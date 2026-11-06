@@ -1,0 +1,18 @@
+[
+  { "command": "sketch.create", "params": { "plane": "xy" }, "as": "s" },
+  { "command": "sketch.rectangle", "params": { "x1": 0, "y1": 0, "x2": 60, "y2": 40 } },
+  { "command": "sketch.circle", "params": { "cx": 30, "cy": 20, "radius": 8 } },
+  { "command": "sketch.finish" },
+  { "command": "solid.extrude", "params": { "sketch": "$s.sketch", "profiles": [{ "x": 5, "y": 5 }], "distance": 15 } },
+  { "command": "solid.fillet", "params": { "edges": ["2:sweep 0", "2:sweep 1", "2:sweep 2", "2:sweep 3"], "radius": 8 } },
+  { "command": "drawing.new_sheet", "params": { "paper": "a3", "scale": 2, "part_name": "Filleted block", "drawn_by": "Chamfera" } },
+  { "command": "drawing.add_view", "params": { "view": "front", "x": 110, "y": 120 }, "as": "front" },
+  { "command": "drawing.add_view", "params": { "view": "top", "x": 110, "y": 215 }, "as": "top" },
+  { "command": "drawing.add_view", "params": { "view": "right", "x": 230, "y": 120 }, "as": "right" },
+  { "command": "drawing.add_view", "params": { "view": "iso", "x": 335, "y": 190, "scale": 1.5 } },
+  { "command": "drawing.add_dimension", "params": { "view": "$front.view", "kind": "horizontal", "x1": 50, "y1": 105, "x2": 170, "y2": 105, "offset": -12 } },
+  { "command": "drawing.add_dimension", "params": { "view": "$front.view", "kind": "vertical", "x1": 170, "y1": 105, "x2": 170, "y2": 135, "offset": 10 } },
+  { "command": "drawing.add_dimension", "params": { "view": "$right.view", "kind": "horizontal", "x1": 190, "y1": 105, "x2": 270, "y2": 105, "offset": -12 } },
+  { "command": "drawing.add_dimension", "params": { "view": "$top.view", "kind": "diameter", "x1": 121.3, "y1": 226.3, "offset": 14 } },
+  { "command": "drawing.add_dimension", "params": { "view": "$top.view", "kind": "radius", "x1": 54.7, "y1": 179.7, "offset": 8 } }
+]

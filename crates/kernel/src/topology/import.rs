@@ -96,7 +96,7 @@ fn link(points: &[Point3], edges: &[InEdge], faces: &[InFace]) -> Result<Body, T
         curve
             .check_range(*t0, *t1)
             .map_err(|err| TopologyError::BadCurveRange(e, err.to_string()))?;
-        body.curves.push(*curve);
+        body.curves.push(curve.clone());
     }
     // Per edge: its forward and backward use.
     let mut halves: Vec<[Option<HalfEdgeId>; 2]> = vec![[None, None]; edges.len()];
@@ -105,7 +105,7 @@ fn link(points: &[Point3], edges: &[InEdge], faces: &[InFace]) -> Result<Body, T
     let mut shell_faces = Vec::with_capacity(faces.len());
     for (fi, (surface, same_sense, face_loops)) in faces.iter().enumerate() {
         let f = FaceId::from_index(fi);
-        let s = SurfaceId::from_index(body.surfaces.push(*surface));
+        let s = SurfaceId::from_index(body.surfaces.push(surface.clone()));
         let mut loop_ids = Vec::with_capacity(face_loops.len());
         for uses in face_loops {
             let l = LoopId::from_index(body.loops.slots());

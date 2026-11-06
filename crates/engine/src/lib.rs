@@ -4,6 +4,7 @@
 //! [`Session::execute`] with a command id and JSON parameters, so they behave the same way.
 //! Read `skills/chamfera-commands/SKILL.md` before adding one.
 
+pub mod assembly;
 pub mod box_select;
 pub mod cmd;
 pub mod construct;
@@ -12,6 +13,7 @@ pub mod hole;
 mod imported;
 mod params;
 pub mod pick_filter;
+pub mod projection;
 pub mod script;
 pub mod sketching;
 pub mod solids;
@@ -105,6 +107,8 @@ impl Session {
         // the solids must follow the restored design.
         let rebuilt_itself = id.starts_with("solid.")
             || id.starts_with("feature.")
+            || id.starts_with("component.")
+            || id.starts_with("joint.")
             || id.starts_with("construct.")
             || id == "body.import_step";
         if (spec.mutates && (result.is_err() || !rebuilt_itself))

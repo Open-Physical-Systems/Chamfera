@@ -14,12 +14,14 @@ use egui::{Color32, PointerButton, Rect, Sense, Vec2};
 use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
 
+mod assembly_ui;
 mod blend_ui;
 mod browser;
 mod chrome;
 mod construct_ui;
 mod context_menu;
 mod display_ui;
+mod drawing_ui;
 mod file_ui;
 mod hole_ui;
 mod inspect_ui;
@@ -34,8 +36,11 @@ mod search;
 mod shell_ui;
 mod shortcuts;
 mod sketch_select;
+mod sketch_shapes;
 mod sketch_ui;
 mod solid_ui;
+mod spline_ui;
+mod sweep_ui;
 mod timeline;
 mod transform_ui;
 mod viewcube;
@@ -60,6 +65,8 @@ pub struct Options {
     pub script: Vec<Value>,
     /// Open the Parameters window at start.
     pub parameters: bool,
+    /// Open the DRAWING workspace at start.
+    pub drawing: bool,
     /// Open the Extrude tool at start and pick the profile under the viewport's centre,
     /// as a click there would.
     pub extrude: bool,
@@ -146,6 +153,8 @@ pub struct ChamferaApp {
     sketch: sketch_ui::SketchUi,
     params: params_ui::ParamsUi,
     solid: solid_ui::SolidUi,
+    assembly: assembly_ui::AssemblyUi,
+    drawing: drawing_ui::DrawingUi,
     construct: construct_ui::ConstructUi,
     file: file_ui::FileUi,
     browser: browser::BrowserUi,
@@ -230,6 +239,8 @@ impl ChamferaApp {
             sketch: sketch_ui::SketchUi::default(),
             params: params_ui::ParamsUi::default(),
             solid: solid_ui::SolidUi::default(),
+            assembly: assembly_ui::AssemblyUi::default(),
+            drawing: drawing_ui::DrawingUi::default(),
             construct: construct_ui::ConstructUi::default(),
             file: file_ui::FileUi::default(),
             browser: browser::BrowserUi::default(),
@@ -262,6 +273,7 @@ impl ChamferaApp {
             app.refresh_sketch_status();
         }
         app.params.open = options.parameters;
+        app.drawing.active = options.drawing;
         if options.extrude {
             let mut tool = solid_ui::ExtrudeTool::default();
             if let Some(p) = &options.extrude_with {
@@ -438,6 +450,17 @@ impl ChamferaApp {
             self.face_click(x, y, w, h);
             return;
         }
+        if self.assembly.joint.is_some() {
+            let at = response.hover_pos().map(local);
+            self.joint_hover(at, w, h);
+            if response.clicked()
+                && let Some(pos) = response.interact_pointer_pos()
+            {
+                let (x, y) = local(pos);
+                self.joint_click(x, y, w, h);
+                return;
+            }
+        }
         if self.solid.hole.is_some() {
             let at = response.hover_pos().map(local);
             self.hole_hover(at, w, h);
@@ -474,6 +497,14 @@ impl ChamferaApp {
         {
             let (x, y) = local(pos);
             self.inspect_click(x, y, w, h);
+            return;
+        }
+        if self.solid.sweep.is_some()
+            && response.clicked()
+            && let Some(pos) = response.interact_pointer_pos()
+        {
+            let (x, y) = local(pos);
+            self.sweep_click(x, y, w, h);
             return;
         }
         if self.solid.shell.is_some()
@@ -566,6 +597,8 @@ impl ChamferaApp {
         }
         let blends = self.blend_overlays();
         self.session.scene.overlays.extend(blends);
+        let joints = self.joint_overlays();
+        self.session.scene.overlays.extend(joints);
         let holes = self.hole_overlays();
         self.session.scene.overlays.extend(holes);
         self.inspect_overlays();
@@ -574,6 +607,9 @@ impl ChamferaApp {
                 style: chamfera_render::OverlayStyle::Highlight,
                 ..picked
             });
+        }
+        if let Some(picked) = self.sweep_overlay() {
+            self.session.scene.overlays.push(picked);
         }
         let picks = self.pick_overlays();
         self.session.scene.overlays.extend(picks);
@@ -804,7 +840,13 @@ impl eframe::App for ChamferaApp {
             .default_size(248.0)
             .size_range(180.0..=420.0)
             .show(ui, |ui| self.browser(ui));
-        egui::CentralPanel::no_frame().show(ui, |ui| self.viewport(ui, frame));
+        egui::CentralPanel::no_frame().show(ui, |ui| {
+            if self.drawing.active && self.session.active_sketch.is_none() {
+                self.drawing_canvas(ui);
+            } else {
+                self.viewport(ui, frame);
+            }
+        });
         if self.frames < 2 {
             self.frames += 1;
             ctx.request_repaint();
@@ -812,16 +854,20 @@ impl eframe::App for ChamferaApp {
             self.parameters_window(&ctx);
             self.extrude_dialog(&ctx);
             self.blend_dialog(&ctx);
+            self.joint_dialog(&ctx);
             self.hole_dialog(&ctx);
             self.transform_dialog(&ctx);
             self.inspect_dialog(&ctx);
             self.shell_dialog(&ctx);
+            self.sweep_dialog(&ctx);
             self.feature_dialog(&ctx);
+            self.timeline_error_window(&ctx);
             self.construct_dialog(&ctx);
             self.rename_dialog(&ctx);
             self.properties_window(&ctx);
             self.appearance_window(&ctx);
         }
+        self.rename_box(&ctx);
         self.unsaved_dialog(&ctx);
         self.shortcuts_window(&ctx);
         self.search_window(&ctx);

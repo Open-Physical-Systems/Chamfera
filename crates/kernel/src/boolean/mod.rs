@@ -163,6 +163,11 @@ pub fn boolean(a: &Body, b: &Body, op: BooleanOp) -> KernelResult<Body> {
                 "the {which} solid has more than {MAX_BOOLEAN_FACES} faces"
             )));
         }
+        if body.has_spline_geometry() {
+            return Err(KernelError::Unsupported(format!(
+                "the {which} solid has spline faces; booleans on them need NURBS surface intersection (K10)"
+            )));
+        }
     }
     let mut reg = Registry::default();
     let mut la = load(a, Operand::A, &mut reg)?;
@@ -201,7 +206,12 @@ pub fn boolean(a: &Body, b: &Body, op: BooleanOp) -> KernelResult<Body> {
             for piece in split_face(own, f, fc, &reg)? {
                 let class = classify(&piece, own, other, p)?;
                 if let Some(reverse) = select(op, own.which, class) {
-                    kept.push(OutFace::new(piece, face.side, face.name.clone(), reverse));
+                    kept.push(OutFace::new(
+                        piece,
+                        face.side.clone(),
+                        face.name.clone(),
+                        reverse,
+                    ));
                 }
             }
         }

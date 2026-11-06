@@ -165,18 +165,28 @@ impl ChamferaApp {
     /// The ribbon: workspace tabs, then the tools of the active one.
     pub(crate) fn ribbon(&mut self, ui: &mut egui::Ui) {
         let sketching = self.session.active_sketch.is_some();
+        let drawing = self.drawing.active && !sketching;
         ui.add_space(2.0);
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = S2;
-            self.tab(ui, "SOLID", !sketching, !sketching)
-                .on_hover_text(if sketching {
-                    "Finish the sketch to use the solid tools"
-                } else {
-                    "Solid modelling: sketches, extrudes and revolves"
-                });
+            let solid = self.tab(ui, "SOLID", !sketching && !drawing, !sketching);
+            if solid.clicked() {
+                self.drawing.active = false;
+            }
+            solid.on_hover_text(if sketching {
+                "Finish the sketch to use the solid tools"
+            } else {
+                "Solid modelling: sketches, extrudes and revolves"
+            });
             if sketching {
                 self.tab(ui, "SKETCH", true, true)
                     .on_hover_text("Editing a sketch: draw, constrain and dimension");
+            } else if self
+                .tab(ui, "DRAWING", drawing, true)
+                .on_hover_text("2D drawing sheets: views of the model, dimensions, export")
+                .clicked()
+            {
+                self.drawing.active = true;
             }
         });
         let look = self.look();
@@ -195,6 +205,8 @@ impl ChamferaApp {
                     ui.spacing_mut().item_spacing.x = 0.0;
                     if sketching {
                         self.sketch_toolbar(ui);
+                    } else if drawing {
+                        self.drawing_toolbar(ui);
                     } else {
                         self.solid_toolbar(ui);
                     }
@@ -279,6 +291,8 @@ impl ChamferaApp {
                     widgets::bar_divider(ui, look, 14.0);
                 }
                 ui.label(small(crate::sketch_ui::tool_hint(self), muted));
+            } else if self.drawing.active {
+                ui.label(small(self.drawing_hint(), muted));
             } else if self.solid.pick_face {
                 ui.label(small("Click a flat face of a solid to sketch on it · Esc cancels", muted));
             } else if self.solid.blend.is_some() {

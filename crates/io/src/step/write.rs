@@ -3,8 +3,8 @@
 use super::format::{logical, point, real, string, vector};
 use super::{MAX_STEP_TEXT, SCHEMA, StepOptions};
 use crate::IoError;
-use chamfera_geom::{Frame, LINEAR_TOLERANCE, Point3, Vec3};
-use chamfera_kernel::{Body, Curve, EdgeId, HalfEdgeId, LoopId, Surface, VertexId};
+use chamfera_geom::{BSplineCurve3, Frame, LINEAR_TOLERANCE, Point3, Vec3};
+use chamfera_kernel::{Body, Curve, EdgeId, Extrusion, HalfEdgeId, LoopId, Surface, VertexId};
 use std::collections::HashMap;
 use std::fmt::{self, Write};
 
@@ -87,6 +87,19 @@ fn check_text(what: &str, s: &str) -> Result<(), IoError> {
 /// per loop 2, per face 6 (surface with placement), per shell 2.
 fn estimate(body: &Body) -> usize {
     let s = body.summary();
+    // A B-spline curve takes a point per control point and one entity; an extrusion its
+    // curve, a direction and a vector.
+    let mut splines = 0usize;
+    for e in body.edges() {
+        if let Ok(Some((Curve::BSpline(c), _, _))) = body.edge_curve(e) {
+            splines = splines.saturating_add(c.control_points().len() + 1);
+        }
+    }
+    for f in body.faces() {
+        if let Ok(Some((Surface::Extrusion(x), _))) = body.face_surface(f) {
+            splines = splines.saturating_add(x.curve().control_points().len() + 4);
+        }
+    }
     s.vertices
         .saturating_mul(2)
         .saturating_add(s.edges.saturating_mul(9))
@@ -94,6 +107,7 @@ fn estimate(body: &Body) -> usize {
         .saturating_add(s.loops.saturating_mul(2))
         .saturating_add(s.faces.saturating_mul(6))
         .saturating_add(s.shells.saturating_mul(2))
+        .saturating_add(splines)
 }
 
 /// Writes `bodies` (each with a name) as one product in a Part 21 file and returns the
@@ -383,7 +397,61 @@ fn curve(out: &mut Out, c: &Curve, body: &str) -> Result<Ref, IoError> {
             let e = a.ellipse();
             ellipse(out, e.frame(), e.rx(), e.ry())
         }
+        Curve::BSpline(c) => bspline_curve(out, c),
     }
+}
+
+/// A B-spline curve (ISO 10303-42, 4.4.2): `B_SPLINE_CURVE_WITH_KNOTS(name, degree,
+/// control_points_list, curve_form, closed_curve, self_intersect, knot_multiplicities,
+/// knots, knot_spec)`, the knots written once each with their multiplicities. A rational
+/// curve is the complex instance of `B_SPLINE_CURVE`, `B_SPLINE_CURVE_WITH_KNOTS` and
+/// `RATIONAL_B_SPLINE_CURVE(weights_data)` with their supertypes, in the alphabetical
+/// order Part 21 requires (ISO 10303-21, 11.2.5.3). The parameter is ours: the knots are
+/// the kernel's, so an edge's `[t0, t1]` means the same points.
+fn bspline_curve(out: &mut Out, c: &BSplineCurve3) -> Result<Ref, IoError> {
+    let mut points = Vec::new();
+    for p in c.control_points() {
+        points.push(out.point(p)?.to_string());
+    }
+    let (mut values, mut mults): (Vec<f64>, Vec<usize>) = (Vec::new(), Vec::new());
+    for k in c.knots() {
+        match values.last() {
+            Some(last) if last == k => {
+                if let Some(m) = mults.last_mut() {
+                    *m += 1;
+                }
+            }
+            _ => {
+                values.push(*k);
+                mults.push(1);
+            }
+        }
+    }
+    let list = |v: &[String]| v.join(",");
+    let pts = list(&points);
+    let ms = list(&mults.iter().map(usize::to_string).collect::<Vec<_>>());
+    let ks = list(
+        &values
+            .iter()
+            .map(|k| real(*k))
+            .collect::<Result<Vec<_>, _>>()?,
+    );
+    let degree = c.degree();
+    let closed = logical(c.is_closed());
+    if !c.is_rational() {
+        return out.add(&format!(
+            "B_SPLINE_CURVE_WITH_KNOTS('',{degree},({pts}),.UNSPECIFIED.,{closed},.F.,({ms}),({ks}),.UNSPECIFIED.)"
+        ));
+    }
+    let ws = list(
+        &c.weights()
+            .iter()
+            .map(|w| real(*w))
+            .collect::<Result<Vec<_>, _>>()?,
+    );
+    out.add(&format!(
+        "(BOUNDED_CURVE() B_SPLINE_CURVE({degree},({pts}),.UNSPECIFIED.,{closed},.F.) B_SPLINE_CURVE_WITH_KNOTS(({ms}),({ks}),.UNSPECIFIED.) CURVE() GEOMETRIC_REPRESENTATION_ITEM() RATIONAL_B_SPLINE_CURVE(({ws})) REPRESENTATION_ITEM(''))"
+    ))
 }
 
 fn circle(out: &mut Out, frame: &Frame, radius: f64) -> Result<Ref, IoError> {
@@ -432,8 +500,13 @@ fn ellipse(out: &mut Out, frame: &Frame, rx: f64, ry: f64) -> Result<Ref, IoErro
 /// tube's centre circle, and the flag is kept. On the inner part of a degenerate torus
 /// Part 42's `R + a cos v` is negative, so `σ_u × σ_v` points toward the tube's centre
 /// circle, against ours: lemon faces are written with the flag flipped.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 enum StepSurface {
+    /// `SURFACE_OF_LINEAR_EXTRUSION(name, swept_curve, extrusion_axis)` (Part 42,
+    /// 4.4.48): `σ(u, v) = C(u) + v V`, with `C` the kernel's curve lifted into the
+    /// frame's plane and `V` the frame's unit z: the kernel's own parameterisation, so
+    /// the normals agree.
+    Extrusion(Extrusion),
     Plane(Frame),
     Cylinder {
         frame: Frame,
@@ -461,6 +534,7 @@ enum StepSurface {
 impl StepSurface {
     fn of(s: &Surface) -> StepSurface {
         match s {
+            Surface::Extrusion(e) => StepSurface::Extrusion(e.clone()),
             Surface::Plane(frame) => StepSurface::Plane(*frame),
             Surface::Cylinder(c) => StepSurface::Cylinder {
                 frame: *c.frame(),
@@ -495,7 +569,17 @@ impl StepSurface {
     }
 
     fn write(&self, out: &mut Out) -> Result<Ref, IoError> {
-        match *self {
+        match self.clone() {
+            StepSurface::Extrusion(e) => {
+                let curve = e
+                    .curve()
+                    .to_3d(e.frame())
+                    .map_err(|x| err(format!("an extruded curve: {x}")))?;
+                let c = bspline_curve(out, &curve)?;
+                let d = out.direction(e.frame().z())?;
+                let v = out.add(&format!("VECTOR('',{d},1.)"))?;
+                out.add(&format!("SURFACE_OF_LINEAR_EXTRUSION('',{c},{v})"))
+            }
             StepSurface::Plane(frame) => {
                 let a = out.axis(&frame)?;
                 out.add(&format!("PLANE('',{a})"))
@@ -548,7 +632,8 @@ impl StepSurface {
             let e = (f.x() * l.x + f.y() * l.y).normalized();
             (e, l.x.hypot(l.y), l.z)
         };
-        match *self {
+        match self.clone() {
+            StepSurface::Extrusion(_) => None,
             StepSurface::Plane(frame) => Some(frame.z()),
             // σ_u × σ_v = r e.
             StepSurface::Cylinder { frame, .. } => radial(&frame).0,
@@ -584,6 +669,9 @@ impl StepSurface {
     /// Whether Part 42's normal of this entity agrees with the kernel's normal of `s`,
     /// compared at a regular point of `s` (off its axis).
     fn normal_agrees(&self, s: &Surface, body: &str) -> Result<bool, IoError> {
+        if let StepSurface::Extrusion(_) = self {
+            return Ok(true);
+        }
         let v = match s {
             // ρ = r + v sin α > 0: v = 0 unless the reference circle is the apex.
             Surface::Cone(c) if c.radius() <= LINEAR_TOLERANCE => c.half_angle().signum(),

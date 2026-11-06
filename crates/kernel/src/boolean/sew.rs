@@ -36,7 +36,7 @@ pub(super) fn classify(
     other: &Loaded<'_>,
     partners: &[usize],
 ) -> KernelResult<Class> {
-    let side = own.face(piece.face)?.side;
+    let side = own.face(piece.face)?.side.clone();
     for p in interior_points(&piece.region, &side) {
         match classify_point(other.body, p) {
             Ok(PointInSolid::Inside) => return Ok(Class::In),
@@ -234,7 +234,7 @@ fn root(parent: &mut [usize], mut i: usize) -> usize {
 /// same outward normal, or pieces of one curved operand face.
 fn mergeable(a: &OutFace, b: &OutFace) -> bool {
     use crate::Surface;
-    match (a.side.surface, b.side.surface) {
+    match (&a.side.surface, &b.side.surface) {
         (Surface::Plane(fa), Surface::Plane(fb)) => {
             let na = fa.z() * a.side.orient;
             let nb = fb.z() * b.side.orient;
@@ -301,7 +301,7 @@ fn merge_faces(faces: Vec<OutFace>, reg: &Registry) -> KernelResult<Vec<OutFace>
         let cycles = trace(reg, &first.side, &keep, &HashSet::new())?;
         for region in regions(reg, &first.side, cycles)? {
             out.push(OutFace {
-                side: first.side,
+                side: first.side.clone(),
                 name: first.name.clone(),
                 loops: region.loops,
                 origin: first.origin,
@@ -573,7 +573,7 @@ pub(super) fn sew(faces: Vec<OutFace>, mut reg: Registry) -> KernelResult<Body> 
             loops.push(lp);
         }
         list.push(ListFace {
-            surface: f.side.surface,
+            surface: f.side.surface.clone(),
             same_sense: f.side.orient > 0.0,
             name: f.name.clone(),
             loops,

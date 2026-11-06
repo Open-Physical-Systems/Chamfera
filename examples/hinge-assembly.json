@@ -1,0 +1,25 @@
+[
+  { "command": "component.new", "params": { "name": "Leaf A" }, "as": "a" },
+  { "command": "sketch.create", "params": { "plane": "xy" }, "as": "sa" },
+  { "command": "sketch.rectangle", "params": { "x1": 0, "y1": 0, "x2": 40, "y2": 30 } },
+  { "command": "sketch.finish" },
+  { "command": "solid.extrude", "params": { "sketch": "$sa.sketch", "profiles": [{ "x": 20, "y": 15 }], "distance": 4 } },
+  { "command": "component.activate", "params": { "component": 0 } },
+  { "command": "component.new", "params": { "name": "Leaf B" }, "as": "b" },
+  { "command": "sketch.create", "params": { "plane": "xy" }, "as": "sb" },
+  { "command": "sketch.rectangle", "params": { "x1": -40, "y1": 0, "x2": 0, "y2": 30 } },
+  { "command": "sketch.finish" },
+  { "command": "solid.extrude", "params": { "sketch": "$sb.sketch", "profiles": [{ "x": -20, "y": 15 }], "distance": 4 } },
+  { "command": "component.activate", "params": { "component": 0 } },
+  { "command": "component.ground", "params": { "component": "$a.component" } },
+  { "command": "component.tint", "params": { "component": "$a.component", "tint": true } },
+  { "command": "component.tint", "params": { "component": "$b.component", "tint": true } },
+  { "command": "joint.create", "params": {
+      "type": "revolute", "name": "Hinge",
+      "a": { "component": "$a.component", "point": { "x": 0, "y": 0, "z": 4 }, "axis": { "x": 0, "y": 1, "z": 0 } },
+      "b": { "component": "$b.component", "point": { "x": 0, "y": 0, "z": 4 }, "axis": { "x": 0, "y": 1, "z": 0 } },
+      "value": 0, "min": 0, "max": 180 }, "as": "hinge" },
+  { "command": "joint.set_value", "params": { "joint": "$hinge.joint", "value": 60 } },
+  { "command": "component.list" },
+  { "command": "view.home", "params": { "width": 1100, "height": 760 } }
+]

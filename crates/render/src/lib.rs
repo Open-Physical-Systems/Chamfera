@@ -348,6 +348,9 @@ pub struct SceneBody {
     pub edges: Vec<Vec<Point3>>,
     #[serde(default)]
     pub appearance: Appearance,
+    /// A component tint: an index into the theme's `component_tints`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tint: Option<u8>,
 }
 
 /// What a click picked.
@@ -366,6 +369,8 @@ pub enum OverlayStyle {
     Sketch,
     Constrained,
     Construction,
+    /// Model edges projected into the sketch.
+    Projected,
     Preview,
     Highlight,
     /// A measure result: the line between two closest points.
@@ -382,6 +387,7 @@ impl OverlayStyle {
             OverlayStyle::Sketch => theme.sketch,
             OverlayStyle::Constrained => theme.sketch_constrained,
             OverlayStyle::Construction => theme.sketch_construction,
+            OverlayStyle::Projected => theme.sketch_projected,
             OverlayStyle::Preview => theme.sketch_preview,
             OverlayStyle::Highlight => theme.highlight,
             OverlayStyle::Measure => theme.measure,
@@ -478,6 +484,7 @@ impl Scene {
             visible: true,
             edges: Vec::new(),
             appearance: Appearance::default(),
+            tint: None,
         });
         Some(id)
     }

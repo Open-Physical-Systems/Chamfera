@@ -153,6 +153,18 @@ impl EdgeGeo {
                     .closest_point(p)?
                     .point
             }
+            // The spline's nearest point when it lies on this edge's span, else the
+            // nearer end.
+            Curve::BSpline(c) => {
+                let near = c.closest_point(p);
+                let (lo, hi) = (t0.min(t1), t0.max(t1));
+                if (lo..=hi).contains(&near.u) {
+                    near.point
+                } else {
+                    let [a, b] = self.ends();
+                    if a.distance(p) <= b.distance(p) { a } else { b }
+                }
+            }
         })
     }
 
@@ -172,6 +184,7 @@ impl EdgeGeo {
                 let e = a.ellipse();
                 EllipticalArc3::new(*e.frame(), e.rx(), e.ry(), t0, t1 - t0)?.length()?
             }
+            Curve::BSpline(c) => c.length_between(t0, t1)?.abs(),
         })
     }
 }

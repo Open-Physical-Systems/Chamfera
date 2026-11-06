@@ -753,7 +753,9 @@ impl ViewRenderer {
                 let c = if selected {
                     frame.theme.body_selected
                 } else {
-                    b.appearance.colour.unwrap_or(frame.theme.body)
+                    b.appearance
+                        .colour
+                        .unwrap_or_else(|| frame.theme.body_colour(b.tint))
                 };
                 let mut c = c.linear();
                 c[3] = b.appearance.opacity();

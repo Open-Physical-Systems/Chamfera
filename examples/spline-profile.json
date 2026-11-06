@@ -1,0 +1,6 @@
+[
+  { "command": "sketch.create", "params": { "plane": "xy" } },
+  { "command": "sketch.spline", "as": "top", "params": { "points": [ { "x": 0, "y": 0 }, { "x": 20, "y": 18 }, { "x": 45, "y": 10 }, { "x": 70, "y": 24 }, { "x": 90, "y": 0 } ] } },
+  { "command": "sketch.line", "params": { "x1": 90, "y1": 0, "x2": 0, "y2": 0, "start": "$top.points.4", "end": "$top.points.0" } },
+  { "command": "sketch.spline", "params": { "points": [ { "x": 60, "y": 4 }, { "x": 72, "y": 8 }, { "x": 66, "y": 14 }, { "x": 56, "y": 10 } ], "kind": "control", "closed": true } }
+]

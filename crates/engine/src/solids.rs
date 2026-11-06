@@ -6,7 +6,9 @@
 //! timeline) and the rest of the timeline still builds, as CAD users expect.
 
 use crate::Session;
-use chamfera_doc::{Blend, BlendKind, Extrude, ExtrudeDirection, FeatureKind, Operation, Revolve};
+use chamfera_doc::{
+    Blend, BlendKind, Extrude, ExtrudeDirection, FeatureKind, Loft, Operation, Revolve, Sweep,
+};
 use chamfera_geom::{Point2, Point3};
 use chamfera_kernel::{Body, EdgeId, Line2, Profile, ProfileEdge, TessOptions, tessellate};
 use chamfera_sketch::{Curve, ProfileLoop, Region, Sketch};
@@ -16,6 +18,8 @@ use std::collections::BTreeMap;
 #[derive(Debug, Clone)]
 pub struct Solid {
     pub feature: u32,
+    /// The component it belongs to (`chamfera_doc::ROOT` for the design itself).
+    pub component: u32,
     pub name: String,
     pub body: Body,
     /// The scene body that shows it, if it could be displayed.
@@ -102,6 +106,28 @@ fn build_blend(
         return Err(format!("{word}: the edge {name:?} is no longer there"));
     }
     Ok(next)
+}
+
+/// The first edge a blend names that no body built so far has, as `edge "2:top 0" of
+/// Extrude1`.
+fn missing_edge(
+    doc: &chamfera_doc::Document,
+    b: &Blend,
+    made: &[(u32, String, Body)],
+) -> Option<String> {
+    let have: std::collections::BTreeSet<String> = made
+        .iter()
+        .flat_map(|(_, _, body)| body.edges().into_iter().filter_map(|e| edge_ref(body, e)))
+        .collect();
+    let gone = b.edges.iter().find(|e| !have.contains(*e))?;
+    let owner = gone
+        .split_whitespace()
+        .find_map(|w| w.split_once(':'))
+        .and_then(|(id, _)| id.parse::<u32>().ok());
+    Some(match owner {
+        Some(f) => format!("edge {gone:?} of {}", feature_name(doc, f)),
+        None => format!("edge {gone:?}"),
+    })
 }
 
 /// Hollows the bodies built so far (rung K12). A body is shelled when it has one of the
@@ -200,6 +226,7 @@ pub fn body_has_feature(body: &Body, feature: u32) -> bool {
 /// The plane of the face `r.face` of feature `r.feature`, from bodies built so far in this
 /// rebuild (whichever body it ended up in after joins and cuts).
 fn attached_plane(
+    doc: &chamfera_doc::Document,
     made: &[(u32, String, Body)],
     r: &chamfera_doc::FaceRef,
 ) -> Result<chamfera_geom::Frame, String> {
@@ -213,9 +240,15 @@ fn attached_plane(
         }
     }
     Err(format!(
-        "the face {:?} it is drawn on is gone (feature {} changed or failed)",
-        r.face, r.feature
+        "the face {:?} it is drawn on is gone ({} changed, failed or is not built)",
+        r.face,
+        feature_name(doc, r.feature)
     ))
+}
+
+/// A feature's name, for messages.
+fn feature_name(doc: &chamfera_doc::Document, id: u32) -> String {
+    doc.item_name(id).unwrap_or_else(|| format!("feature {id}"))
 }
 
 /// What the last rebuild produced.
@@ -226,6 +259,13 @@ pub struct Built {
     pub errors: BTreeMap<u32, String>,
     /// Features whose solids were built but cannot be shown yet, and why.
     pub display_errors: BTreeMap<u32, String>,
+    /// Where each component is, and joints that could not be solved.
+    pub placements: crate::assembly::Placements,
+    /// For a feature that failed because something it refers to changed upstream: that
+    /// reference, such as `face "top" of Extrude1`.
+    pub broken: BTreeMap<u32, String>,
+    /// Sketches on a face that could not follow it, and why.
+    pub sketch_errors: BTreeMap<u32, String>,
     /// Construction planes, axes and points, by feature id.
     pub constructs: BTreeMap<u32, crate::construct::Constructed>,
 }
@@ -257,10 +297,37 @@ fn loop_edges(sketch: &Sketch, l: &ProfileLoop) -> Result<Vec<ProfileEdge>, Stri
                     sketch.point(*end).ok_or_else(gone)?,
                 )
                 .map_err(|e| format!("an arc of the profile: {e}"))?,
+                Curve::Spline { .. } => {
+                    // A spline's own curve; a closed one (a loop by itself) as two halves,
+                    // as the kernel wants every loop edge to have two ends.
+                    let c = sketch
+                        .spline_of(curve)
+                        .ok_or_else(|| "a spline of the profile has no curve".to_owned())?;
+                    let mut pieces = if c.is_closed() {
+                        let (lo, hi) = c.domain();
+                        let (a, b) = c
+                            .split_at(0.5 * (lo + hi))
+                            .map_err(|e| format!("a spline of the profile: {e}"))?;
+                        vec![ProfileEdge::Spline(a), ProfileEdge::Spline(b)]
+                    } else {
+                        vec![ProfileEdge::Spline(c)]
+                    };
+                    if seg.reversed {
+                        pieces.reverse();
+                        for p in &mut pieces {
+                            *p = p.reversed();
+                        }
+                    }
+                    return Ok(pieces);
+                }
+                Curve::Ellipse { .. } | Curve::EllipticalArc { .. } => {
+                    return Err("ellipses in a profile cannot be swept into solids yet".into());
+                }
             };
-            Ok(if seg.reversed { edge.reversed() } else { edge })
+            Ok(vec![if seg.reversed { edge.reversed() } else { edge }])
         })
-        .collect()
+        .collect::<Result<Vec<Vec<ProfileEdge>>, String>>()
+        .map(|v| v.into_iter().flatten().collect())
 }
 
 /// A sketch region as an exact kernel profile (outer loop and holes).
@@ -649,6 +716,7 @@ fn named_body<'a>(made: &'a [(u32, String, Body)], name: &str) -> Result<&'a Bod
 
 /// The mirror plane as a point and a normal.
 fn mirror_plane(
+    doc: &chamfera_doc::Document,
     plane: &chamfera_doc::MirrorPlane,
     made: &[(u32, String, Body)],
 ) -> Result<(Point3, chamfera_geom::Vec3), String> {
@@ -659,6 +727,7 @@ fn mirror_plane(
         MirrorPlane::Xz => Frame::XZ,
         MirrorPlane::Yz => Frame::YZ,
         MirrorPlane::Face { feature, face } => attached_plane(
+            doc,
             made,
             &chamfera_doc::FaceRef {
                 feature: *feature,
@@ -673,12 +742,13 @@ fn mirror_plane(
 /// The mirror images a mirror makes: of the named bodies as built so far, then of the
 /// listed features' own shapes. Each is renamed as copy `k` of the mirror.
 fn mirror_bodies(
+    doc: &chamfera_doc::Document,
     m: &chamfera_doc::Mirror,
     mirror_id: u32,
     made: &[(u32, String, Body)],
     tools: &BTreeMap<u32, (Vec<Body>, Operation)>,
 ) -> Result<Vec<Body>, String> {
-    let (point, normal) = mirror_plane(&m.plane, made)?;
+    let (point, normal) = mirror_plane(doc, &m.plane, made)?;
     let mut sources: Vec<&Body> = Vec::new();
     for name in &m.bodies {
         sources.push(named_body(made, name)?);
@@ -859,6 +929,134 @@ fn build_revolve(
         .collect()
 }
 
+/// A sweep's path as kernel segments in space (lines, and arcs counter-clockwise about
+/// the path sketch's normal as the sketch stores them).
+fn sweep_path_segments(
+    f: &chamfera_doc::SketchFeature,
+    curves: &[u32],
+) -> Result<Vec<chamfera_kernel::PathSegment>, String> {
+    use chamfera_kernel::PathSegment;
+    let gone = || format!("a curve of the path in {} is gone", f.name);
+    curves
+        .iter()
+        .map(|id| {
+            let at = |p: chamfera_sketch::PointId| {
+                f.sketch
+                    .point(p)
+                    .map(|q| f.plane.from_plane(q))
+                    .ok_or_else(gone)
+            };
+            match f.sketch.curve(chamfera_sketch::CurveId(*id)) {
+                Some(Curve::Line { start, end, .. }) => Ok(PathSegment::Line {
+                    start: at(*start)?,
+                    end: at(*end)?,
+                }),
+                Some(Curve::Arc {
+                    centre, start, end, ..
+                }) => {
+                    PathSegment::arc_from_points(at(*centre)?, f.plane.z(), at(*start)?, at(*end)?)
+                        .map_err(|e| format!("an arc of the path: {e}"))
+                }
+                Some(_) => Err(format!("curve {id} of {} is not a line or an arc", f.name)),
+                None => Err(gone()),
+            }
+        })
+        .collect()
+}
+
+/// The ends of a line or an arc (`None` for other curves).
+fn curve_ends(c: &Curve) -> Option<[chamfera_sketch::PointId; 2]> {
+    match c {
+        Curve::Line { start, end, .. } | Curve::Arc { start, end, .. } => Some([*start, *end]),
+        _ => None,
+    }
+}
+
+/// The lines and arcs of `sketch` joined end to end with `curve` (ends at the same
+/// place), in order along the chain. A place where more than two lines and arcs end
+/// ends the chain (a branch).
+pub fn path_chain(sketch: &Sketch, curve: u32) -> Vec<u32> {
+    let tol = chamfera_geom::LINEAR_TOLERANCE;
+    let ends: Vec<(u32, [Point2; 2])> = sketch
+        .curves()
+        .filter_map(|(id, c)| {
+            let [a, b] = curve_ends(c)?;
+            Some((id.0, [sketch.point(a)?, sketch.point(b)?]))
+        })
+        .collect();
+    let users = |p: Point2| -> Vec<u32> {
+        ends.iter()
+            .filter(|(_, e)| e.iter().any(|q| q.distance(p) <= tol))
+            .map(|(id, _)| *id)
+            .collect()
+    };
+    let Some(&(_, start)) = ends.iter().find(|(id, _)| *id == curve) else {
+        return Vec::new();
+    };
+    // Walk from the curve out of each of its ends.
+    let walk = |from: Point2| -> Vec<u32> {
+        let mut out = Vec::new();
+        let (mut at, mut prev) = (from, curve);
+        for _ in 0..ends.len() {
+            let u = users(at);
+            if u.len() != 2 {
+                break;
+            }
+            let Some(next) = u.into_iter().find(|c| *c != prev) else {
+                break;
+            };
+            if next == curve || out.contains(&next) {
+                break;
+            }
+            let Some((_, e)) = ends.iter().find(|(id, _)| *id == next) else {
+                break;
+            };
+            out.push(next);
+            at = if e[0].distance(at) <= tol { e[1] } else { e[0] };
+            prev = next;
+        }
+        out
+    };
+    let mut chain = walk(start[0]);
+    chain.reverse();
+    chain.push(curve);
+    for c in walk(start[1]) {
+        if !chain.contains(&c) {
+            chain.push(c);
+        }
+    }
+    chain
+}
+
+/// The bodies one sweep makes: one per profile, along the same path.
+fn build_sweep(doc: &chamfera_doc::Document, s: &Sweep) -> Result<Vec<Body>, String> {
+    let f = doc.sketch(s.sketch).map_err(|x| x.to_string())?;
+    let p = doc.sketch(s.path_sketch).map_err(|x| x.to_string())?;
+    let path = sweep_path_segments(p, &s.path)?;
+    feature_profiles(f, &s.profiles)?
+        .iter()
+        .map(|profile| {
+            chamfera_kernel::sweep_path(&f.plane, profile, &path).map_err(|x| format!("sweep: {x}"))
+        })
+        .collect()
+}
+
+/// The body one loft makes, through its profiles in order.
+fn build_loft(doc: &chamfera_doc::Document, l: &Loft) -> Result<Vec<Body>, String> {
+    let mut sections = Vec::with_capacity(l.sections.len());
+    for s in &l.sections {
+        let f = doc.sketch(s.sketch).map_err(|x| x.to_string())?;
+        let profile = feature_profiles(f, &[s.profile])?
+            .into_iter()
+            .next()
+            .ok_or("a loft profile is missing")?;
+        sections.push((f.plane, profile));
+    }
+    chamfera_kernel::loft(&sections)
+        .map(|b| vec![b])
+        .map_err(|x| format!("loft: {x}"))
+}
+
 impl Session {
     /// Rebuilds every feature, in timeline order, and replaces the solid bodies in the
     /// scene. Meshes and other bodies (imported STL) are left alone.
@@ -869,16 +1067,49 @@ impl Session {
         let mut made: Vec<(u32, String, Body)> = Vec::new();
         // Each built feature's own shapes (before they were combined), for patterns.
         let mut tools: BTreeMap<u32, (Vec<Body>, Operation)> = BTreeMap::new();
-        let features = self.doc.features.clone();
-        for feature in &features {
+        // Items after the timeline marker are not built.
+        let order = self.doc.timeline_order();
+        let marker = self.doc.marker();
+        for id in order.into_iter().take(marker) {
+            // A sketch drawn on a face follows that face, as built at this point.
+            if self.doc.sketch(id).is_ok() {
+                if let Err(e) = self.follow_attached_sketch(id, &made, &built.constructs) {
+                    built.sketch_errors.insert(id, e);
+                }
+                continue;
+            }
+            let Ok(feature) = self.doc.feature(id).cloned() else {
+                continue;
+            };
+            let feature = &feature;
             if feature.suppressed {
                 continue;
             }
-            // A sketch drawn on a face follows that face (built earlier in the timeline).
-            if let Some(sketch) = feature.kind.sketch()
-                && let Err(e) = self.follow_attached_sketch(sketch, &made, &built.constructs)
+            // Every sketch the feature uses (a sweep's path, a loft's sections too) was
+            // followed in timeline order before it.
+            if let Some((sketch, e)) = feature
+                .kind
+                .sketches()
+                .into_iter()
+                .find_map(|s| built.sketch_errors.get(&s).map(|e| (s, e.clone())))
             {
-                built.errors.insert(feature.id, e);
+                let name = feature_name(&self.doc, sketch);
+                built.errors.insert(feature.id, format!("{name}: {e}"));
+                if let Some(r) = self
+                    .doc
+                    .sketch(sketch)
+                    .ok()
+                    .and_then(|s| s.attached.clone())
+                {
+                    built.broken.insert(
+                        feature.id,
+                        format!(
+                            "face {:?} of {}",
+                            r.face,
+                            feature_name(&self.doc, r.feature)
+                        ),
+                    );
+                }
                 continue;
             }
             if let FeatureKind::Construct(c) = &feature.kind {
@@ -893,6 +1124,11 @@ impl Session {
                 continue;
             }
             if let FeatureKind::Pattern(p) = &feature.kind {
+                if !tools.contains_key(&p.source) {
+                    built
+                        .broken
+                        .insert(feature.id, feature_name(&self.doc, p.source));
+                }
                 let copies = pattern_copies(&self.doc, p, feature.id, &tools, &built.constructs);
                 match copies {
                     Ok((bodies, Operation::NewBody)) => {
@@ -916,24 +1152,25 @@ impl Session {
                 continue;
             }
             if let FeatureKind::Mirror(m) = &feature.kind {
-                let result = mirror_bodies(m, feature.id, &made, &tools).and_then(|bodies| {
-                    tools.insert(feature.id, (bodies.clone(), m.operation));
-                    let mut next = made.clone();
-                    if m.operation == Operation::NewBody {
-                        let n = bodies.len();
-                        for (k, b) in bodies.into_iter().enumerate() {
-                            let name = if n == 1 {
-                                feature.name.clone()
-                            } else {
-                                format!("{} ({})", feature.name, k + 1)
-                            };
-                            next.push((feature.id, name, b));
+                let result =
+                    mirror_bodies(&self.doc, m, feature.id, &made, &tools).and_then(|bodies| {
+                        tools.insert(feature.id, (bodies.clone(), m.operation));
+                        let mut next = made.clone();
+                        if m.operation == Operation::NewBody {
+                            let n = bodies.len();
+                            for (k, b) in bodies.into_iter().enumerate() {
+                                let name = if n == 1 {
+                                    feature.name.clone()
+                                } else {
+                                    format!("{} ({})", feature.name, k + 1)
+                                };
+                                next.push((feature.id, name, b));
+                            }
+                        } else {
+                            apply_operation(&mut next, &bodies, m.operation)?;
                         }
-                    } else {
-                        apply_operation(&mut next, &bodies, m.operation)?;
-                    }
-                    Ok(next)
-                });
+                        Ok(next)
+                    });
                 match result {
                     Ok(next) => made = next,
                     Err(e) => {
@@ -955,6 +1192,9 @@ impl Session {
                 match build_blend(&self.doc, b, feature.id, &made) {
                     Ok(next) => made = next,
                     Err(e) => {
+                        if let Some(r) = missing_edge(&self.doc, b, &made) {
+                            built.broken.insert(feature.id, r);
+                        }
                         built.errors.insert(feature.id, e);
                     }
                 }
@@ -986,6 +1226,8 @@ impl Session {
                     let bodies: Vec<&Body> = made.iter().map(|m| &m.2).collect();
                     build_extrude(&self.doc, e, &bodies)
                 }
+                FeatureKind::Sweep(s) => build_sweep(&self.doc, s),
+                FeatureKind::Loft(l) => build_loft(&self.doc, l),
                 FeatureKind::Revolve(r) => build_revolve(&self.doc, r, &built.constructs),
                 FeatureKind::Pattern(_)
                 | FeatureKind::Construct(_)
@@ -1032,20 +1274,17 @@ impl Session {
                     }
                 }
                 Err(e) => {
+                    if e.contains("no longer closed")
+                        && let Some(sketch) = feature.kind.sketch()
+                    {
+                        built.broken.insert(
+                            feature.id,
+                            format!("a profile of {}", feature_name(&self.doc, sketch)),
+                        );
+                    }
                     built.errors.insert(feature.id, e);
                 }
             }
-        }
-        // Sketches on faces or construction planes that no feature uses yet follow too.
-        let attached: Vec<u32> = self
-            .doc
-            .sketches
-            .iter()
-            .filter(|s| s.attached.is_some() || s.on_plane.is_some())
-            .map(|s| s.id)
-            .collect();
-        for id in attached {
-            let _ = self.follow_attached_sketch(id, &made, &built.constructs);
         }
         // Replace the scene's solid bodies.
         let old: Vec<u32> = self
@@ -1069,7 +1308,8 @@ impl Session {
         self.scene.bodies.retain(|b| !old.contains(&b.id));
         self.scene.deselect(|b| old.contains(&b));
         let options = TessOptions::default();
-        for (feature, name, body) in made {
+        let placed = self.place_components(made, &mut built);
+        for (feature, component, name, body) in placed {
             // A solid that cannot be shown is still built: its measures and export work.
             let mut faces = Vec::new();
             let mut edges = Vec::new();
@@ -1084,6 +1324,7 @@ impl Session {
                             .display_errors
                             .insert(feature, "the scene holds no more bodies".into());
                     }
+                    Session::tint_body(&self.doc.assembly, &mut self.scene, id, component);
                     id
                 }
                 Err(e) => {
@@ -1097,6 +1338,7 @@ impl Session {
                 faces,
                 edges,
                 feature,
+                component,
                 name,
                 body,
                 scene_id,
@@ -1114,8 +1356,8 @@ impl Session {
         self.built = built;
     }
 
-    /// Moves an attached sketch's plane onto its face or construction plane, as built so
-    /// far.
+    /// Moves an attached sketch's plane onto its face or construction plane, and its
+    /// projected edges onto their edges, as built so far.
     fn follow_attached_sketch(
         &mut self,
         sketch: u32,
@@ -1126,21 +1368,23 @@ impl Session {
             return Ok(());
         };
         let plane = match (f.attached.clone(), f.on_plane) {
-            (Some(r), _) => attached_plane(made, &r)?,
+            (Some(r), _) => Some(attached_plane(&self.doc, made, &r)?),
             (None, Some(id)) => match constructs.get(&id) {
-                Some(crate::construct::Constructed::Plane { frame, .. }) => *frame,
+                Some(crate::construct::Constructed::Plane { frame, .. }) => Some(*frame),
                 _ => {
                     return Err(format!(
                         "the plane {id} it is drawn on is suppressed or could not be built"
                     ));
                 }
             },
-            (None, None) => return Ok(()),
+            (None, None) => None,
         };
-        if let Ok(f) = self.doc.sketch_mut(sketch) {
+        if let Some(plane) = plane
+            && let Ok(f) = self.doc.sketch_mut(sketch)
+        {
             f.plane = plane;
         }
-        Ok(())
+        self.follow_projections(sketch, made.iter().map(|m| &m.2))
     }
 
     /// The solid face under pixel `(x, y)`: (feature, face name, plane), for flat faces
@@ -1301,6 +1545,17 @@ impl Session {
         &self.built.display_errors
     }
 
+    /// The reference that broke for each feature that failed because of an upstream
+    /// change, such as `face "top" of Extrude1`.
+    pub fn broken_references(&self) -> &BTreeMap<u32, String> {
+        &self.built.broken
+    }
+
+    /// Sketches on a face that could not follow it in the last rebuild, and why.
+    pub fn sketch_errors(&self) -> &BTreeMap<u32, String> {
+        &self.built.sketch_errors
+    }
+
     /// The profile under pixel `(x, y)`: the nearest sketch plane the ray meets where a
     /// closed region lies. Returns (sketch id, seed point inside the region, its area).
     pub fn profile_at(&self, x: f64, y: f64, w: f64, h: f64) -> Option<(u32, Point2, f64)> {
@@ -1327,6 +1582,58 @@ impl Session {
             }
         }
         best.map(|(_, s, p, a)| (s, p, a))
+    }
+
+    /// The sketch line or arc nearest pixel `(x, y)` on screen (within
+    /// [`crate::sketching::PICK_CURVE_PX`]), in any sketch, and the chain of lines and
+    /// arcs joined end to end with it (through points no third curve uses), for picking
+    /// a sweep path in one click: (sketch, curve, chain in path order).
+    pub fn path_at(&self, x: f64, y: f64, w: f64, h: f64) -> Option<(u32, u32, Vec<u32>)> {
+        use chamfera_render::{mat_mul, transform_point};
+        if !(w >= 1.0 && h >= 1.0 && x.is_finite() && y.is_finite()) {
+            return None;
+        }
+        let bounds = self.scene.bounds();
+        let vp = mat_mul(
+            &self.camera.projection_matrix(w / h, bounds.as_ref()),
+            &self.camera.view_matrix(),
+        );
+        let screen = |p: Point3| -> Option<(f64, f64)> {
+            let n = transform_point(&vp, p)?;
+            if !(0.0..=1.0).contains(&n[2]) {
+                return None;
+            }
+            Some(((n[0] + 1.0) * 0.5 * w, (1.0 - n[1]) * 0.5 * h))
+        };
+        let mut best: Option<(f64, u32, u32)> = None;
+        for f in &self.doc.sketches {
+            for (id, curve) in f.sketch.curves() {
+                if !matches!(curve, Curve::Line { .. } | Curve::Arc { .. }) {
+                    continue;
+                }
+                let pts: Vec<(f64, f64)> = crate::sketching::curve_polyline(&f.sketch, curve)
+                    .into_iter()
+                    .filter_map(|p| screen(f.plane.from_plane(p)))
+                    .collect();
+                for pair in pts.windows(2) {
+                    let [a, b] = pair else { continue };
+                    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+                    let len2 = dx * dx + dy * dy;
+                    let t = if len2 > 1e-12 {
+                        (((x - a.0) * dx + (y - a.1) * dy) / len2).clamp(0.0, 1.0)
+                    } else {
+                        0.0
+                    };
+                    let d = (a.0 + t * dx - x).hypot(a.1 + t * dy - y);
+                    if d <= crate::sketching::PICK_CURVE_PX && best.is_none_or(|bb| d < bb.0) {
+                        best = Some((d, f.id, id.0));
+                    }
+                }
+            }
+        }
+        let (_, sketch, curve) = best?;
+        let f = self.doc.sketch(sketch).ok()?;
+        Some((sketch, curve, path_chain(&f.sketch, curve)))
     }
 
     /// The outline (outer loop and holes) of the region at `seed`, as world line segments.

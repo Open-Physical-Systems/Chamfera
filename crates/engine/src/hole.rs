@@ -79,25 +79,9 @@ fn mouth_depth(s: &HoleSizes) -> f64 {
 
 /// The standalone points of a sketch (points no curve uses), in sketch coordinates.
 pub fn sketch_hole_points(sketch: &chamfera_sketch::Sketch) -> Vec<Point2> {
-    use chamfera_sketch::Curve;
     let mut used = std::collections::BTreeSet::new();
     for (_, c) in sketch.curves() {
-        match c {
-            Curve::Line { start, end, .. } => {
-                used.insert(*start);
-                used.insert(*end);
-            }
-            Curve::Circle { centre, .. } => {
-                used.insert(*centre);
-            }
-            Curve::Arc {
-                centre, start, end, ..
-            } => {
-                used.insert(*centre);
-                used.insert(*start);
-                used.insert(*end);
-            }
-        }
+        used.extend(c.points());
     }
     sketch
         .points()
