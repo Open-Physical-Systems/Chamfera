@@ -35,6 +35,7 @@ impl ChamferaApp {
             ui.add_space(S2);
             ui.menu_button("File", |ui| self.file_menu(ui));
             ui.menu_button("View", |ui| self.view_menu(ui));
+            ui.menu_button("Help", |ui| self.help_menu(ui));
             widgets::bar_divider(ui, self.look(), 20.0);
             let look = self.look();
             let desktop = cfg!(not(target_arch = "wasm32"));
