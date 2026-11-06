@@ -1354,6 +1354,8 @@ impl Session {
             }
         }
         self.built = built;
+        // Toolpaths follow the model.
+        self.regenerate_cam();
     }
 
     /// Moves an attached sketch's plane onto its face or construction plane, and its

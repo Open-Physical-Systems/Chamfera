@@ -379,6 +379,10 @@ pub enum OverlayStyle {
     Construct,
     /// What the pointer is over, before a click (`theme.hover_highlight`).
     Hover,
+    /// A toolpath's cutting moves.
+    ToolpathFeed,
+    /// A toolpath's rapid moves (the engine splits them into dashes).
+    ToolpathRapid,
 }
 
 impl OverlayStyle {
@@ -393,6 +397,8 @@ impl OverlayStyle {
             OverlayStyle::Measure => theme.measure,
             OverlayStyle::Construct => theme.construct,
             OverlayStyle::Hover => theme.hover_highlight,
+            OverlayStyle::ToolpathFeed => theme.toolpath_feed,
+            OverlayStyle::ToolpathRapid => theme.toolpath_rapid,
         }
     }
 }

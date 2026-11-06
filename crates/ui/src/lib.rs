@@ -17,6 +17,7 @@ use std::sync::{Arc, Mutex};
 mod assembly_ui;
 mod blend_ui;
 mod browser;
+mod cam_ui;
 mod chrome;
 mod construct_ui;
 mod context_menu;
@@ -162,6 +163,8 @@ pub struct ChamferaApp {
     search: search::SearchUi,
     /// Right-click menus, the selection filter and hover pre-highlight.
     ctx_menu: context_menu::ContextMenuUi,
+    /// The Manufacture workspace.
+    cam: cam_ui::CamUi,
     /// Visual style, section and the Appearance panel.
     display: display_ui::DisplayUi,
     /// The browser's file picker, downloads and local storage.
@@ -247,6 +250,7 @@ impl ChamferaApp {
             timeline: timeline::TimelineUi::default(),
             search: search::SearchUi::default(),
             ctx_menu: context_menu::ContextMenuUi::default(),
+            cam: cam_ui::CamUi::default(),
             display: display_ui::DisplayUi::default(),
             #[cfg(target_arch = "wasm32")]
             web: web::WebFiles::default(),
@@ -268,6 +272,8 @@ impl ChamferaApp {
                 Err(e) => app.message = Some((e.to_string(), true)),
             }
         }
+        // A script that generated toolpaths opens in the Manufacture workspace.
+        app.cam.active = app.session.toolpaths_visible() && app.session.active_sketch.is_none();
         if app.session.active_sketch.is_some() {
             app.sketch.tool = Some(sketch_ui::Tool::Select);
             app.refresh_sketch_status();
@@ -425,6 +431,14 @@ impl ChamferaApp {
                 }
                 self.run("view.zoom", p);
             }
+        }
+        if self.cam_picking()
+            && response.clicked()
+            && let Some(pos) = response.interact_pointer_pos()
+        {
+            let (x, y) = local(pos);
+            self.cam_click(x, y, w, h);
+            return;
         }
         if self.picking_extrude_target()
             && response.clicked()
@@ -839,7 +853,13 @@ impl eframe::App for ChamferaApp {
             .resizable(true)
             .default_size(248.0)
             .size_range(180.0..=420.0)
-            .show(ui, |ui| self.browser(ui));
+            .show(ui, |ui| {
+                if self.cam.active {
+                    self.cam_tree(ui);
+                } else {
+                    self.browser(ui);
+                }
+            });
         egui::CentralPanel::no_frame().show(ui, |ui| {
             if self.drawing.active && self.session.active_sketch.is_none() {
                 self.drawing_canvas(ui);
@@ -865,6 +885,7 @@ impl eframe::App for ChamferaApp {
             self.construct_dialog(&ctx);
             self.rename_dialog(&ctx);
             self.properties_window(&ctx);
+            self.cam_dialogs(&ctx);
             self.appearance_window(&ctx);
         }
         self.rename_box(&ctx);

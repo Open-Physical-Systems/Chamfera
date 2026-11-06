@@ -1,6 +1,7 @@
 //! Layer 2: the design document: parameters and sketches now, the feature timeline from M4.
 
 pub mod appearance;
+pub mod cam;
 pub mod component;
 pub mod construct;
 pub mod drawing;
@@ -59,6 +60,7 @@ use thiserror::Error;
 /// - 18: drawings: sheets with views of the solids and dimensions (`drawing`).
 ///   Older files open with no sheets.
 /// - 19: projected (linked) sketch curves and ellipses.
+/// - 20: the CAM section: setups, tools and machining operations (`cam`).
 /// - 21: body appearances (a colour and opacity per feature's body). Older files open
 ///   with every body in the theme's colour.
 pub const FORMAT_VERSION: u32 = 21;
@@ -243,6 +245,9 @@ pub struct Document {
     /// How the bodies a feature (or an import) made look, by its id. Display data only.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub appearances: BTreeMap<u32, Appearance>,
+    /// Manufacturing: setups, tools and operations (format 20). Older files have none.
+    #[serde(default, skip_serializing_if = "cam::Cam::is_empty")]
+    pub cam: cam::Cam,
 }
 
 impl Default for Document {
@@ -259,6 +264,7 @@ impl Default for Document {
             assembly: Assembly::default(),
             drawing: Drawing::default(),
             appearances: BTreeMap::new(),
+            cam: cam::Cam::default(),
         }
     }
 }
@@ -666,6 +672,8 @@ impl Document {
         checked.drawing = doc.drawing;
         appearance::check(&doc.appearances, checked.last_feature_id)?;
         checked.appearances = doc.appearances;
+        doc.cam.validate()?;
+        checked.cam = doc.cam;
         // Values in the file must agree with their expressions.
         checked.evaluate()?;
         Ok(checked)

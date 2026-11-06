@@ -12,6 +12,7 @@ authors.workspace = true
 chamfera-doc.workspace = true
 chamfera-drawing.workspace = true
 chamfera-io.workspace = true
+chamfera-cam.workspace = true
 chamfera-kernel.workspace = true
 chamfera-sketch.workspace = true
 chamfera-render.workspace = true

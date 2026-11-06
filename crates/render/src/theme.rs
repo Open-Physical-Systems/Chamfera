@@ -78,6 +78,11 @@ pub struct Theme {
     /// Crossing box selection (dragged right to left: what it touches): dashed outline.
     pub select_crossing: Rgba,
     pub select_crossing_fill: Rgba,
+    // toolpaths (Manufacture)
+    /// Cutting moves (feeds), drawn solid.
+    pub toolpath_feed: Rgba,
+    /// Rapid moves, drawn dashed.
+    pub toolpath_rapid: Rgba,
     // interface surfaces (see docs/design/ui.md)
     /// The app bar, ribbon, timeline and status bar.
     pub chrome: Rgba,
@@ -172,6 +177,8 @@ impl Theme {
             select_window_fill: Rgba(30, 112, 214, 36),
             select_crossing: Rgba(30, 135, 70, 255),
             select_crossing_fill: Rgba(30, 135, 70, 36),
+            toolpath_feed: Rgba(96, 72, 204, 255),
+            toolpath_rapid: Rgba(200, 50, 60, 220),
             chrome: Rgba(252, 252, 253, 255),
             panel: Rgba(246, 247, 249, 255),
             panel_alt: Rgba(236, 239, 243, 255),
@@ -240,6 +247,8 @@ impl Theme {
             select_window_fill: Rgba(84, 160, 255, 40),
             select_crossing: Rgba(88, 196, 124, 255),
             select_crossing_fill: Rgba(88, 196, 124, 40),
+            toolpath_feed: Rgba(170, 150, 255, 255),
+            toolpath_rapid: Rgba(255, 110, 110, 220),
             chrome: Rgba(29, 31, 35, 255),
             panel: Rgba(35, 38, 43, 255),
             panel_alt: Rgba(45, 49, 56, 255),

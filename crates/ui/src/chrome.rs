@@ -169,15 +169,34 @@ impl ChamferaApp {
         ui.add_space(2.0);
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = S2;
-            let solid = self.tab(ui, "SOLID", !sketching && !drawing, !sketching);
+            let manufacture = self.cam.active && !sketching && !drawing;
+            let solid = self.tab(
+                ui,
+                "SOLID",
+                !sketching && !drawing && !manufacture,
+                !sketching,
+            );
             if solid.clicked() {
                 self.drawing.active = false;
+                if manufacture {
+                    self.set_manufacture(false);
+                }
             }
             solid.on_hover_text(if sketching {
                 "Finish the sketch to use the solid tools"
             } else {
                 "Solid modelling: sketches, extrudes and revolves"
             });
+            if !sketching
+                && self
+                    .tab(ui, "MANUFACTURE", manufacture, true)
+                    .on_hover_text("Manufacture: setups, 2D milling toolpaths and G-code")
+                    .clicked()
+                && !manufacture
+            {
+                self.drawing.active = false;
+                self.set_manufacture(true);
+            }
             if sketching {
                 self.tab(ui, "SKETCH", true, true)
                     .on_hover_text("Editing a sketch: draw, constrain and dimension");
@@ -187,6 +206,9 @@ impl ChamferaApp {
                 .clicked()
             {
                 self.drawing.active = true;
+                if self.cam.active {
+                    self.set_manufacture(false);
+                }
             }
         });
         let look = self.look();
@@ -207,6 +229,8 @@ impl ChamferaApp {
                         self.sketch_toolbar(ui);
                     } else if drawing {
                         self.drawing_toolbar(ui);
+                    } else if self.cam.active {
+                        self.cam_toolbar(ui);
                     } else {
                         self.solid_toolbar(ui);
                     }

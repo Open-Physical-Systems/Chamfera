@@ -43,6 +43,10 @@ It uses the GPU if there is one, else a software Vulkan driver (lavapipe, `mesa-
 - `construct.pick {x, y, width, height}` names the face, nearest edge and vertex under a pixel in the form these commands take.
 - `sketch.create {"plane": <plane id>}` sketches on a construction plane and follows it; `solid.revolve` and `solid.pattern_circular` take `axis_feature` (`examples/construction-planes.json`).
 
+## Manufacture (CAM)
+- `cam.setup`, `cam.tool_add`, `cam.op_add {"kind": "facing"|"contour"|"pocket"|"drill", "tool", ...}`, `cam.op_edit`, `cam.generate`, `cam.list`, `cam.post {"dialect": "linuxcnc"|"grbl", "path"}` (without `path` the G-code comes back as `gcode`). Faces are named like `4:top` (feature id, role); `examples/cam-plate.json` builds a pocketed plate and all four operations.
+- Check `cam.generate`'s reply (lengths, minutes, per-operation `error`) against values you worked out; a script that runs `cam.generate` opens the app in the MANUFACTURE tab with the toolpaths drawn.
+
 ## Commands and scripts
 - `chamfera-cli commands` lists every command; `chamfera-cli exec <id> '<json>'` runs one.
 - `chamfera-cli run script.json` runs a list of `{"command", "params"}` steps and prints one reply per line (`examples/parameters.json`).
