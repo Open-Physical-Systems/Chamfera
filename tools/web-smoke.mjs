@@ -19,14 +19,27 @@
 //   --timeout MS      how long to wait for the app (default 30000)
 //   --settle MS       extra wait after it runs, before the screenshot (default 1500)
 //   --chrome PATH     the browser (default: $CHROME, then google-chrome, chromium, ...)
-//   --script FILE     a JS file evaluated in the page once the app runs (for checks)
-//   --keep-storage    reuse a profile folder across runs (default: a fresh one)
+//   --steps FILE      a JSON list of steps to run once the app runs (see below)
+//   --profile DIR     reuse this Chrome profile (local storage survives between runs);
+//                     default: a fresh one, removed afterwards
+//   --downloads DIR   where downloads go (default: a temporary folder)
+//
+// Steps drive the page like a user, with trusted input events:
+//   {"click": [x, y]}                        left click at CSS pixels (also "button")
+//   {"key": "o", "modifiers": ["ctrl"]}      a key press (modifiers: ctrl, shift, alt, meta)
+//   {"choose": ["path", ...]}                answer the next file picker with these files
+//   {"wait": 500}                            milliseconds
+//   {"expect": "js expression", "what": "description"}   must become truthy within 10 s
+//   {"download": "suffix", "minBytes": 1}    a download whose name ends so must complete
+//   {"reload": true}                         reload the page and wait for the app again
+//   {"shot": "file.png"}                     a screenshot
+// Paths in steps are relative to the steps file.
 
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { extname, join, resolve, normalize, sep } from "node:path";
+import { basename, dirname, extname, isAbsolute, join, resolve, normalize, sep } from "node:path";
 
 function parseArgs(argv) {
   const o = {
@@ -39,8 +52,9 @@ function parseArgs(argv) {
     timeout: 30000,
     settle: 1500,
     chrome: process.env.CHROME || null,
-    script: null,
+    steps: null,
     profile: null,
+    downloads: null,
   };
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
@@ -59,8 +73,9 @@ function parseArgs(argv) {
       case "--timeout": o.timeout = Number(next()); break;
       case "--settle": o.settle = Number(next()); break;
       case "--chrome": o.chrome = next(); break;
-      case "--script": o.script = next(); break;
+      case "--steps": o.steps = next(); break;
       case "--profile": o.profile = next(); break;
+      case "--downloads": o.downloads = next(); break;
       default: throw new Error(`unknown option ${a}`);
     }
   }
@@ -240,7 +255,20 @@ async function main() {
     }, 15000, "a page target");
     const cdp = await Cdp.connect(targets.webSocketDebuggerUrl);
     const log = [];
+    const downloads = [];
+    let chooser = null;
     cdp.on((m) => {
+      if (m.method === "Page.fileChooserOpened") chooser = m.params;
+      if (m.method === "Browser.downloadWillBegin") {
+        downloads.push({ guid: m.params.guid, name: m.params.suggestedFilename, state: "started" });
+      }
+      if (m.method === "Browser.downloadProgress") {
+        const d = downloads.find((x) => x.guid === m.params.guid);
+        if (d) {
+          d.state = m.params.state;
+          d.bytes = m.params.receivedBytes;
+        }
+      }
       if (m.method === "Runtime.consoleAPICalled") {
         const text = m.params.args.map((a) => a.value ?? a.description ?? "").join(" ");
         log.push(`[console.${m.params.type}] ${text}`);
@@ -260,6 +288,12 @@ async function main() {
     await cdp.send("Runtime.enable");
     await cdp.send("Log.enable");
     await cdp.send("Page.enable");
+    const downloadDir = o.downloads ? resolve(o.downloads) : join(profile, "downloads");
+    await cdp.send("Browser.setDownloadBehavior", {
+      behavior: "allowAndName",
+      downloadPath: downloadDir,
+      eventsEnabled: true,
+    });
     await cdp.send("Emulation.setDeviceMetricsOverride", {
       width: w,
       height: h,
@@ -284,16 +318,18 @@ async function main() {
     const query = o.renderer ? `?renderer=${encodeURIComponent(o.renderer)}` : "";
     const url = `http://127.0.0.1:${port}/${query}`;
     await cdp.send("Page.navigate", { url });
-    const state = await waitFor(
-      () =>
-        cdp.eval(`(() => {
-          const b = document.body;
-          const s = b && b.dataset.chamfera;
-          return s === "running" || s === "failed" ? s : null;
-        })()`).catch(() => null),
-      o.timeout,
-      "the app to start (body[data-chamfera])",
-    );
+    const started = () =>
+      waitFor(
+        () =>
+          cdp.eval(`(() => {
+            const b = document.body;
+            const s = b && b.dataset.chamfera;
+            return s === "running" || s === "failed" ? s : null;
+          })()`).catch(() => null),
+        o.timeout,
+        "the app to start (body[data-chamfera])",
+      );
+    const state = await started();
     await sleep(o.settle);
     const info = await cdp.eval(`(() => {
       const c = document.querySelector("canvas#chamfera");
@@ -313,10 +349,88 @@ async function main() {
     if (!info.canvas) problems.push("no canvas#chamfera");
     else if (info.canvas.px[0] < 100 || info.canvas.px[1] < 100) problems.push("the canvas is not sized");
     if (o.renderer === "webgl" && !/gl/i.test(info.backend)) problems.push(`asked for WebGL, got ${info.backend}`);
-    if (o.script) {
-      const result = await cdp.eval(readFileSync(o.script, "utf8"));
-      console.log(`script: ${JSON.stringify(result)}`);
-      await sleep(o.settle);
+    if (o.steps) {
+      const base = dirname(resolve(o.steps));
+      const at = (p) => (isAbsolute(p) ? p : join(base, p));
+      const steps = JSON.parse(readFileSync(o.steps, "utf8"));
+      const mods = (list = []) =>
+        list.reduce((m, k) => m | ({ alt: 1, ctrl: 2, meta: 4, shift: 8 }[k] ?? 0), 0);
+      let seen = 0;
+      for (const [i, step] of steps.entries()) {
+        const label = `step ${i + 1} ${JSON.stringify(step)}`;
+        console.log(label);
+        if (step.click) {
+          const [x, y] = step.click;
+          const button = step.button || "left";
+          await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
+          await sleep(100);
+          await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button, clickCount: 1 });
+          await sleep(50);
+          await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button, clickCount: 1 });
+          await sleep(300);
+        } else if (step.key) {
+          const key = step.key;
+          const code = key.length === 1 ? `Key${key.toUpperCase()}` : key;
+          const keyCode = key.length === 1 ? key.toUpperCase().charCodeAt(0) : 0;
+          const m = mods(step.modifiers);
+          for (const type of ["rawKeyDown", "keyUp"]) {
+            await cdp.send("Input.dispatchKeyEvent", {
+              type, key, code, modifiers: m, windowsVirtualKeyCode: keyCode,
+            });
+            await sleep(50);
+          }
+          await sleep(300);
+        } else if (step.choose) {
+          chooser = null;
+          await cdp.send("Page.setInterceptFileChooserDialog", { enabled: true });
+          step.pending = step.choose.map(at);
+          o.pendingFiles = step.pending;
+        } else if (step.wait) {
+          await sleep(step.wait);
+        } else if (step.expect) {
+          await waitFor(
+            () => cdp.eval(step.expect).catch(() => false),
+            step.timeout || 10000,
+            step.what || step.expect,
+          );
+        } else if (step.download) {
+          const d = await waitFor(
+            () => downloads.slice(seen).find((x) => x.name.endsWith(step.download) && x.state !== "started"),
+            step.timeout || 10000,
+            `a download ending in ${step.download}`,
+          );
+          seen = downloads.indexOf(d) + 1;
+          if (d.state !== "completed") throw new Error(`download ${d.name}: ${d.state}`);
+          if ((d.bytes ?? 0) < (step.minBytes ?? 1)) throw new Error(`download ${d.name} has ${d.bytes} bytes`);
+          console.log(`  downloaded ${d.name} (${d.bytes} bytes) to ${join(downloadDir, d.guid)}`);
+        } else if (step.reload) {
+          await cdp.eval(`delete document.body.dataset.chamfera; true`).catch(() => {});
+          await cdp.send("Page.reload", {});
+          if ((await started()) !== "running") throw new Error("the app did not start again");
+          await sleep(o.settle);
+        } else if (step.shot) {
+          const shot = await cdp.send("Page.captureScreenshot", { format: "png" });
+          writeFileSync(at(step.shot), Buffer.from(shot.data, "base64"));
+          console.log(`  screenshot: ${at(step.shot)}`);
+        } else {
+          throw new Error(`unknown ${label}`);
+        }
+        // A picker the page opened is answered with the files from the last "choose".
+        if (o.pendingFiles && (step.click || step.key)) {
+          const end = Date.now() + 3000;
+          while (!chooser && Date.now() < end) await sleep(100);
+        }
+        if (chooser && o.pendingFiles) {
+          await cdp.send("DOM.setFileInputFiles", {
+            files: o.pendingFiles,
+            backendNodeId: chooser.backendNodeId,
+          });
+          console.log(`  picked ${o.pendingFiles.map((f) => basename(f)).join(", ")}`);
+          chooser = null;
+          o.pendingFiles = null;
+        }
+      }
+      if (o.pendingFiles) problems.push("a file was offered but the page never opened a picker");
     }
     if (o.out) {
       const shot = await cdp.send("Page.captureScreenshot", { format: "png" });

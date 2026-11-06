@@ -37,8 +37,7 @@ impl ChamferaApp {
             ui.menu_button("View", |ui| self.view_menu(ui));
             widgets::bar_divider(ui, self.look(), 20.0);
             let look = self.look();
-            let desktop = cfg!(not(target_arch = "wasm32"));
-            if widgets::icon_button(ui, look, Icon::Save, 30.0, 20.0, desktop, false)
+            if widgets::icon_button(ui, look, Icon::Save, 30.0, 20.0, true, false)
                 .on_hover_text("Save the design  (Ctrl+S)")
                 .clicked()
             {
