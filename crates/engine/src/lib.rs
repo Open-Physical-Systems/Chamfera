@@ -26,6 +26,9 @@ mod naming_tests;
 mod params;
 #[cfg(test)]
 mod params_tests;
+pub mod perf;
+#[cfg(test)]
+mod perf_tests;
 pub mod pick_filter;
 pub mod projection;
 pub mod script;
@@ -81,6 +84,11 @@ pub struct Session {
     pub selected_edges: Vec<String>,
     /// Solids built from the timeline (worked out again after every change).
     built: solids::Built,
+    /// Checkpoints and meshes of earlier rebuilds, to rebuild only what changed. Not part
+    /// of the design or of undo.
+    pub(crate) caches: perf::Caches,
+    /// Per-item times of the rebuilds since timing was switched on (`debug.timings`).
+    pub(crate) timings: Vec<perf::FeatureTiming>,
     /// Toolpaths worked out from the CAM section, and whether they are shown.
     pub(crate) cam: cam::CamState,
     /// What a joint drag, the motion study's time and an exploded view show. Display
