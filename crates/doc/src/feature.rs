@@ -508,6 +508,12 @@ pub enum FeatureKind {
     SheetBase(crate::SheetBase),
     SheetFlange(crate::SheetFlange),
     SheetUnfold(crate::SheetUnfold),
+    /// Faces moved along their normals (direct edit).
+    OffsetFace(crate::face_edit::OffsetFace),
+    /// Faces removed and the gap healed (direct edit).
+    DeleteFace(crate::face_edit::DeleteFace),
+    /// Planar faces moved or turned (direct edit).
+    MoveFace(crate::face_edit::MoveFace),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -538,7 +544,10 @@ impl FeatureKind {
             | FeatureKind::Blend(_)
             | FeatureKind::Shell(_)
             | FeatureKind::Mirror(_)
-            | FeatureKind::Move(_) => None,
+            | FeatureKind::Move(_)
+            | FeatureKind::OffsetFace(_)
+            | FeatureKind::DeleteFace(_)
+            | FeatureKind::MoveFace(_) => None,
         }
     }
 
@@ -571,7 +580,10 @@ impl FeatureKind {
             | FeatureKind::Construct(_)
             | FeatureKind::Blend(_)
             | FeatureKind::Shell(_)
-            | FeatureKind::Move(_) => Operation::NewBody,
+            | FeatureKind::Move(_)
+            | FeatureKind::OffsetFace(_)
+            | FeatureKind::DeleteFace(_)
+            | FeatureKind::MoveFace(_) => Operation::NewBody,
         }
     }
 
@@ -591,7 +603,10 @@ impl FeatureKind {
             | FeatureKind::Shell(_)
             | FeatureKind::Mirror(_)
             | FeatureKind::Move(_)
-            | FeatureKind::Loft(_) => &[],
+            | FeatureKind::Loft(_)
+            | FeatureKind::OffsetFace(_)
+            | FeatureKind::DeleteFace(_)
+            | FeatureKind::MoveFace(_) => &[],
         }
     }
 
@@ -620,6 +635,9 @@ impl FeatureKind {
             FeatureKind::SheetBase(_) => "BaseFlange",
             FeatureKind::SheetFlange(_) => "Flange",
             FeatureKind::SheetUnfold(_) => "FlatPattern",
+            FeatureKind::OffsetFace(_) => "Offset Face",
+            FeatureKind::DeleteFace(_) => "Delete Face",
+            FeatureKind::MoveFace(_) => "Move Face",
         }
     }
 
@@ -664,6 +682,11 @@ impl FeatureKind {
                 .map(String::as_str)
                 .collect(),
             FeatureKind::SheetBase(_) | FeatureKind::SheetUnfold(_) => Vec::new(),
+            FeatureKind::OffsetFace(o) => vec![o.distance.as_str()],
+            FeatureKind::DeleteFace(_) => Vec::new(),
+            FeatureKind::MoveFace(m) => std::iter::once(m.distance.as_str())
+                .chain(m.turn.as_ref().map(|t| t.angle.as_str()))
+                .collect(),
             FeatureKind::Pattern(p) => match &p.layout {
                 PatternLayout::Linear { spacing, .. } => vec![p.count.as_str(), spacing.as_str()],
                 PatternLayout::Circular { angle, .. } => vec![p.count.as_str(), angle.as_str()],
@@ -698,6 +721,12 @@ impl Document {
         }
         if let FeatureKind::SheetUnfold(u) = kind {
             return self.check_sheet_unfold(u);
+        }
+        match kind {
+            FeatureKind::OffsetFace(o) => return self.check_offset_face(o),
+            FeatureKind::DeleteFace(d) => return self.check_delete_face(d),
+            FeatureKind::MoveFace(m) => return self.check_move_face(m),
+            _ => {}
         }
         if let FeatureKind::Blend(b) = kind {
             if b.edges.is_empty() || b.edges.len() > MAX_BLEND_EDGES {
@@ -767,7 +796,10 @@ impl Document {
             | FeatureKind::Shell(_)
             | FeatureKind::Mirror(_)
             | FeatureKind::Move(_)
-            | FeatureKind::Loft(_) => {}
+            | FeatureKind::Loft(_)
+            | FeatureKind::OffsetFace(_)
+            | FeatureKind::DeleteFace(_)
+            | FeatureKind::MoveFace(_) => {}
             FeatureKind::Sweep(s) => self.check_sweep_path(s)?,
             FeatureKind::Revolve(r) => {
                 let a = self.evaluate_feature_value(&r.angle, expr::Dim::ANGLE)?;
@@ -1303,7 +1335,10 @@ impl Document {
                 | FeatureKind::Shell(_)
                 | FeatureKind::Move(_)
                 | FeatureKind::Sweep(_)
-                | FeatureKind::Loft(_) => false,
+                | FeatureKind::Loft(_)
+                | FeatureKind::OffsetFace(_)
+                | FeatureKind::DeleteFace(_)
+                | FeatureKind::MoveFace(_) => false,
             })
             .map(|f| f.name.clone());
         sketches.chain(features).collect()

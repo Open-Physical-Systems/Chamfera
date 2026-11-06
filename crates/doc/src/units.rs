@@ -218,6 +218,10 @@ impl FeatureKind {
                         .flatten(),
                 )
                 .collect(),
+            FeatureKind::OffsetFace(o) => vec![&mut o.distance],
+            FeatureKind::DeleteFace(_) => Vec::new(),
+            // A move's turn is an angle; its distance is a length.
+            FeatureKind::MoveFace(m) => vec![&mut m.distance],
             FeatureKind::Pattern(p) => match &mut p.layout {
                 crate::PatternLayout::Linear { spacing, .. } => vec![spacing],
                 crate::PatternLayout::Circular { .. } => Vec::new(),

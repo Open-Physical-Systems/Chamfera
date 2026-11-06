@@ -50,6 +50,8 @@
 //! Rung K12 (first part) is here: [`shell`] hollows a solid of planes, cylinders and
 //! cones into walls of a thickness, with chosen faces open (an inward offset subtracted).
 
+mod face_edit;
+pub use face_edit::{delete_faces, move_faces, offset_faces};
 mod blend;
 mod boolean;
 mod check;

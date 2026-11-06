@@ -38,6 +38,8 @@ pub static COMMANDS: &[CommandSpec] = &[
                  faces: list of strings (optional) - new open faces of a shell\n\
                  height, angle, position, side, offset_start, offset_end, edge (optional) - a flange's new values, as for sheet.flange\n\
                  rule: string, reversed: boolean (optional) - a base flange's new rule and direction\n\
+                 faces: list of strings (optional) - new open faces of a shell, or faces of a face edit\n\
+                 distance, angle (optional) - a face edit's new distance (offset, move) and turn angle\n\
                  suppressed: boolean (optional)",
         mutates: true,
         run: edit,
@@ -255,7 +257,11 @@ pub(super) fn feature_reply(s: &Session, id: u32) -> Value {
     let solids: Vec<Value> = s
         .solids()
         .iter()
-        .filter(|x| x.feature == id || crate::solids::body_has_feature(&x.body, id))
+        .filter(|x| {
+            x.feature == id
+                || crate::solids::body_has_feature(&x.body, id)
+                || s.edited_solids(id).contains(&x.name)
+        })
         .map(|x| {
             json!({
                 "name": x.name,
@@ -359,7 +365,7 @@ fn extrude_options(s: &Session, p: &Value, e: &mut Extrude) -> Result<(), Comman
 }
 
 /// The extrude `solid.extrude` and `solid.extrude_preview` describe.
-fn new_extrude(s: &Session, p: &Value) -> Result<Extrude, CommandError> {
+pub(super) fn new_extrude(s: &Session, p: &Value) -> Result<Extrude, CommandError> {
     let mut e = Extrude {
         sketch: params::req_id(p, "sketch")?,
         profiles: seeds(p)?,
@@ -746,6 +752,9 @@ fn pattern_circular(s: &mut Session, p: &Value) -> CmdResult {
 
 fn edit(s: &mut Session, p: &Value) -> CmdResult {
     let id = params::req_id(p, "feature")?;
+    if super::face_edit::is_face_edit(&s.doc.feature(id)?.kind) {
+        return super::face_edit::edit(s, id, p);
+    }
     let new_distance = distance(p)?;
     let new_direction = direction(p)?;
     let new_operation = operation(p)?;
@@ -780,6 +789,9 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
             | FeatureKind::SheetFlange(_)
             | FeatureKind::SheetUnfold(_) => {
                 return Err(bad("sheet metal features have no operation"));
+            }
+            FeatureKind::OffsetFace(_) | FeatureKind::DeleteFace(_) | FeatureKind::MoveFace(_) => {
+                return Err(bad("a face edit has no operation"));
             }
         }
     }

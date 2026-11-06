@@ -118,7 +118,7 @@ fn offset_surface(s: &Surface, delta: f64, name: &str) -> KernelResult<Surface> 
 }
 
 /// Solves a 3x3 symmetric positive definite system by Cholesky factorisation.
-fn solve3(m: [[f64; 3]; 3], b: [f64; 3]) -> Option<[f64; 3]> {
+pub(crate) fn solve3(m: [[f64; 3]; 3], b: [f64; 3]) -> Option<[f64; 3]> {
     let mut l = [[0.0f64; 3]; 3];
     for i in 0..3 {
         for j in 0..=i {

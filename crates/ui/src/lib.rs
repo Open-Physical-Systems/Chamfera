@@ -36,6 +36,7 @@ mod navigation;
 mod params_ui;
 mod prefs;
 mod prefs_ui;
+mod press_pull_ui;
 mod search;
 mod sheet_ui;
 mod shell_ui;
@@ -95,6 +96,9 @@ pub struct Options {
     pub search: Option<String>,
     /// Open the viewport's right-click menu at this viewport point once it has drawn.
     pub context_menu: Option<[f32; 2]>,
+    /// Open Press Pull, pick at this viewport point and set the distance, as a drag
+    /// would: `[x, y, distance]`.
+    pub press_pull: Option<[f32; 3]>,
     /// Open the Preferences window at start on this page (general, navigation, units,
     /// grid).
     pub preferences: Option<String>,
@@ -339,6 +343,12 @@ impl ChamferaApp {
             }
         }
         app.ctx_menu.open_at = options.context_menu;
+        if let Some(demo) = options.press_pull {
+            app.open_press_pull(press_pull_ui::PullMode::Auto);
+            if let Some(t) = app.solid.press_pull.as_mut() {
+                t.demo = Some(demo);
+            }
+        }
         app.box_preview = options.select_box;
         if let Some(q) = &options.search {
             app.run_action(shortcuts::Action::Search);
@@ -449,6 +459,9 @@ impl ChamferaApp {
         {
             let (x, y) = local(pos);
             self.cam_click(x, y, w, h);
+            return;
+        }
+        if self.press_pull_input(response, rect) {
             return;
         }
         if self.picking_extrude_target()
@@ -641,6 +654,8 @@ impl ChamferaApp {
         self.session.scene.overlays.extend(joints);
         let holes = self.hole_overlays();
         self.session.scene.overlays.extend(holes);
+        let pulls = self.press_pull_overlays();
+        self.session.scene.overlays.extend(pulls);
         self.inspect_overlays();
         if let Some(picked) = self.extrude_overlay() {
             self.session.scene.overlays.push(Overlay {
@@ -733,6 +748,7 @@ impl ChamferaApp {
             self.dimension_labels(ui, rect);
         }
         self.inspect_labels(ui, rect);
+        self.press_pull_labels(ui, rect);
         self.paint_box(ui, rect);
         self.view_cube(ui, rect);
         self.viewport_hint(ui, rect);
@@ -907,6 +923,7 @@ impl eframe::App for ChamferaApp {
             self.inspect_dialog(&ctx);
             self.shell_dialog(&ctx);
             self.sheet_dialogs(&ctx);
+            self.press_pull_dialog(&ctx);
             self.sweep_dialog(&ctx);
             self.feature_dialog(&ctx);
             self.timeline_error_window(&ctx);

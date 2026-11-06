@@ -263,6 +263,16 @@ fn hostile_params_never_panic() {
         json!({"faces": [], "pick": {"x": 400, "y": 300, "width": 800, "height": 600}, "thickness": 1}),
         json!({"pick": {"x": 400, "y": 300, "width": 800, "height": 600}, "thickness": [2]}),
         json!({"faces": [], "thickness": f64::NAN}),
+        json!({"faces": ["2:top"], "distance": 1e308, "angle": f64::NAN, "direction": {"x": 0, "y": 0, "z": 0}}),
+        json!({"faces": [long, 5], "distance": "q", "origin": "here", "axis": [1]}),
+        json!({"faces": ["2:top"], "distance": 0, "angle": "500 deg", "origin": {"x": 0, "y": 0, "z": 0}, "axis": {"x": 0, "y": 0, "z": 0}}),
+        json!({"face": "2:top", "distance": -1e9, "preview": true}),
+        json!({"face": long, "edge": "2:top 0", "distance": 1}),
+        json!({"edge": "2:top 0", "distance": "-2 mm", "preview": "yes", "clear": 1}),
+        json!({"sketch": 1, "profile": {"x": 1e300, "y": 0}, "distance": 5, "operation": "smash"}),
+        json!({"sketch": 1, "profile": [1], "distance": f64::NAN}),
+        json!({"pick": {"x": 400, "y": 300, "width": 800, "height": 600}, "distance": 3, "preview": true}),
+        json!({"face": "2:top", "distance": 2, "clear": true}),
         json!({"x1": 0, "y1": 0, "x2": 800, "y2": 600, "width": 800, "height": 600, "mode": "crossing", "add": true, "remove": true}),
         json!({"x1": 900, "y1": -1, "x2": f64::NAN, "y2": 1e308, "width": 800, "height": 600, "mode": "window"}),
         json!({"x1": 0, "y1": 0, "x2": 0, "y2": 0, "width": 1, "height": 1, "mode": "crossing", "add": "yes"}),
@@ -3915,6 +3925,291 @@ fn projecting_needs_a_sketch_and_real_edges() {
         s.execute("sketch.project", &json!({"edges": ["2:top 1"]}))
             .is_err()
     );
+}
+
+// ----- direct face edits and Press Pull -----
+
+fn face_names(s: &Session) -> Vec<String> {
+    s.solids()
+        .iter()
+        .flat_map(|x| {
+            x.body
+                .faces()
+                .into_iter()
+                .filter_map(|f| x.body.face_name(f).ok().flatten().map(str::to_owned))
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+fn solid_volume(s: &Session) -> f64 {
+    s.solids().iter().map(|x| x.body.volume().unwrap()).sum()
+}
+
+#[test]
+fn offset_face_moves_the_top_of_the_plate_and_follows_upstream_edits() {
+    let mut s = Session::new();
+    extruded_plate(&mut s, json!(10));
+    // 50 x 30 x (10 + 5) and 50 x 30 x (10 - 4).
+    let r = s
+        .execute(
+            "solid.offset_face",
+            &json!({"faces": ["2:top"], "distance": 5}),
+        )
+        .unwrap();
+    assert!((exact_volume(&r) - 22_500.0).abs() < 1e-6);
+    let id = r["feature"].as_u64().unwrap();
+    assert_eq!(r["name"], "Offset Face1");
+    let r = s
+        .execute("feature.edit", &json!({"feature": id, "distance": -4}))
+        .unwrap();
+    assert!((exact_volume(&r) - 9_000.0).abs() < 1e-6);
+    // The plate made 20 thick upstream: the top still drops 4, 50·30·16.
+    s.execute("feature.edit", &json!({"feature": 2, "distance": 20}))
+        .unwrap();
+    assert!((solid_volume(&s) - 24_000.0).abs() < 1e-6);
+    assert!(s.feature_errors().is_empty());
+    // A face edit takes no extrude or shell values.
+    assert!(
+        s.execute("feature.edit", &json!({"feature": id, "thickness": 1}))
+            .is_err()
+    );
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!((solid_volume(&s) - 9_000.0).abs() < 1e-6);
+}
+
+#[test]
+fn an_offset_through_the_body_is_refused_and_changes_nothing() {
+    let mut s = Session::new();
+    extruded_plate(&mut s, json!(10));
+    let before = s.doc.clone();
+    for p in [
+        json!({"faces": ["2:top"], "distance": -10}),
+        json!({"faces": ["2:top"], "distance": -15}),
+        json!({"faces": ["2:top"], "distance": 0}),
+        json!({"faces": ["9:nowhere"], "distance": 1}),
+        json!({"faces": [], "distance": 1}),
+    ] {
+        assert!(s.execute("solid.offset_face", &p).is_err(), "{p}");
+    }
+    assert_eq!(s.doc, before);
+    assert!((solid_volume(&s) - 15_000.0).abs() < 1e-6);
+}
+
+/// A 50 x 30 x 10 plate with a through hole of diameter 6 at (25, 15); returns the hole
+/// wall's face name.
+fn plate_with_hole_wall(s: &mut Session) -> String {
+    s.execute("sketch.create", &json!({"plane": "xy"})).unwrap();
+    s.execute(
+        "sketch.rectangle",
+        &json!({"x1": 0, "y1": 0, "x2": 50, "y2": 30}),
+    )
+    .unwrap();
+    s.execute("sketch.circle", &json!({"cx": 25, "cy": 15, "radius": 3}))
+        .unwrap();
+    s.execute("sketch.finish", &json!({})).unwrap();
+    s.execute(
+        "solid.extrude",
+        &json!({"sketch": 1, "profiles": [{"x": 5, "y": 5}], "distance": 10}),
+    )
+    .unwrap();
+    let x = &s.solids()[0].body;
+    x.faces()
+        .into_iter()
+        .find(|f| {
+            matches!(
+                x.face_surface(*f).unwrap(),
+                Some((chamfera_kernel::Surface::Cylinder(_), _))
+            )
+        })
+        .and_then(|f| x.face_name(f).unwrap().map(str::to_owned))
+        .unwrap()
+}
+
+#[test]
+fn offsetting_a_hole_wall_widens_the_hole() {
+    let mut s = Session::new();
+    let wall = plate_with_hole_wall(&mut s);
+    let pi = std::f64::consts::PI;
+    assert!((solid_volume(&s) - (15_000.0 - 90.0 * pi)).abs() < 1e-6);
+    // The wall's outward normal points into the hole: -1 takes the radius from 3 to 4,
+    // 15000 - 16π·10.
+    let r = s
+        .execute(
+            "solid.offset_face",
+            &json!({"faces": [wall], "distance": -1}),
+        )
+        .unwrap();
+    let want = 15_000.0 - 160.0 * pi;
+    assert!(
+        (exact_volume(&r) - want).abs() < 1e-6,
+        "{}",
+        exact_volume(&r)
+    );
+}
+
+#[test]
+fn deleting_a_fillet_face_gives_the_sharp_corner_back() {
+    // The filleted-block example without its chamfer: 60 x 40 x 15 with a hole of r 8
+    // and its four vertical edges filleted r 8. Deleting one fillet face adds back
+    // (8² - π 8²/4) · 15 = (64 - 16π) · 15.
+    let mut s = Session::new();
+    s.execute("sketch.create", &json!({"plane": "xy"})).unwrap();
+    s.execute(
+        "sketch.rectangle",
+        &json!({"x1": 0, "y1": 0, "x2": 60, "y2": 40}),
+    )
+    .unwrap();
+    s.execute("sketch.circle", &json!({"cx": 30, "cy": 20, "radius": 8}))
+        .unwrap();
+    s.execute("sketch.finish", &json!({})).unwrap();
+    s.execute(
+        "solid.extrude",
+        &json!({"sketch": 1, "profiles": [{"x": 5, "y": 5}], "distance": 15}),
+    )
+    .unwrap();
+    let r = s
+        .execute(
+            "solid.fillet",
+            &json!({"edges": ["2:sweep 0", "2:sweep 1", "2:sweep 2", "2:sweep 3"], "radius": 8}),
+        )
+        .unwrap();
+    let pi = std::f64::consts::PI;
+    let corner = (64.0 - 16.0 * pi) * 15.0;
+    let filleted = 36_000.0 - 64.0 * pi * 15.0 - 4.0 * corner;
+    assert!((exact_volume(&r) - filleted).abs() < 1e-6);
+    let fillet = r["feature"].as_u64().unwrap();
+    let name = format!("{fillet}:fillet of 2:sweep 0");
+    assert!(face_names(&s).contains(&name));
+    let r = s
+        .execute("solid.delete_face", &json!({"faces": [name]}))
+        .unwrap();
+    assert!((exact_volume(&r) - (filleted + corner)).abs() < 1e-6);
+    // Deleting a plain side face cannot be healed: refused, nothing changes.
+    let before = s.doc.clone();
+    assert!(
+        s.execute("solid.delete_face", &json!({"faces": ["2:side 0"]}))
+            .is_err()
+    );
+    assert_eq!(s.doc, before);
+}
+
+#[test]
+fn deleting_a_blind_holes_faces_fills_it() {
+    let mut s = Session::new();
+    extruded_plate(&mut s, json!(10));
+    let plane = s.named_face_plane("2:top").unwrap();
+    let at = plane.to_plane(chamfera_geom::Point3::new(25.0, 15.0, 10.0));
+    let r = s
+        .execute(
+            "solid.hole",
+            &json!({"face": "2:top", "points": [{"x": at.x, "y": at.y}], "diameter": 6,
+                    "depth": 4, "tip_angle": "flat"}),
+        )
+        .unwrap();
+    // A flat-bottomed hole r 3, 4 deep: 15000 - 9π·4.
+    let pi = std::f64::consts::PI;
+    assert!((exact_volume(&r) - (15_000.0 - 36.0 * pi)).abs() < 1e-6);
+    let id = r["feature"].as_u64().unwrap();
+    let faces = vec![format!("{id}:hole 0 wall"), format!("{id}:hole 0 floor")];
+    let r = s
+        .execute("solid.delete_face", &json!({"faces": faces}))
+        .unwrap();
+    assert!((exact_volume(&r) - 15_000.0).abs() < 1e-6);
+}
+
+#[test]
+fn press_pull_picks_the_operation_from_what_it_is_given() {
+    let mut s = Session::new();
+    extruded_plate(&mut s, json!(10));
+    // A face: the same as Offset Face.
+    let r = s
+        .execute("solid.press_pull", &json!({"face": "2:top", "distance": 5}))
+        .unwrap();
+    assert_eq!(r["operation"], "Offset Face");
+    assert!((exact_volume(&r) - 22_500.0).abs() < 1e-6);
+    let id = r["feature"].as_u64().unwrap();
+    assert!(matches!(
+        s.doc.feature(id as u32).unwrap().kind,
+        chamfera_doc::FeatureKind::OffsetFace(_)
+    ));
+    // An edge: a fillet. `top 0` is a 50 mm edge of the (raised) top.
+    let r = s
+        .execute(
+            "solid.press_pull",
+            &json!({"edge": "2:top 0", "distance": 2}),
+        )
+        .unwrap();
+    assert_eq!(r["operation"], "Fillet");
+    let fillet = r["feature"].as_u64().unwrap();
+    // 22500 - (1 - π/4) 2² · 50.
+    let pi = std::f64::consts::PI;
+    let v = 22_500.0 - (1.0 - pi / 4.0) * 4.0 * 50.0;
+    assert!((exact_volume(&r) - v).abs() < 1e-6, "{}", exact_volume(&r));
+    // The fillet's face: its radius changes (to 3) instead of a new feature.
+    let n = s.doc.features.len();
+    let face = format!("{fillet}:fillet of 2:top 0");
+    let preview = s
+        .execute(
+            "solid.press_pull",
+            &json!({"face": face, "distance": 3, "preview": true}),
+        )
+        .unwrap();
+    let v3 = 22_500.0 - (1.0 - pi / 4.0) * 9.0 * 50.0;
+    assert!((preview["volume"].as_f64().unwrap() - v3).abs() < 1e-6);
+    assert_eq!(s.scene.previews.len(), 1);
+    assert_eq!(s.doc.features.len(), n);
+    let r = s
+        .execute("solid.press_pull", &json!({"face": face, "distance": 3}))
+        .unwrap();
+    assert_eq!(r["operation"], "Fillet radius");
+    assert_eq!(s.doc.features.len(), n);
+    assert!(s.scene.previews.is_empty());
+    assert!((solid_volume(&s) - v3).abs() < 1e-6);
+    // A sketch profile: an extrude.
+    let r = s
+        .execute(
+            "solid.press_pull",
+            &json!({"sketch": 1, "profile": {"x": 25, "y": 15}, "distance": 4}),
+        )
+        .unwrap();
+    assert_eq!(r["operation"], "Extrude");
+    // Nothing or two things given: refused.
+    assert!(
+        s.execute("solid.press_pull", &json!({"distance": 4}))
+            .is_err()
+    );
+    assert!(
+        s.execute(
+            "solid.press_pull",
+            &json!({"face": "2:top", "edge": "2:top 0", "distance": 4})
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn move_face_tilts_the_top_about_its_centre_line() {
+    let mut s = Session::new();
+    extruded_plate(&mut s, json!(10));
+    // A turn of 10° about the line y = 15, z = 10 along x: the wedges gained and lost are
+    // equal, so the volume stays 15000.
+    let r = s
+        .execute(
+            "solid.move_face",
+            &json!({"faces": ["2:top"], "angle": 10,
+                    "origin": {"x": 0, "y": 15, "z": 10}, "axis": {"x": 1, "y": 0, "z": 0}}),
+        )
+        .unwrap();
+    assert!((exact_volume(&r) - 15_000.0).abs() < 1e-6);
+    // The bottom moved 5 along its outward normal (down): 50 x 30 x 15 less nothing.
+    let r = s
+        .execute(
+            "solid.move_face",
+            &json!({"faces": ["2:bottom"], "distance": 5}),
+        )
+        .unwrap();
+    assert!((exact_volume(&r) - 22_500.0).abs() < 1e-6);
 }
 
 /// A circle of radius `r` on the YZ plane at the origin (sketch 1) and the L path (sketch

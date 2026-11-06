@@ -270,6 +270,9 @@ pub struct Built {
     pub constructs: BTreeMap<u32, crate::construct::Constructed>,
     /// Sheet metal parts and flat patterns.
     pub sheet: crate::sheet::SheetState,
+    /// The solids each direct face edit changed, by name (their faces keep the names of
+    /// the features that made them).
+    pub edited: BTreeMap<u32, Vec<String>>,
 }
 
 /// A sketch loop as exact kernel profile edges: lines stay lines, arcs and circles stay
@@ -1214,6 +1217,30 @@ impl Session {
                 }
                 continue;
             }
+            let face_edit = match &feature.kind {
+                FeatureKind::OffsetFace(o) => Some(crate::face_edit::build_offset_face(
+                    &self.doc, o, feature.id, &made,
+                )),
+                FeatureKind::DeleteFace(d) => {
+                    Some(crate::face_edit::build_delete_face(d, feature.id, &made))
+                }
+                FeatureKind::MoveFace(m) => Some(crate::face_edit::build_move_face(
+                    &self.doc, m, feature.id, &made,
+                )),
+                _ => None,
+            };
+            if let Some(result) = face_edit {
+                match result {
+                    Ok((next, changed)) => {
+                        made = next;
+                        built.edited.insert(feature.id, changed);
+                    }
+                    Err(e) => {
+                        built.errors.insert(feature.id, e);
+                    }
+                }
+                continue;
+            }
             if let FeatureKind::Shell(sh) = &feature.kind {
                 match build_shell(&self.doc, sh, feature.id, &made) {
                     Ok(next) => made = next,
@@ -1251,6 +1278,9 @@ impl Session {
                 | FeatureKind::SheetBase(_)
                 | FeatureKind::SheetFlange(_)
                 | FeatureKind::SheetUnfold(_) => continue,
+                FeatureKind::OffsetFace(_)
+                | FeatureKind::DeleteFace(_)
+                | FeatureKind::MoveFace(_) => continue,
             };
             let operation = feature.kind.operation();
             let result = result.map(|bodies| {
@@ -1549,6 +1579,11 @@ impl Session {
             .filter(|x| x.scene_id == Some(hit.body))
             .map(|x| x.name.clone())
             .collect()
+    }
+
+    /// The names of the solids the direct face edit `feature` changed in the last rebuild.
+    pub fn edited_solids(&self, feature: u32) -> &[String] {
+        self.built.edited.get(&feature).map_or(&[], Vec::as_slice)
     }
 
     /// Features that failed in the last rebuild.
