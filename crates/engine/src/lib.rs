@@ -6,6 +6,7 @@
 
 pub mod cmd;
 mod params;
+pub mod script;
 pub mod sketching;
 pub mod solids;
 

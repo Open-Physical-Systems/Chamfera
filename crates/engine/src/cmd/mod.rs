@@ -49,6 +49,11 @@ pub fn find(id: &str) -> Option<&'static CommandSpec> {
     registry().into_iter().find(|c| c.id == id)
 }
 
+/// True for script names like `rect` or `axis2` (the same rule as parameter names).
+pub fn is_valid_name(s: &str) -> bool {
+    chamfera_doc::is_valid_name(s)
+}
+
 /// True for ids like `param.set` or `sketch.rectangle.two_point`.
 pub fn is_valid_id(id: &str) -> bool {
     let parts: Vec<&str> = id.split('.').collect();

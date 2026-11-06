@@ -93,18 +93,11 @@ fn run_script(path: &str, session: &mut Session) -> Result<(), String> {
     let steps = script
         .as_array()
         .ok_or("a script is a JSON list of {\"command\": ..., \"params\": {...}}")?;
-    for (i, step) in steps.iter().enumerate() {
-        let id = step
-            .get("command")
-            .and_then(Value::as_str)
-            .ok_or_else(|| format!("step {}: `command` must be a string", i + 1))?;
-        let params = step.get("params").cloned().unwrap_or_else(|| json!({}));
-        let reply = session
-            .execute(id, &params)
-            .map_err(|e| format!("step {} ({id}): {e}", i + 1))?;
+    let replies = chamfera_engine::script::run_steps(session, steps).map_err(|e| e.to_string())?;
+    for (i, (step, reply)) in steps.iter().zip(&replies).enumerate() {
         println!(
             "{}",
-            json!({ "step": i + 1, "command": id, "reply": reply })
+            json!({ "step": i + 1, "command": step.get("command"), "reply": reply })
         );
     }
     Ok(())
