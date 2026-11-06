@@ -11,6 +11,13 @@ struct Globals {
     background_bottom: vec4<f32>,
     // x, y: view size in pixels; z: overlay point size in pixels.
     viewport: vec4<f32>,
+    // Section plane: xyz normal (towards the removed side), w = -dot(normal, origin).
+    section: vec4<f32>,
+    // x: 1 with a section; y: pixels per mm; z: dash period (px); w: hatch period (px).
+    display: vec4<f32>,
+    section_cap: vec4<f32>,
+    section_hatch: vec4<f32>,
+    edge_hidden: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> g: Globals;
@@ -38,8 +45,27 @@ fn mesh_vs(@location(0) position: vec3<f32>, @location(1) normal: vec3<f32>) -> 
     return out;
 }
 
+// True where the section plane cuts the point away.
+fn cut_away(world: vec3<f32>) -> bool {
+    return g.display.x > 0.5 && dot(g.section.xyz, world) + g.section.w > 0.0;
+}
+
 @fragment
 fn mesh_fs(in: MeshOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    if (cut_away(in.world)) {
+        discard;
+    }
+    // Looking into a cut solid shows the inside of its far faces: draw them as the cut
+    // face, flat, with 45-degree hatch stripes in screen space.
+    if (g.display.x > 0.5 && !front) {
+        let period = max(g.display.w, 2.0);
+        let px = floor(in.clip.xy);
+        let k = (px.x + px.y) - floor((px.x + px.y) / period) * period;
+        if (k < 2.0) {
+            return vec4<f32>(g.section_hatch.rgb, 1.0);
+        }
+        return vec4<f32>(g.section_cap.rgb, 1.0);
+    }
     var n = normalize(in.normal);
     // Meshes from files may be inside out; light the side we see.
     if (!front) {
@@ -55,7 +81,7 @@ fn mesh_fs(in: MeshOut, @builtin(front_facing) front: bool) -> @location(0) vec4
     let h = normalize(v + key);
     let spec = pow(max(dot(n, h), 0.0), 48.0) * 0.18;
     let shade = 0.22 + 0.55 * head + 0.3 * side;
-    return vec4<f32>(body.color.rgb * shade + vec3<f32>(spec), 1.0);
+    return vec4<f32>(body.color.rgb * shade + vec3<f32>(spec), body.color.a);
 }
 
 // A tool's preview: lit like a body, but see-through by the colour's alpha.
@@ -92,6 +118,50 @@ fn line_vs(@location(0) position: vec3<f32>, @location(1) color: vec4<f32>) -> L
 @fragment
 fn line_fs(in: LineOut) -> @location(0) vec4<f32> {
     return in.color;
+}
+
+// ---- body edges: clipped by the section; hidden ones dashed ----
+
+struct EdgeOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) color: vec4<f32>,
+    @location(1) world: vec3<f32>,
+    @location(2) arc: f32,
+};
+
+@vertex
+fn edge_vs(
+    @location(0) position: vec3<f32>,
+    @location(1) color: vec4<f32>,
+    @location(2) arc: f32,
+) -> EdgeOut {
+    var out: EdgeOut;
+    out.clip = g.view_proj * vec4<f32>(position, 1.0);
+    out.color = color;
+    out.world = position;
+    out.arc = arc;
+    return out;
+}
+
+@fragment
+fn edge_fs(in: EdgeOut) -> @location(0) vec4<f32> {
+    if (cut_away(in.world)) {
+        discard;
+    }
+    return in.color;
+}
+
+@fragment
+fn hidden_edge_fs(in: EdgeOut) -> @location(0) vec4<f32> {
+    if (cut_away(in.world)) {
+        discard;
+    }
+    let period = max(g.display.z, 2.0);
+    let along = in.arc * g.display.y;
+    if (along - floor(along / period) * period > period * 0.5) {
+        discard;
+    }
+    return g.edge_hidden;
 }
 
 // ---- background: a vertical gradient from one full-screen triangle ----

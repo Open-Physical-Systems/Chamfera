@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+  <!-- Chamfera interface icon: 2D pocket. Original artwork, MIT OR Apache-2.0. -->
+  <path stroke="#2B313B" d="M3.5 3.5h17v17h-17z"/>
+  <path stroke="#E8770E" d="M7 7h10v10H7z"/>
+  <path stroke="#E8770E" d="M10.25 10.25h3.5v3.5h-3.5z"/>
+</svg>

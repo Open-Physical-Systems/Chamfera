@@ -278,6 +278,14 @@ fn hostile_params_never_panic() {
         json!({"x1": 0, "y1": 0, "x2": 0, "y2": 0, "width": 1, "height": 1, "mode": "crossing", "add": "yes"}),
         json!({"x": 400, "y": 300, "width": 800, "height": 600, "mode": "toggle"}),
         json!({"x": 400, "y": 300, "width": 800, "height": 600, "mode": "flip"}),
+        json!({"length": "in", "precision": 3, "angle_precision": 1, "spacing": 5}),
+        json!({"length": "furlong", "precision": 9, "angle_precision": -1, "spacing": 0}),
+        json!({"length": 25.4, "precision": 2.5, "angle_precision": "2", "spacing": 1e300}),
+        json!({"length": "", "precision": 1e300, "spacing": "auto"}),
+        json!({"yaw": 0.1, "pitch": 0.1, "pivot": {"x": 1e300, "y": 0, "z": 0}}),
+        json!({"yaw": 0.1, "pitch": 0.1, "pivot": {"x": "a", "y": null}}),
+        json!({"yaw": 0.1, "pitch": 0.1, "pivot": [1, 2, 3]}),
+        json!({"yaw": 0.1, "pitch": 5.0, "pivot": {"x": 1e6, "y": -1e6, "z": 1e6}}),
         json!({"sketch": 1, "profiles": [{"x": 10, "y": 10}], "distance": 5, "taper": 1e308,
             "start_offset": -1e308, "distance2": f64::NAN, "direction": "two_sides"}),
         json!({"sketch": 1, "profiles": [{"x": 10, "y": 10}], "extent": "through_all",
@@ -290,6 +298,13 @@ fn hostile_params_never_panic() {
             "to": {"pick": {"x": 1e300, "y": -1, "width": 0, "height": 0}}, "clear": "yes"}),
         json!({"sketch": 1, "profiles": [{"x": 10, "y": 10}], "distance": 5, "to": [1],
             "taper": [5], "start_offset": {"x": 1}, "distance2": true, "clear": true}),
+        json!({"style": 5, "plane": "2:top", "offset": 1e308, "flip": "yes", "body": 1}),
+        json!({"style": long, "plane": long, "offset": f64::NAN, "flip": 1, "colour": long}),
+        json!({"style": "wireframe", "plane": "1:top", "offset": -1e7, "flip": true}),
+        json!({"body": 1, "colour": "#zzzzzz", "opacity": 2, "preset": long}),
+        json!({"body": 1, "colour": "#ff8000", "opacity": 0.3, "preset": "glass"}),
+        json!({"body": 1, "colour": 5, "opacity": "half", "preset": ["glass"]}),
+        json!({"body": 1, "colour": "#\u{e9}\u{e9}\u{e9}", "opacity": 1e-300, "preset": "default"}),
         json!({"cx": 0, "cy": 0, "x": 1e300, "y": 0, "sides": 1e9, "mode": 5, "minor": f64::NAN, "width": -1, "overall": "no"}),
         json!({"cx": 0, "cy": 0, "x": 5, "y": 0, "sides": 64, "mode": "circumscribed", "minor": 1e-300, "width": 1e300, "overall": true, "x1": 0, "y1": 0, "x2": 1e-9, "y2": 0}),
         json!({"cx": 1, "cy": 1, "x": 1, "y": 1, "sides": 3, "minor": 3, "x1": 1, "y1": 1, "x2": 1, "y2": 1, "width": 0}),
@@ -3192,6 +3207,96 @@ fn picked_edges_follow_the_pick_modes() {
     assert_eq!(pick(bx, by + 3.0, "remove"), json!([]));
 }
 
+#[test]
+fn ten_in_an_inch_design_is_254_mm_and_units_change_only_labels() {
+    let mut s = Session::new();
+    s.execute("design.new", &json!({"length": "in"})).unwrap();
+    s.execute(
+        "param.set",
+        &json!({"name": "w", "expression": "10", "unit": "length"}),
+    )
+    .unwrap();
+    // 10 in × 25.4 mm/in = 254 mm.
+    assert!((s.doc.parameters["w"].value - 254.0).abs() < 1e-9);
+    assert_eq!(s.doc.units.length(s.doc.parameters["w"].value), "10.00 in");
+    // Back to mm: the stored "10" becomes "10 in", so w stays 254 mm.
+    let r = s
+        .execute("design.units", &json!({"length": "mm", "precision": 3}))
+        .unwrap();
+    assert_eq!(
+        r,
+        json!({"length": "mm", "precision": 3, "angle_precision": 2})
+    );
+    assert!((s.doc.parameters["w"].value - 254.0).abs() < 1e-9);
+    assert_eq!(s.doc.units.length(12.3456), "12.346 mm");
+    // It is one undo step, and a bad unit changes nothing.
+    assert!(
+        s.execute("design.units", &json!({"length": "furlong"}))
+            .is_err()
+    );
+    assert!(s.execute("design.units", &json!({"precision": 9})).is_err());
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.doc.units.length.symbol(), "in");
+    assert_eq!(s.doc.parameters["w"].expression.as_deref(), Some("10"));
+}
+
+#[test]
+fn orbit_about_a_pivot_keeps_the_pivot_where_it_was_relative_to_the_eye() {
+    let mut s = Session::new();
+    s.camera.target = chamfera_geom::Point3::new(0.0, 0.0, 0.0);
+    let pivot = chamfera_geom::Point3::new(30.0, 0.0, 0.0);
+    let before = s.camera.basis();
+    let rel = pivot - s.camera.eye();
+    let coords = (
+        rel.dot(before.right),
+        rel.dot(before.up),
+        rel.dot(before.forward),
+    );
+    s.execute(
+        "view.orbit",
+        &json!({"yaw": 0.3, "pitch": 0.1, "pivot": {"x": 30, "y": 0, "z": 0}}),
+    )
+    .unwrap();
+    // A rigid turn about the pivot: the pivot has the same camera-frame coordinates as
+    // before, so it stays on the same pixel.
+    let after = s.camera.basis();
+    let rel = pivot - s.camera.eye();
+    let now = (
+        rel.dot(after.right),
+        rel.dot(after.up),
+        rel.dot(after.forward),
+    );
+    assert!((now.0 - coords.0).abs() < 1e-9 && (now.1 - coords.1).abs() < 1e-9);
+    assert!((now.2 - coords.2).abs() < 1e-9);
+    // Without a pivot the target stays put.
+    let t = s.camera.target;
+    s.execute("view.orbit", &json!({"yaw": 0.3, "pitch": 0.0}))
+        .unwrap();
+    assert!((s.camera.target - t).length() < 1e-12);
+}
+
+#[test]
+fn the_grid_spacing_is_a_view_setting() {
+    let mut s = Session::new();
+    s.execute("view.grid", &json!({"spacing": 5})).unwrap();
+    assert_eq!(s.scene.grid_spacing, Some(5.0));
+    s.execute("view.grid", &json!({})).unwrap();
+    assert_eq!(s.scene.grid_spacing, None);
+    assert!(s.execute("view.grid", &json!({"spacing": 0})).is_err());
+    assert!(!s.has_unsaved_changes());
+    // view.point_at on an empty scene gives the point on the centre ray at the target.
+    let r = s
+        .execute(
+            "view.point_at",
+            &json!({"x": 400, "y": 300, "width": 800, "height": 600}),
+        )
+        .unwrap();
+    let p = &r["point"];
+    let t = s.camera.target;
+    assert!((p["x"].as_f64().unwrap() - t.x).abs() < 1e-6);
+    assert!((p["z"].as_f64().unwrap() - t.z).abs() < 1e-6);
+}
+
 // ---------------------------------------------------------------- extrude options
 
 fn close_to(got: f64, want: f64) -> bool {
@@ -4295,4 +4400,191 @@ fn the_swept_pipe_and_loft_example_has_its_exact_volumes() {
         assert!((a - b).abs() < 1e-6 * b, "{a} vs {b}");
     }
     assert!(s.display_errors().is_empty());
+}
+
+fn only_body(s: &Session) -> &chamfera_render::SceneBody {
+    assert_eq!(s.scene.bodies.len(), 1);
+    &s.scene.bodies[0]
+}
+
+#[test]
+fn a_solid_shows_its_exact_edges_and_keeps_its_appearance_through_save_and_open() {
+    let mut s = Session::new();
+    extruded_plate(&mut s, json!(10));
+    // A box has 12 B-rep edges, each drawn as its own polyline.
+    assert_eq!(only_body(&s).edges.len(), 12);
+    assert_eq!(
+        only_body(&s).appearance,
+        chamfera_render::Appearance::default()
+    );
+    let body = only_body(&s).id;
+    let r = s
+        .execute("body.appearance", &json!({"body": body, "preset": "glass"}))
+        .unwrap();
+    assert_eq!(r["feature"], 2);
+    assert_eq!(r["saved"], true);
+    // The glass preset: (170, 210, 230) at 30% opacity, stored for feature 2.
+    let a = only_body(&s).appearance;
+    assert_eq!(a.colour, Some(chamfera_render::Rgba(170, 210, 230, 255)));
+    assert!((a.opacity - 0.3).abs() < 1e-6);
+    assert!(s.can_undo());
+    // A colour on its own keeps the opacity.
+    let body = only_body(&s).id;
+    s.execute(
+        "body.appearance",
+        &json!({"body": body, "colour": "#ff8000"}),
+    )
+    .unwrap();
+    let a = only_body(&s).appearance;
+    assert_eq!(a.colour, Some(chamfera_render::Rgba(255, 128, 0, 255)));
+    assert!((a.opacity - 0.3).abs() < 1e-6);
+
+    let dir = std::env::temp_dir().join(format!("chamfera-look-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("glass.chamfera");
+    s.execute("design.save", &json!({"path": path.to_str().unwrap()}))
+        .unwrap();
+    let mut t = Session::new();
+    t.execute("design.open", &json!({"path": path.to_str().unwrap()}))
+        .unwrap();
+    assert_eq!(t.doc, s.doc);
+    let a = only_body(&t).appearance;
+    assert_eq!(a.colour, Some(chamfera_render::Rgba(255, 128, 0, 255)));
+    assert!((a.opacity - 0.3).abs() < 1e-6);
+    std::fs::remove_dir_all(&dir).unwrap();
+
+    // Undo goes back to plain glass; default clears it from the design.
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(
+        only_body(&s).appearance.colour,
+        Some(chamfera_render::Rgba(170, 210, 230, 255))
+    );
+    let body = only_body(&s).id;
+    s.execute(
+        "body.appearance",
+        &json!({"body": body, "preset": "default"}),
+    )
+    .unwrap();
+    assert!(s.doc.appearances.is_empty());
+    assert_eq!(
+        only_body(&s).appearance,
+        chamfera_render::Appearance::default()
+    );
+}
+
+#[test]
+fn bad_appearances_are_refused_and_change_nothing() {
+    let mut s = Session::new();
+    extruded_plate(&mut s, json!(10));
+    let body = only_body(&s).id;
+    for p in [
+        json!({"body": body}),
+        json!({"body": body, "opacity": 0.0}),
+        json!({"body": body, "opacity": 1.5}),
+        json!({"body": body, "colour": "red"}),
+        json!({"body": body, "preset": "unobtainium"}),
+        json!({"body": 999, "opacity": 0.5}),
+    ] {
+        assert!(s.execute("body.appearance", &p).is_err(), "{p}");
+    }
+    assert!(s.doc.appearances.is_empty());
+    assert!(!s.can_undo() || s.doc.appearances.is_empty());
+}
+
+#[test]
+fn a_mesh_body_takes_an_appearance_for_the_session_only() {
+    let mut s = Session::new();
+    let body = s.execute("body.sample", &json!({})).unwrap()["body"]
+        .as_u64()
+        .unwrap();
+    let r = s
+        .execute("body.appearance", &json!({"body": body, "opacity": 0.5}))
+        .unwrap();
+    assert_eq!(r["saved"], false);
+    assert!(s.doc.appearances.is_empty());
+    let b = s.scene.body(body as u32).unwrap();
+    assert!((b.appearance.opacity - 0.5).abs() < 1e-6);
+    assert_eq!(b.appearance.colour, None);
+}
+
+#[test]
+fn a_section_on_a_face_cuts_the_view_at_its_offset() {
+    // The plate is 50 x 30 x 10 from the origin. A section on its top face (z = 10,
+    // normal +Z) moved 4 mm down sits at z = 6 and cuts away everything above.
+    let mut s = Session::new();
+    extruded_plate(&mut s, json!(10));
+    let r = s
+        .execute("view.section", &json!({"plane": "2:top", "offset": -4}))
+        .unwrap();
+    assert!(
+        (r["section"]["origin"]["z"].as_f64().unwrap() - 6.0).abs() < 1e-9,
+        "{r}"
+    );
+    let sec = s.scene.display.section.unwrap();
+    assert!((sec.normal.z - 1.0).abs() < 1e-9);
+    // Looking straight down at the middle, the top is gone: the first face hit is the
+    // bottom (z = 0), seen from inside.
+    let ray = chamfera_geom::Ray::new(
+        chamfera_geom::Point3::new(25.0, 15.0, 100.0),
+        -chamfera_geom::Vec3::Z,
+    )
+    .unwrap();
+    assert!(s.scene.pick(&ray).unwrap().point.z.abs() < 1e-9);
+    // The design is untouched: a section is a display state, not a feature.
+    assert!(!s.can_undo() || s.doc.features.len() == 1);
+    assert_eq!(s.doc.features.len(), 1);
+    // Flipped, it keeps the top 4 mm instead: the pick lands on the top face.
+    s.execute(
+        "view.section",
+        &json!({"plane": "2:top", "offset": -4, "flip": true}),
+    )
+    .unwrap();
+    assert!((s.scene.pick(&ray).unwrap().point.z - 10.0).abs() < 1e-9);
+    // An origin plane: xz is the front plane, its normal along Y.
+    s.execute("view.section", &json!({"plane": "xz", "offset": 15}))
+        .unwrap();
+    let sec = s.scene.display.section.unwrap();
+    assert!((sec.normal.y.abs() - 1.0).abs() < 1e-9);
+    assert!((sec.origin.y.abs() - 15.0).abs() < 1e-9);
+    for bad in [
+        json!({"plane": "diagonal"}),
+        json!({"plane": "9:nowhere"}),
+        json!({"plane": "xy", "offset": 1e300}),
+        json!({"plane": "xy", "flip": "yes"}),
+    ] {
+        assert!(s.execute("view.section", &bad).is_err(), "{bad}");
+    }
+    let r = s.execute("view.section_clear", &json!({})).unwrap();
+    assert!(r["section"].is_null());
+    assert!(s.scene.display.section.is_none());
+}
+
+#[test]
+fn the_visual_style_is_set_by_name_and_reported_by_view_get() {
+    let mut s = Session::new();
+    for name in [
+        "shaded",
+        "shaded_edges",
+        "shaded_hidden_edges",
+        "wireframe",
+        "wireframe_hidden",
+    ] {
+        s.execute("view.style", &json!({"style": name})).unwrap();
+        assert_eq!(
+            s.execute("view.get", &json!({})).unwrap()["display"]["style"],
+            name
+        );
+    }
+    assert_eq!(
+        s.scene.display.style,
+        chamfera_render::VisualStyle::WireframeHidden
+    );
+    assert!(
+        s.execute("view.style", &json!({"style": "cartoon"}))
+            .is_err()
+    );
+    assert_eq!(
+        s.scene.display.style,
+        chamfera_render::VisualStyle::WireframeHidden
+    );
 }

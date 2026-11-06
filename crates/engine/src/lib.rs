@@ -6,8 +6,12 @@
 
 pub mod assembly;
 pub mod box_select;
+pub mod cam;
+#[cfg(test)]
+mod cam_tests;
 pub mod cmd;
 pub mod construct;
+pub mod display;
 pub mod face_edit;
 pub mod hole;
 mod imported;
@@ -62,6 +66,8 @@ pub struct Session {
     pub selected_edges: Vec<String>,
     /// Solids built from the timeline (worked out again after every change).
     built: solids::Built,
+    /// Toolpaths worked out from the CAM section, and whether they are shown.
+    pub(crate) cam: cam::CamState,
     /// The file the design was last opened from or saved to.
     pub path: Option<std::path::PathBuf>,
     /// The design as last opened or saved, to tell whether there are unsaved changes.

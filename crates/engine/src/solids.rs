@@ -1323,6 +1323,18 @@ impl Session {
             .iter()
             .filter_map(|s| s.scene_id)
             .collect();
+        // Selected solids stay selected through the rebuild (by the feature that made
+        // them), so a panel working on the selection, such as Appearance, keeps it.
+        let reselect: Vec<u32> = self
+            .built
+            .solids
+            .iter()
+            .filter(|x| {
+                x.scene_id
+                    .is_some_and(|id| self.scene.selected.contains(&id))
+            })
+            .map(|x| x.feature)
+            .collect();
         self.scene.bodies.retain(|b| !old.contains(&b.id));
         self.scene.deselect(|b| old.contains(&b));
         let options = TessOptions::default();
@@ -1336,6 +1348,7 @@ impl Session {
                     faces = m.face_of_triangle;
                     edges = m.edge_polylines;
                     let id = self.scene.add(&name, m.mesh);
+                    self.dress_body(id, feature, edges.iter().map(|(_, l)| l.clone()).collect());
                     if id.is_none() {
                         built
                             .display_errors
@@ -1362,7 +1375,17 @@ impl Session {
             });
         }
         self.show_imported(&mut built);
+        for x in &built.solids {
+            if let Some(id) = x.scene_id
+                && reselect.contains(&x.feature)
+                && !self.scene.selected.contains(&id)
+            {
+                self.scene.selected.push(id);
+            }
+        }
         self.built = built;
+        // Toolpaths follow the model.
+        self.regenerate_cam();
     }
 
     /// Moves an attached sketch's plane onto its face or construction plane, and its

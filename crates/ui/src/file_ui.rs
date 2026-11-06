@@ -15,6 +15,10 @@ use serde_json::json;
 pub enum Pending {
     New,
     Open,
+    /// Open this design from File > Open Recent.
+    /// (Desktop only: the browser has no paths.)
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    OpenPath(std::path::PathBuf),
     Quit,
 }
 
@@ -52,6 +56,25 @@ impl ChamferaApp {
         ui.separator();
         let save = item(ui, Icon::Save, "Save", "Ctrl+S");
         #[cfg(not(target_arch = "wasm32"))]
+        let mut recent_pick: Option<std::path::PathBuf> = None;
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let recent = self.prefs.recent_shown().to_vec();
+            if !recent.is_empty() {
+                ui.menu_button("Open Recent", |ui| {
+                    for r in &recent {
+                        let name = std::path::Path::new(r)
+                            .file_name()
+                            .map_or_else(|| r.clone(), |n| n.to_string_lossy().into_owned());
+                        if ui.button(name).on_hover_text(r).clicked() {
+                            recent_pick = Some(std::path::PathBuf::from(r));
+                            ui.close();
+                        }
+                    }
+                });
+            }
+        }
+        #[cfg(not(target_arch = "wasm32"))]
         let save_as = item(ui, Icon::Save, "Save As…", "Ctrl+Shift+S");
         ui.separator();
         let step = item(
@@ -66,6 +89,8 @@ impl ChamferaApp {
             &format!("{}…", label("design.export_stl")),
             "",
         );
+        let post_linuxcnc = item(ui, Icon::CamPost, "Post G-code (LinuxCNC)…", "");
+        let post_grbl = item(ui, Icon::CamPost, "Post G-code (GRBL)…", "");
         // While the DRAWING tab is open: the sheet's exports (`drawing_ui.rs`).
         let drawing_export = self.drawing_export_items(ui, look);
         ui.separator();
@@ -76,6 +101,8 @@ impl ChamferaApp {
             "",
         );
         let sample = item(ui, Icon::Body, label("body.sample"), "");
+        ui.separator();
+        let preferences = item(ui, Icon::Parameters, "Preferences…", "Ctrl+,");
         #[cfg(not(target_arch = "wasm32"))]
         let quit = {
             ui.separator();
@@ -90,6 +117,15 @@ impl ChamferaApp {
         if new {
             ui.close();
             self.ask_or(Pending::New);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(path) = recent_pick {
+            ui.close();
+            self.ask_or(Pending::OpenPath(path));
+        }
+        if preferences {
+            ui.close();
+            self.prefs_ui.open = true;
         }
         if open {
             ui.close();
@@ -111,6 +147,10 @@ impl ChamferaApp {
         if stl {
             ui.close();
             self.export("STL mesh", &["stl"], "design.export_stl");
+        }
+        if post_linuxcnc || post_grbl {
+            ui.close();
+            self.post_dialog(if post_grbl { "grbl" } else { "linuxcnc" });
         }
         if let Some(f) = drawing_export {
             ui.close();
@@ -144,12 +184,17 @@ impl ChamferaApp {
     fn do_pending(&mut self, action: Pending) {
         match action {
             Pending::New => {
-                self.run("design.new", json!({}));
+                let length = self.prefs.default_length.symbol();
+                self.run("design.new", json!({ "length": length }));
                 self.after_new_design();
                 #[cfg(target_arch = "wasm32")]
                 self.web.clear();
             }
             Pending::Open => self.open_dialog(),
+            #[cfg(not(target_arch = "wasm32"))]
+            Pending::OpenPath(path) => self.open_path(&path),
+            #[cfg(target_arch = "wasm32")]
+            Pending::OpenPath(_) => {}
             Pending::Quit => {
                 self.file.allow_close = true;
                 self.ctx_close = true;
@@ -172,12 +217,30 @@ impl ChamferaApp {
         else {
             return;
         };
+        self.open_path(&path);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn open_path(&mut self, path: &std::path::Path) {
         if self
             .run("design.open", json!({ "path": path.to_string_lossy() }))
             .is_some()
         {
             self.after_new_design();
             self.message = Some((format!("Opened {}", path.display()), false));
+        }
+    }
+
+    /// Remembers the design's file in the recent list once it is opened or saved.
+    pub(crate) fn track_recent(&mut self) {
+        if self.session.path == self.recent_seen {
+            return;
+        }
+        self.recent_seen = self.session.path.clone();
+        if let Some(p) = &self.recent_seen {
+            let text = p.to_string_lossy().into_owned();
+            self.prefs.add_recent(&text);
+            self.preferences_changed();
         }
     }
 
@@ -383,7 +446,7 @@ impl ChamferaApp {
         let name = self.design_name();
         let what = match action {
             Pending::New => "starting a new design",
-            Pending::Open => "opening another design",
+            Pending::Open | Pending::OpenPath(_) => "opening another design",
             Pending::Quit => "quitting",
         };
         let modal = egui::Modal::new(egui::Id::unique("unsaved changes"))
@@ -458,6 +521,9 @@ impl ChamferaApp {
         }
         if pressed(cmd, Key::O) {
             self.ask_or(Pending::Open);
+        }
+        if pressed(cmd, Key::Comma) {
+            self.prefs_ui.open = !self.prefs_ui.open;
         }
     }
 

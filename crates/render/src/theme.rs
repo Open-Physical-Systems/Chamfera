@@ -45,6 +45,12 @@ pub struct Theme {
     /// The shape a tool would make (the extrude preview), drawn translucent over the
     /// model: its alpha is how much of the model shows through.
     pub preview_body: Rgba,
+    /// Edges behind faces in the "hidden edges" visual style (drawn dashed and faint).
+    pub edge_hidden: Rgba,
+    /// The cut faces of a section view.
+    pub section_cap: Rgba,
+    /// The hatch stripes over `section_cap`.
+    pub section_hatch: Rgba,
     // sketches
     /// Sketch geometry that can still move (under-constrained).
     pub sketch: Rgba,
@@ -72,6 +78,11 @@ pub struct Theme {
     /// Crossing box selection (dragged right to left: what it touches): dashed outline.
     pub select_crossing: Rgba,
     pub select_crossing_fill: Rgba,
+    // toolpaths (Manufacture)
+    /// Cutting moves (feeds), drawn solid.
+    pub toolpath_feed: Rgba,
+    /// Rapid moves, drawn dashed.
+    pub toolpath_rapid: Rgba,
     // interface surfaces (see docs/design/ui.md)
     /// The app bar, ribbon, timeline and status bar.
     pub chrome: Rgba,
@@ -149,6 +160,9 @@ impl Theme {
             body_selected: Rgba(64, 140, 230, 255),
             edge: Rgba(40, 46, 56, 255),
             preview_body: Rgba(30, 112, 214, 110),
+            edge_hidden: Rgba(40, 46, 56, 110),
+            section_cap: Rgba(214, 120, 64, 255),
+            section_hatch: Rgba(120, 58, 24, 255),
             sketch: Rgba(30, 100, 220, 255),
             sketch_constrained: Rgba(20, 24, 30, 255),
             sketch_construction: Rgba(214, 120, 30, 255),
@@ -163,6 +177,8 @@ impl Theme {
             select_window_fill: Rgba(30, 112, 214, 36),
             select_crossing: Rgba(30, 135, 70, 255),
             select_crossing_fill: Rgba(30, 135, 70, 36),
+            toolpath_feed: Rgba(96, 72, 204, 255),
+            toolpath_rapid: Rgba(200, 50, 60, 220),
             chrome: Rgba(252, 252, 253, 255),
             panel: Rgba(246, 247, 249, 255),
             panel_alt: Rgba(236, 239, 243, 255),
@@ -214,6 +230,9 @@ impl Theme {
             body_selected: Rgba(84, 160, 255, 255),
             edge: Rgba(18, 20, 24, 255),
             preview_body: Rgba(84, 160, 255, 110),
+            edge_hidden: Rgba(200, 206, 216, 90),
+            section_cap: Rgba(200, 110, 60, 255),
+            section_hatch: Rgba(110, 52, 22, 255),
             sketch: Rgba(96, 170, 255, 255),
             sketch_constrained: Rgba(236, 240, 246, 255),
             sketch_construction: Rgba(240, 150, 60, 255),
@@ -228,6 +247,8 @@ impl Theme {
             select_window_fill: Rgba(84, 160, 255, 40),
             select_crossing: Rgba(88, 196, 124, 255),
             select_crossing_fill: Rgba(88, 196, 124, 40),
+            toolpath_feed: Rgba(170, 150, 255, 255),
+            toolpath_rapid: Rgba(255, 110, 110, 220),
             chrome: Rgba(29, 31, 35, 255),
             panel: Rgba(35, 38, 43, 255),
             panel_alt: Rgba(45, 49, 56, 255),

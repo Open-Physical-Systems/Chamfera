@@ -180,6 +180,7 @@ impl Session {
         // Construction geometry goes first, so sketches draw over it.
         let (mut construct, fills) = self.construct_overlays();
         construct.append(&mut overlays);
+        construct.extend(self.toolpath_overlays());
         self.scene.overlays = construct;
         self.scene.fills = fills;
     }

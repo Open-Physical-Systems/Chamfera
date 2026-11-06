@@ -17,6 +17,7 @@ chamfera-kernel = { path = "crates/kernel" }
 chamfera-render = { path = "crates/render" }
 chamfera-doc = { path = "crates/doc" }
 chamfera-io = { path = "crates/io" }
+chamfera-cam = { path = "crates/cam" }
 chamfera-drawing = { path = "crates/drawing" }
 chamfera-engine = { path = "crates/engine" }
 chamfera-gpu = { path = "crates/gpu" }

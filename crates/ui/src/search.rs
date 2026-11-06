@@ -110,7 +110,11 @@ fn command_of(action: Action) -> Option<&'static str> {
         Action::ImportStl => "body.import_stl",
         Action::Sample => "body.sample",
         Action::Command(id) => id,
-        Action::SaveAs | Action::Cancel | Action::ShowShortcuts | Action::Search => return None,
+        Action::SaveAs
+        | Action::Cancel
+        | Action::ShowShortcuts
+        | Action::Search
+        | Action::Preferences => return None,
     })
 }
 
@@ -156,6 +160,7 @@ fn ui_actions() -> Vec<Action> {
         Action::ExportStl,
         Action::ImportStl,
         Action::Sample,
+        Action::Preferences,
         Action::ShowShortcuts,
     ]);
     v
@@ -200,7 +205,8 @@ fn context_of(action: Action) -> &'static str {
         | Action::ExportStep
         | Action::ExportStl
         | Action::ImportStl
-        | Action::Sample => "File",
+        | Action::Sample
+        | Action::Preferences => "File",
         Action::Undo | Action::Redo | Action::Cancel => "Edit",
         Action::ShowShortcuts | Action::Search => "Help",
         Action::Command(id) => match id.split('.').next() {
@@ -246,6 +252,7 @@ pub(crate) fn icon_of(action: Action) -> Icon {
         Action::ExportStep | Action::ExportStl => Icon::Export,
         Action::ImportStl => Icon::ImportMesh,
         Action::Sample => Icon::Body,
+        Action::Preferences => Icon::Parameters,
         Action::ShowShortcuts | Action::Search => Icon::Select,
         Action::Command(id) => match id.split('.').next() {
             Some("sketch") => Icon::Sketch,
@@ -565,6 +572,7 @@ impl ChamferaApp {
                 self.fit_pending = true;
             }
             Action::ShowShortcuts => self.search.shortcuts_open = true,
+            Action::Preferences => self.prefs_ui.open = true,
             Action::Search => self.open_search(),
             Action::Command(id) => self.run_command_item(id),
         }

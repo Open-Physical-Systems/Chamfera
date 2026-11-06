@@ -5,7 +5,7 @@
 **Status:** `done` = on `dev`; `branch` = on an unmerged branch (named); `missing` = not started (a note says when groundwork exists).
 **Priority:** P0 = a Fusion user expects it on day one; P1 = important; P2 = later.
 **Size:** S = days; M = one to three weeks; L = a month or more, or a kernel rung.
-**Layer:** the crate(s) touched: `geom`, `sketch`, `kernel`, `render`, `doc`, `io`, `engine`, `gpu`, `ui`, `mcp`, `apps`; plus `cam` (a planned L1 crate).
+**Layer:** the crate(s) touched: `geom`, `sketch`, `kernel`, `render`, `doc`, `io`, `engine`, `gpu`, `ui`, `mcp`, `apps`; plus `cam` (L3).
 
 ## Next 10 to build
 
@@ -236,7 +236,7 @@ Close runners-up: selection filters and box selection (UI and NAV), splines (nee
 | Measure distance and angle | Between any two picked points, edges, faces, bodies (minimum distance) | done (`inspect.measure`, `inspect.measure_at`, INSPECT > Measure) | P0 | M | kernel, engine, ui |
 | Measure length, area, radius | Of a picked edge or face | done | P0 | S | kernel, engine |
 | Mass properties | Volume, area, mass, centre of mass, moments of inertia | done (`inspect.mass`, INSPECT > Mass Properties) | P0 | M | kernel, engine |
-| Section analysis | Cut the view with a plane and show the cut face | missing | P1 | M | gpu, render, kernel |
+| Section analysis | Cut the view with a plane and show the cut face | done (`view.section`, hatched cap) | P1 | M | gpu, render, kernel |
 | Interference | See assemblies | missing | P1 | M | kernel |
 | Curvature and zebra analysis | Show surface quality (comb, zebra stripes, curvature map) | missing | P2 | M | gpu, kernel |
 | Draft analysis | Colour faces by draft angle | missing | P2 | M | gpu |
@@ -295,7 +295,7 @@ Close runners-up: selection filters and box selection (UI and NAV), splines (nee
 | View cube | Clickable cube with faces and a corner for iso, plus home and fit | done | P0 | M | ui |
 | View cube edges and corners, drag to orbit | Click edges and every corner; drag the cube | missing | P1 | S | ui |
 | Navigation presets | Mouse mappings matching other CAD tools | missing | P1 | S | ui |
-| Visual styles | Shaded, shaded with edges, wireframe, hidden lines | missing | P1 | M | gpu, render |
+| Visual styles | Shaded, shaded with edges, wireframe, hidden lines | done (`view.style`) | P1 | M | gpu, render |
 | Ribbon with workspaces and tabs | Tool groups by task | done | P0 | M | ui |
 | Browser (model tree) | Bodies, sketches, parameters; show/hide, context menu | done | P0 | M | ui |
 | Browser: origin, construction, components folders | Tree items for planes, axes and components | missing | P0 | S | ui |
@@ -338,7 +338,7 @@ Close runners-up: selection filters and box selection (UI and NAV), splines (nee
 | Feature | Description | Status | Pri | Size | Layer |
 |---|---|---|---|---|---|
 | Shaded viewport with edges | Real-time display | done | P0 | M | gpu |
-| Appearance library | Colours and finishes (metal, plastic, glass) per body or face | missing | P1 | M | doc, gpu |
+| Appearance library | Colours and finishes (metal, plastic, glass) per body or face | done per body (`body.appearance`, presets); per face missing | P1 | M | doc, gpu |
 | Environment lighting, ground shadows, reflections | Nicer real-time display | missing | P2 | M | gpu |
 | Decals | Pictures placed on faces | missing | P2 | M | gpu |
 | Offline path-traced render | Photo-quality pictures | missing | P2 | L | new crate |
@@ -348,18 +348,18 @@ Close runners-up: selection filters and box selection (UI and NAV), splines (nee
 
 | Feature | Description | Status | Pri | Size | Layer |
 |---|---|---|---|---|---|
-| Setup: stock, work coordinate system, machine | Define the raw block, part zero and the machine | missing | P2 | M | cam, doc |
-| Tool library | Mills, drills, chamfer and ball tools with feeds and speeds | missing | P2 | M | cam |
-| Facing | Flatten the stock top | missing | P2 | S | cam |
-| 2D contour | Follow a profile, with lead-in/out and tabs | missing | P2 | M | cam |
-| 2D pocket | Clear a closed region | missing | P2 | M | cam |
-| Drilling | Drill, peck, tap cycles at hole positions | missing | P2 | M | cam |
+| Setup: stock, work coordinate system, machine | Define the raw block, part zero and the machine | done (stock, part zero, X axis from an edge; no machine model yet) | P2 | M | cam, doc |
+| Tool library | Mills, drills, chamfer and ball tools with feeds and speeds | done | P2 | M | cam |
+| Facing | Flatten the stock top | done | P2 | S | cam |
+| 2D contour | Follow a profile, with lead-in/out and tabs | done (no tabs yet) | P2 | M | cam |
+| 2D pocket | Clear a closed region | done (vertical walls, islands) | P2 | M | cam |
+| Drilling | Drill, peck, tap cycles at hole positions | done (drill, peck; no tapping) | P2 | M | cam |
 | 2D adaptive clearing | Constant tool engagement roughing | missing | P2 | L | cam |
 | 3D roughing and finishing | Adaptive, parallel, scallop, contour, pencil passes | missing | P2 | L | cam |
 | Multi-axis | 3+2 and simultaneous 4 and 5 axis | missing | P2 | L | cam |
 | Turning | Lathe operations | missing | P2 | L | cam |
 | Simulation | Show the tool removing stock; collision and gouge checks | missing | P2 | L | cam, gpu |
-| Post processors as data | G-code output for Grbl first, then LinuxCNC and others | missing | P2 | M | cam, io |
+| Post processors as data | G-code output for Grbl first, then LinuxCNC and others | done (LinuxCNC and GRBL dialects in code, not data yet) | P2 | M | cam, io |
 | Additive (3D-print) setup | Orient, support and slice | missing | P2 | L | cam |
 
 ## 16. Collaboration and data

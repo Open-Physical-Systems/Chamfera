@@ -834,6 +834,7 @@ impl ChamferaApp {
 
     /// The Extrude (or Revolve) dialog.
     pub(crate) fn extrude_dialog(&mut self, ctx: &egui::Context) {
+        let units = self.session.doc.units;
         // The lines of the picked sketch, for the revolve axis.
         let lines: Vec<(u32, String)> = self
             .solid
@@ -969,7 +970,7 @@ impl ChamferaApp {
                         // What the translucent preview shows, or why there is none.
                         let (text, colour) = match &tool.preview {
                             Ok(v) => (
-                                format!("Preview · volume {v:.2} mm³"),
+                                format!("Preview · volume {}", units.volume(*v)),
                                 look.c(|t| t.text_muted),
                             ),
                             Err(e) if e.is_empty() => (String::new(), look.c(|t| t.text_muted)),
@@ -1007,8 +1008,9 @@ impl ChamferaApp {
                 let v = r["solids"][0]["volume"].as_f64().unwrap_or(0.0);
                 self.message = Some((
                     format!(
-                        "{} · volume {v:.2} mm³",
-                        r["name"].as_str().unwrap_or("Revolve")
+                        "{} · volume {}",
+                        r["name"].as_str().unwrap_or("Revolve"),
+                        self.units().volume(v),
                     ),
                     false,
                 ));
@@ -1021,8 +1023,9 @@ impl ChamferaApp {
             let v = r["solids"][0]["volume"].as_f64().unwrap_or(0.0);
             self.message = Some((
                 format!(
-                    "{} · volume {v:.2} mm³",
-                    r["name"].as_str().unwrap_or("Extrude")
+                    "{} · volume {}",
+                    r["name"].as_str().unwrap_or("Extrude"),
+                    self.units().volume(v),
                 ),
                 false,
             ));

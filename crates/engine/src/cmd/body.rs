@@ -7,6 +7,20 @@ use serde_json::{Value, json};
 
 pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec {
+        id: "body.appearance",
+        label: "Appearance",
+        params: "body: integer (required) - the body id\n\
+                 preset: string (optional) - a named appearance: steel, aluminium, brass, \
+                 copper, paint_red, paint_blue, paint_yellow, paint_black, glass (30% \
+                 opaque), rubber; or default for the theme's colour\n\
+                 colour: string (optional) - #rrggbb, or default for the theme's colour\n\
+                 opacity: number (optional) - 0.05 to 1 (1 is opaque)\n\
+                 Give at least one. A solid's appearance is saved with the design (for \
+                 every body of its feature); a mesh body's lasts for the session.",
+        mutates: true,
+        run: crate::display::appearance,
+    },
+    CommandSpec {
         id: "body.import_step",
         label: "Insert STEP Solids",
         params: "path: string (required) - a .step/.stp file (AP203, AP214, AP242); its B-rep solids become exact bodies, solids it cannot import yet are listed in `skipped`",
@@ -79,6 +93,7 @@ fn summary(s: &Session, id: u32) -> Value {
                 "area": b.mesh.area(),
                 "volume": b.mesh.signed_volume(),
                 "bounds": bounds,
+                "appearance": b.appearance,
             })
         }
         None => Value::Null,
