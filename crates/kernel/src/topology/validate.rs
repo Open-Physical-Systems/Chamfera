@@ -86,8 +86,12 @@ pub enum TopologyError {
     WrongOrientation(FaceId),
     #[error("{0} encloses no area")]
     DegenerateFace(FaceId),
-    #[error("{0} encloses no positive volume (its faces point inward or do not close)")]
+    #[error(
+        "{0} encloses no volume (its faces do not close, or they point inward with no lump around it)"
+    )]
     NotOutward(ShellId),
+    #[error("{0} is a void (its faces point inward) that does not lie inside a lump of the body")]
+    VoidOutside(ShellId),
 }
 
 impl From<TopologyError> for crate::KernelError {
@@ -459,7 +463,8 @@ impl Body {
     /// counter-clockwise (outer) or clockwise (inner) in `(u, v)` when the outward normal is
     /// `S_u × S_v`, the other way when it is the opposite (loops around a periodic
     /// direction without a seam are not checked for orientation); every shell encloses
-    /// positive volume (which also catches a face whose orientation flag is wrong).
+    /// non-zero volume, positive for a lump and negative for a void inside a lump (which also
+    /// catches a face whose orientation flag is wrong; see `check_shell_volumes`).
     pub fn validate(&self) -> Result<TopologyReport, TopologyError> {
         let report = self.validate_loaded()?;
         for (ei, edge) in self.edges.live() {
@@ -499,16 +504,66 @@ impl Body {
                 _ => self.check_curved_face(f, &surface, same_sense)?,
             }
         }
+        self.check_shell_volumes()?;
+        Ok(report)
+    }
+
+    /// Every shell encloses a non-zero volume. A shell enclosing positive volume is the
+    /// outer boundary of a lump; one enclosing negative volume (its faces point into the
+    /// region it bounds) is a void, which booleans make (K7), and must lie inside a lump:
+    /// its bounding box inside the bounding box of a positive shell, and the body's total
+    /// volume positive.
+    fn check_shell_volumes(&self) -> Result<(), TopologyError> {
+        let mut lumps = Vec::new();
+        let mut voids = Vec::new();
         for (si, _) in self.shells.live() {
             let s = ShellId::from_index(si);
             let v = self
                 .shell_volume(s)
                 .map_err(|_| TopologyError::NotOutward(s))?;
-            if v.is_nan() || v <= 0.0 {
+            let b = self.shell_box(s).ok_or(TopologyError::NotOutward(s))?;
+            let tiny = LINEAR_TOLERANCE * LINEAR_TOLERANCE * LINEAR_TOLERANCE;
+            if !v.is_finite() || v.abs() <= tiny {
                 return Err(TopologyError::NotOutward(s));
             }
+            if v > 0.0 {
+                lumps.push((v, b));
+            } else {
+                voids.push((s, v, b));
+            }
         }
-        Ok(report)
+        let total: f64 =
+            lumps.iter().map(|l| l.0).sum::<f64>() + voids.iter().map(|v| v.1).sum::<f64>();
+        for (s, _, b) in &voids {
+            let inside = lumps.iter().any(|(_, l)| {
+                l.min.x - LINEAR_TOLERANCE <= b.min.x
+                    && l.min.y - LINEAR_TOLERANCE <= b.min.y
+                    && l.min.z - LINEAR_TOLERANCE <= b.min.z
+                    && b.max.x <= l.max.x + LINEAR_TOLERANCE
+                    && b.max.y <= l.max.y + LINEAR_TOLERANCE
+                    && b.max.z <= l.max.z + LINEAR_TOLERANCE
+            });
+            if !inside || total <= 0.0 {
+                return Err(TopologyError::VoidOutside(*s));
+            }
+        }
+        Ok(())
+    }
+
+    /// The box around the edges of a shell's faces.
+    fn shell_box(&self, s: ShellId) -> Option<chamfera_geom::Aabb> {
+        let mut out: Option<chamfera_geom::Aabb> = None;
+        for f in self.shell_faces(s).ok()? {
+            for e in self.face_edges(f).ok()? {
+                let (c, t0, t1) = self.edge_curve(e).ok()??;
+                let b = c.bounding_box_on(t0, t1).ok()?;
+                out = Some(match out {
+                    Some(o) => o.union(b),
+                    None => b,
+                });
+            }
+        }
+        out
     }
 
     fn check_planar_face(

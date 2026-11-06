@@ -6,7 +6,7 @@
 //! timeline) and the rest of the timeline still builds, as CAD users expect.
 
 use crate::Session;
-use chamfera_doc::{Extrude, ExtrudeDirection, FeatureKind, Revolve};
+use chamfera_doc::{Extrude, ExtrudeDirection, FeatureKind, Operation, Revolve};
 use chamfera_geom::{Point2, Point3};
 use chamfera_kernel::{Body, Line2, Profile, ProfileEdge, TessOptions, tessellate};
 use chamfera_sketch::{Curve, ProfileLoop, Region, Sketch};
@@ -34,16 +34,52 @@ pub fn face_plane(body: &Body, face: chamfera_kernel::FaceId) -> Option<chamfera
     }
 }
 
-/// The plane of the face `r.face` of feature `r.feature`'s solid, from bodies built so
-/// far in this rebuild.
+/// A face's full name in built bodies: the feature that made it, then its role, like
+/// `2:top`. Booleans keep these names, so after a boss is joined onto a plate, the plate's
+/// top is still `2:top` and the boss's is `4:top`.
+pub fn face_key(feature: u32, role: &str) -> String {
+    format!("{feature}:{role}")
+}
+
+/// Splits `2:top` into (2, "top").
+pub fn split_face_key(name: &str) -> Option<(u32, &str)> {
+    let (f, role) = name.split_once(':')?;
+    Some((f.parse().ok()?, role))
+}
+
+/// Gives every face of a feature's new body its full name (see [`face_key`]).
+fn name_faces(body: &mut Body, feature: u32) {
+    for face in body.faces() {
+        let role = body.face_name(face).ok().flatten().map(str::to_owned);
+        if let Some(role) = role
+            && split_face_key(&role).is_none()
+        {
+            let _ = body.set_face_name(face, &face_key(feature, &role));
+        }
+    }
+}
+
+/// True when `body` has a face that `feature` made (it made or changed the body).
+pub fn body_has_feature(body: &Body, feature: u32) -> bool {
+    body.faces().into_iter().any(|f| {
+        body.face_name(f)
+            .ok()
+            .flatten()
+            .and_then(split_face_key)
+            .is_some_and(|(id, _)| id == feature)
+    })
+}
+
+/// The plane of the face `r.face` of feature `r.feature`, from bodies built so far in this
+/// rebuild (whichever body it ended up in after joins and cuts).
 fn attached_plane(
     made: &[(u32, String, Body)],
     r: &chamfera_doc::FaceRef,
 ) -> Result<chamfera_geom::Frame, String> {
-    for (feature, _, body) in made.iter().filter(|m| m.0 == r.feature) {
-        let _ = feature;
+    let wanted = face_key(r.feature, &r.face);
+    for (_, _, body) in made {
         for face in body.faces() {
-            if body.face_name(face).ok().flatten() == Some(r.face.as_str()) {
+            if body.face_name(face).ok().flatten() == Some(wanted.as_str()) {
                 return face_plane(body, face)
                     .ok_or_else(|| format!("the face {:?} is not flat", r.face));
             }
@@ -128,6 +164,119 @@ fn feature_profiles(
         .collect()
 }
 
+/// Boolean operations on kernel bodies. The engine calls these only; kernel rung K7
+/// provides them.
+mod booleans {
+    use chamfera_kernel::{Body, KernelError};
+
+    pub fn union(a: &Body, b: &Body) -> Result<Body, String> {
+        chamfera_kernel::union(a, b).map_err(|e| format!("join: {e}"))
+    }
+
+    /// `None` when nothing is left.
+    pub fn subtract(a: &Body, b: &Body) -> Result<Option<Body>, String> {
+        match chamfera_kernel::subtract(a, b) {
+            Ok(body) => Ok(Some(body)),
+            Err(KernelError::EmptyResult) => Ok(None),
+            Err(e) => Err(format!("cut: {e}")),
+        }
+    }
+
+    /// `None` when they don't overlap.
+    pub fn intersect(a: &Body, b: &Body) -> Result<Option<Body>, String> {
+        match chamfera_kernel::intersect(a, b) {
+            Ok(body) => Ok(Some(body)),
+            Err(KernelError::EmptyResult) => Ok(None),
+            Err(e) => Err(format!("intersect: {e}")),
+        }
+    }
+}
+
+/// True when two bodies' bounding boxes overlap (or touch).
+fn boxes_overlap(a: &Body, b: &Body) -> bool {
+    match (a.bounding_box(), b.bounding_box()) {
+        (Some(x), Some(y)) => {
+            let t = chamfera_geom::LINEAR_TOLERANCE;
+            x.min.x <= y.max.x + t
+                && y.min.x <= x.max.x + t
+                && x.min.y <= y.max.y + t
+                && y.min.y <= x.max.y + t
+                && x.min.z <= y.max.z + t
+                && y.min.z <= x.max.z + t
+        }
+        _ => false,
+    }
+}
+
+/// Applies a feature's new shapes (`tools`) to the bodies built so far: Join merges each
+/// tool with every body it overlaps, Cut removes it from them, Intersect keeps only the
+/// overlap. The targets are the bodies whose bounds meet the tool, like Fusion users
+/// expect, so nothing has to be referenced by name.
+fn apply_operation(
+    made: &mut Vec<(u32, String, Body)>,
+    tools: &[Body],
+    operation: Operation,
+) -> Result<(), String> {
+    let verb = match operation {
+        Operation::NewBody => return Ok(()),
+        Operation::Join => "join",
+        Operation::Cut => "cut",
+        Operation::Intersect => "intersect",
+    };
+    for tool in tools {
+        let targets: Vec<usize> = made
+            .iter()
+            .enumerate()
+            .filter(|(_, m)| boxes_overlap(&m.2, tool))
+            .map(|(i, _)| i)
+            .collect();
+        if targets.is_empty() {
+            return Err(format!(
+                "nothing to {verb}: the new shape does not reach any body"
+            ));
+        }
+        match operation {
+            Operation::Join => {
+                // Everything the tool touches becomes one body, named after the first.
+                let mut acc = tool.clone();
+                for &i in targets.iter().rev() {
+                    let Some(target) = made.get(i) else { continue };
+                    acc = booleans::union(&target.2, &acc)?;
+                }
+                let first = targets[0];
+                for &i in targets.iter().skip(1).rev() {
+                    made.remove(i);
+                }
+                if let Some(m) = made.get_mut(first) {
+                    m.2 = acc;
+                }
+            }
+            Operation::Cut | Operation::Intersect => {
+                for &i in targets.iter().rev() {
+                    let Some(target) = made.get(i) else { continue };
+                    let result = if operation == Operation::Cut {
+                        booleans::subtract(&target.2, tool)?
+                    } else {
+                        booleans::intersect(&target.2, tool)?
+                    };
+                    match result {
+                        Some(b) => {
+                            if let Some(m) = made.get_mut(i) {
+                                m.2 = b;
+                            }
+                        }
+                        None => {
+                            made.remove(i);
+                        }
+                    }
+                }
+            }
+            Operation::NewBody => {}
+        }
+    }
+    Ok(())
+}
+
 /// The bodies one extrude makes: one per profile.
 fn build_extrude(doc: &chamfera_doc::Document, e: &Extrude) -> Result<Vec<Body>, String> {
     let f = doc.sketch(e.sketch).map_err(|x| x.to_string())?;
@@ -195,8 +344,18 @@ impl Session {
                 FeatureKind::Extrude(e) => build_extrude(&self.doc, e),
                 FeatureKind::Revolve(r) => build_revolve(&self.doc, r),
             };
+            let operation = feature.kind.operation();
+            let result = result.map(|bodies| {
+                bodies
+                    .into_iter()
+                    .map(|mut b| {
+                        name_faces(&mut b, feature.id);
+                        b
+                    })
+                    .collect::<Vec<_>>()
+            });
             match result {
-                Ok(bodies) => {
+                Ok(bodies) if operation == Operation::NewBody => {
                     let n = bodies.len();
                     for (k, body) in bodies.into_iter().enumerate() {
                         let name = if n == 1 {
@@ -205,6 +364,16 @@ impl Session {
                             format!("{} ({})", feature.name, k + 1)
                         };
                         made.push((feature.id, name, body));
+                    }
+                }
+                Ok(tools) => {
+                    // Work on a copy so a failure leaves the bodies built so far intact.
+                    let mut next = made.clone();
+                    match apply_operation(&mut next, &tools, operation) {
+                        Ok(()) => made = next,
+                        Err(e) => {
+                            built.errors.insert(feature.id, e);
+                        }
                     }
                 }
                 Err(e) => {
@@ -304,9 +473,10 @@ impl Session {
             .iter()
             .find(|s| s.scene_id == Some(hit.body))?;
         let face = *solid.faces.get(hit.triangle)?;
-        let name = solid.body.face_name(face).ok().flatten()?.to_owned();
+        let name = solid.body.face_name(face).ok().flatten()?;
+        let (feature, role) = split_face_key(name)?;
         let plane = face_plane(&solid.body, face)?;
-        Some((solid.feature, name, plane))
+        Some((feature, role.to_owned(), plane))
     }
 
     /// The solids of the last rebuild.
