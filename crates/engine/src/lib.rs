@@ -7,6 +7,7 @@
 pub mod cmd;
 mod imported;
 mod params;
+pub mod projection;
 pub mod script;
 pub mod sketching;
 pub mod solids;

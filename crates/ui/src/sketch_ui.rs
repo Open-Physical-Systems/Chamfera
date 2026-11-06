@@ -32,18 +32,26 @@ pub enum Tool {
     Trim,
     Extend,
     Split,
+    // The shape tools and Project live in `sketch_shapes.rs`.
+    Polygon,
+    Slot,
+    Ellipse,
+    Project,
 }
 
 /// The CREATE tools shown in the ribbon; the group's list has all of `CREATE_ALL`.
-const CREATE_SHOWN: [Tool; 6] = [
+const CREATE_SHOWN: [Tool; 9] = [
     Tool::Line,
     Tool::Rectangle,
     Tool::Circle,
     Tool::Arc,
+    Tool::Polygon,
+    Tool::Slot,
+    Tool::Ellipse,
     Tool::Offset,
     Tool::Mirror,
 ];
-const CREATE_ALL: [Tool; 11] = [
+const CREATE_ALL: [Tool; 15] = [
     Tool::Line,
     Tool::Rectangle,
     Tool::CentreRectangle,
@@ -51,6 +59,10 @@ const CREATE_ALL: [Tool; 11] = [
     Tool::Arc,
     Tool::ThreePointArc,
     Tool::TangentArc,
+    Tool::Polygon,
+    Tool::Slot,
+    Tool::Ellipse,
+    Tool::Project,
     Tool::Offset,
     Tool::Mirror,
     Tool::RectangularPattern,
@@ -87,6 +99,9 @@ impl Tool {
             Tool::Trim => label("sketch.trim"),
             Tool::Extend => label("sketch.extend"),
             Tool::Split => label("sketch.split"),
+            t @ (Tool::Polygon | Tool::Slot | Tool::Ellipse | Tool::Project) => {
+                crate::sketch_shapes::name(t)
+            }
         }
     }
 
@@ -109,11 +124,17 @@ impl Tool {
             Tool::Trim => Icon::Trim,
             Tool::Extend => Icon::Extend,
             Tool::Split => Icon::Split,
+            t @ (Tool::Polygon | Tool::Slot | Tool::Ellipse | Tool::Project) => {
+                crate::sketch_shapes::icon(t)
+            }
         }
     }
 
     fn tooltip(self) -> &'static str {
         match self {
+            t @ (Tool::Polygon | Tool::Slot | Tool::Ellipse | Tool::Project) => {
+                crate::sketch_shapes::tooltip(t)
+            }
             Tool::Select => {
                 "Select
 Pick points and curves to constrain or dimension (Shift adds); drag points to move them"
@@ -187,6 +208,9 @@ Click a curve to split it where other curves cross it; Split All splits every cr
 
     fn hint(self, clicks: usize) -> &'static str {
         match (self, clicks) {
+            (t @ (Tool::Polygon | Tool::Slot | Tool::Ellipse | Tool::Project), n) => {
+                crate::sketch_shapes::hint(t, n)
+            }
             (Tool::Select, _) => {
                 "Click to select (Shift adds) · drag a point to move it · Del deletes"
             }
@@ -292,6 +316,8 @@ pub struct SketchUi {
     /// The curve the Offset tool picked with its first click.
     picked_curve: Option<u32>,
     pub options: ToolOptions,
+    /// The values of the shape tools (`sketch_shapes.rs`).
+    pub shapes: crate::sketch_shapes::ShapeOptions,
     dragging: Option<u32>,
     /// A dimension being edited: its constraint id, kind and the text typed so far.
     editing: Option<(u64, String, String)>,
@@ -863,6 +889,10 @@ impl ChamferaApp {
             self.edit_click(tool, (x, y, w, h), click);
             return;
         }
+        if tool == Tool::Project {
+            self.project_click(x, y, w, h);
+            return;
+        }
         self.sketch.clicks.push(click);
         self.place(tool);
     }
@@ -870,6 +900,13 @@ impl ChamferaApp {
     /// Creates geometry once a tool has all its clicks.
     fn place(&mut self, tool: Tool) {
         let c = self.sketch.clicks.clone();
+        if crate::sketch_shapes::is_shape(tool) {
+            let pts: Vec<Point2> = c.iter().map(|k| k.at).collect();
+            if self.place_shape(tool, &pts) {
+                self.sketch.clicks.clear();
+            }
+            return;
+        }
         match (tool, c.as_slice()) {
             (Tool::Line, [a, b]) => {
                 if a.at.coincident(b.at) {
@@ -1072,6 +1109,10 @@ impl ChamferaApp {
                 }
             }
             (tool, _) if tool.edits() => polylines.extend(self.edit_preview(tool, hover)),
+            (tool, _) if crate::sketch_shapes::is_shape(tool) => {
+                let pts: Vec<Point2> = c.iter().map(|k| k.at).collect();
+                polylines.extend(self.shape_preview(tool, &pts, hover));
+            }
             _ => {}
         }
         for poly in polylines {
@@ -1156,6 +1197,7 @@ impl ChamferaApp {
         }
         self.dimension_editor(ui, rect);
         self.sketch_tool_box(ui, rect);
+        self.shape_tool_box(ui, rect);
     }
 
     /// The inline value box for the dimension being edited. Enter applies, Esc cancels.

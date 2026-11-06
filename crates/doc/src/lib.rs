@@ -25,7 +25,8 @@ use thiserror::Error;
 /// - 7: linear and circular patterns of features.
 /// - 8: imported solid bodies.
 /// - 9: fillets and chamfers of edges.
-pub const FORMAT_VERSION: u32 = 9;
+/// - 10: model edges projected into sketches, linked to their source.
+pub const FORMAT_VERSION: u32 = 10;
 /// The tag every design file starts with, so other JSON is not mistaken for a design.
 pub const FORMAT_TAG: &str = "chamfera";
 /// Longest parameter name.
@@ -122,6 +123,27 @@ pub struct FaceRef {
     pub face: String,
 }
 
+/// Most projected edges one sketch may hold.
+pub const MAX_PROJECTIONS: usize = 10_000;
+/// Longest edge reference a projection may hold.
+pub const MAX_EDGE_REF_LEN: usize = 512;
+
+/// A model edge projected into a sketch: the sketch curve it became, fixed in place, and
+/// the edge it follows when the design rebuilds, by its reference name (`2:top 0`, or
+/// `between 2:side 0 and 2:top` for an edge without a name of its own).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Projection {
+    pub edge: String,
+    pub curve: u32,
+    /// Whether the curve follows the edge on rebuild; an unlinked copy stays where it is.
+    #[serde(default = "linked_default")]
+    pub linked: bool,
+}
+
+fn linked_default() -> bool {
+    true
+}
+
 /// A sketch and the plane it is drawn on.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SketchFeature {
@@ -138,6 +160,16 @@ pub struct SketchFeature {
     /// rebuilds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attached: Option<FaceRef>,
+    /// Model edges projected into the sketch (see [`Projection`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub projections: Vec<Projection>,
+}
+
+impl SketchFeature {
+    /// The projection that made `curve`, if any.
+    pub fn projection_of(&self, curve: u32) -> Option<&Projection> {
+        self.projections.iter().find(|p| p.curve == curve)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -428,6 +460,7 @@ impl Document {
             sketch: chamfera_sketch::Sketch::new(),
             expressions: BTreeMap::new(),
             attached: None,
+            projections: Vec::new(),
         });
         Ok(id)
     }
@@ -518,6 +551,19 @@ impl Document {
                     || e.chars().count() > expr::MAX_EXPRESSION_LEN
                 {
                     return Err(bad(format!("expression for missing constraint {c}")));
+                }
+            }
+            if s.projections.len() > MAX_PROJECTIONS {
+                return Err(bad("too many projected edges".into()));
+            }
+            for p in &s.projections {
+                if s.sketch.curve(chamfera_sketch::CurveId(p.curve)).is_none()
+                    || p.edge.chars().count() > MAX_EDGE_REF_LEN
+                {
+                    return Err(bad(format!(
+                        "projection of {:?} to missing curve {}",
+                        p.edge, p.curve
+                    )));
                 }
             }
         }
@@ -716,5 +762,30 @@ mod tests {
         let bad =
             r#"{"format":"chamfera","version":1,"parameters":{"2x":{"value":1,"unit":"length"}}}"#;
         assert!(Document::from_json(bad).is_err());
+    }
+
+    #[test]
+    fn projections_must_name_a_curve_of_their_sketch() {
+        let mut doc = Document::default();
+        let id = doc.add_sketch(chamfera_geom::Frame::XY).unwrap();
+        let f = doc.sketch_mut(id).unwrap();
+        let p = f
+            .sketch
+            .add_point(chamfera_geom::Point2::new(0.0, 0.0))
+            .unwrap();
+        let c = f.sketch.add_circle(p, 4.0).unwrap();
+        f.projections.push(Projection {
+            edge: "2:top 4".into(),
+            curve: c.0,
+            linked: true,
+        });
+        let back = Document::from_json(&doc.to_json().unwrap()).unwrap();
+        assert_eq!(back, doc);
+        let mut text: serde_json::Value = serde_json::from_str(&doc.to_json().unwrap()).unwrap();
+        text["sketches"][0]["projections"][0]["curve"] = serde_json::json!(99);
+        assert!(Document::from_json(&text.to_string()).is_err());
+        text["sketches"][0]["projections"][0]["curve"] = serde_json::json!(c.0);
+        text["sketches"][0]["projections"][0]["edge"] = serde_json::json!("x".repeat(600));
+        assert!(Document::from_json(&text.to_string()).is_err());
     }
 }

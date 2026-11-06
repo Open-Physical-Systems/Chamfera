@@ -48,6 +48,8 @@ pub struct Theme {
     /// Sketch geometry fixed by its constraints.
     pub sketch_constrained: Rgba,
     pub sketch_construction: Rgba,
+    /// Model edges projected into a sketch (fixed, linked to their source).
+    pub sketch_projected: Rgba,
     /// Geometry being drawn, before it is created.
     pub sketch_preview: Rgba,
     /// What the pointer is over, or what is picked.
@@ -103,6 +105,7 @@ impl Theme {
             sketch: Rgba(30, 100, 220, 255),
             sketch_constrained: Rgba(20, 24, 30, 255),
             sketch_construction: Rgba(214, 120, 30, 255),
+            sketch_projected: Rgba(150, 60, 200, 255),
             sketch_preview: Rgba(30, 100, 220, 140),
             highlight: Rgba(240, 160, 20, 255),
             chrome: Rgba(252, 252, 253, 255),
@@ -142,6 +145,7 @@ impl Theme {
             sketch: Rgba(96, 170, 255, 255),
             sketch_constrained: Rgba(236, 240, 246, 255),
             sketch_construction: Rgba(240, 150, 60, 255),
+            sketch_projected: Rgba(200, 140, 255, 255),
             sketch_preview: Rgba(96, 170, 255, 140),
             highlight: Rgba(255, 190, 60, 255),
             chrome: Rgba(29, 31, 35, 255),

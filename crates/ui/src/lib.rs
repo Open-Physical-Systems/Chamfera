@@ -25,6 +25,7 @@ const SHOT_TIMEOUT_SECS: f64 = 30.0;
 static SHOT_FAILED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 mod icons;
 mod params_ui;
+mod sketch_shapes;
 mod sketch_ui;
 mod solid_ui;
 mod timeline;

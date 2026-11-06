@@ -208,6 +208,9 @@ fn loop_edges(sketch: &Sketch, l: &ProfileLoop) -> Result<Vec<ProfileEdge>, Stri
                     sketch.point(*end).ok_or_else(gone)?,
                 )
                 .map_err(|e| format!("an arc of the profile: {e}"))?,
+                Curve::Ellipse { .. } | Curve::EllipticalArc { .. } => {
+                    return Err("ellipses in a profile cannot be swept into solids yet".into());
+                }
             };
             Ok(if seg.reversed { edge.reversed() } else { edge })
         })
@@ -578,7 +581,7 @@ impl Session {
             .doc
             .sketches
             .iter()
-            .filter(|s| s.attached.is_some())
+            .filter(|s| s.attached.is_some() || !s.projections.is_empty())
             .map(|s| s.id)
             .collect();
         for id in attached {
@@ -632,7 +635,8 @@ impl Session {
         self.built = built;
     }
 
-    /// Moves an attached sketch's plane onto its face, as built so far.
+    /// Moves an attached sketch's plane onto its face, and its projected edges onto
+    /// their edges, as built so far.
     fn follow_attached_sketch(
         &mut self,
         sketch: u32,
@@ -641,14 +645,13 @@ impl Session {
         let Ok(f) = self.doc.sketch(sketch) else {
             return Ok(());
         };
-        let Some(r) = f.attached.clone() else {
-            return Ok(());
-        };
-        let plane = attached_plane(made, &r)?;
-        if let Ok(f) = self.doc.sketch_mut(sketch) {
-            f.plane = plane;
+        if let Some(r) = f.attached.clone() {
+            let plane = attached_plane(made, &r)?;
+            if let Ok(f) = self.doc.sketch_mut(sketch) {
+                f.plane = plane;
+            }
         }
-        Ok(())
+        self.follow_projections(sketch, made.iter().map(|m| &m.2))
     }
 
     /// The solid face under pixel `(x, y)`: (feature, face name, plane), for flat faces

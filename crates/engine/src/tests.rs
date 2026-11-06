@@ -198,6 +198,12 @@ fn hostile_params_never_panic() {
         json!({"edges": [long], "radius": -1, "distance": "0 mm", "size": "q"}),
         json!({"edges": [], "pick": {"x": 1e300, "y": "a"}, "radius": 1}),
         json!({"pick": {"x": 400, "y": 300, "width": 800, "height": 600}, "radius": 1e9}),
+        json!({"cx": 0, "cy": 0, "x": 1e300, "y": 0, "sides": 1e9, "mode": 5, "minor": f64::NAN, "width": -1, "overall": "no"}),
+        json!({"cx": 0, "cy": 0, "x": 5, "y": 0, "sides": 64, "mode": "circumscribed", "minor": 1e-300, "width": 1e300, "overall": true, "x1": 0, "y1": 0, "x2": 1e-9, "y2": 0}),
+        json!({"cx": 1, "cy": 1, "x": 1, "y": 1, "sides": 3, "minor": 3, "x1": 1, "y1": 1, "x2": 1, "y2": 1, "width": 0}),
+        json!({"edges": [long], "faces": [{"feature": 4294967296u64, "face": long}], "linked": 1}),
+        json!({"faces": "top", "pick": {"x": 1e300}, "edges": [null], "linked": null}),
+        json!({"faces": [{"feature": 2, "face": "top"}], "edges": ["2:top 0"], "pick": {"x": 400, "y": 300, "width": 800, "height": 600}}),
     ];
     for c in registry() {
         for p in &hostile {
@@ -1730,4 +1736,288 @@ fn body_import_step_adds_exact_solids_that_undo_save_and_open_keep() {
             .is_err()
     );
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+// ----- sketch shapes and projected edges -----
+
+#[test]
+fn polygon_slot_and_ellipse_commands_draw_shapes_of_their_exact_area() {
+    let pi = std::f64::consts::PI;
+    let mut s = Session::new();
+    s.execute("sketch.create", &json!({"plane": "xy"})).unwrap();
+    // A hexagon inscribed in r = 10: six equilateral triangles, (3√3/2) · 100.
+    s.execute(
+        "sketch.polygon",
+        &json!({"cx": 0, "cy": 0, "x": 10, "y": 0, "sides": 6}),
+    )
+    .unwrap();
+    let hexagon = 1.5 * 3f64.sqrt() * 100.0;
+    assert!((sketch_areas(&mut s)[0] - hexagon).abs() < 1e-9);
+    // Circumscribed about r = 5, a square is 10 x 10.
+    s.execute(
+        "sketch.polygon",
+        &json!({"cx": 40, "cy": 0, "x": 45, "y": 0, "sides": 4, "mode": "circumscribed"}),
+    )
+    .unwrap();
+    // A slot with centres 20 apart, 6 wide: 20 · 6 + π · 3².
+    s.execute(
+        "sketch.slot",
+        &json!({"x1": 0, "y1": 30, "x2": 20, "y2": 30, "width": 6}),
+    )
+    .unwrap();
+    // An ellipse a = 10, b = 5: π a b.
+    s.execute(
+        "sketch.ellipse",
+        &json!({"cx": 0, "cy": 60, "x": 10, "y": 60, "minor": 5}),
+    )
+    .unwrap();
+    let a = sketch_areas(&mut s);
+    let mut expected = [hexagon, 100.0, 120.0 + 9.0 * pi, 50.0 * pi];
+    expected.sort_by(f64::total_cmp);
+    assert_eq!(a.len(), 4, "{a:?}");
+    for (got, want) in a.iter().zip(expected) {
+        assert!((got - want).abs() < 1e-6, "{a:?} vs {expected:?}");
+    }
+    // Bad input is refused and changes nothing.
+    let before = s.doc.clone();
+    for (id, p) in [
+        (
+            "sketch.polygon",
+            json!({"cx": 0, "cy": 0, "x": 1, "y": 0, "sides": 2}),
+        ),
+        (
+            "sketch.polygon",
+            json!({"cx": 0, "cy": 0, "x": 1, "y": 0, "sides": 65}),
+        ),
+        (
+            "sketch.polygon",
+            json!({"cx": 0, "cy": 0, "x": 1, "y": 0, "sides": 5, "mode": "x"}),
+        ),
+        (
+            "sketch.slot",
+            json!({"x1": 0, "y1": 0, "x2": 0, "y2": 0, "width": 2}),
+        ),
+        (
+            "sketch.slot",
+            json!({"x1": 0, "y1": 0, "x2": 4, "y2": 0, "width": 6, "overall": true}),
+        ),
+        (
+            "sketch.ellipse",
+            json!({"cx": 0, "cy": 0, "x": 0, "y": 0, "minor": 2}),
+        ),
+        (
+            "sketch.ellipse",
+            json!({"cx": 0, "cy": 0, "x": 5, "y": 0, "minor": -2}),
+        ),
+    ] {
+        assert!(s.execute(id, &p).is_err(), "{id} {p}");
+    }
+    assert_eq!(s.doc, before);
+}
+
+#[test]
+fn an_ellipse_profile_is_refused_by_extrude_with_a_reason() {
+    let mut s = Session::new();
+    s.execute("sketch.create", &json!({"plane": "xy"})).unwrap();
+    s.execute(
+        "sketch.ellipse",
+        &json!({"cx": 0, "cy": 0, "x": 10, "y": 0, "minor": 5}),
+    )
+    .unwrap();
+    s.execute("sketch.finish", &json!({})).unwrap();
+    let e = s
+        .execute(
+            "solid.extrude",
+            &json!({"sketch": 1, "profiles": [{"x": 0, "y": 0}], "distance": 5}),
+        )
+        .unwrap_err();
+    assert!(e.to_string().contains("ellipse"), "{e}");
+    assert!(s.solids().is_empty());
+}
+
+/// The length dimension of sketch 1 with this value.
+fn length_dimension(s: &mut Session, value: f64) -> u64 {
+    let g = s.execute("sketch.get", &json!({"sketch": 1})).unwrap();
+    g["constraints"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| {
+            c["definition"]["kind"] == "length"
+                && (c["definition"]["value"].as_f64().unwrap() - value).abs() < 1e-9
+        })
+        .and_then(|c| c["constraint"].as_u64())
+        .unwrap()
+}
+
+#[test]
+fn projecting_the_top_of_a_box_gives_its_outline_which_follows_the_box() {
+    // The 50 x 30 x 10 box; its top edges projected onto a sketch on its top face are a
+    // 50 x 30 rectangle, area 1500, fixed in place (no freedom).
+    let mut s = Session::new();
+    extruded_plate(&mut s, json!(10));
+    let sketch = s
+        .execute(
+            "sketch.create_on_face",
+            &json!({"feature": 2, "face": "top"}),
+        )
+        .unwrap()["sketch"]
+        .as_u64()
+        .unwrap();
+    let edges: Vec<String> = (0..4).map(|k| format!("2:top {k}")).collect();
+    let r = s
+        .execute("sketch.project", &json!({ "edges": edges }))
+        .unwrap();
+    assert_eq!(r["curves"].as_array().unwrap().len(), 4, "{r}");
+    let g = s.execute("sketch.get", &json!({})).unwrap();
+    assert_eq!(g["dof"], 0);
+    assert_eq!(g["status"], "FullyConstrained");
+    let a = sketch_areas(&mut s);
+    assert_eq!(a.len(), 1);
+    assert!((a[0] - 1500.0).abs() < 1e-6, "{a:?}");
+    // Projecting the same edge again adds nothing.
+    let again = s
+        .execute("sketch.project", &json!({"edges": ["2:top 0"]}))
+        .unwrap();
+    assert!(again["curves"].as_array().unwrap().is_empty());
+    // The box grows to 60 wide: the projected rectangle follows, 60 x 30.
+    s.execute("sketch.finish", &json!({})).unwrap();
+    let width = length_dimension(&mut s, 50.0);
+    s.execute("sketch.edit", &json!({"sketch": 1})).unwrap();
+    s.execute(
+        "sketch.dimension",
+        &json!({"constraint": width, "value": 60}),
+    )
+    .unwrap();
+    s.execute("sketch.edit", &json!({ "sketch": sketch }))
+        .unwrap();
+    let a = sketch_areas(&mut s);
+    assert_eq!(a.len(), 1);
+    assert!((a[0] - 1800.0).abs() < 1e-6, "{a:?}");
+    // Undo brings back the 50 x 30 box and its outline.
+    s.execute("edit.undo", &json!({})).unwrap();
+    let a = sketch_areas(&mut s);
+    assert!((a[0] - 1500.0).abs() < 1e-6, "{a:?}");
+}
+
+#[test]
+fn a_projected_hole_is_a_circle_of_its_radius_and_a_face_projects_all_its_loops() {
+    // The plate with a hole of radius 4 at (25, 15) through it: projecting its top face
+    // gives the outline (4 lines) and the hole (a circle of radius 4).
+    let mut s = Session::new();
+    dimensioned_rectangle(&mut s);
+    s.execute("sketch.circle", &json!({"cx": 25, "cy": 15, "radius": 4}))
+        .unwrap();
+    s.execute("sketch.finish", &json!({})).unwrap();
+    s.execute(
+        "solid.extrude",
+        &json!({"sketch": 1, "profiles": [{"x": 5, "y": 5}], "distance": 10}),
+    )
+    .unwrap();
+    s.execute(
+        "sketch.create_on_face",
+        &json!({"feature": 2, "face": "top"}),
+    )
+    .unwrap();
+    let r = s
+        .execute(
+            "sketch.project",
+            &json!({"faces": [{"feature": 2, "face": "top"}], "linked": true}),
+        )
+        .unwrap();
+    assert_eq!(r["curves"].as_array().unwrap().len(), 5, "{r}");
+    let f = s.active_sketch().unwrap();
+    let circles: Vec<f64> = f
+        .sketch
+        .curves()
+        .filter_map(|(id, c)| match c {
+            chamfera_sketch::Curve::Circle { .. } => f.sketch.radius(id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(circles.len(), 1);
+    assert!((circles[0] - 4.0).abs() < 1e-9, "{circles:?}");
+    let centre = f
+        .sketch
+        .curves()
+        .find_map(|(_, c)| match c {
+            chamfera_sketch::Curve::Circle { centre, .. } => f.sketch.point(*centre),
+            _ => None,
+        })
+        .unwrap();
+    assert!(centre.distance(chamfera_geom::Point2::new(25.0, 15.0)) < 1e-9);
+    // The plate with the hole and the disc: 1500 - 16π and 16π.
+    let pi = std::f64::consts::PI;
+    let a = sketch_areas(&mut s);
+    assert!((a[0] - 16.0 * pi).abs() < 1e-6, "{a:?}");
+    assert!((a[1] - (1500.0 - 16.0 * pi)).abs() < 1e-6, "{a:?}");
+    // Projected curves draw in their own colour, and their fixes have no labels.
+    use chamfera_render::OverlayStyle;
+    assert!(
+        s.scene
+            .overlays
+            .iter()
+            .any(|o| o.style == OverlayStyle::Projected && !o.lines.is_empty())
+    );
+    assert!(s.dimension_labels().is_empty());
+    // The design saves and opens with its projections.
+    let json = s.doc.to_json().unwrap();
+    let back = chamfera_doc::Document::from_json(&json).unwrap();
+    assert_eq!(back.sketches[1].projections.len(), 5);
+    // Deleting a projected curve forgets its link.
+    let curve = back.sketches[1].projections[0].curve;
+    s.sketch_selection = vec![crate::sketching::SketchItem::Curve(curve)];
+    s.execute("sketch.remove", &json!({})).unwrap();
+    assert_eq!(s.active_sketch().unwrap().projections.len(), 4);
+}
+
+#[test]
+fn projecting_needs_a_sketch_and_real_edges() {
+    let mut s = Session::new();
+    extruded_plate(&mut s, json!(10));
+    // No sketch being edited.
+    assert!(
+        s.execute("sketch.project", &json!({"edges": ["2:top 0"]}))
+            .is_err()
+    );
+    s.execute("sketch.create", &json!({"plane": "xz"})).unwrap();
+    let before = s.doc.clone();
+    for p in [
+        json!({}),
+        json!({"edges": ["2:nowhere 9"]}),
+        json!({"edges": "2:top 0"}),
+        json!({"faces": [{"feature": 2, "face": "nowhere"}]}),
+        json!({"faces": [{"feature": "2"}]}),
+        json!({"edges": ["2:top 0"], "linked": "yes"}),
+        json!({"pick": {"x": -5, "y": -5, "width": 10, "height": 10}}),
+    ] {
+        assert!(s.execute("sketch.project", &p).is_err(), "{p}");
+    }
+    assert_eq!(s.doc, before);
+    // On the XZ plane a top edge along X stays a line 50 long at z = 10, and an edge along
+    // Y is seen end-on: a point, refused.
+    let r = s
+        .execute(
+            "sketch.project",
+            &json!({"edges": ["2:top 0"], "linked": false}),
+        )
+        .unwrap();
+    let curve = r["curves"][0].as_u64().unwrap();
+    let f = s.active_sketch().unwrap();
+    let Some(chamfera_sketch::Curve::Line { start, end, .. }) =
+        f.sketch.curve(chamfera_sketch::CurveId(curve as u32))
+    else {
+        panic!("not a line");
+    };
+    let (a, b) = (
+        f.sketch.point(*start).unwrap(),
+        f.sketch.point(*end).unwrap(),
+    );
+    assert!((a.distance(b) - 50.0).abs() < 1e-9);
+    assert!((a.y - 10.0).abs() < 1e-9 && (b.y - 10.0).abs() < 1e-9);
+    assert!(!f.projections[0].linked);
+    assert!(
+        s.execute("sketch.project", &json!({"edges": ["2:top 1"]}))
+            .is_err()
+    );
 }

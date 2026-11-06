@@ -358,6 +358,8 @@ pub enum OverlayStyle {
     Sketch,
     Constrained,
     Construction,
+    /// Model edges projected into the sketch.
+    Projected,
     Preview,
     Highlight,
 }
@@ -368,6 +370,7 @@ impl OverlayStyle {
             OverlayStyle::Sketch => theme.sketch,
             OverlayStyle::Constrained => theme.sketch_constrained,
             OverlayStyle::Construction => theme.sketch_construction,
+            OverlayStyle::Projected => theme.sketch_projected,
             OverlayStyle::Preview => theme.sketch_preview,
             OverlayStyle::Highlight => theme.highlight,
         }
