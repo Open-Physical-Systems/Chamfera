@@ -68,7 +68,9 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         id: "sketch.dimension",
         label: "Edit Dimension",
-        params: "constraint: integer (required) - a dimension\nvalue: number (required) - mm or radians",
+        params: "constraint: integer (required) - a dimension\n\
+                 value: number - mm or radians; or\n\
+                 expression: string - such as \"width / 2\"; the dimension then follows it",
         mutates: true,
         run: dimension,
     },
@@ -386,10 +388,31 @@ fn constrain(s: &mut Session, p: &Value) -> CmdResult {
 
 fn dimension(s: &mut Session, p: &Value) -> CmdResult {
     let id = chamfera_sketch::ConstraintId(params::req_id(p, "constraint")?);
-    let value = params::req_f64(p, "value")?;
-    let sk = active(s)?;
-    sk.try_set_dimension(id, value).map_err(sketch_err)?;
-    Ok(json!({ "constraint": id.0, "value": value }))
+    let sketch_id = active_id(s)?;
+    let expression = params::opt_str(p, "expression")?.map(str::to_owned);
+    let f = s.doc.sketch_mut(sketch_id)?;
+    if f.sketch.constraint(id).is_none_or(|c| !c.is_dimension()) {
+        return Err(bad(format!("{id} is not a dimension")));
+    }
+    match expression {
+        // An expression drives the dimension from now on; evaluating applies and solves.
+        Some(e) => {
+            f.expressions.insert(id.0, e);
+            s.doc.evaluate()?;
+        }
+        None => {
+            let value = params::req_f64(p, "value")?;
+            f.expressions.remove(&id.0);
+            f.sketch.try_set_dimension(id, value).map_err(sketch_err)?;
+        }
+    }
+    let f = s.doc.sketch(sketch_id)?;
+    let value = f.sketch.constraint(id).and_then(|c| c.value());
+    Ok(json!({
+        "constraint": id.0,
+        "value": value,
+        "expression": f.expressions.get(&id.0),
+    }))
 }
 
 fn drag(s: &mut Session, p: &Value) -> CmdResult {
@@ -699,6 +722,7 @@ fn get(s: &mut Session, p: &Value) -> CmdResult {
         "dof": dof.as_ref().map(|d| d.dof),
         "status": dof.as_ref().map(|d| format!("{:?}", d.status)),
         "profiles": regions,
+        "expressions": f.expressions,
         "selection": s.sketch_selection,
     }))
 }

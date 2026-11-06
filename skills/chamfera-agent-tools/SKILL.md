@@ -24,6 +24,7 @@ It uses the GPU if there is one, else a software Vulkan driver (lavapipe, `mesa-
 
 ## Sketches
 - `sketch.create {"plane": "xy"}` makes a sketch active; `sketch.line`, `sketch.rectangle`, `sketch.circle`, `sketch.arc` draw; `sketch.constrain {"constraint": {"kind": ..., ...}}` constrains; `sketch.get` returns points, curves, constraints, DOF, status and profile areas. Check DOF and areas against values you worked out.
+- Parameters: `param.set {"name": "width", "expression": "80 mm"}`; a dimension follows one with `sketch.dimension {"constraint": id, "expression": "width / 2"}` (`examples/parametric-plate.json`). `chamfera --parameters` opens the Parameters window at start.
 - Points, curves and constraints share one id counter per sketch: read ids from each reply instead of guessing them.
 
 ## Commands and scripts

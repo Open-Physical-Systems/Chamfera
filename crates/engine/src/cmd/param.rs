@@ -24,7 +24,8 @@ pub static COMMANDS: &[CommandSpec] = &[
         id: "param.set",
         label: "Set Parameter",
         params: "name: string (required) - letters, digits, _; not starting with a digit\n\
-                 value: number (required) - in mm for length, radians for angle\n\
+                 expression: string (optional) - such as \"80 mm\", \"width / 2\" or \"30 deg\"\n\
+                 value: number (required without expression) - mm for length, radians for angle\n\
                  unit: string (optional) - length (default), angle or unitless",
         mutates: true,
         run: set,
@@ -38,15 +39,26 @@ fn list(s: &mut Session, p: &Value) -> CmdResult {
 
 fn set(s: &mut Session, p: &Value) -> CmdResult {
     let name = params::req_str(p, "name")?;
-    let value = params::req_f64(p, "value")?;
     let unit = match params::opt_str(p, "unit")? {
         None => Unit::Length,
         Some(u) => Unit::parse(u).ok_or_else(|| {
             CommandError::BadParams(format!("unknown unit {u:?}: use length, angle or unitless"))
         })?,
     };
-    s.doc.set_parameter(name, value, unit)?;
-    Ok(json!({ "name": name, "value": value, "unit": unit }))
+    match params::opt_str(p, "expression")? {
+        Some(e) => s.doc.set_parameter_expression(name, e, unit)?,
+        None => {
+            let value = params::req_f64(p, "value")?;
+            s.doc.set_parameter(name, value, unit)?;
+        }
+    }
+    let param = s.doc.parameters.get(name);
+    Ok(json!({
+        "name": name,
+        "value": param.map(|p| p.value),
+        "unit": unit,
+        "expression": param.and_then(|p| p.expression.clone()),
+    }))
 }
 
 fn remove(s: &mut Session, p: &Value) -> CmdResult {
