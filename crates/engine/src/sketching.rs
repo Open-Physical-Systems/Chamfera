@@ -157,7 +157,11 @@ impl Session {
             by_style.sort_by_key(|(s, _)| *s == OverlayStyle::Highlight);
             overlays.extend(by_style.into_iter().map(|(_, o)| o));
         }
-        self.scene.overlays = overlays;
+        // Construction geometry goes first, so sketches draw over it.
+        let (mut construct, fills) = self.construct_overlays();
+        construct.append(&mut overlays);
+        self.scene.overlays = construct;
+        self.scene.fills = fills;
     }
 
     /// Projects a point of the active sketch's plane to a pixel of a `w` x `h` viewport.

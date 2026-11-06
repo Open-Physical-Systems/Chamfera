@@ -200,11 +200,15 @@ pub struct ViewRenderer {
     /// Edges behind faces, dashed (the hidden-edge style).
     hidden_edges: wgpu::RenderPipeline,
     grid: wgpu::RenderPipeline,
+    /// See-through fills (construction planes): hidden by bodies, hiding nothing.
+    fills: wgpu::RenderPipeline,
     overlay_lines: wgpu::RenderPipeline,
     overlay_points: wgpu::RenderPipeline,
     /// The same, hidden by bodies in front (finished sketches).
     overlay_lines_depth: wgpu::RenderPipeline,
     overlay_points_depth: wgpu::RenderPipeline,
+    /// Translucent tool previews (`Scene::previews`).
+    preview: wgpu::RenderPipeline,
     targets: Option<Targets>,
     bodies: HashMap<u32, GpuBody>,
     /// Made on first use, only on backends without texture view formats.
@@ -435,6 +439,19 @@ impl ViewRenderer {
             blend: Some(wgpu::BlendState::ALPHA_BLENDING),
             write: all,
         });
+        let fills = make(Spec {
+            label: "fills",
+            layout: &base_layout,
+            vs: "line_vs",
+            fs: "line_fs",
+            buffers: &line_buffers,
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            depth_write: false,
+            compare: wgpu::CompareFunction::LessEqual,
+            bias: no_bias,
+            blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+            write: all,
+        });
         // Overlays draw over everything, in order, blended.
         let overlay_lines = make(Spec {
             label: "overlay lines",
@@ -458,6 +475,20 @@ impl ViewRenderer {
             topology: wgpu::PrimitiveTopology::TriangleList,
             depth_write: false,
             compare: wgpu::CompareFunction::Always,
+            bias: no_bias,
+            blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+            write: all,
+        });
+        // Previews blend over the bodies and hide behind them, without hiding anything.
+        let preview = make(Spec {
+            label: "preview",
+            layout: &mesh_layout,
+            vs: "mesh_vs",
+            fs: "preview_fs",
+            buffers: &mesh_buffers,
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            depth_write: false,
+            compare: wgpu::CompareFunction::LessEqual,
             bias: no_bias,
             blend: Some(wgpu::BlendState::ALPHA_BLENDING),
             write: all,
@@ -499,10 +530,12 @@ impl ViewRenderer {
             edges,
             hidden_edges,
             grid,
+            fills,
             overlay_lines,
             overlay_points,
             overlay_lines_depth,
             overlay_points_depth,
+            preview,
             targets: None,
             bodies: HashMap::new(),
             raw_blit: None,
@@ -734,6 +767,7 @@ impl ViewRenderer {
             usage: wgpu::BufferUsages::VERTEX,
         });
 
+        let fills = fill_vertices(frame.scene, frame.theme);
         let (depth_lines, depth_points) = overlay_vertices(frame.scene, frame.theme, false);
         let (overlay_lines, overlay_points) = overlay_vertices(frame.scene, frame.theme, true);
         let vertex_buffer = |label, data: &[LineVertex]| {
@@ -745,10 +779,47 @@ impl ViewRenderer {
                 })
             })
         };
+        let fill_buf = vertex_buffer("fills", &fills);
         let overlay_line_buf = vertex_buffer("overlay lines", &overlay_lines);
         let overlay_point_buf = vertex_buffer("overlay points", &overlay_points);
         let depth_line_buf = vertex_buffer("overlay lines (depth)", &depth_lines);
         let depth_point_buf = vertex_buffer("overlay points (depth)", &depth_points);
+        // Previews change while a dialog's values change, so they are uploaded each frame.
+        let preview_tris: Vec<MeshVertex> = frame
+            .scene
+            .previews
+            .iter()
+            .flat_map(mesh_vertices)
+            .collect();
+        let preview_lines: Vec<LineVertex> = frame
+            .scene
+            .previews
+            .iter()
+            .flat_map(|m| mesh_edge_vertices(m, frame.theme.sketch_preview.linear()))
+            .collect();
+        let preview = (!preview_tris.is_empty()).then(|| {
+            let tris = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("preview triangles"),
+                contents: bytemuck::cast_slice(&preview_tris),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+            let colour = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("preview colour"),
+                contents: bytemuck::cast_slice(&frame.theme.preview_body.linear()),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+            let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("preview"),
+                layout: &self.body_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: colour.as_entire_binding(),
+                }],
+            });
+            (tris, preview_tris.len() as u32, bind)
+        });
+        let preview_edges =
+            vertex_buffer("preview edges", &preview_lines).map(|b| (b, preview_lines.len() as u32));
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("viewport"),
@@ -827,6 +898,22 @@ impl ViewRenderer {
                 pass.set_pipeline(&self.grid);
                 pass.set_vertex_buffer(0, grid_buf.slice(..));
                 pass.draw(0..grid.len() as u32, 0..1);
+            }
+            if let Some((tris, n, bind)) = &preview {
+                pass.set_pipeline(&self.preview);
+                pass.set_bind_group(1, bind, &[]);
+                pass.set_vertex_buffer(0, tris.slice(..));
+                pass.draw(0..*n, 0..1);
+            }
+            if let Some((buf, n)) = &preview_edges {
+                pass.set_pipeline(&self.overlay_lines_depth);
+                pass.set_vertex_buffer(0, buf.slice(..));
+                pass.draw(0..*n, 0..1);
+            }
+            if let Some(buf) = &fill_buf {
+                pass.set_pipeline(&self.fills);
+                pass.set_vertex_buffer(0, buf.slice(..));
+                pass.draw(0..fills.len() as u32, 0..1);
             }
             if let Some(buf) = &depth_line_buf {
                 pass.set_pipeline(&self.overlay_lines_depth);
@@ -918,6 +1005,27 @@ fn overlay_vertices(
     (lines, points)
 }
 
+/// The fills' triangle corners, in drawing order, capped at [`MAX_OVERLAY_ITEMS`]
+/// triangles. Triangles with an invalid corner are skipped.
+fn fill_vertices(scene: &Scene, theme: &Theme) -> Vec<LineVertex> {
+    let mut out = Vec::new();
+    let mut budget = MAX_OVERLAY_ITEMS;
+    for f in &scene.fills {
+        let color = f.style.color(theme).linear();
+        for t in f.triangles.iter().take(budget) {
+            if t.iter().all(|p| p.is_valid()) {
+                out.extend(t.iter().map(|p| LineVertex {
+                    position: f3(*p),
+                    color,
+                    arc: 0.0,
+                }));
+            }
+        }
+        budget = budget.saturating_sub(f.triangles.len());
+    }
+    out
+}
+
 /// Flat-shaded triangles: each corner carries its face's normal.
 fn mesh_vertices(mesh: &TriMesh) -> Vec<MeshVertex> {
     let mut out = Vec::with_capacity(mesh.triangles.len() * 3);
@@ -936,22 +1044,36 @@ fn mesh_vertices(mesh: &TriMesh) -> Vec<MeshVertex> {
     out
 }
 
+/// A mesh's sharp edges as vertex pairs, each carrying its length along the edge.
+fn mesh_edge_vertices(mesh: &TriMesh, color: [f32; 4]) -> Vec<LineVertex> {
+    let mut out = Vec::new();
+    for [a, b] in mesh.feature_edges(EDGE_ANGLE) {
+        out.push(LineVertex {
+            position: f3(a),
+            color,
+            arc: 0.0,
+        });
+        out.push(LineVertex {
+            position: f3(b),
+            color,
+            arc: (b - a).length() as f32,
+        });
+    }
+    out
+}
+
 /// A body's edge lines as vertex pairs: its exact B-rep edges when it has them, else the
 /// mesh's sharp edges. Each vertex carries its length along the edge, for dashes.
 fn edge_vertices(body: &SceneBody, color: [f32; 4]) -> Vec<LineVertex> {
+    if body.edges.is_empty() {
+        return mesh_edge_vertices(&body.mesh, color);
+    }
     let vertex = |p: Point3, arc: f64| LineVertex {
         position: f3(p),
         color,
         arc: arc as f32,
     };
     let mut out = Vec::new();
-    if body.edges.is_empty() {
-        for [a, b] in body.mesh.feature_edges(EDGE_ANGLE) {
-            out.push(vertex(a, 0.0));
-            out.push(vertex(b, (b - a).length()));
-        }
-        return out;
-    }
     for line in &body.edges {
         let mut arc = 0.0;
         for pair in line.windows(2) {

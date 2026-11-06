@@ -331,6 +331,10 @@ impl ChamferaApp {
         let has_solids = !self.session.solids().is_empty();
         let name = shortcuts::action_label(action);
         let desktop = cfg!(not(target_arch = "wasm32"));
+        // The extrude preview needs what the Extrude tool needs (a profile, no open tool).
+        if matches!(action, Action::Command("solid.extrude_preview")) {
+            return self.unavailable(Action::Extrude);
+        }
         let why = match action {
             Action::SketchTool(_) | Action::FinishSketch if !sketching => {
                 format!("{name} works in a sketch: start one with Create Sketch first")

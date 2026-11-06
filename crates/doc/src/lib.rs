@@ -1,15 +1,20 @@
 //! Layer 2: the design document: parameters and sketches now, the feature timeline from M4.
 
+pub mod construct;
 pub mod expr;
 pub mod feature;
 pub mod imported;
 
 pub use appearance::Appearance;
+pub use construct::{
+    AxisRef, ConstructKind, Construction, EdgeRef, OriginAxis, OriginPlane, PlaneRef, PointRef,
+};
 pub mod appearance;
 
 pub use feature::{
-    Blend, BlendKind, Extrude, ExtrudeDirection, Feature, FeatureKind, Operation, Pattern,
-    PatternLayout, Revolve, Shell,
+    Blend, BlendKind, Extrude, ExtrudeDirection, ExtrudeExtent, ExtrudeTo, ExtrudeValues, Feature,
+    FeatureKind, Hole, HoleKind, HoleSizes, Mirror, MirrorPlane, Move, MoveTransform, Operation,
+    Pattern, PatternLayout, Revolve, Shell,
 };
 pub use imported::ImportedBody;
 
@@ -29,8 +34,17 @@ use thiserror::Error;
 /// - 8: imported solid bodies.
 /// - 9: fillets and chamfers of edges.
 /// - 10: shells (hollowed solids with open faces).
+/// - 11: construction planes, axes and points as timeline features (`construct`), sketches
+///   on a construction plane (`on_plane`), and revolves and circular patterns about a
+///   construction axis (`axis_feature`). Older files open unchanged: every new field is
+///   optional.
+/// - 12: hole features (simple, counterbore, countersink) on a flat face.
+/// - 13: extrude options: extents (through all, up to a face or plane), two sides with
+///   their own distances, a start offset and a taper angle. Older extrudes read as by
+///   distance from the sketch plane without a taper.
+/// - 14: mirror and move/copy of bodies and features.
 /// - 21: body appearances (a colour and opacity per feature's body). Older files open
-///   with every body in the theme's colour. (11 to 20 are taken by branches landing at
+///   with every body in the theme's colour. (15 to 20 are taken by branches landing at
 ///   the same time; the merge renumbers.)
 pub const FORMAT_VERSION: u32 = 21;
 /// The tag every design file starts with, so other JSON is not mistaken for a design.
@@ -145,6 +159,10 @@ pub struct SketchFeature {
     /// rebuilds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attached: Option<FaceRef>,
+    /// The construction plane (its feature id) this sketch lies on, if any: its plane
+    /// follows that construction when the design rebuilds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_plane: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -439,6 +457,7 @@ impl Document {
             sketch: chamfera_sketch::Sketch::new(),
             expressions: BTreeMap::new(),
             attached: None,
+            on_plane: None,
         });
         Ok(id)
     }
@@ -549,6 +568,11 @@ impl Document {
                 return Err(DocError::BadFeature {
                     reason: format!("feature {} has a name longer than 256", f.id),
                 });
+            }
+            if let FeatureKind::Construct(c) = &f.kind {
+                c.check_shape().map_err(|reason| DocError::BadFeature {
+                    reason: format!("feature {}: {reason}", f.id),
+                })?;
             }
         }
         checked.features = doc.features;

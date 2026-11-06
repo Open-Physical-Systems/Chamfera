@@ -5,10 +5,255 @@
 use crate::icons::Icon;
 use crate::widgets::{self, Look};
 use crate::{ChamferaApp, label};
-use chamfera_doc::{ExtrudeDirection, Operation};
+use chamfera_doc::{Extrude, ExtrudeDirection, ExtrudeExtent, ExtrudeTo, FaceRef, Operation};
 use chamfera_geom::Point2;
 use chamfera_render::{Overlay, OverlayStyle};
-use serde_json::json;
+use serde_json::{Value, json};
+
+/// The extrude options as the Extrude tool and the Edit Feature dialog edit them.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExtrudeForm {
+    pub extent: ExtrudeExtent,
+    pub direction: ExtrudeDirection,
+    pub distance: String,
+    /// The second side's distance (two sides).
+    pub distance2: String,
+    pub start_offset: String,
+    pub taper: String,
+    /// What a to-object extrude goes up to.
+    pub to: Option<ExtrudeTo>,
+    /// Waiting for a click on the face to extrude up to.
+    pub picking_to: bool,
+}
+
+impl Default for ExtrudeForm {
+    fn default() -> Self {
+        ExtrudeForm {
+            extent: ExtrudeExtent::Distance,
+            direction: ExtrudeDirection::Normal,
+            distance: "10 mm".into(),
+            distance2: "5 mm".into(),
+            start_offset: "0 mm".into(),
+            taper: "0 deg".into(),
+            to: None,
+            picking_to: false,
+        }
+    }
+}
+
+const FIELD: [f32; 2] = [180.0, 26.0];
+
+impl ExtrudeForm {
+    /// The form for an extrude on the timeline.
+    pub fn from_extrude(e: &Extrude) -> ExtrudeForm {
+        let d = ExtrudeForm::default();
+        ExtrudeForm {
+            extent: e.extent,
+            direction: e.direction,
+            distance: e.distance.clone(),
+            distance2: e.distance2.clone().unwrap_or(d.distance2),
+            start_offset: e.start_offset.clone().unwrap_or(d.start_offset),
+            taper: e.taper.clone().unwrap_or(d.taper),
+            to: e.to.clone(),
+            picking_to: false,
+        }
+    }
+
+    /// The options as `solid.extrude` and `feature.edit` take them.
+    pub fn params(&self) -> Value {
+        let or_zero = |s: &str, zero: &str| {
+            let t = s.trim();
+            if t.is_empty() {
+                zero.to_owned()
+            } else {
+                t.to_owned()
+            }
+        };
+        let mut p = json!({
+            "extent": self.extent.key(),
+            "direction": self.direction.key(),
+            "start_offset": or_zero(&self.start_offset, "0"),
+            "taper": or_zero(&self.taper, "0"),
+        });
+        if self.extent == ExtrudeExtent::Distance {
+            p["distance"] = json!(self.distance.trim());
+            if self.direction == ExtrudeDirection::TwoSides {
+                p["distance2"] = json!(self.distance2.trim());
+            }
+        }
+        if self.extent == ExtrudeExtent::ToObject {
+            match &self.to {
+                Some(ExtrudeTo::Face(r)) => {
+                    p["to"] = json!({ "feature": r.feature, "face": r.face });
+                }
+                Some(ExtrudeTo::Plane(f)) => {
+                    let (o, n) = (f.origin(), f.z());
+                    p["to"] = json!({ "plane": {
+                        "origin": { "x": o.x, "y": o.y, "z": o.z },
+                        "normal": { "x": n.x, "y": n.y, "z": n.z },
+                    }});
+                }
+                None => {}
+            }
+        }
+        p
+    }
+
+    fn to_label(&self) -> String {
+        match &self.to {
+            _ if self.picking_to => "Click a flat face…".to_owned(),
+            Some(ExtrudeTo::Face(r)) => format!("Face {} of feature {}", r.face, r.feature),
+            Some(ExtrudeTo::Plane(_)) => "A plane".to_owned(),
+            None => "Pick a face".to_owned(),
+        }
+    }
+
+    /// The option rows of a two-column dialog grid. True when Enter was pressed in a field.
+    pub fn rows(&mut self, ui: &mut egui::Ui, look: Look) -> bool {
+        let mut enter = false;
+        let mut field = |ui: &mut egui::Ui, text: &mut String, hint: &str, tip: &str| {
+            let r = ui
+                .add_sized(
+                    FIELD,
+                    egui::TextEdit::singleline(text)
+                        .hint_text(hint)
+                        .align(egui::Align2::LEFT_CENTER),
+                )
+                .on_hover_text(tip);
+            if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                enter = true;
+            }
+        };
+        widgets::field_label(ui, look, "Extent");
+        egui::ComboBox::from_id_salt("extrude extent")
+            .selected_text(extent_name(self.extent))
+            .width(FIELD[0])
+            .show_ui(ui, |ui| {
+                for x in [
+                    ExtrudeExtent::Distance,
+                    ExtrudeExtent::ThroughAll,
+                    ExtrudeExtent::ToObject,
+                ] {
+                    ui.selectable_value(&mut self.extent, x, extent_name(x));
+                }
+            });
+        ui.end_row();
+        if self.extent != ExtrudeExtent::ToObject {
+            widgets::field_label(ui, look, "Direction");
+            if self.extent == ExtrudeExtent::ThroughAll
+                && self.direction == ExtrudeDirection::TwoSides
+            {
+                self.direction = ExtrudeDirection::Symmetric;
+            }
+            let mut choices = vec![
+                ExtrudeDirection::Normal,
+                ExtrudeDirection::Reversed,
+                ExtrudeDirection::Symmetric,
+            ];
+            if self.extent == ExtrudeExtent::Distance {
+                choices.push(ExtrudeDirection::TwoSides);
+            }
+            egui::ComboBox::from_id_salt("extrude direction")
+                .selected_text(direction_name(self.direction))
+                .width(FIELD[0])
+                .show_ui(ui, |ui| {
+                    for d in choices {
+                        ui.selectable_value(&mut self.direction, d, direction_name(d));
+                    }
+                });
+            ui.end_row();
+        }
+        match self.extent {
+            ExtrudeExtent::Distance => {
+                let two = self.direction == ExtrudeDirection::TwoSides;
+                widgets::field_label(ui, look, if two { "Side 1" } else { "Distance" });
+                field(
+                    ui,
+                    &mut self.distance,
+                    "10 mm or thickness * 2",
+                    "How far to extrude",
+                );
+                ui.end_row();
+                if two {
+                    widgets::field_label(ui, look, "Side 2");
+                    field(
+                        ui,
+                        &mut self.distance2,
+                        "5 mm",
+                        "How far the other side goes, against the normal",
+                    );
+                    ui.end_row();
+                }
+            }
+            ExtrudeExtent::ThroughAll => {}
+            ExtrudeExtent::ToObject => {
+                widgets::field_label(ui, look, "Up to");
+                let picked = self.to.is_some() && !self.picking_to;
+                let text = egui::RichText::new(self.to_label()).color(if picked {
+                    look.c(|t| t.text)
+                } else {
+                    look.c(|t| t.text_muted)
+                });
+                if ui
+                    .add_sized(FIELD, egui::Button::new(text))
+                    .on_hover_text(
+                        "Click, then click a flat face parallel to the profile; the extrude follows it",
+                    )
+                    .clicked()
+                {
+                    self.picking_to = !self.picking_to;
+                }
+                ui.end_row();
+            }
+        }
+        widgets::field_label(ui, look, "Start offset");
+        field(
+            ui,
+            &mut self.start_offset,
+            "0 mm",
+            "Start this far from the sketch plane, along its normal",
+        );
+        ui.end_row();
+        widgets::field_label(ui, look, "Taper");
+        field(
+            ui,
+            &mut self.taper,
+            "0 deg",
+            "Draft angle of the sides: positive narrows away from the start",
+        );
+        ui.end_row();
+        enter
+    }
+}
+
+/// A short description of an extrude for the timeline.
+pub(crate) fn extrude_summary(e: &Extrude) -> String {
+    let mut parts = vec![match e.extent {
+        ExtrudeExtent::Distance => match (&e.direction, &e.distance2) {
+            (ExtrudeDirection::TwoSides, Some(d2)) => format!("{} and {d2}", e.distance),
+            _ => format!(
+                "{} · {}",
+                e.distance,
+                direction_name(e.direction).to_lowercase()
+            ),
+        },
+        ExtrudeExtent::ThroughAll => format!(
+            "through all · {}",
+            direction_name(e.direction).to_lowercase()
+        ),
+        ExtrudeExtent::ToObject => match &e.to {
+            Some(ExtrudeTo::Face(r)) => format!("up to face {} of feature {}", r.face, r.feature),
+            _ => "up to a plane".to_owned(),
+        },
+    }];
+    if let Some(o) = &e.start_offset {
+        parts.push(format!("offset {o}"));
+    }
+    if let Some(t) = &e.taper {
+        parts.push(format!("taper {t}"));
+    }
+    parts.join(" · ")
+}
 
 /// The Extrude or Revolve tool while it is open: both pick profiles the same way.
 pub struct ExtrudeTool {
@@ -17,13 +262,16 @@ pub struct ExtrudeTool {
     sketch: Option<u32>,
     /// A point inside each picked profile.
     seeds: Vec<Point2>,
-    pub distance: String,
-    direction: ExtrudeDirection,
+    /// The extrude's options.
+    pub form: ExtrudeForm,
     /// Revolve: the sketch line to turn around, and the angle expression.
     axis: Option<u32>,
     angle: String,
     /// New body, join, cut or intersect.
     operation: Operation,
+    /// The parameters the preview shows, and what it said: the volume or why not.
+    preview_for: Option<Value>,
+    preview: Result<f64, String>,
 }
 
 impl Default for ExtrudeTool {
@@ -32,12 +280,84 @@ impl Default for ExtrudeTool {
             revolve: false,
             sketch: None,
             seeds: Vec::new(),
-            distance: "10 mm".into(),
-            direction: ExtrudeDirection::Normal,
+            form: ExtrudeForm::default(),
             operation: Operation::NewBody,
             axis: None,
             angle: "360 deg".into(),
+            preview_for: None,
+            preview: Err(String::new()),
         }
+    }
+}
+
+impl ExtrudeTool {
+    /// Sets the options given as `solid.extrude` parameters (for `--extrude-with`).
+    pub fn apply(&mut self, p: &Value) {
+        let text = |k: &str, unit: &str| match p.get(k) {
+            Some(Value::String(s)) => Some(s.clone()),
+            Some(Value::Number(n)) => Some(format!("{n} {unit}")),
+            _ => None,
+        };
+        let f = &mut self.form;
+        if let Some(x) = p
+            .get("extent")
+            .and_then(Value::as_str)
+            .and_then(ExtrudeExtent::parse)
+        {
+            f.extent = x;
+        }
+        if let Some(d) = p
+            .get("direction")
+            .and_then(Value::as_str)
+            .and_then(ExtrudeDirection::parse)
+        {
+            f.direction = d;
+        }
+        if let Some(o) = p
+            .get("operation")
+            .and_then(Value::as_str)
+            .and_then(Operation::parse)
+        {
+            self.operation = o;
+        }
+        for (k, unit, slot) in [
+            ("distance", "mm", &mut f.distance),
+            ("distance2", "mm", &mut f.distance2),
+            ("start_offset", "mm", &mut f.start_offset),
+            ("taper", "deg", &mut f.taper),
+        ] {
+            if let Some(v) = text(k, unit) {
+                *slot = v;
+            }
+        }
+        if let (Some(feature), Some(face)) = (
+            p["to"]["feature"]
+                .as_u64()
+                .and_then(|v| u32::try_from(v).ok()),
+            p["to"]["face"].as_str(),
+        ) {
+            f.to = Some(ExtrudeTo::Face(FaceRef {
+                feature,
+                face: face.to_owned(),
+            }));
+        }
+    }
+
+    /// The `solid.extrude` parameters for what the dialog shows, once a profile is picked.
+    fn params(&self) -> Option<Value> {
+        if self.revolve || self.seeds.is_empty() {
+            return None;
+        }
+        let mut p = self.form.params();
+        p["sketch"] = json!(self.sketch);
+        p["profiles"] = json!(
+            self.seeds
+                .iter()
+                .map(|p| json!({ "x": p.x, "y": p.y }))
+                .collect::<Vec<_>>()
+        );
+        p["operation"] = json!(self.operation.key());
+        Some(p)
     }
 }
 
@@ -46,12 +366,18 @@ pub struct SolidUi {
     pub extrude: Option<ExtrudeTool>,
     /// The Fillet or Chamfer tool.
     pub blend: Option<crate::blend_ui::BlendTool>,
+    /// The Hole tool.
+    pub hole: Option<crate::hole_ui::HoleTool>,
+    /// The Mirror, Move or pattern tool.
+    pub transform: Option<crate::transform_ui::TransformTool>,
     /// The Shell tool.
     pub shell: Option<crate::shell_ui::ShellTool>,
     /// Waiting for a click on a flat face to sketch on.
     pub pick_face: bool,
     /// `--extrude`: pick the profile under the viewport's centre on the first frame.
     pub pick_centre: bool,
+    /// The Measure or Mass Properties tool (`inspect_ui.rs`).
+    pub inspect: Option<crate::inspect_ui::InspectTool>,
 }
 
 impl ChamferaApp {
@@ -67,13 +393,19 @@ impl ChamferaApp {
         let has_solids = !self.session.solids().is_empty();
         let tool_free = self.solid.extrude.is_none()
             && self.solid.blend.is_none()
+            && self.solid.hole.is_none()
+            && self.solid.transform.is_none()
+            && self.solid.inspect.is_none()
             && self.solid.shell.is_none();
         let extruding = self.solid.extrude.as_ref().is_some_and(|t| !t.revolve);
         let revolving = self.solid.extrude.as_ref().is_some_and(|t| t.revolve);
         let mut plane: Option<(&str, &str)> = None;
         let mut on_face = false;
+        let construct_planes = self.construct_planes();
+        let mut on_construct: Option<u32> = None;
         let mut open_tool: Option<bool> = None;
         let mut sketch_button: Option<egui::Response> = None;
+        let (mut open_hole, holing) = (false, self.solid.hole.is_some());
         let (_, menu) = widgets::ribbon_group(ui, look, "CREATE", true, |ui| {
             let r = widgets::tool_button(
                 ui,
@@ -127,6 +459,7 @@ impl ChamferaApp {
             {
                 open_tool = Some(true);
             }
+            open_hole = crate::hole_ui::hole_button(ui, look, has_solids, tool_free, holing);
         });
         // Create Sketch opens the list of planes under its button.
         if let Some(r) = &sketch_button {
@@ -138,6 +471,7 @@ impl ChamferaApp {
                         plane = Some((p, view));
                     }
                 }
+                on_construct = crate::construct_ui::plane_menu(ui, look, &construct_planes);
                 ui.separator();
                 if widgets::menu_item(ui, look, Icon::Body, "A flat face…", has_solids).clicked()
                 {
@@ -194,6 +528,12 @@ impl ChamferaApp {
         });
         if let Some((p, view)) = plane {
             self.create_sketch(p, view);
+        }
+        if let Some(id) = on_construct {
+            self.sketch_on_construct(id);
+        }
+        if open_hole {
+            self.open_hole_tool();
         }
         if on_face {
             self.start_sketch_on_face();
@@ -270,6 +610,14 @@ impl ChamferaApp {
         if let Some(chamfer) = open_blend {
             self.open_blend(chamfer);
         }
+        self.transform_group(ui, has_solids && tool_free);
+        let look = self.look();
+        widgets::ribbon_divider(ui, look);
+        self.construct_group(ui);
+        let look = self.look();
+        widgets::ribbon_divider(ui, look);
+        let modelling_free = self.solid.extrude.is_none() && self.solid.blend.is_none();
+        self.inspect_group(ui, has_solids, modelling_free);
         let look = self.look();
         widgets::ribbon_divider(ui, look);
         let mut import = false;
@@ -587,36 +935,27 @@ impl ChamferaApp {
                                 ui.end_row();
                                 return;
                             }
-                            widgets::field_label(ui, look, "Distance");
-                            let edit = ui.add_sized(
-                                [180.0, 26.0],
-                                egui::TextEdit::singleline(&mut tool.distance)
-                                    .hint_text("10 mm or thickness * 2")
-                                    .align(egui::Align2::LEFT_CENTER),
-                            );
-                            if edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                            if tool.form.rows(ui, look) {
                                 ok = true;
                             }
-                            ui.end_row();
-                            widgets::field_label(ui, look, "Direction");
-                            egui::ComboBox::from_id_salt("extrude direction")
-                                .selected_text(direction_name(tool.direction))
-                                .width(180.0)
-                                .show_ui(ui, |ui| {
-                                    for d in [
-                                        ExtrudeDirection::Normal,
-                                        ExtrudeDirection::Reversed,
-                                        ExtrudeDirection::Symmetric,
-                                    ] {
-                                        ui.selectable_value(
-                                            &mut tool.direction,
-                                            d,
-                                            direction_name(d),
-                                        );
-                                    }
-                                });
-                            ui.end_row();
                         });
+                    if !tool.revolve && !tool.seeds.is_empty() {
+                        // What the translucent preview shows, or why there is none.
+                        let (text, colour) = match &tool.preview {
+                            Ok(v) => (
+                                format!("Preview · volume {v:.2} mm³"),
+                                look.c(|t| t.text_muted),
+                            ),
+                            Err(e) if e.is_empty() => (String::new(), look.c(|t| t.text_muted)),
+                            Err(e) => (e.clone(), look.c(|t| t.error)),
+                        };
+                        if !text.is_empty() {
+                            ui.add_space(widgets::S2);
+                            ui.add(
+                                egui::Label::new(egui::RichText::new(text).color(colour)).wrap(),
+                            );
+                        }
+                    }
                 });
                 widgets::dialog_footer(ui, look, |ui| {
                     if widgets::primary_button(ui, look, "OK", ready).clicked() {
@@ -649,28 +988,102 @@ impl ChamferaApp {
                 ));
                 self.solid.extrude = None;
             }
-        } else if ok && !tool.revolve && !tool.seeds.is_empty() {
-            let params = json!({
-                "sketch": tool.sketch,
-                "profiles": tool.seeds.iter().map(|p| json!({ "x": p.x, "y": p.y })).collect::<Vec<_>>(),
-                "distance": tool.distance.trim(),
-                "direction": direction_key(tool.direction),
-                "operation": tool.operation.key(),
-            });
-            if let Some(r) = self.run("solid.extrude", params) {
-                let v = r["solids"][0]["volume"].as_f64().unwrap_or(0.0);
-                self.message = Some((
-                    format!(
-                        "{} · volume {v:.2} mm³",
-                        r["name"].as_str().unwrap_or("Extrude")
-                    ),
-                    false,
-                ));
-                self.solid.extrude = None;
-            }
+        } else if ok
+            && let Some(params) = tool.params()
+            && let Some(r) = self.run("solid.extrude", params)
+        {
+            let v = r["solids"][0]["volume"].as_f64().unwrap_or(0.0);
+            self.message = Some((
+                format!(
+                    "{} · volume {v:.2} mm³",
+                    r["name"].as_str().unwrap_or("Extrude")
+                ),
+                false,
+            ));
+            self.solid.extrude = None;
         }
         if cancel {
             self.solid.extrude = None;
+        }
+        if self.update_extrude_preview() {
+            ctx.request_repaint();
+        }
+    }
+
+    /// Keeps the translucent preview in step with the Extrude dialog: built again through
+    /// `solid.extrude_preview` when its values change, removed when the tool closes. True
+    /// when the preview changed.
+    pub(crate) fn update_extrude_preview(&mut self) -> bool {
+        let wanted = self.solid.extrude.as_ref().and_then(ExtrudeTool::params);
+        let Some(params) = wanted else {
+            let had = !self.session.scene.previews.is_empty();
+            if had {
+                let _ = self
+                    .session
+                    .execute("solid.extrude_preview", &json!({ "clear": true }));
+                self.preview_version += 1;
+            }
+            if let Some(tool) = self.solid.extrude.as_mut() {
+                tool.preview_for = None;
+                tool.preview = Err(String::new());
+            }
+            return had;
+        };
+        let shown = self.solid.extrude.as_ref().is_some_and(|t| {
+            t.preview_for.as_ref() == Some(&params)
+                && (t.preview.is_err() || !self.session.scene.previews.is_empty())
+        });
+        if shown {
+            return false;
+        }
+        self.preview_version += 1;
+        let result = self.session.execute("solid.extrude_preview", &params);
+        if let Some(tool) = self.solid.extrude.as_mut() {
+            tool.preview = match result {
+                Ok(r) => Ok(r["volume"].as_f64().unwrap_or(0.0)),
+                Err(e) => Err(e.to_string()),
+            };
+            tool.preview_for = Some(params);
+        }
+        true
+    }
+
+    /// True while an extrude dialog waits for a click on the face to extrude up to.
+    pub(crate) fn picking_extrude_target(&self) -> bool {
+        self.solid
+            .extrude
+            .as_ref()
+            .is_some_and(|t| t.form.picking_to)
+            || self
+                .timeline
+                .editing
+                .as_ref()
+                .and_then(|e| e.extrude.as_ref())
+                .is_some_and(|f| f.picking_to)
+    }
+
+    /// A click while an extrude dialog waits for its target face: the flat face there.
+    pub(crate) fn extrude_target_click(&mut self, x: f64, y: f64, w: f64, h: f64) {
+        let face = self.session.face_at(x, y, w, h);
+        let form = match self.solid.extrude.as_mut() {
+            Some(t) if t.form.picking_to => Some(&mut t.form),
+            _ => self
+                .timeline
+                .editing
+                .as_mut()
+                .and_then(|e| e.extrude.as_mut()),
+        };
+        let Some(form) = form else {
+            return;
+        };
+        match face {
+            Some((feature, face, _)) => {
+                form.to = Some(ExtrudeTo::Face(FaceRef { feature, face }));
+                form.picking_to = false;
+            }
+            None => {
+                self.message = Some(("Click a flat face of a solid".into(), true));
+            }
         }
     }
 }
@@ -689,14 +1102,15 @@ pub(crate) fn direction_name(d: ExtrudeDirection) -> &'static str {
         ExtrudeDirection::Normal => "One side",
         ExtrudeDirection::Reversed => "Flipped",
         ExtrudeDirection::Symmetric => "Symmetric",
+        ExtrudeDirection::TwoSides => "Two sides",
     }
 }
 
-pub(crate) fn direction_key(d: ExtrudeDirection) -> &'static str {
-    match d {
-        ExtrudeDirection::Normal => "normal",
-        ExtrudeDirection::Reversed => "reversed",
-        ExtrudeDirection::Symmetric => "symmetric",
+pub(crate) fn extent_name(x: ExtrudeExtent) -> &'static str {
+    match x {
+        ExtrudeExtent::Distance => "Distance",
+        ExtrudeExtent::ThroughAll => "Through all",
+        ExtrudeExtent::ToObject => "To object",
     }
 }
 
@@ -732,6 +1146,63 @@ mod tests {
         assert!(
             (r["solids"][0]["volume"].as_f64().unwrap() - 4000.0).abs() < 1e-6,
             "40 x 20 x 5"
+        );
+    }
+
+    /// The dialog's options drive the live preview, OK extrudes what it showed, and the
+    /// up-to face is picked by clicking it.
+    #[test]
+    fn the_extrude_options_preview_live_and_pick_their_face() {
+        let mut app = ChamferaApp::headless();
+        app.create_sketch("xy", "top");
+        app.run(
+            "sketch.rectangle",
+            json!({ "x1": 0, "y1": 0, "x2": 40, "y2": 20 }),
+        );
+        app.finish_sketch();
+        app.session.camera.target = chamfera_geom::Point3::new(20.0, 10.0, 0.0);
+        let mut tool = ExtrudeTool::default();
+        tool.apply(&json!({"distance": 10, "direction": "two_sides", "distance2": 4}));
+        app.solid.extrude = Some(tool);
+        app.extrude_click(400.0, 300.0, 800.0, 600.0);
+        // 40 x 20 x (10 + 4) = 11200, shown translucent before OK.
+        assert!(app.update_extrude_preview());
+        let shown = app.solid.extrude.as_ref().unwrap().preview.clone();
+        assert!(
+            shown.as_ref().is_ok_and(|v| (*v - 11_200.0).abs() < 1e-6),
+            "{shown:?}"
+        );
+        assert_eq!(app.session.scene.previews.len(), 1);
+        assert!(app.session.solids().is_empty());
+        // Unchanged values do not build it again; a refused taper says why and shows none.
+        assert!(!app.update_extrude_preview());
+        app.solid.extrude.as_mut().unwrap().form.taper = "60 deg".into();
+        app.update_extrude_preview();
+        assert!(app.solid.extrude.as_ref().unwrap().preview.is_err());
+        assert!(app.session.scene.previews.is_empty());
+        app.solid.extrude.as_mut().unwrap().form.taper = "0 deg".into();
+        let params = app.solid.extrude.as_ref().unwrap().params().unwrap();
+        let r = app.run("solid.extrude", params).unwrap();
+        assert!((r["solids"][0]["volume"].as_f64().unwrap() - 11_200.0).abs() < 1e-6);
+        // Closing the tool removes the preview.
+        app.solid.extrude = None;
+        app.update_extrude_preview();
+        assert!(app.session.scene.previews.is_empty());
+        // Up to the top face: clicking the solid in the top view picks it.
+        let mut tool = ExtrudeTool::default();
+        tool.form.extent = ExtrudeExtent::ToObject;
+        tool.form.picking_to = true;
+        app.solid.extrude = Some(tool);
+        assert!(app.picking_extrude_target());
+        app.extrude_target_click(400.0, 300.0, 800.0, 600.0);
+        let form = &app.solid.extrude.as_ref().unwrap().form;
+        assert!(!form.picking_to);
+        assert_eq!(
+            form.to,
+            Some(ExtrudeTo::Face(FaceRef {
+                feature: 2,
+                face: "top".into()
+            }))
         );
     }
 }
