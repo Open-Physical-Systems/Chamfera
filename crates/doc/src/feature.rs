@@ -119,12 +119,35 @@ pub struct Pattern {
 /// Most copies one pattern may make.
 pub const MAX_PATTERN_COUNT: f64 = 1000.0;
 
+/// Rounded (fillet) or bevelled (chamfer) edges.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BlendKind {
+    Fillet,
+    Chamfer,
+}
+
+/// A fillet or chamfer of edges of the solids built so far. Edges are named like faces
+/// (`2:top 0` is edge `top 0` of feature 2's shape), so the blend finds them again after
+/// every rebuild.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Blend {
+    pub blend: BlendKind,
+    pub edges: Vec<String>,
+    /// The radius (fillet) or distance (chamfer), an expression such as `2 mm`.
+    pub size: String,
+}
+
+/// Most edges one blend may hold.
+pub const MAX_BLEND_EDGES: usize = 10_000;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum FeatureKind {
     Extrude(Extrude),
     Revolve(Revolve),
     Pattern(Pattern),
+    Blend(Blend),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -144,7 +167,7 @@ impl FeatureKind {
         match self {
             FeatureKind::Extrude(e) => Some(e.sketch),
             FeatureKind::Revolve(r) => Some(r.sketch),
-            FeatureKind::Pattern(_) => None,
+            FeatureKind::Pattern(_) | FeatureKind::Blend(_) => None,
         }
     }
 
@@ -153,7 +176,7 @@ impl FeatureKind {
         match self {
             FeatureKind::Extrude(e) => e.operation,
             FeatureKind::Revolve(r) => r.operation,
-            FeatureKind::Pattern(_) => Operation::NewBody,
+            FeatureKind::Pattern(_) | FeatureKind::Blend(_) => Operation::NewBody,
         }
     }
 
@@ -161,7 +184,7 @@ impl FeatureKind {
         match self {
             FeatureKind::Extrude(e) => &e.profiles,
             FeatureKind::Revolve(r) => &r.profiles,
-            FeatureKind::Pattern(_) => &[],
+            FeatureKind::Pattern(_) | FeatureKind::Blend(_) => &[],
         }
     }
 
@@ -170,6 +193,10 @@ impl FeatureKind {
             FeatureKind::Extrude(_) => "Extrude",
             FeatureKind::Revolve(_) => "Revolve",
             FeatureKind::Pattern(_) => "Pattern",
+            FeatureKind::Blend(b) => match b.blend {
+                BlendKind::Fillet => "Fillet",
+                BlendKind::Chamfer => "Chamfer",
+            },
         }
     }
 
@@ -178,6 +205,7 @@ impl FeatureKind {
         match self {
             FeatureKind::Extrude(e) => vec![e.distance.as_str()],
             FeatureKind::Revolve(r) => vec![r.angle.as_str()],
+            FeatureKind::Blend(b) => vec![b.size.as_str()],
             FeatureKind::Pattern(p) => match &p.layout {
                 PatternLayout::Linear { spacing, .. } => vec![p.count.as_str(), spacing.as_str()],
                 PatternLayout::Circular { angle, .. } => vec![p.count.as_str(), angle.as_str()],
@@ -193,6 +221,22 @@ impl Document {
         let bad = |reason: String| DocError::BadFeature { reason };
         if let FeatureKind::Pattern(p) = kind {
             return self.check_pattern(p);
+        }
+        if let FeatureKind::Blend(b) = kind {
+            if b.edges.is_empty() || b.edges.len() > MAX_BLEND_EDGES {
+                return Err(bad(format!("pick 1 to {MAX_BLEND_EDGES} edges")));
+            }
+            if b.edges
+                .iter()
+                .any(|e| e.is_empty() || e.chars().count() > 512)
+            {
+                return Err(bad("an edge name is empty or too long".into()));
+            }
+            let s = self.evaluate_feature_value(&b.size, expr::Dim::LENGTH)?;
+            if !s.is_finite() || s <= chamfera_geom::LINEAR_TOLERANCE {
+                return Err(bad("the size must be above 0".into()));
+            }
+            return Ok(());
         }
         let Some(sketch) = kind.sketch() else {
             return Err(bad("the feature has no sketch".into()));
@@ -223,7 +267,7 @@ impl Document {
                     return Err(bad("the distance must not be 0".into()));
                 }
             }
-            FeatureKind::Pattern(_) => {}
+            FeatureKind::Pattern(_) | FeatureKind::Blend(_) => {}
             FeatureKind::Revolve(r) => {
                 let a = self.evaluate_feature_value(&r.angle, expr::Dim::ANGLE)?;
                 if !a.is_finite()
