@@ -1,0 +1,12 @@
+[
+  { "command": "sketch.create", "params": { "plane": "xy" }, "as": "s" },
+  { "command": "sketch.rectangle", "params": { "x1": 0, "y1": 0, "x2": 30, "y2": 30 } },
+  { "command": "sketch.rectangle", "params": { "x1": 45, "y1": 0, "x2": 75, "y2": 30 } },
+  { "command": "sketch.rectangle", "params": { "x1": 90, "y1": 0, "x2": 120, "y2": 30 } },
+  { "command": "sketch.finish" },
+  { "command": "solid.extrude", "params": { "sketch": "$s.sketch", "profiles": [{ "x": 5, "y": 5 }], "distance": 20 } },
+  { "command": "solid.extrude", "params": { "sketch": "$s.sketch", "profiles": [{ "x": 50, "y": 5 }], "distance": 20 } },
+  { "command": "solid.extrude", "params": { "sketch": "$s.sketch", "profiles": [{ "x": 95, "y": 5 }], "distance": 20 } },
+  { "command": "view.home", "params": { "width": 1152, "height": 677 } },
+  { "command": "select.box", "params": { "x1": 320, "y1": 160, "x2": 700, "y2": 460, "width": 1152, "height": 677, "mode": "window" } }
+]
