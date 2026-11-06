@@ -77,7 +77,15 @@ fn hint(ui: &mut egui::Ui, look: Look, text: &str) {
 impl ChamferaApp {
     /// Applies preferences that act on the app at once, then saves them.
     pub(crate) fn preferences_changed(&mut self) {
-        self.theme_choice = self.prefs.theme;
+        // Applying the preferences again (a design opened, the recent list changed) keeps
+        // a theme forced at start; picking another theme ends it.
+        self.theme_choice = match self.forced_theme {
+            Some((forced, base)) if base == self.prefs.theme => forced,
+            _ => {
+                self.forced_theme = None;
+                self.prefs.theme
+            }
+        };
         self.styled_for = None;
         let result = if self.prefs_store {
             prefs::save(&self.prefs)

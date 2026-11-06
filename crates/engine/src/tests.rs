@@ -1530,6 +1530,68 @@ fn a_linear_pattern_of_a_cut_drills_a_row_of_holes() {
 }
 
 #[test]
+fn feature_edit_changes_a_patterns_count_and_spacing_and_refuses_unknown_keys() {
+    // Plate 50 x 30 x 10; a hole r = 3 at (10, 15) cut through, patterned 2 along +X
+    // 10 apart: 15000 - 2 * 90π. Edited to 4 copies 8 apart (x = 10, 18, 26, 34, all
+    // inside the plate): 15000 - 4 * 90π.
+    let mut s = Session::new();
+    extruded_plate(&mut s, json!(10));
+    s.execute("sketch.create", &json!({"plane": "xy"})).unwrap();
+    s.execute("sketch.circle", &json!({"cx": 10, "cy": 15, "radius": 3}))
+        .unwrap();
+    s.execute("sketch.finish", &json!({})).unwrap();
+    let cut = s
+        .execute(
+            "solid.extrude",
+            &json!({"sketch": 3, "profiles": [{"x": 10, "y": 15}], "distance": 10, "operation": "cut"}),
+        )
+        .unwrap()["feature"]
+        .clone();
+    let pat = s
+        .execute(
+            "solid.pattern_linear",
+            &json!({"feature": cut, "count": 2, "direction": {"x": 1, "y": 0, "z": 0}, "spacing": 10}),
+        )
+        .unwrap()["feature"]
+        .clone();
+    let pi = std::f64::consts::PI;
+    let vol = |s: &Session| s.solids()[0].body.volume().unwrap();
+    assert!((vol(&s) - (15_000.0 - 180.0 * pi)).abs() < 1e-6);
+    let r = s
+        .execute(
+            "feature.edit",
+            &json!({"feature": pat, "count": 4, "spacing": "8 mm"}),
+        )
+        .unwrap();
+    assert_eq!(r["definition"]["count"], "4", "{r}");
+    assert!(
+        (vol(&s) - (15_000.0 - 360.0 * pi)).abs() < 1e-6,
+        "{}",
+        vol(&s)
+    );
+    // An edit that names a key feature.edit does not know changes nothing and is refused,
+    // instead of succeeding silently (which made a following undo remove the pattern).
+    let before = s.doc.clone();
+    let e = s
+        .execute("feature.edit", &json!({"feature": pat, "cuont": 3}))
+        .unwrap_err();
+    assert!(e.to_string().contains("cuont"), "{e}");
+    assert_eq!(s.doc, before);
+    // count and spacing belong to patterns.
+    assert!(
+        s.execute("feature.edit", &json!({"feature": cut, "count": 3}))
+            .is_err()
+    );
+    // Undo goes back to 2 copies.
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(
+        (vol(&s) - (15_000.0 - 180.0 * pi)).abs() < 1e-6,
+        "{}",
+        vol(&s)
+    );
+}
+
+#[test]
 fn a_circular_pattern_of_new_bodies_makes_copies_around_an_axis() {
     // A 4 x 4 x 4 cube at (20..24, -2..2) patterned 6 times around Z: 6 bodies of 64.
     let mut s = Session::new();
