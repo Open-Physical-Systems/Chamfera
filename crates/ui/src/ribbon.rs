@@ -2293,12 +2293,15 @@ impl ChamferaApp {
         };
         let r = r.on_hover_text(tip);
         let mut pick = None;
+        // The switcher and its items by name, for the browser checks (`web.rs`).
+        let mut targets = vec![("Workspace", r.rect)];
         egui::Popup::menu(&r).show(|ui| {
             ui.set_min_width(240.0);
             ui.set_max_width(300.0);
             widgets::caption(ui, look, "WORKSPACE");
             for w in Workspace::ALL {
                 let item = widgets::menu_item(ui, look, w.icon(), w.name(), !sketching);
+                targets.push((w.name(), item.rect));
                 if w == current {
                     widgets::menu_check(ui, look, &item);
                 }
@@ -2308,6 +2311,12 @@ impl ChamferaApp {
                 }
             }
         });
+        #[cfg(target_arch = "wasm32")]
+        for (text, rect) in targets {
+            self.web.target(text, rect);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        drop(targets);
         if let Some(w) = pick {
             self.set_workspace(w);
         }

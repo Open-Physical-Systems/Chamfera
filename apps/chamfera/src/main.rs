@@ -5,7 +5,8 @@
 //!          [--parameters] [--configurations] [--tool-library] [--preferences PAGE] [--drawing] [--extrude] [--extrude-with JSON]
 //!          [--render] [--render-window WxH,SAMPLES]
 //!          [--hole] [--box X1,Y1,X2,Y2] [--drawing-drag X1,Y1,X2,Y2] [--search QUERY] [--context-menu X,Y]
-//!          [--press-pull X,Y,D] [--ribbon-menu GROUP] [--assistant-demo] [--size WxH]
+//!          [--press-pull X,Y,D] [--ribbon-menu GROUP] [--assistant-demo]
+//!          [--assistant-ask REQUEST] [--about] [--size WxH]
 //!          [--history] [--recovery-demo] [--tutorial ID]
 //!          [--zoom F] [--screenshot shot.png]
 //!          [--sketch-input "tool line; click 0,0; hover 30,12; type 25"]
@@ -20,7 +21,7 @@ const USAGE: &str = "usage: chamfera [part.stl ...] [--sample] [--theme light|da
 [--script steps.json] [--parameters] [--configurations] [--tool-library] [--preferences PAGE] [--drawing] [--extrude] \
 [--extrude-with JSON] [--hole] \
 [--box X1,Y1,X2,Y2] [--drawing-drag X1,Y1,X2,Y2] [--search QUERY] [--context-menu X,Y] [--press-pull X,Y,D] \
-[--ribbon-menu GROUP] [--assistant-demo] [--history] [--recovery-demo] [--tutorial ID] [--render] [--render-window WxH,SAMPLES] [--size WxH] \
+[--ribbon-menu GROUP] [--assistant-demo] [--assistant-ask REQUEST] [--about] [--history] [--recovery-demo] [--tutorial ID] [--render] [--render-window WxH,SAMPLES] [--size WxH] \
 [--zoom F] \
 [--screenshot shot.png] \
 [--sketch-input \"tool line; click X,Y; hover X,Y; shift; type 25; tab\"]";
@@ -75,6 +76,11 @@ fn main() -> ExitCode {
                     );
                 }
             },
+            "--assistant-ask" => match args.next() {
+                Some(q) => options.assistant_ask = Some(q),
+                None => return fail("--assistant-ask takes a request for the Assistant"),
+            },
+            "--about" => options.about = true,
             "--history" => options.history = true,
             "--recovery-demo" => options.recovery_demo = true,
             "--extrude" => options.extrude = true,

@@ -1,0 +1,28 @@
+[
+  { "clickText": "Workspace" },
+  { "clickText": "Drawing" },
+  { "wait": 1500 },
+  { "shot": "../../target/web-checks-drawing.png" },
+
+  { "clickText": "Workspace" },
+  { "clickText": "Manufacture" },
+  { "wait": 1500 },
+  { "shot": "../../target/web-checks-manufacture.png" },
+
+  { "clickText": "Workspace" },
+  { "clickText": "Render" },
+  { "wait": 1500 },
+  { "shot": "../../target/web-checks-render.png" },
+
+  { "clickText": "Workspace" },
+  { "clickText": "Design" },
+  { "key": "a", "modifiers": ["ctrl", "shift"] },
+  { "wait": 1000 },
+  { "shot": "../../target/web-checks-assistant.png" },
+
+  { "clickText": "Help" },
+  { "clickText": "About Chamfera" },
+  { "wait": 1000 },
+  { "expect": "fetch('THIRD-PARTY-LICENSES.txt').then(r => r.ok ? r.text() : '').then(t => t.includes('egui '))", "what": "the licence texts ship with the browser app" },
+  { "shot": "../../target/web-checks-about.png" }
+]

@@ -29,7 +29,8 @@ $env:CHAMFERA_WINDOWS_ICON = $Icon
 cargo build --release --manifest-path (Join-Path $Root "Cargo.toml") -p chamfera -p chamfera-cli
 if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
 
-# Portable zip: one top-level folder with both exes, the licences and the attributions.
+# Portable zip: one top-level folder with both exes, the licences, the attributions and
+# the licence texts of the bundled crates.
 $Stage = Join-Path $Out $Name
 if (Test-Path $Stage) { Remove-Item -Recurse -Force $Stage }
 New-Item -ItemType Directory -Path $Stage | Out-Null
@@ -37,6 +38,12 @@ foreach ($f in @("target\release\chamfera.exe", "target\release\chamfera-cli.exe
                  "LICENSE-MIT", "LICENSE-APACHE", "ATTRIBUTION.md")) {
   Copy-Item (Join-Path $Root $f) $Stage
 }
+# The licence texts of the bundled crates, next to the exes (Help > About finds them).
+Push-Location $Root
+try {
+  cargo xtask notices --out (Join-Path $Stage "THIRD-PARTY-LICENSES.txt")
+  if ($LASTEXITCODE -ne 0) { throw "cargo xtask notices failed" }
+} finally { Pop-Location }
 $Zip = Join-Path $Out "$Name.zip"
 if (Test-Path $Zip) { Remove-Item -Force $Zip }
 Compress-Archive -Path $Stage -DestinationPath $Zip
