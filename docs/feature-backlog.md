@@ -16,7 +16,7 @@ Items 1 to 7 can run in parallel (they touch different crates or files); 8 to 10
 | # | Feature | Why now | Size | Main crates | Depends on |
 |---|---|---|---|---|---|
 | 1 | **Shell** (hollow a solid, remove chosen faces, wall thickness) | The third most used solid feature after extrude and fillet; kernel rung K12 | L | kernel, engine | none |
-| 2 | **Measure and mass properties** (distance, angle, edge length, face area, volume, centre of mass) | Users and agents check every part with it; the kernel already computes exact area and volume | M | kernel, engine, ui | none |
+| 2 | **Measure and mass properties** (distance, angle, edge length, face area, volume, centre of mass) | Users and agents check every part with it; the kernel already computes exact area and volume (done) | M | kernel, engine, ui | none |
 | 3 | **Construction planes, axes and points** (offset, at angle, midplane, through three points, tangent; axis through edge/two points; points) | Needed to sketch anywhere other than XY/XZ/YZ or a flat face | M | doc, engine, ui | none |
 | 4 | **Command search and keyboard shortcuts** (search box listing every command; single-key shortcuts for the common tools; right-click context menus in the viewport) | Every command already exists in the registry, so this is mostly UI | M | ui | none |
 | 5 | **Typed values and richer inference while drawing** (type length and angle in fields beside the cursor; snaps to midpoint, centre, quadrant, on curve, tangent, perpendicular; Shift to suspend snaps) | The sketcher feels unfinished without it; AutoCAD and Fusion users both rely on it | M | ui, engine (sketch commands) | none |
@@ -233,9 +233,9 @@ Close runners-up: selection filters and box selection (UI and NAV), splines (nee
 | Feature | Description | Status | Pri | Size | Layer |
 |---|---|---|---|---|---|
 | Point pick with normal | Picking a point on a body returns its position and normal | done | P0 | S | engine, gpu |
-| Measure distance and angle | Between any two picked points, edges, faces, bodies (minimum distance) | missing | P0 | M | kernel, engine, ui |
-| Measure length, area, radius | Of a picked edge or face | missing | P0 | S | kernel, engine |
-| Mass properties | Volume, area, mass, centre of mass, moments of inertia | missing | P0 | M | kernel, engine |
+| Measure distance and angle | Between any two picked points, edges, faces, bodies (minimum distance) | done (`inspect.measure`, `inspect.measure_at`, INSPECT > Measure) | P0 | M | kernel, engine, ui |
+| Measure length, area, radius | Of a picked edge or face | done | P0 | S | kernel, engine |
+| Mass properties | Volume, area, mass, centre of mass, moments of inertia | done (`inspect.mass`, INSPECT > Mass Properties) | P0 | M | kernel, engine |
 | Section analysis | Cut the view with a plane and show the cut face | missing | P1 | M | gpu, render, kernel |
 | Interference | See assemblies | missing | P1 | M | kernel |
 | Curvature and zebra analysis | Show surface quality (comb, zebra stripes, curvature map) | missing | P2 | M | gpu, kernel |

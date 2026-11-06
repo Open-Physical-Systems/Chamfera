@@ -360,6 +360,8 @@ pub enum OverlayStyle {
     Construction,
     Preview,
     Highlight,
+    /// A measure result: the line between two closest points.
+    Measure,
 }
 
 impl OverlayStyle {
@@ -370,6 +372,7 @@ impl OverlayStyle {
             OverlayStyle::Construction => theme.sketch_construction,
             OverlayStyle::Preview => theme.sketch_preview,
             OverlayStyle::Highlight => theme.highlight,
+            OverlayStyle::Measure => theme.measure,
         }
     }
 }

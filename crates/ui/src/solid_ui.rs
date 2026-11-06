@@ -50,6 +50,8 @@ pub struct SolidUi {
     pub pick_face: bool,
     /// `--extrude`: pick the profile under the viewport's centre on the first frame.
     pub pick_centre: bool,
+    /// The Measure or Mass Properties tool (`inspect_ui.rs`).
+    pub inspect: Option<crate::inspect_ui::InspectTool>,
 }
 
 impl ChamferaApp {
@@ -63,7 +65,9 @@ impl ChamferaApp {
             .iter()
             .any(|s| !s.sketch.profiles().is_empty());
         let has_solids = !self.session.solids().is_empty();
-        let tool_free = self.solid.extrude.is_none() && self.solid.blend.is_none();
+        let tool_free = self.solid.extrude.is_none()
+            && self.solid.blend.is_none()
+            && self.solid.inspect.is_none();
         let extruding = self.solid.extrude.as_ref().is_some_and(|t| !t.revolve);
         let revolving = self.solid.extrude.as_ref().is_some_and(|t| t.revolve);
         let mut plane: Option<(&str, &str)> = None;
@@ -274,6 +278,10 @@ impl ChamferaApp {
             self.solid.blend = Some(crate::blend_ui::BlendTool::new(chamfer));
             self.message = Some(("Click the edges to round or bevel".into(), false));
         }
+        let look = self.look();
+        widgets::ribbon_divider(ui, look);
+        let modelling_free = self.solid.extrude.is_none() && self.solid.blend.is_none();
+        self.inspect_group(ui, has_solids, modelling_free);
         let look = self.look();
         widgets::ribbon_divider(ui, look);
         let mut import = false;

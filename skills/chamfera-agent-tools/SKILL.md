@@ -33,6 +33,7 @@ It uses the GPU if there is one, else a software Vulkan driver (lavapipe, `mesa-
 ## Commands and scripts
 - `chamfera-cli commands` lists every command; `chamfera-cli exec <id> '<json>'` runs one.
 - `chamfera-cli run script.json` runs a list of `{"command", "params"}` steps and prints one reply per line (`examples/parameters.json`).
+- Measure: `inspect.measure {"a": {"solid": "Extrude1", "face": "2:top"}, "b": {"point": [x, y, z]}}` gives the distance, both closest points and the angle; entities are `{solid}`, `{solid, face}`, `{solid, edge}` (names from `solid.edges`), `{solid, vertex}` or `{point}`; `inspect.measure_at {x, y, width, height, from?}` picks by pixel; `inspect.mass {"body": "Extrude1", "density": 1}` gives volume, mass, centre of mass and inertia. A `--script` whose last inspect step is `inspect.measure` or `inspect.mass` opens that tool with its result, so a screenshot shows it (`examples/measure-block-and-pin.json`).
 - Check results with the numbers in the replies (volume, bounds, pick point and normal) against values you worked out, not only with pictures.
 
 ## Evidence

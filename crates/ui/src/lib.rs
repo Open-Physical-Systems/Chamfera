@@ -18,6 +18,7 @@ mod blend_ui;
 mod browser;
 mod chrome;
 mod file_ui;
+mod inspect_ui;
 
 /// `--screenshot` gives up after this long without a drawn frame.
 const SHOT_TIMEOUT_SECS: f64 = 30.0;
@@ -199,10 +200,11 @@ impl ChamferaApp {
         for f in &options.files {
             app.run("body.import_stl", json!({ "path": f.to_string_lossy() }));
         }
-        if !options.script.is_empty()
-            && let Err(e) = chamfera_engine::script::run_steps(&mut app.session, &options.script)
-        {
-            app.message = Some((e.to_string(), true));
+        if !options.script.is_empty() {
+            match chamfera_engine::script::run_steps(&mut app.session, &options.script) {
+                Ok(replies) => app.inspect_from_script(&options.script, &replies),
+                Err(e) => app.message = Some((e.to_string(), true)),
+            }
         }
         if app.session.active_sketch.is_some() {
             app.sketch.tool = Some(sketch_ui::Tool::Select);
@@ -355,6 +357,14 @@ impl ChamferaApp {
                 return;
             }
         }
+        if self.solid.inspect.is_some()
+            && response.clicked()
+            && let Some(pos) = response.interact_pointer_pos()
+        {
+            let (x, y) = local(pos);
+            self.inspect_click(x, y, w, h);
+            return;
+        }
         if self.solid.extrude.is_some()
             && response.clicked()
             && let Some(pos) = response.interact_pointer_pos()
@@ -421,6 +431,7 @@ impl ChamferaApp {
         }
         let blends = self.blend_overlays();
         self.session.scene.overlays.extend(blends);
+        self.inspect_overlays();
         if let Some(picked) = self.extrude_overlay() {
             self.session.scene.overlays.push(Overlay {
                 style: chamfera_render::OverlayStyle::Highlight,
@@ -493,6 +504,7 @@ impl ChamferaApp {
         if self.session.active_sketch.is_some() {
             self.dimension_labels(ui, rect);
         }
+        self.inspect_labels(ui, rect);
         self.view_cube(ui, rect);
         self.viewport_hint(ui, rect);
     }
@@ -632,6 +644,7 @@ impl eframe::App for ChamferaApp {
             self.parameters_window(&ctx);
             self.extrude_dialog(&ctx);
             self.blend_dialog(&ctx);
+            self.inspect_dialog(&ctx);
             self.feature_dialog(&ctx);
         }
         self.unsaved_dialog(&ctx);
