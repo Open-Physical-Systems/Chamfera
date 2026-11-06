@@ -23,6 +23,7 @@ pub mod script;
 pub mod sheet;
 pub mod sketching;
 pub mod solids;
+pub mod surface;
 
 use chamfera_doc::{DocError, Document};
 use chamfera_render::{Camera, Scene};
@@ -195,5 +196,7 @@ impl Session {
 
 #[cfg(test)]
 mod body_tools_tests;
+#[cfg(test)]
+mod surface_tests;
 #[cfg(test)]
 mod tests;

@@ -883,18 +883,15 @@ fn construct_axis(
     }
 }
 
-/// The bodies one revolve makes: one per profile, about a line of the same sketch or a
-/// construction axis in the sketch plane.
-fn build_revolve(
-    doc: &chamfera_doc::Document,
-    r: &Revolve,
+/// A revolve's axis in its sketch's plane coordinates: a construction axis lying in the
+/// sketch plane, or a line of the sketch.
+pub(crate) fn revolve_axis(
+    f: &chamfera_doc::SketchFeature,
+    axis_curve: u32,
+    axis_feature: Option<u32>,
     constructs: &BTreeMap<u32, crate::construct::Constructed>,
-) -> Result<Vec<Body>, String> {
-    let f = doc.sketch(r.sketch).map_err(|x| x.to_string())?;
-    let angle = doc
-        .evaluate_feature_value(&r.angle, chamfera_doc::expr::Dim::ANGLE)
-        .map_err(|x| x.to_string())?;
-    let sketch_line = match r.axis_feature {
+) -> Result<Line2, String> {
+    let sketch_line = match axis_feature {
         Some(id) => {
             let (o, d) = construct_axis(constructs, id)?;
             // The axis must lie in the sketch plane: its direction has no normal part and
@@ -914,7 +911,7 @@ fn build_revolve(
     };
     let axis = match (
         sketch_line,
-        f.sketch.curve(chamfera_sketch::CurveId(r.axis)),
+        f.sketch.curve(chamfera_sketch::CurveId(axis_curve)),
     ) {
         (Some(line), _) => line,
         (None, Some(Curve::Line { start, end, .. })) => {
@@ -923,8 +920,23 @@ fn build_revolve(
             };
             Line2::new(a, b - a).map_err(|e| format!("the axis: {e}"))?
         }
-        _ => return Err(format!("the axis {} is not a line of {}", r.axis, f.name)),
+        _ => return Err(format!("the axis {} is not a line of {}", axis_curve, f.name)),
     };
+    Ok(axis)
+}
+
+/// The bodies one revolve makes: one per profile, about a line of the same sketch or a
+/// construction axis in the sketch plane.
+fn build_revolve(
+    doc: &chamfera_doc::Document,
+    r: &Revolve,
+    constructs: &BTreeMap<u32, crate::construct::Constructed>,
+) -> Result<Vec<Body>, String> {
+    let f = doc.sketch(r.sketch).map_err(|x| x.to_string())?;
+    let angle = doc
+        .evaluate_feature_value(&r.angle, chamfera_doc::expr::Dim::ANGLE)
+        .map_err(|x| x.to_string())?;
+    let axis = revolve_axis(f, r.axis, r.axis_feature, constructs)?;
     feature_profiles(f, &r.profiles)?
         .iter()
         .map(|profile| {
@@ -936,7 +948,7 @@ fn build_revolve(
 
 /// A sweep's path as kernel segments in space (lines, and arcs counter-clockwise about
 /// the path sketch's normal as the sketch stores them).
-fn sweep_path_segments(
+pub(crate) fn sweep_path_segments(
     f: &chamfera_doc::SketchFeature,
     curves: &[u32],
 ) -> Result<Vec<chamfera_kernel::PathSegment>, String> {
@@ -1241,6 +1253,15 @@ impl Session {
                 }
                 continue;
             }
+            if let FeatureKind::Surface(sf) = &feature.kind {
+                match crate::surface::build(&self.doc, feature, sf, &made, &built.constructs) {
+                    Ok(next) => made = next,
+                    Err(e) => {
+                        built.errors.insert(feature.id, e);
+                    }
+                }
+                continue;
+            }
             if feature.kind.is_body_tool() {
                 match crate::body_tools::build(&self.doc, feature, &made, &built.constructs) {
                     Ok(next) => made = next,
@@ -1288,6 +1309,7 @@ impl Session {
                 | FeatureKind::SplitFace(_)
                 | FeatureKind::Thicken(_)
                 | FeatureKind::Remove(_)
+                | FeatureKind::Surface(_)
                 | FeatureKind::Hole(_)
                 | FeatureKind::SheetBase(_)
                 | FeatureKind::SheetFlange(_)
@@ -1378,6 +1400,7 @@ impl Session {
                     edges = m.edge_polylines;
                     let id = self.scene.add(&name, m.mesh);
                     self.dress_body(id, feature, edges.iter().map(|(_, l)| l.clone()).collect());
+                    self.mark_surface(id, body.is_open());
                     if id.is_none() {
                         built
                             .display_errors

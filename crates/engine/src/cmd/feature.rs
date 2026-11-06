@@ -234,7 +234,7 @@ pub(super) fn operation(p: &Value) -> Result<Option<Operation>, CommandError> {
     }
 }
 
-fn seeds(p: &Value) -> Result<Vec<Point2>, CommandError> {
+pub(super) fn seeds(p: &Value) -> Result<Vec<Point2>, CommandError> {
     let list = p
         .get("profiles")
         .and_then(Value::as_array)
@@ -464,7 +464,7 @@ fn revolve(s: &mut Session, p: &Value) -> CmdResult {
 }
 
 /// A list of curve ids.
-fn ids(p: &Value, key: &str) -> Result<Vec<u32>, CommandError> {
+pub(super) fn ids(p: &Value, key: &str) -> Result<Vec<u32>, CommandError> {
     let list = p
         .get(key)
         .and_then(Value::as_array)
@@ -758,6 +758,9 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
     if super::face_edit::is_face_edit(&s.doc.feature(id)?.kind) {
         return super::face_edit::edit(s, id, p);
     }
+    if matches!(s.doc.feature(id)?.kind, FeatureKind::Surface(_)) {
+        return super::surface::edit(s, id, p);
+    }
     let new_distance = distance(p)?;
     let new_direction = direction(p)?;
     let new_operation = operation(p)?;
@@ -798,6 +801,9 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
             }
             FeatureKind::Combine(c) => c.operation = o,
             FeatureKind::Thicken(t) => t.operation = o,
+            FeatureKind::Surface(_) => {
+                return Err(bad("a surface feature always makes a new body"));
+            }
             FeatureKind::SplitBody(_) | FeatureKind::SplitFace(_) | FeatureKind::Remove(_) => {
                 return Err(bad("a split or remove has no operation"));
             }

@@ -236,16 +236,22 @@ fn thicken(
         .map_err(|x| x.to_string())?;
     let (lo, hi) = t.direction.span(thickness);
     let mut shapes = Vec::new();
+    // Surface bodies whose faces are thickened become the solids (they are used up).
+    let mut used_surfaces: Vec<usize> = Vec::new();
     for name in &t.faces {
-        let (body, face) = made
+        let (k, body, face) = made
             .iter()
-            .find_map(|(_, _, b)| {
+            .enumerate()
+            .find_map(|(k, (_, _, b))| {
                 b.faces()
                     .into_iter()
                     .find(|f| b.face_name(*f).ok().flatten() == Some(name.as_str()))
-                    .map(|f| (b, f))
+                    .map(|f| (k, b, f))
             })
             .ok_or_else(|| format!("thicken: the face {name:?} is no longer there"))?;
+        if body.is_open() && !used_surfaces.contains(&k) {
+            used_surfaces.push(k);
+        }
         let mut out = chamfera_kernel::thicken(body, face, lo, hi)
             .map_err(|e| format!("thicken {name}: {e}"))?;
         name_faces(&mut out, feature.id);
@@ -259,7 +265,12 @@ fn thicken(
             shapes.push(out);
         }
     }
-    let mut next = made.to_vec();
+    let mut next: Made = made
+        .iter()
+        .enumerate()
+        .filter(|(k, _)| !used_surfaces.contains(k))
+        .map(|(_, m)| m.clone())
+        .collect();
     if t.operation == Operation::NewBody {
         let n = shapes.len();
         for (k, b) in shapes.into_iter().enumerate() {

@@ -519,6 +519,8 @@ pub enum FeatureKind {
     SplitFace(crate::body_tools::SplitFace),
     Thicken(crate::body_tools::Thicken),
     Remove(crate::body_tools::RemoveBodies),
+    /// A surface body feature: swept surfaces, patch, stitch, trim (format 27).
+    Surface(crate::surface::SurfaceFeature),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -537,6 +539,7 @@ impl FeatureKind {
     /// profile's).
     pub fn sketch(&self) -> Option<u32> {
         match self {
+            FeatureKind::Surface(s) => s.sketch(),
             FeatureKind::Extrude(e) => Some(e.sketch),
             FeatureKind::Revolve(r) => Some(r.sketch),
             FeatureKind::Sweep(s) => Some(s.sketch),
@@ -570,6 +573,7 @@ impl FeatureKind {
         let mut out: Vec<u32> = match self {
             FeatureKind::Sweep(s) => vec![s.sketch, s.path_sketch],
             FeatureKind::Loft(l) => l.sections.iter().map(|s| s.sketch).collect(),
+            FeatureKind::Surface(s) => s.sketches(),
             other => other.sketch().into_iter().collect(),
         };
         let mut seen = std::collections::BTreeSet::new();
@@ -580,6 +584,7 @@ impl FeatureKind {
     /// The operation; a pattern repeats its source's (see the rebuild).
     pub fn operation(&self) -> Operation {
         match self {
+            FeatureKind::Surface(_) => Operation::NewBody,
             FeatureKind::Extrude(e) => e.operation,
             FeatureKind::Revolve(r) => r.operation,
             FeatureKind::Sweep(s) => s.operation,
@@ -609,6 +614,7 @@ impl FeatureKind {
     /// sections).
     pub fn profiles(&self) -> &[Point2] {
         match self {
+            FeatureKind::Surface(s) => s.profiles(),
             FeatureKind::Extrude(e) => &e.profiles,
             FeatureKind::Revolve(r) => &r.profiles,
             FeatureKind::SheetBase(b) => &b.profiles,
@@ -635,6 +641,7 @@ impl FeatureKind {
 
     fn label(&self) -> &'static str {
         match self {
+            FeatureKind::Surface(s) => s.label(),
             FeatureKind::Extrude(_) => "Extrude",
             FeatureKind::Revolve(_) => "Revolve",
             FeatureKind::Pattern(_) => "Pattern",
@@ -672,6 +679,7 @@ impl FeatureKind {
     /// The expressions this feature evaluates.
     fn expressions(&self) -> Vec<&str> {
         match self {
+            FeatureKind::Surface(s) => s.expressions(),
             FeatureKind::Extrude(e) => std::iter::once(e.distance.as_str())
                 .chain(e.distance2.as_deref())
                 .chain(e.start_offset.as_deref())
@@ -764,6 +772,9 @@ impl Document {
         if kind.is_body_tool() {
             return self.check_body_tool(kind);
         }
+        if let FeatureKind::Surface(sf) = kind {
+            return self.check_surface(sf);
+        }
         if let FeatureKind::Blend(b) = kind {
             if b.edges.is_empty() || b.edges.len() > MAX_BLEND_EDGES {
                 return Err(bad(format!("pick 1 to {MAX_BLEND_EDGES} edges")));
@@ -822,6 +833,8 @@ impl Document {
             }
         }
         match kind {
+            // Checked above.
+            FeatureKind::Surface(_) => {}
             FeatureKind::Extrude(e) => self.check_extrude(e)?,
             FeatureKind::SheetBase(b) => self.check_sheet_base(b)?,
             FeatureKind::SheetFlange(_) | FeatureKind::SheetUnfold(_) => {}
@@ -1245,7 +1258,7 @@ impl Document {
     }
 
     /// Checks that `id` is a construction axis.
-    fn check_construct_axis(&self, id: u32) -> Result<(), DocError> {
+    pub(crate) fn check_construct_axis(&self, id: u32) -> Result<(), DocError> {
         match &self.feature(id)?.kind {
             FeatureKind::Construct(c) if c.kind() == crate::construct::ConstructKind::Axis => {
                 Ok(())
@@ -1350,6 +1363,7 @@ impl Document {
             .features
             .iter()
             .filter(|f| match &f.kind {
+                FeatureKind::Surface(sf) => sf.features_used().contains(&feature),
                 FeatureKind::Pattern(p) => {
                     p.source == feature
                         || matches!(

@@ -12,6 +12,7 @@ pub mod feature;
 pub mod imported;
 pub mod joint;
 pub mod sheet;
+pub mod surface;
 pub mod timeline;
 pub mod units;
 
@@ -35,6 +36,10 @@ pub use joint::{EdgeEnd, Joint, JointKind, JointOrigin, OriginAt};
 pub use sheet::{
     FlangePosition, FlangeSide, FlangeValues, ReliefShape, SheetBase, SheetFlange, SheetRule,
     SheetUnfold,
+};
+pub use surface::{
+    SurfaceExtrude, SurfaceFeature, SurfacePatch, SurfaceRevolve, SurfaceShapes, SurfaceStitch,
+    SurfaceSweep, SurfaceTrim, TrimKeep, TrimTool,
 };
 pub use timeline::{Group, ItemKind, Timeline};
 pub use units::{DisplayUnits, LengthUnit};
@@ -87,7 +92,10 @@ use thiserror::Error;
 /// - 26: body tools: combine, split body, split face, thicken and remove bodies
 ///   (`combine`, `split_body`, `split_face`, `thicken`, `remove`). Older files open
 ///   unchanged: they hold none.
-pub const FORMAT_VERSION: u32 = 26;
+/// - 27: surface features (`kind: surface`, with `surface`: `extrude`, `revolve`,
+///   `sweep`, `patch`, `stitch` or `trim`), making surface bodies (open shells). Older
+///   files open unchanged: they hold none.
+pub const FORMAT_VERSION: u32 = 27;
 /// The tag every design file starts with, so other JSON is not mistaken for a design.
 pub const FORMAT_TAG: &str = "chamfera";
 /// Longest parameter name.

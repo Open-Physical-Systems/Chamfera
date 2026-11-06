@@ -129,7 +129,12 @@ pub fn write(bodies: &[(&str, &Body)], options: &StepOptions) -> Result<String, 
     let mut needed: usize = 32;
     for (name, body) in bodies {
         check_text("body name", name)?;
-        body.validate().map_err(|e| kernel(name, e))?;
+        let mode = if body.is_open() {
+            chamfera_kernel::Validation::Surface
+        } else {
+            chamfera_kernel::Validation::Solid
+        };
+        body.validate_as(mode).map_err(|e| kernel(name, e))?;
         if body.shells().is_empty() {
             return Err(err(format!("body {name:?} has no solid to export")));
         }
@@ -149,22 +154,49 @@ pub fn write(bodies: &[(&str, &Body)], options: &StepOptions) -> Result<String, 
     };
     let (context, product_definition_shape) = product_and_context(&mut out, options)?;
     let mut items = Vec::new();
+    let mut surfaces = Vec::new();
     for (name, body) in bodies {
-        items.extend(body_solids(&mut out, name, body)?);
+        if body.is_open() {
+            surfaces.push(surface_model(&mut out, name, body)?);
+        } else {
+            items.extend(body_solids(&mut out, name, body)?);
+        }
     }
-    let origin = out.axis(&Frame::XY)?;
-    items.push(origin);
-    let items = items
-        .iter()
-        .map(Ref::to_string)
-        .collect::<Vec<_>>()
-        .join(",");
-    let rep = out.add(&format!(
-        "ADVANCED_BREP_SHAPE_REPRESENTATION({},({items}),{context})",
-        string(&options.product_name)
-    ))?;
+    let join = |refs: &[Ref]| refs.iter().map(Ref::to_string).collect::<Vec<_>>().join(",");
+    let solid_rep = if items.is_empty() {
+        None
+    } else {
+        items.push(out.axis(&Frame::XY)?);
+        Some(out.add(&format!(
+            "ADVANCED_BREP_SHAPE_REPRESENTATION({},({}),{context})",
+            string(&options.product_name),
+            join(&items)
+        ))?)
+    };
+    // Surface bodies (ISO 10303-42 shell-based surface models of open shells) go in a
+    // manifold surface representation, related to the solid one when there is one.
+    let surface_rep = if surfaces.is_empty() {
+        None
+    } else {
+        surfaces.push(out.axis(&Frame::XY)?);
+        Some(out.add(&format!(
+            "MANIFOLD_SURFACE_SHAPE_REPRESENTATION({},({}),{context})",
+            string(&options.product_name),
+            join(&surfaces)
+        ))?)
+    };
+    let main = match (solid_rep, surface_rep) {
+        (Some(s), Some(m)) => {
+            out.add(&format!(
+                "SHAPE_REPRESENTATION_RELATIONSHIP('','surface bodies',{s},{m})"
+            ))?;
+            s
+        }
+        (Some(r), None) | (None, Some(r)) => r,
+        (None, None) => return Err(err("there are no bodies to export")),
+    };
     out.add(&format!(
-        "SHAPE_DEFINITION_REPRESENTATION({product_definition_shape},{rep})"
+        "SHAPE_DEFINITION_REPRESENTATION({product_definition_shape},{main})"
     ))?;
 
     let mut file = String::with_capacity(out.text.len() + 1024);
@@ -256,6 +288,44 @@ fn body_solids(out: &mut Out, name: &str, body: &Body) -> Result<Vec<Ref>, IoErr
         solids.push(out.add(&format!("MANIFOLD_SOLID_BREP({},{shell})", string(name)))?);
     }
     Ok(solids)
+}
+
+/// A surface body as one `SHELL_BASED_SURFACE_MODEL`: an `OPEN_SHELL` per open shell
+/// (its faces only, not the openings) and a `CLOSED_SHELL` per closed one.
+fn surface_model(out: &mut Out, name: &str, body: &Body) -> Result<Ref, IoError> {
+    let mut w = BodyWriter {
+        name,
+        body,
+        vertices: HashMap::new(),
+        edges: HashMap::new(),
+    };
+    let mut shells = Vec::new();
+    for shell in body.shells() {
+        let mut faces = Vec::new();
+        for f in body.shell_faces(shell).map_err(|e| kernel(name, e))? {
+            faces.push(w.face(out, f)?);
+        }
+        let faces = faces
+            .iter()
+            .map(Ref::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
+        let kind = if body.shell_is_open(shell).map_err(|e| kernel(name, e))? {
+            "OPEN_SHELL"
+        } else {
+            "CLOSED_SHELL"
+        };
+        shells.push(out.add(&format!("{kind}('',({faces}))"))?);
+    }
+    let shells = shells
+        .iter()
+        .map(Ref::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    out.add(&format!(
+        "SHELL_BASED_SURFACE_MODEL({},({shells}))",
+        string(name)
+    ))
 }
 
 impl BodyWriter<'_> {

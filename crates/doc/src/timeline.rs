@@ -128,6 +128,8 @@ pub fn kind_dependencies(kind: &FeatureKind) -> Vec<u32> {
         FeatureKind::SheetBase(_) => {}
         FeatureKind::SheetFlange(f) => deps.extend(edge_features(&f.edge)),
         FeatureKind::SheetUnfold(u) => deps.push(u.base),
+        // Sketches are listed above; bodies are named (found when built).
+        FeatureKind::Surface(sf) => deps.extend(sf.features_used()),
     }
     deps.sort_unstable();
     deps.dedup();
