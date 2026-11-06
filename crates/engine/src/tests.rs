@@ -198,6 +198,29 @@ fn hostile_params_never_panic() {
         json!({"edges": [long], "radius": -1, "distance": "0 mm", "size": "q"}),
         json!({"edges": [], "pick": {"x": 1e300, "y": "a"}, "radius": 1}),
         json!({"pick": {"x": 400, "y": 300, "width": 800, "height": 600}, "radius": 1e9}),
+        json!({"sketch": 1, "profiles": [{"x": 0, "y": 0}], "path_sketch": 1, "path_curves": [1, 2, 99999]}),
+        json!({"sketch": 1, "profiles": [{"x": 0, "y": 0}], "path_sketch": -1, "path_curves": [-1, 1e300]}),
+        json!({"sketch": 1, "profiles": [{"x": 0, "y": 0}], "path_sketch": 1, "path_curves": "all"}),
+        json!({"sections": [{"sketch": 1, "x": 0, "y": 0}, {"sketch": 1, "x": 1e300, "y": 0}]}),
+        json!({"sections": [{"sketch": 1, "x": 5, "y": 5}, {"sketch": 99, "x": 0}], "feature": 1}),
+        json!({"sections": "two", "path_curves": null, "operation": "join", "plane": "xy", "offset": 1e300}),
+        json!({"plane": "xz", "offset": f64::NAN, "feature": 1, "path_curves": [1]}),
+        json!({"x": 400, "y": 300, "width": 800, "height": 600, "filter": ["edges", 5, null]}),
+        json!({"x": 400, "y": 300, "width": 800, "height": 600, "filter": "edges"}),
+        json!({"x": 400, "y": 300, "width": 800, "height": 600, "filter": [], "name": "   "}),
+        json!({"x": 1, "y": 1, "width": 2, "height": 2, "filter": [long], "name": "a\u{7}b"}),
+        json!({"filter": vec!["faces"; 100], "feature": 2, "sketch": 1, "name": "Plate"}),
+        json!({"faces": ["2:top", 5, null], "thickness": "2 mm", "feature": 2}),
+        json!({"faces": [long], "thickness": -1e308, "feature": 3}),
+        json!({"faces": "2:top", "thickness": "0 mm"}),
+        json!({"faces": [], "pick": {"x": 400, "y": 300, "width": 800, "height": 600}, "thickness": 1}),
+        json!({"pick": {"x": 400, "y": 300, "width": 800, "height": 600}, "thickness": [2]}),
+        json!({"faces": [], "thickness": f64::NAN}),
+        json!({"x1": 0, "y1": 0, "x2": 800, "y2": 600, "width": 800, "height": 600, "mode": "crossing", "add": true, "remove": true}),
+        json!({"x1": 900, "y1": -1, "x2": f64::NAN, "y2": 1e308, "width": 800, "height": 600, "mode": "window"}),
+        json!({"x1": 0, "y1": 0, "x2": 0, "y2": 0, "width": 1, "height": 1, "mode": "crossing", "add": "yes"}),
+        json!({"x": 400, "y": 300, "width": 800, "height": 600, "mode": "toggle"}),
+        json!({"x": 400, "y": 300, "width": 800, "height": 600, "mode": "flip"}),
     ];
     for c in registry() {
         for p in &hostile {
@@ -1393,6 +1416,109 @@ fn clicking_near_a_visible_edge_picks_it_and_fillets_it() {
     assert!((v - (15_000.0 - removed)).abs() < 1e-6, "{v}");
 }
 
+#[test]
+fn a_shell_hollows_the_plate_by_its_exact_volume_and_follows_edits() {
+    // 2 mm walls with the top open: the cavity is (50 - 4) x (30 - 4) x (h - 2).
+    let mut s = Session::new();
+    extruded_plate(&mut s, json!(10));
+    let r = s
+        .execute("solid.shell", &json!({"faces": ["2:top"], "thickness": 2}))
+        .unwrap();
+    assert!((exact_volume(&r) - (15_000.0 - 46.0 * 26.0 * 8.0)).abs() < 1e-6);
+    let shell = r["feature"].as_u64().unwrap();
+    // The inner walls are named after the faces they offset.
+    let names: Vec<String> = s.solids()[0]
+        .body
+        .faces()
+        .into_iter()
+        .filter_map(|f| {
+            s.solids()[0]
+                .body
+                .face_name(f)
+                .ok()
+                .flatten()
+                .map(str::to_owned)
+        })
+        .collect();
+    assert!(
+        names
+            .iter()
+            .any(|n| n == &format!("{shell}:shell of 2:bottom"))
+    );
+    // A thicker plate rebuilds with the shell in place.
+    s.execute("feature.edit", &json!({"feature": 2, "distance": 20}))
+        .unwrap();
+    let v = s.solids()[0].body.volume().unwrap();
+    assert!((v - (30_000.0 - 46.0 * 26.0 * 18.0)).abs() < 1e-6, "{v}");
+    // A new thickness, then no open face: a closed hollow box.
+    let r = s
+        .execute(
+            "feature.edit",
+            &json!({"feature": shell, "thickness": "1 mm"}),
+        )
+        .unwrap();
+    assert!((exact_volume(&r) - (30_000.0 - 48.0 * 28.0 * 19.0)).abs() < 1e-6);
+    let r = s
+        .execute("feature.edit", &json!({"feature": shell, "faces": []}))
+        .unwrap();
+    assert!((exact_volume(&r) - (30_000.0 - 48.0 * 28.0 * 18.0)).abs() < 1e-6);
+    // Undo goes back to the open top.
+    s.execute("edit.undo", &json!({})).unwrap();
+    let v = s.solids()[0].body.volume().unwrap();
+    assert!((v - (30_000.0 - 48.0 * 28.0 * 19.0)).abs() < 1e-6, "{v}");
+    // Size and thickness belong to their own features.
+    assert!(
+        s.execute("feature.edit", &json!({"feature": 2, "thickness": 1}))
+            .is_err()
+    );
+    assert!(
+        s.execute("feature.edit", &json!({"feature": shell, "size": 1}))
+            .is_err()
+    );
+}
+
+#[test]
+fn a_too_thick_or_zero_shell_is_refused_and_changes_nothing() {
+    let mut s = Session::new();
+    extruded_plate(&mut s, json!(10));
+    let before = s.doc.features.len();
+    for p in [
+        json!({"faces": ["2:top"], "thickness": 20}),
+        json!({"faces": ["2:top"], "thickness": 0}),
+        json!({"faces": ["9:nowhere"], "thickness": 1}),
+        json!({"faces": ["2:top"]}),
+    ] {
+        assert!(s.execute("solid.shell", &p).is_err(), "{p}");
+    }
+    assert_eq!(s.doc.features.len(), before);
+    assert!((s.solids()[0].body.volume().unwrap() - 15_000.0).abs() < 1e-6);
+}
+
+#[test]
+fn clicking_a_face_opens_it_in_a_shell() {
+    use chamfera_render::{mat_mul, transform_point};
+    let mut s = Session::new();
+    extruded_plate(&mut s, json!(10));
+    let (w, h) = (800.0, 600.0);
+    s.execute("view.home", &json!({"width": w, "height": h}))
+        .unwrap();
+    // Where the middle of the top face (25, 15, 10) lands on screen.
+    let vp = mat_mul(
+        &s.camera.projection_matrix(w / h, s.scene.bounds().as_ref()),
+        &s.camera.view_matrix(),
+    );
+    let n = transform_point(&vp, chamfera_geom::Point3::new(25.0, 15.0, 10.0)).unwrap();
+    let (x, y) = ((n[0] + 1.0) * 0.5 * w, (1.0 - n[1]) * 0.5 * h);
+    let r = s
+        .execute(
+            "solid.shell",
+            &json!({"pick": {"x": x, "y": y, "width": w, "height": h}, "thickness": "2 mm"}),
+        )
+        .unwrap();
+    assert_eq!(r["definition"]["faces"], json!(["2:top"]));
+    assert!((exact_volume(&r) - (15_000.0 - 46.0 * 26.0 * 8.0)).abs() < 1e-6);
+}
+
 // ----- sketch tools -----
 
 fn ids(v: &serde_json::Value) -> Vec<u64> {
@@ -1730,4 +1856,590 @@ fn body_import_step_adds_exact_solids_that_undo_save_and_open_keep() {
             .is_err()
     );
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+// ----- selection filters and renaming -----
+
+/// The extruded plate (50 x 30 x 10) seen from the top, centred on (25, 15), in an
+/// 800 x 600 viewport; returns where model point `p` lands on screen.
+fn plate_from_the_top(s: &mut Session) -> impl Fn([f64; 3]) -> (f64, f64) + use<> {
+    use chamfera_render::{mat_mul, transform_point};
+    extruded_plate(s, json!(10));
+    s.execute("view.standard", &json!({"view": "top"})).unwrap();
+    s.camera.target = chamfera_geom::Point3::new(25.0, 15.0, 0.0);
+    let vp = mat_mul(
+        &s.camera
+            .projection_matrix(800.0 / 600.0, s.scene.bounds().as_ref()),
+        &s.camera.view_matrix(),
+    );
+    move |p| {
+        let n = transform_point(&vp, chamfera_geom::Point3::new(p[0], p[1], p[2])).unwrap();
+        ((n[0] + 1.0) * 0.5 * 800.0, (1.0 - n[1]) * 0.5 * 600.0)
+    }
+}
+
+#[test]
+fn a_pick_filter_chooses_edges_faces_or_bodies() {
+    let mut s = Session::new();
+    let screen = plate_from_the_top(&mut s);
+    let pick = |s: &mut Session, (x, y): (f64, f64), filter: serde_json::Value| {
+        s.execute(
+            "select.pick",
+            &json!({"x": x, "y": y, "width": 800, "height": 600, "filter": filter}),
+        )
+        .unwrap()
+    };
+    // The centre pixel looks down on the middle of the top face (z = 10), far from edges.
+    let centre = screen([25.0, 15.0, 10.0]);
+    let r = pick(&mut s, centre, json!(["edges"]));
+    assert!(r["body"].is_null(), "only edges pass: {r}");
+    assert_eq!(r["edges"], json!([]));
+    let r = pick(&mut s, centre, json!(["faces"]));
+    assert!(r["face"].as_str().unwrap().ends_with(":top"), "{r}");
+    assert!(
+        (r["point"]["z"].as_f64().unwrap() - 10.0).abs() < 1e-6,
+        "{r}"
+    );
+    let r = pick(&mut s, centre, json!(["bodies"]));
+    assert!(r["body"].is_u64(), "{r}");
+    // 3 px off the middle of the top front edge (25, 0, 10), inside the face: edges come
+    // first.
+    let (ex, ey) = screen([25.0, 0.0, 10.0]);
+    let near = (ex, ey - 3.0);
+    let want = edge_between(&mut s, [0.0, 0.0, 10.0], [50.0, 0.0, 10.0]);
+    let r = pick(&mut s, near, json!(["edges", "faces", "bodies"]));
+    assert_eq!(r["edges"], json!([want]), "{r}");
+    assert!(r["body"].is_null(), "{r}");
+    // Without edges the same pixel picks the top face.
+    let r = pick(&mut s, near, json!(["faces"]));
+    assert!(r["face"].as_str().unwrap().ends_with(":top"), "{r}");
+    assert_eq!(r["edges"], json!([]));
+    // Nothing allowed: nothing picked. Clearing drops picked edges too.
+    assert_eq!(pick(&mut s, centre, json!([]))["body"], json!(null));
+    pick(&mut s, near, json!(["edges"]));
+    let r = s.execute("select.clear", &json!({})).unwrap();
+    assert_eq!(r["edges"], json!([]));
+    // Without a filter the pick is the body hit, as before.
+    let r = s
+        .execute(
+            "select.pick",
+            &json!({"x": near.0, "y": near.1, "width": 800, "height": 600}),
+        )
+        .unwrap();
+    assert!(r["body"].is_u64(), "{r}");
+    // Bad filters are refused.
+    for bad in [json!("edges"), json!(["teeth"]), json!([3])] {
+        let p = json!({"x": 400, "y": 300, "width": 800, "height": 600, "filter": bad});
+        assert!(s.execute("select.pick", &p).is_err(), "{p}");
+    }
+}
+
+#[test]
+fn a_sketch_filter_passes_points_curves_or_construction() {
+    // As in `clicks_pick_sketch_points_and_lines_and_find_the_plane`: a top view centred
+    // on (20, 10), with a point there on a line through it.
+    let mut s = Session::new();
+    s.execute("sketch.create", &json!({"plane": "xy"})).unwrap();
+    s.execute("view.standard", &json!({"view": "top"})).unwrap();
+    s.camera.target = chamfera_geom::Point3::new(20.0, 10.0, 0.0);
+    let curve = s
+        .execute(
+            "sketch.line",
+            &json!({"x1": 0, "y1": 10, "x2": 40, "y2": 10}),
+        )
+        .unwrap()["curve"]
+        .as_u64()
+        .unwrap();
+    let p = s
+        .execute("sketch.point", &json!({"x": 20, "y": 10}))
+        .unwrap()["point"]
+        .as_u64()
+        .unwrap();
+    let select = |s: &mut Session, filter: serde_json::Value| {
+        s.execute(
+            "sketch.select",
+            &json!({"x": 400, "y": 300, "width": 800, "height": 600, "filter": filter}),
+        )
+        .unwrap()["item"]
+            .clone()
+    };
+    assert_eq!(select(&mut s, json!(["vertices", "sketch"]))["point"], p);
+    // Points filtered out: the line under the same pixel is picked instead.
+    assert_eq!(select(&mut s, json!(["sketch"]))["curve"], curve);
+    // A construction line passes only with construction allowed.
+    s.execute(
+        "sketch.construction",
+        &json!({"curve": curve, "construction": true}),
+    )
+    .unwrap();
+    assert!(select(&mut s, json!(["sketch"])).is_null());
+    assert_eq!(select(&mut s, json!(["construction"]))["curve"], curve);
+}
+
+#[test]
+fn renaming_features_sketches_and_bodies_and_undo() {
+    let mut s = Session::new();
+    extruded_plate(&mut s, json!(10));
+    let feature = s.doc.features[0].id;
+    let before = s.doc.feature(feature).unwrap().name.clone();
+    let r = s
+        .execute(
+            "feature.rename",
+            &json!({"feature": feature, "name": "  Base plate "}),
+        )
+        .unwrap();
+    assert_eq!(r["name"], "Base plate");
+    // The solid and its scene body take the feature's name.
+    assert_eq!(s.scene.bodies[0].name, "Base plate");
+    let body = s.scene.bodies[0].id;
+    assert!(
+        s.execute("body.rename", &json!({"body": body, "name": "x"}))
+            .is_err(),
+        "a solid is renamed through its feature"
+    );
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.doc.feature(feature).unwrap().name, before);
+    s.execute("sketch.rename", &json!({"sketch": 1, "name": "Outline"}))
+        .unwrap();
+    assert_eq!(s.doc.sketch(1).unwrap().name, "Outline");
+    for bad in [
+        json!(""),
+        json!("   "),
+        json!("a\u{1}b"),
+        json!("x".repeat(81)),
+        json!(5),
+    ] {
+        assert!(
+            s.execute("sketch.rename", &json!({"sketch": 1, "name": bad}))
+                .is_err()
+        );
+    }
+    assert_eq!(s.doc.sketch(1).unwrap().name, "Outline");
+    let mesh = s.execute("body.sample", &json!({})).unwrap()["body"]
+        .as_u64()
+        .unwrap();
+    s.execute("body.rename", &json!({"body": mesh, "name": "Bracket"}))
+        .unwrap();
+    let mesh = u32::try_from(mesh).unwrap();
+    assert_eq!(s.scene.body(mesh).unwrap().name, "Bracket");
+}
+
+/// Two 10 mm cubes, A at x 0..10 and B at x 30..40 (both y 0..10, z 0..10), seen from
+/// the top in an orthographic 800 x 600 view centred on (20, 5) with a half height of
+/// 30 mm. Then 1 mm is 300 / 30 = 10 px, and model (x, y) is pixel
+/// (400 + 10 (x - 20), 300 - 10 (y - 5)): A covers pixels x 200..300, B x 500..600, both
+/// y 250..350. (The top view's pitch is 1e-5 rad short of straight down, which moves a
+/// corner 10 mm up by 1e-4 mm: far below a pixel.)
+fn two_cubes_from_the_top() -> (Session, u32, u32) {
+    use chamfera_geom::{Point3, TriMesh};
+    let mut s = Session::new();
+    let a = s
+        .scene
+        .add(
+            "A",
+            TriMesh::cuboid(Point3::ORIGIN, Point3::new(10.0, 10.0, 10.0)),
+        )
+        .unwrap();
+    let b = s
+        .scene
+        .add(
+            "B",
+            TriMesh::cuboid(Point3::new(30.0, 0.0, 0.0), Point3::new(40.0, 10.0, 10.0)),
+        )
+        .unwrap();
+    top_view_centred_on(&mut s, 20.0, 5.0);
+    (s, a, b)
+}
+
+/// Orthographic top view centred on model (x, y), 30 mm half height: 10 px per mm in an
+/// 800 x 600 viewport.
+fn top_view_centred_on(s: &mut Session, x: f64, y: f64) {
+    s.execute("view.standard", &json!({"view": "top"})).unwrap();
+    s.camera.projection = chamfera_render::Projection::Orthographic;
+    s.camera.target = chamfera_geom::Point3::new(x, y, 0.0);
+    s.camera.distance = 30.0 / (s.camera.fov_y * 0.5).tan();
+}
+
+fn boxed(s: &mut Session, corners: [f64; 4], mode: &str) -> Vec<u64> {
+    let r = s
+        .execute(
+            "select.box",
+            &json!({"x1": corners[0], "y1": corners[1], "x2": corners[2], "y2": corners[3],
+                    "width": 800, "height": 600, "mode": mode}),
+        )
+        .unwrap();
+    let mut ids: Vec<u64> = r["bodies"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_u64().unwrap())
+        .collect();
+    ids.sort();
+    ids
+}
+
+#[test]
+fn a_window_selects_only_bodies_fully_inside_it() {
+    let (mut s, a, b) = two_cubes_from_the_top();
+    let (a, b) = (u64::from(a), u64::from(b));
+    // Around A only (pixels 190..310 x 240..360).
+    assert_eq!(
+        boxed(&mut s, [190.0, 240.0, 310.0, 360.0], "window"),
+        vec![a]
+    );
+    // All of A and half of B (x 190..550): B is not fully inside.
+    assert_eq!(
+        boxed(&mut s, [190.0, 240.0, 550.0, 360.0], "window"),
+        vec![a]
+    );
+    // Both (x 190..610).
+    assert_eq!(
+        boxed(&mut s, [190.0, 240.0, 610.0, 360.0], "window"),
+        vec![a, b]
+    );
+    // Inside A's outline (x 210..290): A pokes out of it, so nothing.
+    assert!(boxed(&mut s, [210.0, 260.0, 290.0, 340.0], "window").is_empty());
+}
+
+#[test]
+fn a_crossing_selects_bodies_it_touches_or_contains() {
+    let (mut s, a, b) = two_cubes_from_the_top();
+    let (a, b) = (u64::from(a), u64::from(b));
+    // All of A and half of B: both are touched.
+    assert_eq!(
+        boxed(&mut s, [550.0, 360.0, 190.0, 240.0], "crossing"),
+        vec![a, b]
+    );
+    // A thin strip across A's middle (x 250..260, past its top and bottom): no corner of A
+    // is inside, but its faces are.
+    assert_eq!(
+        boxed(&mut s, [260.0, 200.0, 250.0, 400.0], "crossing"),
+        vec![a]
+    );
+    // A small box wholly inside B's top face (x 540..560): no edge of B crosses it.
+    assert_eq!(
+        boxed(&mut s, [560.0, 290.0, 540.0, 310.0], "crossing"),
+        vec![b]
+    );
+    // The gap between them (x 320..480) touches neither.
+    assert!(boxed(&mut s, [480.0, 240.0, 320.0, 360.0], "crossing").is_empty());
+}
+
+#[test]
+fn box_selection_adds_and_removes_and_hidden_bodies_are_left_out() {
+    let (mut s, a, b) = two_cubes_from_the_top();
+    let around_a = json!({"x1": 190, "y1": 240, "x2": 310, "y2": 360, "width": 800, "height": 600, "mode": "window"});
+    let around_b = json!({"x1": 490, "y1": 240, "x2": 610, "y2": 360, "width": 800, "height": 600, "mode": "window", "add": true});
+    s.execute("select.box", &around_a).unwrap();
+    let r = s.execute("select.box", &around_b).unwrap();
+    assert_eq!(r["count"], 2);
+    assert_eq!(r["bodies"], json!([a, b]));
+    // Removing with a box around A leaves B.
+    let mut remove_a = around_a.clone();
+    remove_a["remove"] = json!(true);
+    let r = s.execute("select.box", &remove_a).unwrap();
+    assert_eq!(r["bodies"], json!([b]));
+    // Hiding a selected body deselects it, and a hidden body is never boxed.
+    s.execute("body.visibility", &json!({"body": b, "visible": false}))
+        .unwrap();
+    assert_eq!(s.execute("select.get", &json!({})).unwrap()["count"], 0);
+    let all = json!({"x1": 0, "y1": 0, "x2": 800, "y2": 600, "width": 800, "height": 600, "mode": "crossing"});
+    assert_eq!(s.execute("select.box", &all).unwrap()["bodies"], json!([a]));
+    // A corner outside the viewport, or both add and remove, is refused.
+    let mut outside = all.clone();
+    outside["x2"] = json!(801);
+    assert!(s.execute("select.box", &outside).is_err());
+    let mut both = all.clone();
+    both["add"] = json!(true);
+    both["remove"] = json!(true);
+    assert!(s.execute("select.box", &both).is_err());
+    assert_eq!(
+        s.execute("select.clear", &json!({})).unwrap()["bodies"],
+        json!([])
+    );
+}
+
+#[test]
+fn toggle_picks_build_a_set_and_a_plain_miss_clears_it() {
+    let (mut s, a, b) = two_cubes_from_the_top();
+    // The centres of A (5, 5) and B (35, 5) are pixels (250, 300) and (550, 300).
+    let at =
+        |x: f64, mode: &str| json!({"x": x, "y": 300, "width": 800, "height": 600, "mode": mode});
+    s.execute("select.pick", &at(250.0, "replace")).unwrap();
+    let r = s.execute("select.pick", &at(550.0, "toggle")).unwrap();
+    assert_eq!(r["bodies"], json!([a, b]));
+    assert_eq!(r["body"], b, "the last pick is B");
+    // Toggling A off keeps B.
+    let r = s.execute("select.pick", &at(250.0, "toggle")).unwrap();
+    assert_eq!(r["bodies"], json!([b]));
+    // A modified click on empty space (the gap at x = 20 mm, pixel 400) changes nothing.
+    let r = s.execute("select.pick", &at(400.0, "toggle")).unwrap();
+    assert_eq!(r["bodies"], json!([b]));
+    // Add A, then remove B.
+    s.execute("select.pick", &at(250.0, "add")).unwrap();
+    let r = s.execute("select.pick", &at(550.0, "remove")).unwrap();
+    assert_eq!(r["bodies"], json!([a]));
+    // A plain click on empty space clears.
+    let r = s.execute("select.pick", &at(400.0, "replace")).unwrap();
+    assert_eq!(r["count"], 0);
+    assert!(r["body"].is_null());
+}
+
+#[test]
+fn a_box_in_an_active_sketch_selects_its_points_and_curves() {
+    let mut s = Session::new();
+    s.execute("sketch.create", &json!({"plane": "xy"})).unwrap();
+    // Line A from (10, 10) to (20, 10), line B from (40, 10) to (50, 10).
+    let la = s
+        .execute(
+            "sketch.line",
+            &json!({"x1": 10, "y1": 10, "x2": 20, "y2": 10}),
+        )
+        .unwrap();
+    let lb = s
+        .execute(
+            "sketch.line",
+            &json!({"x1": 40, "y1": 10, "x2": 50, "y2": 10}),
+        )
+        .unwrap();
+    // Centred on (30, 10): model (x, y) is pixel (400 + 10 (x - 30), 300 - 10 (y - 10)).
+    // A runs over pixels x 200..300, B x 500..600, both at y = 300.
+    top_view_centred_on(&mut s, 30.0, 10.0);
+    let window = json!({"x1": 190, "y1": 290, "x2": 310, "y2": 310, "width": 800, "height": 600, "mode": "window"});
+    let r = s.execute("select.box", &window).unwrap();
+    let expected = json!([
+        {"point": la["start"]}, {"point": la["end"]}, {"curve": la["curve"]}
+    ]);
+    assert_eq!(r["selection"], expected, "{r}");
+    // A crossing over B's middle (x 530..570, neither end inside) adds only curve B.
+    let crossing = json!({"x1": 570, "y1": 290, "x2": 530, "y2": 310, "width": 800, "height": 600, "mode": "crossing", "add": true});
+    let r = s.execute("select.box", &crossing).unwrap();
+    assert_eq!(r["items"], json!([{"curve": lb["curve"]}]), "{r}");
+    assert_eq!(r["selection"].as_array().unwrap().len(), 4);
+    // The same box as a window selects nothing: B is not inside it.
+    let mut as_window = crossing.clone();
+    as_window["mode"] = json!("window");
+    as_window["add"] = json!(false);
+    let r = s.execute("select.box", &as_window).unwrap();
+    assert_eq!(r["selection"], json!([]));
+}
+
+#[test]
+fn picked_edges_follow_the_pick_modes() {
+    let mut s = Session::new();
+    let screen = plate_from_the_top(&mut s);
+    // 3 px inside the middles of the top front (y = 0) and top back (y = 30) edges.
+    let (fx, fy) = screen([25.0, 0.0, 10.0]);
+    let (bx, by) = screen([25.0, 30.0, 10.0]);
+    let front = edge_between(&mut s, [0.0, 0.0, 10.0], [50.0, 0.0, 10.0]);
+    let back = edge_between(&mut s, [0.0, 30.0, 10.0], [50.0, 30.0, 10.0]);
+    let mut pick = |x: f64, y: f64, mode: &str| {
+        s.execute(
+            "select.pick",
+            &json!({"x": x, "y": y, "width": 800, "height": 600, "mode": mode,
+                    "filter": ["edges"]}),
+        )
+        .unwrap()["edges"]
+            .clone()
+    };
+    assert_eq!(pick(fx, fy - 3.0, "replace"), json!([front]));
+    assert_eq!(pick(bx, by + 3.0, "add"), json!([front, back]));
+    assert_eq!(pick(fx, fy - 3.0, "toggle"), json!([back]));
+    assert_eq!(pick(bx, by + 3.0, "remove"), json!([]));
+}
+
+/// A circle of radius `r` on the YZ plane at the origin (sketch 1) and the L path (sketch
+/// 2, on XY): 30 along +x, a quarter arc of radius 20 about (30, 20), 30 along +y.
+fn sweep_design(r: f64) -> (Session, Vec<u64>) {
+    let mut s = Session::new();
+    s.execute("sketch.create", &json!({"plane": "yz"})).unwrap();
+    s.execute("sketch.circle", &json!({"cx": 0, "cy": 0, "radius": r}))
+        .unwrap();
+    s.execute("sketch.finish", &json!({})).unwrap();
+    s.execute("sketch.create", &json!({"plane": "xy"})).unwrap();
+    let mut path = Vec::new();
+    for (cmd, p) in [
+        ("sketch.line", json!({"x1": 0, "y1": 0, "x2": 30, "y2": 0})),
+        (
+            "sketch.arc",
+            json!({"cx": 30, "cy": 20, "x1": 30, "y1": 0, "x2": 50, "y2": 20}),
+        ),
+        (
+            "sketch.line",
+            json!({"x1": 50, "y1": 20, "x2": 50, "y2": 50}),
+        ),
+    ] {
+        path.push(s.execute(cmd, &p).unwrap()["curve"].as_u64().unwrap());
+    }
+    s.execute("sketch.finish", &json!({})).unwrap();
+    (s, path)
+}
+
+#[test]
+fn sweeping_a_circle_along_an_l_path_gives_the_sum_of_its_parts() {
+    let (mut s, path) = sweep_design(2.0);
+    let r = s
+        .execute(
+            "solid.sweep",
+            &json!({"sketch": 1, "profiles": [{"x": 0, "y": 0}], "path_sketch": 2, "path_curves": path}),
+        )
+        .unwrap();
+    // π r² (30 + 10π + 30), Pappus for the quarter arc of radius 20.
+    let v = r["solids"][0]["volume"].as_f64().unwrap();
+    let exact = std::f64::consts::PI * 4.0 * (60.0 + 10.0 * std::f64::consts::PI);
+    assert!((v - exact).abs() < 1e-6 * exact, "{v} vs {exact}");
+    assert!(s.feature_errors().is_empty());
+    assert!(s.display_errors().is_empty(), "{:?}", s.display_errors());
+    // Editing the path down to the first line leaves a cylinder of π r² 30.
+    let id = r["feature"].as_u64().unwrap();
+    let r = s
+        .execute(
+            "feature.edit",
+            &json!({"feature": id, "path_curves": [path[0]]}),
+        )
+        .unwrap();
+    let v = r["solids"][0]["volume"].as_f64().unwrap();
+    assert!((v - std::f64::consts::PI * 4.0 * 30.0).abs() < 1e-6, "{v}");
+    // The design round-trips through a file.
+    let back = chamfera_doc::Document::from_json(&s.doc.to_json().unwrap()).unwrap();
+    assert_eq!(back, s.doc);
+}
+
+#[test]
+fn a_sweep_that_cannot_be_built_changes_nothing() {
+    // A profile of radius 25 cannot bend around the arc of radius 20.
+    let (mut s, path) = sweep_design(25.0);
+    let before = s.doc.clone();
+    let undo = s.undo.len();
+    let e = s
+        .execute(
+            "solid.sweep",
+            &json!({"sketch": 1, "profiles": [{"x": 0, "y": 0}], "path_sketch": 2, "path_curves": path}),
+        )
+        .unwrap_err();
+    assert!(e.to_string().contains("radius"), "{e}");
+    assert_eq!(s.doc, before);
+    assert_eq!(s.undo.len(), undo);
+    // A path curve that is not there, an empty path, a curve twice.
+    for bad in [json!([999]), json!([]), json!([1, 1])] {
+        assert!(
+            s.execute(
+                "solid.sweep",
+                &json!({"sketch": 1, "profiles": [{"x": 0, "y": 0}], "path_sketch": 2, "path_curves": bad}),
+            )
+            .is_err()
+        );
+    }
+    assert_eq!(s.doc, before);
+}
+
+#[test]
+fn picking_one_curve_of_a_path_picks_its_chain() {
+    let (s, path) = sweep_design(2.0);
+    let f = s.doc.sketch(2).unwrap();
+    let ids: Vec<u32> = path.iter().map(|p| *p as u32).collect();
+    for c in &ids {
+        assert_eq!(crate::solids::path_chain(&f.sketch, *c).len(), 3);
+    }
+}
+
+#[test]
+fn lofting_squares_and_circles_gives_frusta() {
+    let mut s = Session::new();
+    for (offset, half) in [(0.0, 10.0), (10.0, 5.0)] {
+        s.execute("sketch.create", &json!({"plane": "xy", "offset": offset}))
+            .unwrap();
+        s.execute(
+            "sketch.rectangle",
+            &json!({"x1": -half, "y1": -half, "x2": half, "y2": half}),
+        )
+        .unwrap();
+        s.execute("sketch.finish", &json!({})).unwrap();
+    }
+    for (offset, r) in [(0.0, 10.0), (10.0, 5.0)] {
+        s.execute(
+            "sketch.create",
+            &json!({"plane": "xz", "offset": offset - 100.0}),
+        )
+        .unwrap();
+        s.execute("sketch.circle", &json!({"cx": 0, "cy": 0, "radius": r}))
+            .unwrap();
+        s.execute("sketch.finish", &json!({})).unwrap();
+    }
+    let r = s
+        .execute(
+            "solid.loft",
+            &json!({"sections": [{"sketch": 1, "x": 0, "y": 0}, {"sketch": 2, "x": 0, "y": 0}]}),
+        )
+        .unwrap();
+    // h/3 (A1 + A2 + √(A1 A2)) = 10/3 (400 + 100 + 200).
+    let v = r["solids"][0]["volume"].as_f64().unwrap();
+    assert!((v - 7000.0 / 3.0).abs() < 1e-9, "{v}");
+    let r = s
+        .execute(
+            "solid.loft",
+            &json!({"sections": [{"sketch": 3, "x": 0, "y": 0}, {"sketch": 4, "x": 0, "y": 0}]}),
+        )
+        .unwrap();
+    // π h/3 (R² + R r + r²) with R = 10, r = 5, h = 10.
+    let v = r["solids"][0]["volume"].as_f64().unwrap();
+    let exact = std::f64::consts::PI * 10.0 / 3.0 * 175.0;
+    assert!((v - exact).abs() < 1e-9 * exact, "{v}");
+    assert!(s.display_errors().is_empty(), "{:?}", s.display_errors());
+    // A square to a circle has no exact surface yet: refused, nothing changes.
+    let before = s.doc.clone();
+    let undo = s.undo.len();
+    assert!(
+        s.execute(
+            "solid.loft",
+            &json!({"sections": [{"sketch": 1, "x": 0, "y": 0}, {"sketch": 3, "x": 0, "y": 0}]}),
+        )
+        .is_err()
+    );
+    assert!(
+        s.execute(
+            "solid.loft",
+            &json!({"sections": [{"sketch": 1, "x": 0, "y": 0}]}),
+        )
+        .is_err()
+    );
+    assert_eq!(s.doc, before);
+    assert_eq!(s.undo.len(), undo);
+    // The sketches are in use by the lofts.
+    assert!(!s.doc.sketch_users(2).is_empty());
+}
+
+#[test]
+fn the_swept_pipe_and_loft_example_has_its_exact_volumes() {
+    let text = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../examples/swept-pipe-and-loft.json"
+    ))
+    .unwrap();
+    let steps: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let mut s = Session::new();
+    for step in steps.as_array().unwrap() {
+        let params = step.get("params").cloned().unwrap_or(json!({}));
+        s.execute(step["command"].as_str().unwrap(), &params)
+            .unwrap();
+    }
+    let pi = std::f64::consts::PI;
+    let v: Vec<f64> = s
+        .solids()
+        .iter()
+        .map(|x| x.body.volume().unwrap())
+        .collect();
+    // Pipe: annulus π(6² - 4²) along 40 + 15π + 40 (Pappus for the bend of radius 30).
+    // Squares 40 -> 20 over 30 and 20 -> 30 over 20: 30/3 (1600 + 400 + 800) +
+    // 20/3 (400 + 900 + 600). Cone r 15 -> 8 over 25: π 25/3 (225 + 120 + 64).
+    let exact = [
+        20.0 * pi * (80.0 + 15.0 * pi),
+        28_000.0 + 38_000.0 / 3.0,
+        pi * 25.0 / 3.0 * 409.0,
+    ];
+    assert_eq!(v.len(), 3);
+    for (a, b) in v.iter().zip(exact) {
+        assert!((a - b).abs() < 1e-6 * b, "{a} vs {b}");
+    }
+    assert!(s.display_errors().is_empty());
 }

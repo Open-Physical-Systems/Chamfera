@@ -106,6 +106,53 @@ fn build_blend(
     Ok(next)
 }
 
+/// Hollows the bodies built so far (rung K12). A body is shelled when it has one of the
+/// named open faces; with no faces named, every body is hollowed closed. Every name must
+/// still be found.
+fn build_shell(
+    doc: &chamfera_doc::Document,
+    sh: &chamfera_doc::Shell,
+    feature: u32,
+    made: &[(u32, String, Body)],
+) -> Result<Vec<(u32, String, Body)>, String> {
+    let thickness = doc
+        .evaluate_feature_value(&sh.thickness, chamfera_doc::expr::Dim::LENGTH)
+        .map_err(|x| x.to_string())?;
+    let mut found = vec![false; sh.faces.len()];
+    let mut next = made.to_vec();
+    let mut any = false;
+    for (_, _, body) in &mut next {
+        let mut open = Vec::new();
+        for f in body.faces() {
+            if let Some(n) = body.face_name(f).ok().flatten()
+                && let Some(i) = sh.faces.iter().position(|x| x == n)
+            {
+                open.push(f);
+                if let Some(seen) = found.get_mut(i) {
+                    *seen = true;
+                }
+            }
+        }
+        if open.is_empty() && !sh.faces.is_empty() {
+            continue;
+        }
+        let mut out =
+            chamfera_kernel::shell(body, &open, thickness).map_err(|x| format!("shell: {x}"))?;
+        name_faces(&mut out, feature);
+        name_edges(&mut out, feature);
+        *body = out;
+        any = true;
+    }
+    if let Some(i) = found.iter().position(|f| !f) {
+        let name = sh.faces.get(i).map_or("", String::as_str);
+        return Err(format!("shell: the face {name:?} is no longer there"));
+    }
+    if !any {
+        return Err("shell: there is no solid to shell".into());
+    }
+    Ok(next)
+}
+
 /// The plane of a flat face, with its normal pointing out of the solid.
 pub fn face_plane(body: &Body, face: chamfera_kernel::FaceId) -> Option<chamfera_geom::Frame> {
     match body.face_surface(face).ok()?? {
@@ -501,18 +548,79 @@ fn sweep_path_segments(
                 }),
                 Some(Curve::Arc {
                     centre, start, end, ..
-                }) => PathSegment::arc_from_points(
-                    at(*centre)?,
-                    f.plane.z(),
-                    at(*start)?,
-                    at(*end)?,
-                )
-                .map_err(|e| format!("an arc of the path: {e}")),
+                }) => {
+                    PathSegment::arc_from_points(at(*centre)?, f.plane.z(), at(*start)?, at(*end)?)
+                        .map_err(|e| format!("an arc of the path: {e}"))
+                }
                 Some(_) => Err(format!("curve {id} of {} is not a line or an arc", f.name)),
                 None => Err(gone()),
             }
         })
         .collect()
+}
+
+/// The ends of a line or an arc (`None` for other curves).
+fn curve_ends(c: &Curve) -> Option<[chamfera_sketch::PointId; 2]> {
+    match c {
+        Curve::Line { start, end, .. } | Curve::Arc { start, end, .. } => Some([*start, *end]),
+        _ => None,
+    }
+}
+
+/// The lines and arcs of `sketch` joined end to end with `curve` (ends at the same
+/// place), in order along the chain. A place where more than two lines and arcs end
+/// ends the chain (a branch).
+pub fn path_chain(sketch: &Sketch, curve: u32) -> Vec<u32> {
+    let tol = chamfera_geom::LINEAR_TOLERANCE;
+    let ends: Vec<(u32, [Point2; 2])> = sketch
+        .curves()
+        .filter_map(|(id, c)| {
+            let [a, b] = curve_ends(c)?;
+            Some((id.0, [sketch.point(a)?, sketch.point(b)?]))
+        })
+        .collect();
+    let users = |p: Point2| -> Vec<u32> {
+        ends.iter()
+            .filter(|(_, e)| e.iter().any(|q| q.distance(p) <= tol))
+            .map(|(id, _)| *id)
+            .collect()
+    };
+    let Some(&(_, start)) = ends.iter().find(|(id, _)| *id == curve) else {
+        return Vec::new();
+    };
+    // Walk from the curve out of each of its ends.
+    let walk = |from: Point2| -> Vec<u32> {
+        let mut out = Vec::new();
+        let (mut at, mut prev) = (from, curve);
+        for _ in 0..ends.len() {
+            let u = users(at);
+            if u.len() != 2 {
+                break;
+            }
+            let Some(next) = u.into_iter().find(|c| *c != prev) else {
+                break;
+            };
+            if next == curve || out.contains(&next) {
+                break;
+            }
+            let Some((_, e)) = ends.iter().find(|(id, _)| *id == next) else {
+                break;
+            };
+            out.push(next);
+            at = if e[0].distance(at) <= tol { e[1] } else { e[0] };
+            prev = next;
+        }
+        out
+    };
+    let mut chain = walk(start[0]);
+    chain.reverse();
+    chain.push(curve);
+    for c in walk(start[1]) {
+        if !chain.contains(&c) {
+            chain.push(c);
+        }
+    }
+    chain
 }
 
 /// The bodies one sweep makes: one per profile, along the same path.
@@ -599,12 +707,23 @@ impl Session {
                 }
                 continue;
             }
+            if let FeatureKind::Shell(sh) = &feature.kind {
+                match build_shell(&self.doc, sh, feature.id, &made) {
+                    Ok(next) => made = next,
+                    Err(e) => {
+                        built.errors.insert(feature.id, e);
+                    }
+                }
+                continue;
+            }
             let result = match &feature.kind {
                 FeatureKind::Extrude(e) => build_extrude(&self.doc, e),
                 FeatureKind::Revolve(r) => build_revolve(&self.doc, r),
                 FeatureKind::Sweep(s) => build_sweep(&self.doc, s),
                 FeatureKind::Loft(l) => build_loft(&self.doc, l),
-                FeatureKind::Pattern(_) | FeatureKind::Blend(_) => continue,
+                FeatureKind::Pattern(_) | FeatureKind::Blend(_) | FeatureKind::Shell(_) => {
+                    continue;
+                }
             };
             let operation = feature.kind.operation();
             let result = result.map(|bodies| {
@@ -666,9 +785,7 @@ impl Session {
             .filter_map(|s| s.scene_id)
             .collect();
         self.scene.bodies.retain(|b| !old.contains(&b.id));
-        if self.scene.selection.is_some_and(|h| old.contains(&h.body)) {
-            self.scene.selection = None;
-        }
+        self.scene.deselect(|b| old.contains(&b));
         let options = TessOptions::default();
         for (feature, name, body) in made {
             // A solid that cannot be shown is still built: its measures and export work.
@@ -747,6 +864,21 @@ impl Session {
         let (feature, role) = split_face_key(name)?;
         let plane = face_plane(&solid.body, face)?;
         Some((feature, role.to_owned(), plane))
+    }
+
+    /// The full name (`2:top`) of the face of a built solid under pixel `(x, y)`, flat or
+    /// curved (a shell opens either).
+    pub fn face_ref_at(&self, x: f64, y: f64, w: f64, h: f64) -> Option<String> {
+        let bounds = self.scene.bounds();
+        let ray = self.camera.ray_through(x, y, w, h, bounds.as_ref())?;
+        let hit = self.scene.pick(&ray)?;
+        let solid = self
+            .built
+            .solids
+            .iter()
+            .find(|s| s.scene_id == Some(hit.body))?;
+        let face = *solid.faces.get(hit.triangle)?;
+        solid.body.face_name(face).ok().flatten().map(str::to_owned)
     }
 
     /// The true edge nearest pixel `(x, y)` on screen, within [`EDGE_PICK_PIXELS`], that is
@@ -880,6 +1012,58 @@ impl Session {
             }
         }
         best.map(|(_, s, p, a)| (s, p, a))
+    }
+
+    /// The sketch line or arc nearest pixel `(x, y)` on screen (within
+    /// [`crate::sketching::PICK_CURVE_PX`]), in any sketch, and the chain of lines and
+    /// arcs joined end to end with it (through points no third curve uses), for picking
+    /// a sweep path in one click: (sketch, curve, chain in path order).
+    pub fn path_at(&self, x: f64, y: f64, w: f64, h: f64) -> Option<(u32, u32, Vec<u32>)> {
+        use chamfera_render::{mat_mul, transform_point};
+        if !(w >= 1.0 && h >= 1.0 && x.is_finite() && y.is_finite()) {
+            return None;
+        }
+        let bounds = self.scene.bounds();
+        let vp = mat_mul(
+            &self.camera.projection_matrix(w / h, bounds.as_ref()),
+            &self.camera.view_matrix(),
+        );
+        let screen = |p: Point3| -> Option<(f64, f64)> {
+            let n = transform_point(&vp, p)?;
+            if !(0.0..=1.0).contains(&n[2]) {
+                return None;
+            }
+            Some(((n[0] + 1.0) * 0.5 * w, (1.0 - n[1]) * 0.5 * h))
+        };
+        let mut best: Option<(f64, u32, u32)> = None;
+        for f in &self.doc.sketches {
+            for (id, curve) in f.sketch.curves() {
+                if !matches!(curve, Curve::Line { .. } | Curve::Arc { .. }) {
+                    continue;
+                }
+                let pts: Vec<(f64, f64)> = crate::sketching::curve_polyline(&f.sketch, curve)
+                    .into_iter()
+                    .filter_map(|p| screen(f.plane.from_plane(p)))
+                    .collect();
+                for pair in pts.windows(2) {
+                    let [a, b] = pair else { continue };
+                    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+                    let len2 = dx * dx + dy * dy;
+                    let t = if len2 > 1e-12 {
+                        (((x - a.0) * dx + (y - a.1) * dy) / len2).clamp(0.0, 1.0)
+                    } else {
+                        0.0
+                    };
+                    let d = (a.0 + t * dx - x).hypot(a.1 + t * dy - y);
+                    if d <= crate::sketching::PICK_CURVE_PX && best.is_none_or(|bb| d < bb.0) {
+                        best = Some((d, f.id, id.0));
+                    }
+                }
+            }
+        }
+        let (_, sketch, curve) = best?;
+        let f = self.doc.sketch(sketch).ok()?;
+        Some((sketch, curve, path_chain(&f.sketch, curve)))
     }
 
     /// The outline (outer loop and holes) of the region at `seed`, as world line segments.

@@ -2,9 +2,7 @@
 //! self-intersection test uses.
 
 use crate::{KernelError, KernelResult};
-use chamfera_geom::{
-    ANGULAR_TOLERANCE, LINEAR_TOLERANCE, MAX_COORDINATE, Point3, Transform, Vec3,
-};
+use chamfera_geom::{ANGULAR_TOLERANCE, LINEAR_TOLERANCE, MAX_COORDINATE, Point3, Transform, Vec3};
 use std::f64::consts::{PI, TAU};
 
 /// Most segments one sweep path may have (hostile-input limit).
@@ -229,7 +227,9 @@ impl PathSegment {
                 let r = (start - centre).length();
                 let n = (angle / (PI / 32.0)).ceil().clamp(1.0, 64.0) as usize;
                 let step = angle / n as f64;
-                let pts = (0..=n).map(|k| self.point_at(k as f64 / n as f64)).collect();
+                let pts = (0..=n)
+                    .map(|k| self.point_at(k as f64 / n as f64))
+                    .collect();
                 (pts, r * (1.0 - (step * 0.5).cos()))
             }
         }
@@ -259,15 +259,19 @@ pub(crate) fn chain(
     // Endpoint k of segment i is index 2i + k; its partner endpoints on other segments.
     let end = |e: usize| -> Point3 {
         let s = segments[e / 2];
-        if e % 2 == 0 { s.start() } else { s.end() }
+        if e.is_multiple_of(2) {
+            s.start()
+        } else {
+            s.end()
+        }
     };
     let mut partner: Vec<Option<usize>> = vec![None; 2 * n];
-    for a in 0..2 * n {
+    for (a, slot) in partner.iter_mut().enumerate() {
         for b in 0..2 * n {
             if a / 2 == b / 2 || end(a).distance(end(b)) > LINEAR_TOLERANCE {
                 continue;
             }
-            if partner[a].is_some_and(|p| p != b) {
+            if slot.is_some_and(|p| p != b) {
                 return Err(invalid(format!(
                     "the path branches at ({:.3}, {:.3}, {:.3}): it must be a single chain",
                     end(a).x,
@@ -275,7 +279,7 @@ pub(crate) fn chain(
                     end(a).z
                 )));
             }
-            partner[a] = Some(b);
+            *slot = Some(b);
         }
     }
     let free: Vec<usize> = (0..2 * n).filter(|e| partner[*e].is_none()).collect();
@@ -313,7 +317,11 @@ pub(crate) fn chain(
     let mut at = first;
     for _ in 0..n {
         let s = segments[at / 2];
-        out.push(if at % 2 == 0 { s } else { s.reversed() });
+        out.push(if at.is_multiple_of(2) {
+            s
+        } else {
+            s.reversed()
+        });
         let leaving = at ^ 1;
         match partner[leaving] {
             Some(p) => at = p,

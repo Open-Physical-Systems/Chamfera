@@ -39,8 +39,8 @@ mod tests;
 
 use crate::profile::CheckedLoop;
 use crate::{
-    Arc3, Body, Circle3, Curve, KernelError, KernelResult, ListEdge, ListFace, ListVertex,
-    Profile, ProfileEdge, Segment3, Surface,
+    Arc3, Body, Circle3, Curve, KernelError, KernelResult, ListEdge, ListFace, ListVertex, Profile,
+    ProfileEdge, Segment3, Surface,
 };
 use chamfera_geom::{Frame, LINEAR_TOLERANCE, Point3, Vec3};
 use std::f64::consts::TAU;
@@ -109,7 +109,11 @@ impl Edge3 {
                 if sweep >= TAU - chamfera_geom::ANGULAR_TOLERANCE {
                     Ok((Curve::Circle(Circle3::new(frame, radius)?), 0.0, TAU))
                 } else {
-                    Ok((Curve::Arc(Arc3::new(frame, radius, 0.0, sweep)?), 0.0, sweep))
+                    Ok((
+                        Curve::Arc(Arc3::new(frame, radius, 0.0, sweep)?),
+                        0.0,
+                        sweep,
+                    ))
                 }
             }
         }
@@ -281,7 +285,9 @@ pub fn loft(sections: &[(Frame, Profile)]) -> KernelResult<Body> {
     let mut n = f0.z();
     for (f, _) in sections {
         if f.z().cross(n).length() > LOFT_PARALLEL_TOLERANCE {
-            return Err(invalid("the profiles of a loft must lie on parallel planes"));
+            return Err(invalid(
+                "the profiles of a loft must lie on parallel planes",
+            ));
         }
     }
     // Heights along the common normal: strictly monotonic.
@@ -365,7 +371,8 @@ fn best_shift(a: &Section, b: &Section, n: Vec3) -> Option<usize> {
 
 /// Each band's interpolated cross-sections must be simple loops of the same orientation.
 fn check_bands(loops: &[Section], n: Vec3) -> KernelResult<()> {
-    let frame = Frame::from_normal(Point3::ORIGIN, n).ok_or_else(|| invalid("no loft direction"))?;
+    let frame =
+        Frame::from_normal(Point3::ORIGIN, n).ok_or_else(|| invalid("no loft direction"))?;
     for w in loops.windows(2) {
         let [a, b] = w else { continue };
         for f in [0.25, 0.5, 0.75] {

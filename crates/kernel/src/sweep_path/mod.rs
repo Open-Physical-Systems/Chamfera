@@ -75,8 +75,7 @@ fn invalid(msg: impl Into<String>) -> KernelError {
 /// the module documentation for the surfaces, the refusals and the names.
 pub fn sweep_path(frame: &Frame, profile: &Profile, path: &[PathSegment]) -> KernelResult<Body> {
     let checked = profile.check()?;
-    let on_plane =
-        |p: Point3| frame.z().dot(p - frame.origin()).abs() <= LINEAR_TOLERANCE;
+    let on_plane = |p: Point3| frame.z().dot(p - frame.origin()).abs() <= LINEAR_TOLERANCE;
     let centre = frame.from_plane(profile_centre(&checked));
     let chain = path::chain(path, on_plane, centre)?;
     let Some(first) = chain.first() else {

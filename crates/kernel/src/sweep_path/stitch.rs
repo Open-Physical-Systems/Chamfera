@@ -154,7 +154,9 @@ impl List {
             let (tm, td) = midpoint(t);
             let mut hit = None;
             for &oe in &ours {
-                let Some(o) = self.edges.get(oe) else { continue };
+                let Some(o) = self.edges.get(oe) else {
+                    continue;
+                };
                 let (om, od) = midpoint(o);
                 if om.distance(tm) > LINEAR_TOLERANCE {
                     continue;
@@ -178,8 +180,8 @@ impl List {
         }
         // Everything else of `next` is appended.
         for (i, v) in next.vertices.iter().enumerate() {
-            if !vmap.contains_key(&i) {
-                vmap.insert(i, self.vertices.len());
+            if let std::collections::hash_map::Entry::Vacant(slot) = vmap.entry(i) {
+                slot.insert(self.vertices.len());
                 self.vertices.push(v.clone());
             }
         }

@@ -108,6 +108,29 @@ impl ChamferaApp {
                         if b.edges.len() == 1 { "" } else { "s" }
                     ),
                 ),
+                FeatureKind::Shell(sh) => (
+                    Icon::Shell,
+                    format!(
+                        "Shell {} · {} open face{}",
+                        sh.thickness,
+                        sh.faces.len(),
+                        if sh.faces.len() == 1 { "" } else { "s" }
+                    ),
+                ),
+                FeatureKind::Sweep(w) => (
+                    Icon::Sweep,
+                    format!(
+                        "Sweep · from {} along {} curve{} of {}",
+                        sketch_name(w.sketch),
+                        w.path.len(),
+                        if w.path.len() == 1 { "" } else { "s" },
+                        sketch_name(w.path_sketch)
+                    ),
+                ),
+                FeatureKind::Loft(l) => (
+                    Icon::Loft,
+                    format!("Loft · through {} profiles", l.sections.len()),
+                ),
             };
             Item {
                 id: f.id,
@@ -259,6 +282,24 @@ impl ChamferaApp {
                 ui.close();
                 action = Some("edit");
             }
+            let rename = if item.sketch {
+                label("sketch.rename")
+            } else {
+                label("feature.rename")
+            };
+            if widgets::menu_item(ui, look, Icon::Edit, rename, true).clicked() {
+                ui.close();
+                action = Some("rename");
+            }
+            if item.sketch {
+                ui.separator();
+                if widgets::menu_item(ui, look, Icon::Delete, label("sketch.delete"), !item.active)
+                    .clicked()
+                {
+                    ui.close();
+                    action = Some("delete sketch");
+                }
+            }
             if !item.sketch {
                 let text = if item.suppressed {
                     "Unsuppress"
@@ -294,6 +335,17 @@ impl ChamferaApp {
             Some("delete") => {
                 self.run("feature.delete", json!({ "feature": item.id }));
             }
+            Some("delete sketch") => {
+                self.menu_act(crate::context_menu::Act::DeleteSketch(item.id));
+            }
+            Some("rename") => {
+                let target = if item.sketch {
+                    crate::context_menu::RenameTarget::Sketch(item.id)
+                } else {
+                    crate::context_menu::RenameTarget::Feature(item.id)
+                };
+                self.menu_act(crate::context_menu::Act::Rename(target));
+            }
             _ => {}
         }
     }
@@ -305,7 +357,12 @@ impl ChamferaApp {
             }
             return;
         }
-        let Ok(f) = self.session.doc.feature(item.id) else {
+        self.edit_feature(item.id);
+    }
+
+    /// Opens the Edit Feature dialog for a feature.
+    pub(crate) fn edit_feature(&mut self, id: u32) {
+        let Ok(f) = self.session.doc.feature(id) else {
             return;
         };
         let (distance, direction) = match &f.kind {
@@ -313,9 +370,15 @@ impl ChamferaApp {
             FeatureKind::Revolve(r) => (r.angle.clone(), ExtrudeDirection::Normal),
             FeatureKind::Pattern(p) => (p.count.clone(), ExtrudeDirection::Normal),
             FeatureKind::Blend(b) => (b.size.clone(), ExtrudeDirection::Normal),
+            FeatureKind::Shell(sh) => (sh.thickness.clone(), ExtrudeDirection::Normal),
+            FeatureKind::Sweep(w) => (format!("{} curves", w.path.len()), ExtrudeDirection::Normal),
+            FeatureKind::Loft(l) => (
+                format!("{} profiles", l.sections.len()),
+                ExtrudeDirection::Normal,
+            ),
         };
         self.timeline.editing = Some(FeatureEdit {
-            feature: item.id,
+            feature: id,
             distance,
             direction,
             suppressed: f.suppressed,
@@ -335,11 +398,15 @@ impl ChamferaApp {
         // Extrudes edit distance and direction, fillets and chamfers their size; the
         // others show their value only.
         let extrude = matches!(feature.kind, FeatureKind::Extrude(_));
-        let blend = matches!(feature.kind, FeatureKind::Blend(_));
+        let shell = matches!(feature.kind, FeatureKind::Shell(_));
+        let blend = shell || matches!(feature.kind, FeatureKind::Blend(_));
         let revolve = !extrude && !blend;
         let value_label = match &feature.kind {
             FeatureKind::Revolve(_) => "Angle",
             FeatureKind::Pattern(_) => "Count",
+            FeatureKind::Shell(_) => "Thickness",
+            FeatureKind::Sweep(_) => "Path",
+            FeatureKind::Loft(_) => "Profiles",
             _ => "Size",
         };
         const WIDTH: f32 = 300.0;
@@ -353,10 +420,11 @@ impl ChamferaApp {
         };
         let mut ok = false;
         let mut cancel = false;
-        let icon = if revolve {
-            Icon::Revolve
-        } else {
-            Icon::Extrude
+        let icon = match feature.kind {
+            FeatureKind::Sweep(_) => Icon::Sweep,
+            FeatureKind::Loft(_) => Icon::Loft,
+            _ if revolve => Icon::Revolve,
+            _ => Icon::Extrude,
         };
         let title = format!("{}: {name}", label("feature.edit"));
         egui::Window::new("Edit Feature")
@@ -453,7 +521,9 @@ impl ChamferaApp {
         }
         if ok {
             let mut params = json!({ "feature": edit.feature, "suppressed": edit.suppressed });
-            if blend {
+            if shell {
+                params["thickness"] = json!(edit.distance.trim());
+            } else if blend {
                 params["size"] = json!(edit.distance.trim());
             } else if extrude {
                 params["distance"] = json!(edit.distance.trim());

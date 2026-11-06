@@ -257,10 +257,20 @@ pub static COMMANDS: &[CommandSpec] = &[
         run: remove,
     },
     CommandSpec {
+        id: "sketch.rename",
+        label: "Rename Sketch",
+        params: "sketch: integer (required)\n\
+                 name: string (required) - the new name, 1 to 80 characters",
+        mutates: true,
+        run: rename,
+    },
+    CommandSpec {
         id: "sketch.select",
         label: "Select in Sketch",
         params: "x, y, width, height: number (required) - pixel and viewport size\n\
-                 add: boolean (optional) - add to the selection instead of replacing it",
+                 add: boolean (optional) - add to the selection instead of replacing it\n\
+                 filter: list of strings (optional) - what may be picked: vertices (points), \
+                 sketch (curves) and construction (construction curves); default all",
         mutates: false,
         run: select,
     },
@@ -836,14 +846,22 @@ fn plane_point(s: &mut Session, p: &Value) -> CmdResult {
     Ok(json!({ "x": at.x, "y": at.y }))
 }
 
+fn rename(s: &mut Session, p: &Value) -> CmdResult {
+    let id = params::req_id(p, "sketch")?;
+    let name = params::req_display_name(p, "name")?;
+    s.doc.sketch_mut(id)?.name = name.clone();
+    Ok(json!({ "sketch": id, "name": name }))
+}
+
 fn select(s: &mut Session, p: &Value) -> CmdResult {
     let (x, y, w, h) = params::pixel(p)?;
     let add = match p.get("add") {
         None | Some(Value::Null) => false,
         Some(_) => params::req_bool(p, "add")?,
     };
+    let filter = crate::pick_filter::PickFilter::from_params(p)?.unwrap_or_default();
     active_id(s)?;
-    let item = s.pick_sketch_item(x, y, w, h);
+    let item = s.pick_sketch_item_filtered(x, y, w, h, &filter);
     if !add {
         s.sketch_selection.clear();
     }

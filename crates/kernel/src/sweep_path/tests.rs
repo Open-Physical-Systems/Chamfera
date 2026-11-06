@@ -13,8 +13,13 @@ fn line(a: Point3, b: Point3) -> PathSegment {
 
 /// The quarter arc of radius 20 from (30, 0, 0), heading +x, to (50, 20, 0), heading +y.
 fn quarter() -> PathSegment {
-    PathSegment::arc_from_points(p(30.0, 20.0, 0.0), Vec3::Z, p(30.0, 0.0, 0.0), p(50.0, 20.0, 0.0))
-        .unwrap()
+    PathSegment::arc_from_points(
+        p(30.0, 20.0, 0.0),
+        Vec3::Z,
+        p(30.0, 0.0, 0.0),
+        p(50.0, 20.0, 0.0),
+    )
+    .unwrap()
 }
 
 /// The L path: 30 along +x, the quarter arc, 30 along +y.
@@ -55,7 +60,12 @@ fn check_valid(b: &Body) {
 
 #[test]
 fn a_square_along_a_line_is_a_box() {
-    let b = sweep_path(&yz(), &square(4.0), &[line(p(0.0, 0.0, 0.0), p(30.0, 0.0, 0.0))]).unwrap();
+    let b = sweep_path(
+        &yz(),
+        &square(4.0),
+        &[line(p(0.0, 0.0, 0.0), p(30.0, 0.0, 0.0))],
+    )
+    .unwrap();
     check_valid(&b);
     // 4 × 4 × 30 = 480.
     assert!((b.volume().unwrap() - 480.0).abs() < 1e-9);
@@ -78,15 +88,20 @@ fn a_circle_along_a_quarter_arc_obeys_pappus() {
     check_valid(&b);
     // Pappus: area π·2² times the centroid's path, a quarter of 2π·20.
     let v = PI * 4.0 * (FRAC_PI_2 * 20.0);
-    assert!((b.volume().unwrap() - v).abs() < 1e-6 * v, "{}", b.volume().unwrap());
+    assert!(
+        (b.volume().unwrap() - v).abs() < 1e-6 * v,
+        "{}",
+        b.volume().unwrap()
+    );
     // Lateral area 2π·2 · 10π plus two discs of π·4.
     let a = 2.0 * PI * 2.0 * (FRAC_PI_2 * 20.0) + 2.0 * PI * 4.0;
     assert!((b.area().unwrap() - a).abs() < 1e-6 * a);
     // The tube is a torus piece.
-    assert!(b.faces().into_iter().any(|f| matches!(
-        b.face_surface(f).unwrap(),
-        Some((Surface::Torus(_), _))
-    )));
+    assert!(
+        b.faces()
+            .into_iter()
+            .any(|f| matches!(b.face_surface(f).unwrap(), Some((Surface::Torus(_), _))))
+    );
 }
 
 #[test]
@@ -100,7 +115,11 @@ fn an_l_path_equals_the_sum_of_its_parts() {
         // Each part: the profile's area times its length along the centroid's path
         // (Pappus for the arc): 30 + 10π + 30.
         let v = area * (60.0 + 10.0 * PI);
-        assert!((b.volume().unwrap() - v).abs() < 1e-6 * v, "{}", b.volume().unwrap());
+        assert!(
+            (b.volume().unwrap() - v).abs() < 1e-6 * v,
+            "{}",
+            b.volume().unwrap()
+        );
         let edges: Vec<String> = b
             .edges()
             .into_iter()

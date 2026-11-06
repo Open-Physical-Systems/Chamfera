@@ -24,7 +24,11 @@ fn check_valid(b: &Body) {
     let r = b.validate().unwrap();
     let s = r.summary;
     assert_eq!(s.shells, 1);
-    assert_eq!(s.vertices as i64 - s.edges as i64 + s.faces as i64, 2, "{s:?}");
+    assert_eq!(
+        s.vertices as i64 - s.edges as i64 + s.faces as i64,
+        2,
+        "{s:?}"
+    );
 }
 
 #[test]
@@ -33,7 +37,11 @@ fn a_square_to_a_smaller_square_is_a_frustum() {
     check_valid(&b);
     // h/3 (A1 + A2 + √(A1 A2)) = 10/3 (400 + 100 + 200).
     let v = 10.0 / 3.0 * (400.0 + 100.0 + 200.0);
-    assert!((b.volume().unwrap() - v).abs() < 1e-9, "{}", b.volume().unwrap());
+    assert!(
+        (b.volume().unwrap() - v).abs() < 1e-9,
+        "{}",
+        b.volume().unwrap()
+    );
     // Four trapezoids (20 + 10)/2 high √(10² + 5²), and the two squares.
     let a = 4.0 * 15.0 * 125f64.sqrt() + 400.0 + 100.0;
     assert!((b.area().unwrap() - a).abs() < 1e-9);
@@ -53,14 +61,19 @@ fn a_circle_to_a_smaller_circle_is_a_cone_frustum() {
     check_valid(&b);
     // π h/3 (R² + R r + r²) = π 10/3 (100 + 50 + 25).
     let v = PI * 10.0 / 3.0 * (100.0 + 50.0 + 25.0);
-    assert!((b.volume().unwrap() - v).abs() < 1e-9 * v, "{}", b.volume().unwrap());
+    assert!(
+        (b.volume().unwrap() - v).abs() < 1e-9 * v,
+        "{}",
+        b.volume().unwrap()
+    );
     // Lateral π (R + r) s with slant s = √(10² + 5²), and the two discs.
     let a = PI * 15.0 * 125f64.sqrt() + PI * 125.0;
     assert!((b.area().unwrap() - a).abs() < 1e-9 * a);
-    assert!(b.faces().into_iter().any(|f| matches!(
-        b.face_surface(f).unwrap(),
-        Some((Surface::Cone(_), _))
-    )));
+    assert!(
+        b.faces()
+            .into_iter()
+            .any(|f| matches!(b.face_surface(f).unwrap(), Some((Surface::Cone(_), _))))
+    );
 }
 
 #[test]
@@ -129,7 +142,11 @@ fn a_rounded_slot_lofts_with_planes_and_cones() {
     check_valid(&b);
     let area = |r: f64| 4.0 * r + PI * r * r;
     let v = 6.0 / 6.0 * (area(4.0) + 4.0 * area(3.0) + area(2.0));
-    assert!((b.volume().unwrap() - v).abs() < 1e-9 * v, "{}", b.volume().unwrap());
+    assert!(
+        (b.volume().unwrap() - v).abs() < 1e-9 * v,
+        "{}",
+        b.volume().unwrap()
+    );
 }
 
 #[test]

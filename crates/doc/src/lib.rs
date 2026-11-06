@@ -6,7 +6,7 @@ pub mod imported;
 
 pub use feature::{
     Blend, BlendKind, Extrude, ExtrudeDirection, Feature, FeatureKind, Loft, LoftSection,
-    Operation, Pattern, PatternLayout, Revolve, Sweep,
+    Operation, Pattern, PatternLayout, Revolve, Shell, Sweep,
 };
 pub use imported::ImportedBody;
 
@@ -25,7 +25,8 @@ use thiserror::Error;
 /// - 7: linear and circular patterns of features.
 /// - 8: imported solid bodies.
 /// - 9: fillets and chamfers of edges.
-/// - 17: sweeps along a path and lofts between profiles (10 to 16 are taken by work
+/// - 10: shells (hollowed solids with open faces).
+/// - 17: sweeps along a path and lofts between profiles (11 to 16 are taken by work
 ///   landing alongside; the merge renumbers).
 pub const FORMAT_VERSION: u32 = 17;
 /// The tag every design file starts with, so other JSON is not mistaken for a design.
