@@ -342,10 +342,11 @@ Close runners-up: selection filters and box selection (UI and NAV), splines (nee
 | Feature | Description | Status | Pri | Size | Layer |
 |---|---|---|---|---|---|
 | Shaded viewport with edges | Real-time display | done | P0 | M | gpu |
-| Appearance library | Colours and finishes (metal, plastic, glass) per body or face | done per body (`body.appearance`, presets); per face missing | P1 | M | doc, gpu |
-| Environment lighting, ground shadows, reflections | Nicer real-time display | missing | P2 | M | gpu |
+| Appearance library | Colours and finishes (metal, plastic, glass) per body or face | done per body (`body.appearance`: 26 physically based materials, metallic, roughness, transmission, IOR; `render.materials`); per face missing | P1 | M | doc, gpu |
+| Environment lighting, ground shadows, reflections | Nicer real-time display | done (`view.style realistic`: GGX shading, studio, outdoor and dark environments, floor with a key-light shadow map; no screen-space AO yet) | P2 | M | gpu |
+| RENDER workspace | Material library panel (click or drag onto a body), environment, camera, realistic toggle, Render window | done | P2 | M | ui |
 | Decals | Pictures placed on faces | missing | P2 | M | gpu |
-| Offline path-traced render | Photo-quality pictures | missing | P2 | L | new crate |
+| Offline path-traced render | Photo-quality pictures | done (`chamfera-raytrace`: BVH, Lambert + GGX, smooth glass, MIS lights, floor; `render.image`, `render.image_bytes`, `render.start`/`render.save`); no depth of field, no denoiser | P2 | L | raytrace |
 | Turntable / animation export | Rotating video of the model | missing | P2 | M | gpu, apps |
 
 ## 15. CAM (Manufacture workspace, milestone M10)

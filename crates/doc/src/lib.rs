@@ -120,7 +120,10 @@ use thiserror::Error;
 ///   leaders, surface texture symbols, feature control frames, centre lines, balloons)
 ///   and a parts list (`parts_list`). Older files open unchanged: their dimensions keep
 ///   their points, as before.
-pub const FORMAT_VERSION: u32 = 31;
+/// - 34: physically based materials in body appearances (`metallic`, `roughness`,
+///   `transmission`, `ior`), read by the realistic style and the path tracer. Older files
+///   open unchanged: their bodies take a satin, opaque, non-metal material.
+pub const FORMAT_VERSION: u32 = 34;
 /// The tag every design file starts with, so other JSON is not mistaken for a design.
 pub const FORMAT_TAG: &str = "chamfera";
 /// Longest parameter name.

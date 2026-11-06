@@ -29,6 +29,7 @@ pub enum Tab {
     Sketch,
     Drawing,
     Manufacture,
+    Render,
 }
 
 impl Tab {
@@ -40,6 +41,7 @@ impl Tab {
             Tab::Sketch => "SKETCH",
             Tab::Drawing => "DRAWING",
             Tab::Manufacture => "MANUFACTURE",
+            Tab::Render => "RENDER",
         }
     }
 
@@ -51,6 +53,7 @@ impl Tab {
             Tab::Sketch => "Sketch",
             Tab::Drawing => "Drawing",
             Tab::Manufacture => "Manufacture",
+            Tab::Render => "Render",
         }
     }
 
@@ -61,6 +64,7 @@ impl Tab {
             Tab::Sketch => "Editing a sketch: draw, constrain and dimension",
             Tab::Drawing => "2D drawing sheets: views of the model, dimensions, export",
             Tab::Manufacture => "Setups, 2D milling toolpaths and G-code",
+            Tab::Render => "Materials, lighting and presentation images",
         }
     }
 }
@@ -71,13 +75,15 @@ pub enum Workspace {
     Design,
     Drawing,
     Manufacture,
+    Render,
 }
 
 impl Workspace {
-    pub const ALL: [Workspace; 3] = [
+    pub const ALL: [Workspace; 4] = [
         Workspace::Design,
         Workspace::Drawing,
         Workspace::Manufacture,
+        Workspace::Render,
     ];
 
     pub fn name(self) -> &'static str {
@@ -85,6 +91,7 @@ impl Workspace {
             Workspace::Design => "Design",
             Workspace::Drawing => "Drawing",
             Workspace::Manufacture => "Manufacture",
+            Workspace::Render => "Render",
         }
     }
 
@@ -93,6 +100,7 @@ impl Workspace {
             Workspace::Design => Icon::Body,
             Workspace::Drawing => Icon::Drawing,
             Workspace::Manufacture => Icon::CamSetup,
+            Workspace::Render => Icon::RenderImage,
         }
     }
 
@@ -101,6 +109,7 @@ impl Workspace {
             Workspace::Design => "Sketches, solids, assemblies",
             Workspace::Drawing => "2D sheets with views and dimensions",
             Workspace::Manufacture => "Toolpaths and G-code for milling",
+            Workspace::Render => "Materials, lighting and presentation images",
         }
     }
 }
@@ -152,6 +161,9 @@ pub const GROUPS: &[Group] = &[
     group(Tab::Manufacture, "SETUP"),
     group(Tab::Manufacture, "2D"),
     group(Tab::Manufacture, "ACTIONS"),
+    group(Tab::Render, "MATERIALS"),
+    group(Tab::Render, "SCENE"),
+    group(Tab::Render, "RENDER"),
 ];
 
 /// One tool of the ribbon.
@@ -237,7 +249,7 @@ impl RibbonTool {
     }
 }
 
-use Tab::{Drawing as D, Manufacture as M, SheetMetal as T, Sketch as K, Solid as P};
+use Tab::{Drawing as D, Manufacture as M, Render as R, SheetMetal as T, Sketch as K, Solid as P};
 
 /// Every tool of the ribbon, by tab and group; primary tools show in table order, and the
 /// dropdowns list every row in table order.
@@ -1148,6 +1160,55 @@ pub const TOOLS: &[RibbonTool] = &[
     )
     .primary()
     .short("Post"),
+    // RENDER > MATERIALS
+    tool(
+        R,
+        "MATERIALS",
+        Action::Tool("render.materials"),
+        Icon::RenderMaterial,
+        "Materials",
+        "The material library: click one to give it to the selected bodies, or drag it onto a body",
+    )
+    .primary(),
+    // RENDER > SCENE
+    tool(
+        R,
+        "SCENE",
+        Action::Tool("render.environment"),
+        Icon::RenderEnvironment,
+        "Environment",
+        "The lighting: studio, outdoor or dark, with a floor that catches shadows",
+    )
+    .primary(),
+    tool(
+        R,
+        "SCENE",
+        Action::Tool("render.camera"),
+        Icon::RenderCamera,
+        "Camera",
+        "Renders use the current view: pick a standard view or the projection",
+    )
+    .primary(),
+    tool(
+        R,
+        "SCENE",
+        Action::Tool("render.realistic"),
+        Icon::RenderRealistic,
+        "Realistic View",
+        "Show the viewport with the materials, lights, floor and shadows",
+    )
+    .primary()
+    .short("Realistic"),
+    // RENDER > RENDER
+    tool(
+        R,
+        "RENDER",
+        Action::Tool("render.start"),
+        Icon::RenderImage,
+        "Render",
+        "Path-trace the current view into an image that refines as you watch; save it as PNG",
+    )
+    .primary(),
 ];
 
 const fn construct(id: &'static str, name: &'static str, icon: Icon) -> RibbonTool {
@@ -1466,6 +1527,8 @@ impl ChamferaApp {
             Workspace::Drawing
         } else if self.cam.active && !sketching {
             Workspace::Manufacture
+        } else if self.render.active && !sketching {
+            Workspace::Render
         } else {
             Workspace::Design
         }
@@ -1481,6 +1544,7 @@ impl ChamferaApp {
             Workspace::Design => Tab::Solid,
             Workspace::Drawing => Tab::Drawing,
             Workspace::Manufacture => Tab::Manufacture,
+            Workspace::Render => Tab::Render,
         }
     }
 
@@ -1488,6 +1552,9 @@ impl ChamferaApp {
     pub(crate) fn set_workspace(&mut self, w: Workspace) {
         if self.session.active_sketch.is_some() || self.workspace() == w {
             return;
+        }
+        if self.render.active && w != Workspace::Render {
+            self.set_render_workspace(false);
         }
         match w {
             Workspace::Design => {
@@ -1507,6 +1574,14 @@ impl ChamferaApp {
                 self.sheet_metal.active = false;
                 self.drawing.active = false;
                 self.set_manufacture(true);
+            }
+            Workspace::Render => {
+                self.sheet_metal.active = false;
+                self.drawing.active = false;
+                if self.cam.active {
+                    self.set_manufacture(false);
+                }
+                self.set_render_workspace(true);
             }
         }
     }
@@ -1566,6 +1641,13 @@ impl ChamferaApp {
                 "sheet.flange" => self.sheet_metal.flange.is_some(),
                 "sheet.rules" => self.sheet_metal.rules.is_some(),
                 "config.list" => self.configs.open,
+                "render.materials" => self.render.library,
+                "render.environment" => self.render.environment_open,
+                "render.camera" => self.render.camera_open,
+                "render.realistic" => {
+                    self.session.scene.display.style == chamfera_render::VisualStyle::Realistic
+                }
+                "render.start" => self.render.window.is_some(),
                 _ => {
                     if let Some(k) = body_tool_kind(id) {
                         s.body_tool.as_ref().is_some_and(|t| t.kind == k)
@@ -1721,6 +1803,12 @@ impl ChamferaApp {
                 }
                 _ => return None,
             },
+            Tab::Render => match id {
+                "render.start" if !self.session.scene.bodies.iter().any(|b| b.visible) => {
+                    format!("{name}: build or show a body first")
+                }
+                _ => return None,
+            },
             Tab::Manufacture => {
                 let cam = &self.session.doc.cam;
                 match id {
@@ -1758,6 +1846,7 @@ impl ChamferaApp {
             }
             Tab::Drawing => self.set_workspace(Workspace::Drawing),
             Tab::Manufacture => self.set_workspace(Workspace::Manufacture),
+            Tab::Render => self.set_workspace(Workspace::Render),
             Tab::Sketch => {}
         }
         use crate::inspect_ui::InspectMode;
@@ -1800,6 +1889,13 @@ impl ChamferaApp {
             "sheet.export_flat" => self.export("DXF flat pattern", &["dxf"], "sheet.export_flat"),
             "sheet.rules" => self.open_rules(),
             "config.list" => self.configs.open = !self.configs.open,
+            "render.materials" => self.render.library = !self.render.library,
+            "render.environment" => {
+                self.render.environment_open = !self.render.environment_open;
+            }
+            "render.camera" => self.render.camera_open = !self.render.camera_open,
+            "render.realistic" => self.toggle_realistic(),
+            "render.start" => self.open_render_window(),
             _ => {
                 if let Some(k) = body_tool_kind(id) {
                     self.open_body_tool(k);
@@ -1838,6 +1934,10 @@ impl ChamferaApp {
                             | "joint.drag"
                             | "motion.set_time"
                             | "view.explode"
+                            | "render.materials"
+                            | "render.environment"
+                            | "render.camera"
+                            | "render.realistic"
                     ) =>
             {
                 self.run_tool(id);
@@ -2148,6 +2248,7 @@ impl ChamferaApp {
             (Workspace::Design, _) => &[Tab::Solid, Tab::SheetMetal],
             (Workspace::Drawing, _) => &[Tab::Drawing],
             (Workspace::Manufacture, _) => &[Tab::Manufacture],
+            (Workspace::Render, _) => &[Tab::Render],
         };
         let mut pick = None;
         for &t in tabs {
@@ -2205,8 +2306,15 @@ mod tests {
             .chain([Action::SketchOnFace])
             .collect();
         for e in ChamferaApp::headless().search_results("") {
-            let workspace =
-                ["Solid", "Sheet Metal", "Sketch", "Drawing", "Manufacture"].contains(&e.context);
+            let workspace = [
+                "Solid",
+                "Sheet Metal",
+                "Sketch",
+                "Drawing",
+                "Manufacture",
+                "Render",
+            ]
+            .contains(&e.context);
             if workspace
                 && !matches!(e.action, Action::Command(_))
                 && !sub_items.contains(&e.action)
@@ -2293,7 +2401,11 @@ mod tests {
             "solid.move_face", // Press Pull drags faces with it
             "solid.path_at",
             "solid.profile_at",
-            "sheet.rule", // the Sheet Metal Rules dialog
+            "sheet.rule",   // the Sheet Metal Rules dialog
+            "render.image", // scripts and agents; the Render tool uses render.start
+            "render.image_bytes",
+            "render.save", // the Render window's Save PNG
+            "render.save_bytes",
         ];
         let areas = [
             "solid.",
@@ -2305,6 +2417,7 @@ mod tests {
             "drawing.",
             "body.",
             "sheet.",
+            "render.",
         ];
         let covered: Vec<&str> = TOOLS
             .iter()

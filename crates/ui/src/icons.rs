@@ -131,11 +131,21 @@ pub enum Icon {
     MotionStudy,
     Interference,
     Explode,
+    RenderCamera,
+    RenderEnvironment,
+    RenderImage,
+    RenderMaterial,
+    RenderRealistic,
 }
 
 impl Icon {
     #[cfg(test)]
-    pub const ALL: [Icon; 112] = [
+    pub const ALL: [Icon; 117] = [
+        Icon::RenderCamera,
+        Icon::RenderEnvironment,
+        Icon::RenderImage,
+        Icon::RenderMaterial,
+        Icon::RenderRealistic,
         Icon::Assistant,
         Icon::DriveJoint,
         Icon::MotionStudy,
@@ -258,6 +268,11 @@ impl Icon {
         }
         match self {
             Icon::Arc => master!("arc"),
+            Icon::RenderCamera => master!("render_camera"),
+            Icon::RenderEnvironment => master!("render_environment"),
+            Icon::RenderImage => master!("render_image"),
+            Icon::RenderMaterial => master!("render_material"),
+            Icon::RenderRealistic => master!("render_realistic"),
             Icon::Assistant => master!("assistant"),
             Icon::Body => master!("body"),
             Icon::ChevronDown => master!("chevron_down"),
