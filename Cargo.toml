@@ -59,3 +59,10 @@ debug = "line-tables-only"
 [profile.release]
 lto = "thin"
 codegen-units = 1
+
+# The browser build (trunk, apps/chamfera-web/index.html): smallest code, whole-program LTO.
+# Only trunk uses it, so desktop release builds stay as they are.
+[profile.web-release]
+inherits = "release"
+opt-level = "z"
+lto = "fat"

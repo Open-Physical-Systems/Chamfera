@@ -234,7 +234,9 @@ async function main() {
   }
   // For trying other GPU setups: extra Chrome flags, separated by spaces.
   if (process.env.SMOKE_CHROME_FLAGS) flags.push(...process.env.SMOKE_CHROME_FLAGS.split(" ").filter(Boolean));
-  if (process.getuid && process.getuid() === 0) flags.push("--no-sandbox");
+  // As root, and on CI runners (where user namespaces may be restricted), Chrome's sandbox
+  // cannot start; the page is our own build.
+  if ((process.getuid && process.getuid() === 0) || process.env.CI) flags.push("--no-sandbox");
   const chrome = spawn(findChrome(o.chrome), [...flags, "about:blank"], {
     stdio: ["ignore", "ignore", "pipe"],
   });
