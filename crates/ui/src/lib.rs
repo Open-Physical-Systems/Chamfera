@@ -39,7 +39,7 @@ pub struct Options {
     /// Force a theme instead of following the system.
     pub theme: Option<ThemeMode>,
     /// Commands to run at start: `(command id, params)`, as in a `chamfera-cli run` script.
-    pub script: Vec<(String, Value)>,
+    pub script: Vec<Value>,
     /// Open the Parameters window at start.
     pub parameters: bool,
     /// Open the Extrude tool at start and pick the profile under the viewport's centre,
@@ -180,10 +180,10 @@ impl ChamferaApp {
         for f in &options.files {
             app.run("body.import_stl", json!({ "path": f.to_string_lossy() }));
         }
-        for (id, params) in &options.script {
-            if app.run(id, params.clone()).is_none() {
-                break;
-            }
+        if !options.script.is_empty()
+            && let Err(e) = chamfera_engine::script::run_steps(&mut app.session, &options.script)
+        {
+            app.message = Some((e.to_string(), true));
         }
         if app.session.active_sketch.is_some() {
             app.sketch.tool = Some(sketch_ui::Tool::Select);
@@ -394,7 +394,7 @@ impl ChamferaApp {
         }
         if let Some(picked) = self.extrude_overlay() {
             self.session.scene.overlays.push(Overlay {
-                style: chamfera_render::OverlayStyle::Preview,
+                style: chamfera_render::OverlayStyle::Highlight,
                 ..picked
             });
         }
