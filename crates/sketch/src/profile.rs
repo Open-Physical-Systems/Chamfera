@@ -62,6 +62,11 @@ pub struct Region {
 }
 
 /// A line or arc in its forward direction.
+/// Where along a boundary its inside/outside probe is taken (see `point_at_fraction`).
+const PROBE_FRACTION: f64 = 0.381_966;
+/// A sweep this close to a full turn is a full circle (radians).
+const ANGLE_EPS: f64 = 1e-12;
+
 #[derive(Debug, Clone, Copy)]
 enum Geo {
     Line {
@@ -94,17 +99,14 @@ impl Geo {
         if reversed { -fwd } else { fwd }
     }
 
-    fn start(&self, reversed: bool) -> Point2 {
+    /// A point part-way along the curve (fraction `f` of its length, from its start).
+    /// Used as the probe for point-in-region tests: a generic fraction keeps the probe
+    /// off vertices and off other curves' turning points, where ray casting has ties.
+    fn point_at_fraction(&self, f: f64) -> Point2 {
         match *self {
-            Geo::Line { a, b } => {
-                if reversed {
-                    b
-                } else {
-                    a
-                }
-            }
+            Geo::Line { a, b } => a.lerp(b, f),
             Geo::Arc { c, r, a0, sweep } => {
-                let t = if reversed { a0 + sweep } else { a0 };
+                let t = a0 + sweep * f;
                 c + Vec2::new(t.cos(), t.sin()) * r
             }
         }
@@ -137,6 +139,14 @@ impl Geo {
             Geo::Arc { c, r, a0, sweep } => {
                 // Split into pieces monotone in y, at t = π/2 + kπ.
                 let end = a0 + sweep;
+                let full = sweep >= TAU - ANGLE_EPS;
+                // The start and end of a full circle are one point: give them the same y,
+                // or sin(a0) and sin(a0 + 2π) differ in the last bits and a ray through
+                // that point counts one crossing instead of two.
+                let y_of = |t: f64| {
+                    let t = if full && t >= end { a0 } else { t };
+                    c.y + r * t.sin()
+                };
                 let mut t0 = a0;
                 let mut count = 0;
                 let mut guard = 0;
@@ -144,8 +154,8 @@ impl Geo {
                     guard += 1;
                     let k = ((t0 - FRAC_PI_2) / PI).floor() + 1.0;
                     let t1 = (FRAC_PI_2 + k * PI).min(end);
-                    let y0 = c.y + r * t0.sin();
-                    let y1 = c.y + r * t1.sin();
+                    let y0 = y_of(t0);
+                    let y1 = y_of(t1);
                     if (y0 > p.y) != (y1 > p.y) {
                         let h = (r * r - (p.y - c.y) * (p.y - c.y)).max(0.0).sqrt();
                         let mid = 0.5 * (t0 + t1);
@@ -535,10 +545,10 @@ impl Sketch {
         // Holes go to the smallest face of another piece that contains them.
         let mut holes: Vec<Vec<Traced>> = (0..faces.len()).map(|_| Vec::new()).collect();
         for b in boundaries {
-            let Some(&(_, geo, reversed)) = b.segments.first() else {
+            let Some(&(_, geo, _)) = b.segments.first() else {
                 continue;
             };
-            let probe = geo.start(reversed);
+            let probe = geo.point_at_fraction(PROBE_FRACTION);
             let owner = faces
                 .iter()
                 .enumerate()
@@ -768,5 +778,68 @@ mod tests {
     #[test]
     fn an_empty_sketch_has_no_profiles() {
         assert!(Sketch::new().profiles().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod hole_tests {
+    use super::*;
+
+    fn plate(s: &mut Sketch, w: f64, h: f64) {
+        let p: Vec<PointId> = [(0.0, 0.0), (w, 0.0), (w, h), (0.0, h)]
+            .iter()
+            .map(|(x, y)| s.add_point(Point2::new(*x, *y)).unwrap())
+            .collect();
+        for i in 0..4 {
+            s.add_line(p[i], p[(i + 1) % 4]).unwrap();
+        }
+    }
+
+    /// Two r = 8 holes in an 80 x 50 plate, centred at the same height: the plate is one
+    /// region of 4000 - 2 * 64π with two holes, plus a disc of 64π for each circle. Circle
+    /// centres at one height used to make the inside test count one crossing, not two.
+    #[test]
+    fn two_circles_level_with_each_other_are_both_holes_of_the_plate() {
+        let mut s = Sketch::new();
+        plate(&mut s, 80.0, 50.0);
+        for cx in [20.0, 60.0] {
+            let c = s.add_point(Point2::new(cx, 25.0)).unwrap();
+            s.add_circle(c, 8.0).unwrap();
+        }
+        let disc = 64.0 * PI;
+        let mut regions = s.profiles();
+        regions.sort_by(|a, b| b.area.total_cmp(&a.area));
+        assert_eq!(regions.len(), 3);
+        assert!((regions[0].area - (4000.0 - 2.0 * disc)).abs() < 1e-9);
+        assert_eq!(regions[0].holes.len(), 2);
+        for r in &regions[1..] {
+            assert!((r.area - disc).abs() < 1e-9);
+            assert!(r.holes.is_empty());
+        }
+    }
+
+    /// Five r = 5 holes in rows and columns (many level and aligned pairs).
+    #[test]
+    fn a_grid_of_holes_all_belong_to_the_plate() {
+        let mut s = Sketch::new();
+        plate(&mut s, 100.0, 60.0);
+        for (cx, cy) in [
+            (20.0, 20.0),
+            (50.0, 20.0),
+            (80.0, 20.0),
+            (20.0, 45.0),
+            (50.0, 45.0),
+        ] {
+            let c = s.add_point(Point2::new(cx, cy)).unwrap();
+            s.add_circle(c, 5.0).unwrap();
+        }
+        let regions = s.profiles();
+        assert_eq!(regions.len(), 6);
+        let plate = regions
+            .iter()
+            .max_by(|a, b| a.area.total_cmp(&b.area))
+            .unwrap();
+        assert_eq!(plate.holes.len(), 5);
+        assert!((plate.area - (6000.0 - 5.0 * 25.0 * PI)).abs() < 1e-9);
     }
 }
