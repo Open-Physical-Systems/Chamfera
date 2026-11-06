@@ -18,7 +18,8 @@ pub static COMMANDS: &[CommandSpec] = &[
         id: "feature.edit",
         label: "Edit Feature",
         params: "feature: integer (required)\n\
-                 distance: string or number (optional) - new extrude distance expression\n\
+                 distance: string or number (optional) - new extrude or offset plane distance\n\
+                 angle: string or number (optional) - new angle of a plane at an angle\n\
                  direction: string (optional) - normal, reversed or symmetric\n\
                  operation: string (optional) - new_body, join, cut or intersect\n\
                  size: string or number (optional) - new fillet radius or chamfer distance\n\
@@ -82,7 +83,8 @@ pub static COMMANDS: &[CommandSpec] = &[
         label: "Revolve",
         params: "sketch: integer (required)\n\
                  profiles: list of {x, y} (required) - a point inside each profile, in sketch mm\n\
-                 axis: integer (required) - a line of the same sketch to turn around\n\
+                 axis: integer (required unless axis_feature) - a line of the sketch to turn around\n\
+                 axis_feature: integer (optional) - a construction axis in the sketch plane instead\n\
                  angle: string or number (optional) - default 360 deg; a plain number is degrees\n\
                  operation: string (optional) - new_body (default), join, cut or intersect",
         mutates: true,
@@ -112,7 +114,8 @@ pub static COMMANDS: &[CommandSpec] = &[
         params: "feature: integer (required) - the feature to repeat\n\
                  count: string or number (required) - copies including the original, 2 to 1000\n\
                  origin: {x, y, z} (required) - a point on the axis\n\
-                 axis: {x, y, z} (required) - the axis direction\n\
+                 axis: {x, y, z} (required unless axis_feature) - the axis direction\n\
+                 axis_feature: integer (optional) - a construction axis to turn around instead\n\
                  angle: string or number (optional) - spread, default 360 deg (plain = degrees)",
         mutates: true,
         run: pattern_circular,
@@ -243,7 +246,15 @@ fn extrude(s: &mut Session, p: &Value) -> CmdResult {
 
 fn revolve(s: &mut Session, p: &Value) -> CmdResult {
     let sketch = params::req_id(p, "sketch")?;
-    let axis = params::req_id(p, "axis")?;
+    let axis_feature = match p.get("axis_feature") {
+        None | Some(Value::Null) => None,
+        Some(_) => Some(params::req_id(p, "axis_feature")?),
+    };
+    // With a construction axis the sketch line is not used (0 is no curve id).
+    let axis = match axis_feature {
+        Some(_) => 0,
+        None => params::req_id(p, "axis")?,
+    };
     let angle = match p.get("angle") {
         None | Some(Value::Null) => "360 deg".to_owned(),
         Some(Value::String(a)) => a.clone(),
@@ -254,6 +265,7 @@ fn revolve(s: &mut Session, p: &Value) -> CmdResult {
         sketch,
         profiles: seeds(p)?,
         axis,
+        axis_feature,
         angle,
         operation: operation(p)?.unwrap_or_default(),
     });
@@ -452,8 +464,27 @@ fn pattern_circular(s: &mut Session, p: &Value) -> CmdResult {
     let source = params::req_id(p, "feature")?;
     let count = expression(p, "count", "")?.ok_or_else(|| bad("`count` is required"))?;
     let angle = expression(p, "angle", "deg")?.unwrap_or_else(|| "360 deg".to_owned());
-    let o = vec3(p, "origin")?;
-    let axis = vec3(p, "axis")?;
+    let axis_feature = match p.get("axis_feature") {
+        None | Some(Value::Null) => None,
+        Some(_) => Some(params::req_id(p, "axis_feature")?),
+    };
+    // A construction axis gives the origin and direction (followed on rebuild).
+    let (o, axis) = match axis_feature {
+        Some(id) => match s.constructs().get(&id) {
+            Some(crate::construct::Constructed::Axis {
+                origin, direction, ..
+            }) => (
+                chamfera_geom::Vec3::new(origin.x, origin.y, origin.z),
+                *direction,
+            ),
+            _ => {
+                return Err(bad(format!(
+                    "feature {id} is not a built construction axis"
+                )));
+            }
+        },
+        None => (vec3(p, "origin")?, vec3(p, "axis")?),
+    };
     add_pattern(
         s,
         chamfera_doc::Pattern {
@@ -463,6 +494,7 @@ fn pattern_circular(s: &mut Session, p: &Value) -> CmdResult {
                 origin: chamfera_geom::Point3::new(o.x, o.y, o.z),
                 axis,
                 angle,
+                axis_feature,
             },
         },
     )
@@ -473,6 +505,7 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
     let new_distance = distance(p)?;
     let new_direction = direction(p)?;
     let new_operation = operation(p)?;
+    let new_angle = expression(p, "angle", "deg")?;
     let suppressed = match p.get("suppressed") {
         None | Some(Value::Null) => None,
         Some(_) => Some(params::req_bool(p, "suppressed")?),
@@ -484,6 +517,9 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
             FeatureKind::Revolve(r) => r.operation = o,
             FeatureKind::Pattern(_) => {
                 return Err(bad("a pattern does what the feature it repeats does"));
+            }
+            FeatureKind::Construct(_) => {
+                return Err(bad("construction geometry has no operation"));
             }
             FeatureKind::Blend(_) => {
                 return Err(bad("a fillet or chamfer has no operation"));
@@ -516,15 +552,39 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
             sh.faces = f;
         }
     }
-    if let FeatureKind::Extrude(e) = &mut kind {
-        if let Some(d) = new_distance {
-            e.distance = d;
+    match &mut kind {
+        FeatureKind::Extrude(e) => {
+            if let Some(d) = new_distance {
+                e.distance = d;
+            }
+            if let Some(d) = new_direction {
+                e.direction = d;
+            }
         }
-        if let Some(d) = new_direction {
-            e.direction = d;
+        FeatureKind::Construct(chamfera_doc::Construction::PlaneOffset { distance, .. })
+            if new_direction.is_none() =>
+        {
+            if let Some(d) = new_distance {
+                *distance = d;
+            }
         }
-    } else if new_distance.is_some() || new_direction.is_some() {
-        return Err(bad("distance and direction belong to extrudes"));
+        _ if new_distance.is_some() || new_direction.is_some() => {
+            return Err(bad(
+                "distance belongs to extrudes and offset planes, direction to extrudes",
+            ));
+        }
+        _ => {}
+    }
+    match &mut kind {
+        FeatureKind::Construct(chamfera_doc::Construction::PlaneAngle { angle, .. }) => {
+            if let Some(a) = new_angle {
+                *angle = a;
+            }
+        }
+        _ if new_angle.is_some() => {
+            return Err(bad("angle belongs to planes at an angle"));
+        }
+        _ => {}
     }
     s.doc.check_feature(&kind)?;
     let f = s.doc.feature_mut(id)?;
@@ -544,7 +604,7 @@ fn delete(s: &mut Session, p: &Value) -> CmdResult {
     let users = s.doc.feature_users(id);
     if !users.is_empty() {
         return Err(CommandError::Unavailable(format!(
-            "{} is drawn on this feature's faces; delete it first",
+            "{} uses this feature; delete it first",
             users.join(", ")
         )));
     }

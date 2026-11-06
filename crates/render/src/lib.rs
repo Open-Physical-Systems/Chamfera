@@ -360,6 +360,8 @@ pub enum OverlayStyle {
     Construction,
     Preview,
     Highlight,
+    /// Construction planes' outlines, axes and points.
+    Construct,
     /// What the pointer is over, before a click (`theme.hover_highlight`).
     Hover,
 }
@@ -372,9 +374,34 @@ impl OverlayStyle {
             OverlayStyle::Construction => theme.sketch_construction,
             OverlayStyle::Preview => theme.sketch_preview,
             OverlayStyle::Highlight => theme.highlight,
+            OverlayStyle::Construct => theme.construct,
             OverlayStyle::Hover => theme.hover_highlight,
         }
     }
+}
+
+/// How a fill is coloured.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FillStyle {
+    /// Construction planes, see-through.
+    Construct,
+}
+
+impl FillStyle {
+    pub fn color(self, theme: &Theme) -> Rgba {
+        match self {
+            FillStyle::Construct => theme.construct_fill,
+        }
+    }
+}
+
+/// See-through triangles drawn over the model, hidden by bodies in front and hiding
+/// nothing (construction planes). Display only.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Fill {
+    pub style: FillStyle,
+    pub triangles: Vec<[Point3; 3]>,
 }
 
 /// Lines and points drawn over the model: sketches, previews and highlights. Display
@@ -412,6 +439,9 @@ pub struct Scene {
     /// Drawn over everything, in order.
     #[serde(default)]
     pub overlays: Vec<Overlay>,
+    /// See-through fills (construction planes), drawn before the overlays.
+    #[serde(default)]
+    pub fills: Vec<Fill>,
     next_id: u32,
 }
 

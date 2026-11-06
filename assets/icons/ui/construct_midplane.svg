@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+  <!-- Chamfera interface icon: midplane. Original artwork, MIT OR Apache-2.0. -->
+  <polygon points="3.25,21 6.25,17.5 20.75,17.5 17.75,21" stroke="#2B313B"/>
+  <polygon points="3.25,6.5 6.25,3 20.75,3 17.75,6.5" stroke="#2B313B"/>
+  <polygon points="3.25,13.75 6.25,10.25 20.75,10.25 17.75,13.75" stroke="#E8770E" stroke-dasharray="2.5 2"/>
+</svg>

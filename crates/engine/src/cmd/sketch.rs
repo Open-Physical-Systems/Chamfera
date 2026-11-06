@@ -81,7 +81,8 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         id: "sketch.create",
         label: "Create Sketch",
-        params: "plane: string (required) - xy, xz or yz (top, front, right)",
+        params: "plane: string or integer (required) - xy, xz or yz (top, front, right), or the\n\
+                 id of a construction plane (the sketch follows it when the design rebuilds)",
         mutates: true,
         run: create,
     },
@@ -341,6 +342,30 @@ fn solve(sk: &mut Sketch) -> Result<(), CommandError> {
 }
 
 fn create(s: &mut Session, p: &Value) -> CmdResult {
+    if p.get("plane").is_some_and(Value::is_number) {
+        let construct = params::req_id(p, "plane")?;
+        let plane = match s.constructs().get(&construct) {
+            Some(crate::construct::Constructed::Plane { frame, .. }) => *frame,
+            _ => {
+                return Err(bad(format!(
+                    "feature {construct} is not a built construction plane"
+                )));
+            }
+        };
+        let id = s.doc.add_sketch(plane)?;
+        if let Ok(f) = s.doc.sketch_mut(id) {
+            f.on_plane = Some(construct);
+        }
+        s.active_sketch = Some(id);
+        s.sketch_selection.clear();
+        let n = plane.z();
+        return Ok(json!({
+            "sketch": id,
+            "plane": construct,
+            "origin": plane.origin(),
+            "normal": { "x": n.x, "y": n.y, "z": n.z },
+        }));
+    }
     let plane = match params::req_str(p, "plane")? {
         "xy" => Frame::XY,
         "xz" => Frame::XZ,

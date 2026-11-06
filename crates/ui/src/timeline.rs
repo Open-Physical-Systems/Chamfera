@@ -92,6 +92,7 @@ impl ChamferaApp {
                     Icon::PatternRectangular,
                     format!("Pattern × {} of feature {}", p.count, p.source),
                 ),
+                FeatureKind::Construct(c) => (crate::construct_ui::feature_icon(c), c.describe()),
                 FeatureKind::Blend(b) => (
                     match b.blend {
                         chamfera_doc::BlendKind::Fillet => Icon::Fillet,
@@ -355,6 +356,7 @@ impl ChamferaApp {
             FeatureKind::Extrude(e) => (e.distance.clone(), e.direction),
             FeatureKind::Revolve(r) => (r.angle.clone(), ExtrudeDirection::Normal),
             FeatureKind::Pattern(p) => (p.count.clone(), ExtrudeDirection::Normal),
+            FeatureKind::Construct(_) => return self.edit_construct(id),
             FeatureKind::Blend(b) => (b.size.clone(), ExtrudeDirection::Normal),
             FeatureKind::Shell(sh) => (sh.thickness.clone(), ExtrudeDirection::Normal),
         };

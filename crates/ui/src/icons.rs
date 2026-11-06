@@ -38,6 +38,12 @@ pub enum Icon {
     ConstraintPointOn,
     ConstraintTangent,
     ConstraintVertical,
+    ConstructAxis,
+    ConstructMidplane,
+    ConstructPlaneAngle,
+    ConstructPlaneOffset,
+    ConstructPlanePoints,
+    ConstructPoint,
     Construction,
     Delete,
     Dimension,
@@ -84,7 +90,7 @@ pub enum Icon {
 
 impl Icon {
     #[cfg(test)]
-    pub const ALL: [Icon; 61] = [
+    pub const ALL: [Icon; 67] = [
         Icon::Arc,
         Icon::ArcTangent,
         Icon::ArcThreePoint,
@@ -104,6 +110,12 @@ impl Icon {
         Icon::ConstraintPointOn,
         Icon::ConstraintTangent,
         Icon::ConstraintVertical,
+        Icon::ConstructAxis,
+        Icon::ConstructMidplane,
+        Icon::ConstructPlaneAngle,
+        Icon::ConstructPlaneOffset,
+        Icon::ConstructPlanePoints,
+        Icon::ConstructPoint,
         Icon::Construction,
         Icon::Delete,
         Icon::Dimension,
@@ -171,6 +183,12 @@ impl Icon {
             Icon::ConstraintPointOn => master!("constraint_point_on"),
             Icon::ConstraintTangent => master!("constraint_tangent"),
             Icon::ConstraintVertical => master!("constraint_vertical"),
+            Icon::ConstructAxis => master!("construct_axis"),
+            Icon::ConstructMidplane => master!("construct_midplane"),
+            Icon::ConstructPlaneAngle => master!("construct_plane_angle"),
+            Icon::ConstructPlaneOffset => master!("construct_plane_offset"),
+            Icon::ConstructPlanePoints => master!("construct_plane_points"),
+            Icon::ConstructPoint => master!("construct_point"),
             Icon::Construction => master!("construction"),
             Icon::Delete => master!("delete"),
             Icon::Dimension => master!("dimension"),

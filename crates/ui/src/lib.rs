@@ -17,6 +17,7 @@ use std::sync::{Arc, Mutex};
 mod blend_ui;
 mod browser;
 mod chrome;
+mod construct_ui;
 mod context_menu;
 mod file_ui;
 
@@ -92,6 +93,7 @@ struct Drawn {
     selection: Option<Hit>,
     selected: Vec<u32>,
     overlays: Vec<chamfera_render::Overlay>,
+    fills: Vec<chamfera_render::Fill>,
     theme: ThemeMode,
     size: (u32, u32),
 }
@@ -124,6 +126,7 @@ pub struct ChamferaApp {
     sketch: sketch_ui::SketchUi,
     params: params_ui::ParamsUi,
     solid: solid_ui::SolidUi,
+    construct: construct_ui::ConstructUi,
     file: file_ui::FileUi,
     browser: browser::BrowserUi,
     timeline: timeline::TimelineUi,
@@ -204,6 +207,7 @@ impl ChamferaApp {
             sketch: sketch_ui::SketchUi::default(),
             params: params_ui::ParamsUi::default(),
             solid: solid_ui::SolidUi::default(),
+            construct: construct_ui::ConstructUi::default(),
             file: file_ui::FileUi::default(),
             browser: browser::BrowserUi::default(),
             timeline: timeline::TimelineUi::default(),
@@ -372,6 +376,14 @@ impl ChamferaApp {
                 self.run("view.zoom", p);
             }
         }
+        if self.construct.tool.is_some()
+            && response.clicked()
+            && let Some(pos) = response.interact_pointer_pos()
+        {
+            let (x, y) = local(pos);
+            self.construct_click(x, y, w, h);
+            return;
+        }
         if self.solid.pick_face
             && response.clicked()
             && let Some(pos) = response.interact_pointer_pos()
@@ -506,6 +518,7 @@ impl ChamferaApp {
             selection: self.session.scene.selection,
             selected: self.session.scene.selected.clone(),
             overlays: self.session.scene.overlays.clone(),
+            fills: self.session.scene.fills.clone(),
             theme: self.theme.mode,
             size,
         };
@@ -710,6 +723,7 @@ impl eframe::App for ChamferaApp {
             self.blend_dialog(&ctx);
             self.shell_dialog(&ctx);
             self.feature_dialog(&ctx);
+            self.construct_dialog(&ctx);
             self.rename_dialog(&ctx);
             self.properties_window(&ctx);
         }

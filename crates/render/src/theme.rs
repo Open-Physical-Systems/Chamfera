@@ -52,6 +52,11 @@ pub struct Theme {
     pub sketch_preview: Rgba,
     /// What the pointer is over, or what is picked.
     pub highlight: Rgba,
+    // construction geometry
+    /// Construction plane outlines, axes and points.
+    pub construct: Rgba,
+    /// The see-through fill of construction planes.
+    pub construct_fill: Rgba,
     /// The face or edge under the pointer in the viewport, before a click picks it.
     pub hover_highlight: Rgba,
     /// Window box selection (dragged left to right: what is fully inside): solid outline.
@@ -113,6 +118,8 @@ impl Theme {
             sketch_construction: Rgba(214, 120, 30, 255),
             sketch_preview: Rgba(30, 100, 220, 140),
             highlight: Rgba(240, 160, 20, 255),
+            construct: Rgba(176, 112, 16, 255),
+            construct_fill: Rgba(232, 168, 40, 46),
             hover_highlight: Rgba(0, 150, 180, 255),
             select_window: Rgba(30, 112, 214, 255),
             select_window_fill: Rgba(30, 112, 214, 36),
@@ -157,6 +164,8 @@ impl Theme {
             sketch_construction: Rgba(240, 150, 60, 255),
             sketch_preview: Rgba(96, 170, 255, 140),
             highlight: Rgba(255, 190, 60, 255),
+            construct: Rgba(240, 180, 80, 255),
+            construct_fill: Rgba(240, 180, 80, 38),
             hover_highlight: Rgba(90, 215, 235, 255),
             select_window: Rgba(84, 160, 255, 255),
             select_window_fill: Rgba(84, 160, 255, 40),
