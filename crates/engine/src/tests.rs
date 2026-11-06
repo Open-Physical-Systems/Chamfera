@@ -1550,7 +1550,11 @@ fn feature_edit_changes_a_patterns_count_and_spacing_and_refuses_unknown_keys() 
         )
         .unwrap();
     assert_eq!(r["definition"]["count"], "4", "{r}");
-    assert!((vol(&s) - (15_000.0 - 360.0 * pi)).abs() < 1e-6, "{}", vol(&s));
+    assert!(
+        (vol(&s) - (15_000.0 - 360.0 * pi)).abs() < 1e-6,
+        "{}",
+        vol(&s)
+    );
     // An edit that names a key feature.edit does not know changes nothing and is refused,
     // instead of succeeding silently (which made a following undo remove the pattern).
     let before = s.doc.clone();
@@ -1566,7 +1570,11 @@ fn feature_edit_changes_a_patterns_count_and_spacing_and_refuses_unknown_keys() 
     );
     // Undo goes back to 2 copies.
     s.execute("edit.undo", &json!({})).unwrap();
-    assert!((vol(&s) - (15_000.0 - 180.0 * pi)).abs() < 1e-6, "{}", vol(&s));
+    assert!(
+        (vol(&s) - (15_000.0 - 180.0 * pi)).abs() < 1e-6,
+        "{}",
+        vol(&s)
+    );
 }
 
 #[test]

@@ -219,7 +219,10 @@ fn spline_bodies_mirror_with_their_extruded_faces_outward() {
         let m = body.mirrored(p, n).unwrap();
         m.validate().unwrap();
         assert!(close(m.volume().unwrap(), 2000.0 / 3.0, 1e-10), "{n:?}");
-        assert!(close(m.area().unwrap(), body.area().unwrap(), 1e-10), "{n:?}");
+        assert!(
+            close(m.area().unwrap(), body.area().unwrap(), 1e-10),
+            "{n:?}"
+        );
         check_mesh(&m, 2000.0 / 3.0);
     }
     let m = body.mirrored(Point3::ORIGIN, Vec3::X).unwrap();

@@ -56,12 +56,18 @@ fn assert_same(a: &[(String, f64)], b: &[(String, f64)], what: &str) {
     assert_eq!(a.len(), b.len(), "{what}: {a:?} vs {b:?}");
     for ((na, va), (nb, vb)) in a.iter().zip(b) {
         assert_eq!(na, nb, "{what}");
-        assert!((va - vb).abs() <= 1e-9 * va.abs().max(1.0), "{what}: {na} {va} vs {vb}");
+        assert!(
+            (va - vb).abs() <= 1e-9 * va.abs().max(1.0),
+            "{what}: {na} {va} vs {vb}"
+        );
     }
 }
 
 fn close(v: f64, want: f64, what: &str) {
-    assert!((v - want).abs() <= 1e-6 * want.abs().max(1.0), "{what}: {v} vs {want}");
+    assert!(
+        (v - want).abs() <= 1e-6 * want.abs().max(1.0),
+        "{what}: {v} vs {want}"
+    );
 }
 
 /// Undo to empty and redo it all; roll the timeline to the middle and back; suppress and
@@ -125,8 +131,11 @@ fn qa_enclosure_follows_its_width_and_survives_the_life_cycle() {
     let (base, lid) = enclosure(80.0);
     close(v[0].1, base, "base");
     close(v[1].1, lid, "lid");
-    s.execute("param.set", &json!({"name": "width", "expression": "100 mm"}))
-        .unwrap();
+    s.execute(
+        "param.set",
+        &json!({"name": "width", "expression": "100 mm"}),
+    )
+    .unwrap();
     let v = volumes(&s);
     let (base, lid) = enclosure(100.0);
     close(v[0].1, base, "base at width 100");
@@ -177,7 +186,11 @@ fn qa_sheet_bracket_and_its_flat_pattern() {
     // reliefs 2 * 2 * 6.
     let flat = &r[8];
     let ba = 1.44 * PI;
-    close(flat["length"].as_f64().unwrap(), 92.0 + 2.0 * (ba + 21.0), "flat length");
+    close(
+        flat["length"].as_f64().unwrap(),
+        92.0 + 2.0 * (ba + 21.0),
+        "flat length",
+    );
     close(flat["width"].as_f64().unwrap(), 67.0 + ba, "flat width");
     let area = 92.0 * 56.0 + 120.0 * (ba + 21.0) + 72.0 * (ba + 11.0) + 80.0 - 24.0;
     close(flat["area"].as_f64().unwrap(), area, "flat area");
@@ -217,7 +230,11 @@ fn qa_hinge_measures_between_its_leaves_at_three_angles() {
             &json!({"a": {"solid": "Extrude1"}, "b": {"solid": "Extrude2"}}),
         )
         .unwrap();
-    close(d["distance"].as_f64().unwrap(), 0.5f64.sqrt(), "after the life cycle");
+    close(
+        d["distance"].as_f64().unwrap(),
+        0.5f64.sqrt(),
+        "after the life cycle",
+    );
 }
 
 #[test]
@@ -234,7 +251,10 @@ fn qa_tapered_hexagon_and_spline_mirror() {
         .iter()
         .map(|p| p["area"].as_f64().unwrap())
         .collect();
-    assert!(areas.iter().any(|a| (a - 120.0 * PI).abs() < 1e-9), "{areas:?}");
+    assert!(
+        areas.iter().any(|a| (a - 120.0 * PI).abs() < 1e-9),
+        "{areas:?}"
+    );
     let (r0, h, t) = (5.0 * 3f64.sqrt(), 10.0, 5f64.to_radians().tan());
     let hex = 2.0 * 3f64.sqrt() * (r0.powi(3) - (r0 - h * t).powi(3)) / (3.0 * t);
     let v = volumes(&s);
@@ -253,7 +273,11 @@ fn qa_cam_on_the_enclosure_base_posts_both_dialects() {
     let mut s = Session::new();
     let r = run_qa(&mut s, "06-cam-enclosure-base.json", &out);
     // Four Ø4 holes through the 2 mm floor: 21569.49 - 4 * 4π * 2 (see `enclosure`).
-    close(volumes(&s)[0].1, enclosure(80.0).0 - 32.0 * PI, "drilled base");
+    close(
+        volumes(&s)[0].1,
+        enclosure(80.0).0 - 32.0 * PI,
+        "drilled base",
+    );
     let generated = &r[10];
     assert_eq!(generated["errors"], 0, "{generated}");
     let holes = generated["operations"][2]["holes"].as_array().unwrap();
@@ -300,8 +324,11 @@ fn qa_drawing_dimensions_follow_the_model() {
     run_qa(&mut s, "01-enclosure.json", &out);
     let mut s = Session::new();
     run_qa(&mut s, "07-enclosure-drawing.json", &out);
-    s.execute("param.set", &json!({"name": "width", "expression": "100 mm"}))
-        .unwrap();
+    s.execute(
+        "param.set",
+        &json!({"name": "width", "expression": "100 mm"}),
+    )
+    .unwrap();
     let l = s.execute("drawing.list", &json!({})).unwrap();
     // The front view now spans 100 mm, and so must its width dimension.
     close(
@@ -344,8 +371,14 @@ fn qa_a_sweep_bend_near_a_flat_face_joins() {
     let text = std::fs::read_to_string(repo().join("examples/qa/02-flanged-pipe.json")).unwrap();
     let text = text
         .replace(r#""x2": 0, "y2": 78"#, r#""x2": 0, "y2": 68"#)
-        .replace(r#""cy": 78, "x1": 30, "y1": 108, "x2": 0, "y2": 78"#, r#""cy": 68, "x1": 30, "y1": 98, "x2": 0, "y2": 68"#)
-        .replace(r#""y1": 108, "x2": 80, "y2": 108"#, r#""y1": 98, "x2": 80, "y2": 98"#);
+        .replace(
+            r#""cy": 78, "x1": 30, "y1": 108, "x2": 0, "y2": 78"#,
+            r#""cy": 68, "x1": 30, "y1": 98, "x2": 0, "y2": 68"#,
+        )
+        .replace(
+            r#""y1": 108, "x2": 80, "y2": 108"#,
+            r#""y1": 98, "x2": 80, "y2": 98"#,
+        );
     let steps: Value = serde_json::from_str(&text).unwrap();
     let mut s = Session::new();
     script::run_steps(&mut s, steps.as_array().unwrap()).unwrap();
