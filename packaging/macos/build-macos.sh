@@ -51,8 +51,11 @@ for s in 16 32 128 256 512; do
 done
 iconutil -c icns -o "$APP/Contents/Resources/chamfera.icns" "$ICONSET"
 
-cp "$ROOT/LICENSE-MIT" "$ROOT/LICENSE-APACHE" "$ROOT/ATTRIBUTION.md" "$APP/Contents/Resources/"
-cp "$ROOT/LICENSE-MIT" "$ROOT/LICENSE-APACHE" "$ROOT/ATTRIBUTION.md" "$OUT/stage/"
+# The licence texts of the bundled crates; Help > About finds them in Contents/Resources.
+cargo xtask notices --out "$OUT/THIRD-PARTY-LICENSES.txt"
+for d in "$APP/Contents/Resources" "$OUT/stage"; do
+  cp "$ROOT/LICENSE-MIT" "$ROOT/LICENSE-APACHE" "$ROOT/ATTRIBUTION.md" "$OUT/THIRD-PARTY-LICENSES.txt" "$d/"
+done
 ln -s /Applications "$OUT/stage/Applications"
 
 # Ad-hoc signature (no identity): keeps the bundle's code signature consistent, so macOS shows

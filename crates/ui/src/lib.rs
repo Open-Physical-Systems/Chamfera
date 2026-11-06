@@ -14,6 +14,7 @@ use egui::{Color32, PointerButton, Rect, Sense, Vec2};
 use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
 
+mod about_ui;
 mod assembly_ui;
 mod assistant_ui;
 mod blend_ui;
@@ -126,6 +127,11 @@ pub struct Options {
     pub recovery_demo: bool,
     /// Open the RENDER workspace at start.
     pub render: bool,
+    /// Open Help > About Chamfera at start.
+    pub about: bool,
+    /// Open the Assistant and send this request with the user's key at start (checks the
+    /// real HTTPS path; the screenshot waits for the reply or the error).
+    pub assistant_ask: Option<String>,
     /// Open the Render window and start a render of this width, height and sample count
     /// (the screenshot waits for it to finish).
     pub render_window: Option<[u32; 3]>,
@@ -249,6 +255,8 @@ pub struct ChamferaApp {
     history: history_ui::HistoryUi,
     /// Autosave and the recovery question (`recovery_ui`).
     recovery: recovery_ui::RecoveryUi,
+    /// Help > About Chamfera (`about_ui`).
+    about: about_ui::AboutUi,
 }
 
 /// A command's label, so menus show the same words as the command list.
@@ -283,6 +291,12 @@ impl ChamferaApp {
         }
         if app.assistant.transport.is_none() {
             app.assistant.load_key();
+        }
+        // After the key is loaded: this request goes over the real HTTPS path.
+        if let Some(q) = &options.assistant_ask {
+            app.assistant.open = true;
+            app.assistant.input = q.chars().take(2000).collect();
+            app.assistant_send();
         }
         if app.gpu.is_none() {
             app.message = Some(("No GPU device: the viewport cannot draw.".into(), true));
@@ -358,6 +372,7 @@ impl ChamferaApp {
             assistant: assistant_ui::AssistantUi::default(),
             history: history_ui::HistoryUi::default(),
             recovery: recovery_ui::RecoveryUi::default(),
+            about: about_ui::AboutUi::default(),
         };
         app.session.history.limits = app.prefs.history_limits();
         if app.prefs.default_length != chamfera_doc::LengthUnit::Mm {
@@ -444,6 +459,9 @@ impl ChamferaApp {
         }
         if options.assistant_demo {
             app.assistant_demo();
+        }
+        if options.about {
+            app.about.open_with_notices();
         }
         if options.history {
             app.open_history();
@@ -1130,6 +1148,7 @@ impl eframe::App for ChamferaApp {
         }
         self.autosave_frame(&ctx);
         self.shortcuts_window(&ctx);
+        self.about_window(&ctx);
         self.search_window(&ctx);
         self.file_shortcuts(&ctx);
         #[cfg(target_arch = "wasm32")]
