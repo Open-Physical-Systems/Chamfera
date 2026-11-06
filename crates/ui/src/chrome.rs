@@ -37,6 +37,7 @@ impl ChamferaApp {
             #[cfg(target_arch = "wasm32")]
             self.web.target("File", _file.response.rect);
             ui.menu_button("View", |ui| self.view_menu(ui));
+            ui.menu_button("Help", |ui| self.help_menu(ui));
             widgets::bar_divider(ui, self.look(), 20.0);
             let look = self.look();
             if widgets::icon_button(ui, look, Icon::Save, 30.0, 20.0, true, false)
