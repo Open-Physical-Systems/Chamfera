@@ -42,6 +42,7 @@ struct Drawn {
     camera: Camera,
     bodies: Vec<(u32, bool, usize)>,
     selection: Option<Hit>,
+    overlays: Vec<chamfera_render::Overlay>,
     theme: ThemeMode,
     size: (u32, u32),
 }
@@ -422,6 +423,7 @@ impl ChamferaApp {
                 .map(|b| (b.id, b.visible, b.mesh.triangles.len()))
                 .collect(),
             selection: self.session.scene.selection,
+            overlays: self.session.scene.overlays.clone(),
             theme: self.theme.mode,
             size,
         };
@@ -437,6 +439,7 @@ impl ChamferaApp {
                     theme: &self.theme,
                     width: size.0,
                     height: size.1,
+                    scale: ppp,
                 },
             );
             rs.queue.submit([commands]);

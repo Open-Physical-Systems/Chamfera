@@ -173,6 +173,7 @@ mod tests {
             theme: &theme,
             width: 64,
             height: 48,
+            scale: 1.0,
         };
         let rgba = match snapshot_rgba(&frame) {
             Ok(p) => p,
@@ -194,5 +195,75 @@ mod tests {
         assert!(centre.iter().all(|&c| c < 220), "centre {centre:?}");
         let png = encode_png(64, 48, &rgba).unwrap();
         assert_eq!(&png[1..4], b"PNG");
+    }
+}
+
+#[cfg(test)]
+mod overlay_tests {
+    use super::*;
+    use chamfera_geom::{Point3, TriMesh};
+    use chamfera_render::{Camera, Overlay, OverlayStyle, Scene, StandardView, Theme};
+
+    /// A sketch line and point placed behind a box stay visible (overlays are never hidden
+    /// by bodies) and take the theme's sketch colour.
+    ///
+    /// Front view, distance 100, fov 35 degrees: the view is 2 * 100 * tan(17.5) = 63.1 mm
+    /// tall over 48 px, so 0.761 px per mm, centre at (32, 24). The box (x -10..10) covers
+    /// columns 24.4..39.6. The line at z = 0.7 mm sits on row 24 - 0.53 = 23.47, inside
+    /// row 23 rather than on a row boundary. The point at x = -6, z = 6 lands at column
+    /// 27.4 and row 19.4, a 7 px square.
+    #[test]
+    fn overlays_draw_over_bodies_in_the_sketch_colour() {
+        let mut scene = Scene::default();
+        scene.add(
+            "box",
+            TriMesh::cuboid(
+                Point3::new(-10.0, -10.0, -10.0),
+                Point3::new(10.0, 10.0, 10.0),
+            ),
+        );
+        scene.overlays.push(Overlay {
+            style: OverlayStyle::Sketch,
+            lines: vec![[Point3::new(-30.0, 20.0, 0.7), Point3::new(30.0, 20.0, 0.7)]],
+            points: vec![Point3::new(-6.0, 20.0, 6.0)],
+        });
+        let mut camera = Camera::default();
+        camera.set_view(StandardView::Front);
+        camera.distance = 100.0;
+        let theme = Theme::light();
+        let (w, h) = (64u32, 48u32);
+        let frame = Frame {
+            scene: &scene,
+            camera: &camera,
+            theme: &theme,
+            width: w,
+            height: h,
+            scale: 1.0,
+        };
+        let rgba = match snapshot_rgba(&frame) {
+            Ok(p) => p,
+            Err(SnapshotError::NoAdapter(e)) | Err(SnapshotError::Device(e)) => {
+                eprintln!("skipped: {e}");
+                return;
+            }
+            Err(e) => panic!("{e}"),
+        };
+        let px = |x: u32, y: u32| {
+            let i = ((y * w + x) * 4) as usize;
+            [rgba[i], rgba[i + 1], rgba[i + 2]]
+        };
+        let s = theme.sketch;
+        let is_sketch = |c: [u8; 3]| {
+            (i32::from(c[0]) - i32::from(s.0)).abs() <= 8
+                && (i32::from(c[1]) - i32::from(s.1)).abs() <= 8
+                && (i32::from(c[2]) - i32::from(s.2)).abs() <= 8
+        };
+        // Column 36 is on the box face, away from the point.
+        assert!(is_sketch(px(36, 23)), "line pixel {:?}", px(36, 23));
+        assert!(
+            !is_sketch(px(36, 28)),
+            "the box face is not sketch coloured"
+        );
+        assert!(is_sketch(px(27, 19)), "point pixel {:?}", px(27, 19));
     }
 }

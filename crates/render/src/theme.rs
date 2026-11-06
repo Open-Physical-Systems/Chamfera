@@ -42,6 +42,16 @@ pub struct Theme {
     pub body: Rgba,
     pub body_selected: Rgba,
     pub edge: Rgba,
+    // sketches
+    /// Sketch geometry that can still move (under-constrained).
+    pub sketch: Rgba,
+    /// Sketch geometry fixed by its constraints.
+    pub sketch_constrained: Rgba,
+    pub sketch_construction: Rgba,
+    /// Geometry being drawn, before it is created.
+    pub sketch_preview: Rgba,
+    /// What the pointer is over, or what is picked.
+    pub highlight: Rgba,
     // interface
     pub panel: Rgba,
     pub panel_alt: Rgba,
@@ -65,6 +75,11 @@ impl Theme {
             body: Rgba(176, 184, 196, 255),
             body_selected: Rgba(64, 140, 230, 255),
             edge: Rgba(40, 46, 56, 255),
+            sketch: Rgba(30, 100, 220, 255),
+            sketch_constrained: Rgba(20, 24, 30, 255),
+            sketch_construction: Rgba(214, 120, 30, 255),
+            sketch_preview: Rgba(30, 100, 220, 140),
+            highlight: Rgba(240, 160, 20, 255),
             panel: Rgba(246, 247, 249, 255),
             panel_alt: Rgba(234, 237, 241, 255),
             text: Rgba(28, 32, 38, 255),
@@ -87,6 +102,11 @@ impl Theme {
             body: Rgba(150, 158, 170, 255),
             body_selected: Rgba(84, 160, 255, 255),
             edge: Rgba(18, 20, 24, 255),
+            sketch: Rgba(96, 170, 255, 255),
+            sketch_constrained: Rgba(236, 240, 246, 255),
+            sketch_construction: Rgba(240, 150, 60, 255),
+            sketch_preview: Rgba(96, 170, 255, 140),
+            highlight: Rgba(255, 190, 60, 255),
             panel: Rgba(36, 39, 44, 255),
             panel_alt: Rgba(44, 48, 54, 255),
             text: Rgba(226, 230, 236, 255),
