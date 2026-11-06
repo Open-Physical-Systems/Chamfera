@@ -10,6 +10,8 @@ use egui::{Color32, PointerButton, Rect, Sense, UiBuilder, Vec2};
 use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
 
+mod sketch_ui;
+
 /// How the app starts.
 #[derive(Debug, Clone, Default)]
 pub struct Options {
@@ -21,6 +23,8 @@ pub struct Options {
     pub screenshot: Option<std::path::PathBuf>,
     /// Force a theme instead of following the system.
     pub theme: Option<ThemeMode>,
+    /// Commands to run at start: `(command id, params)`, as in a `chamfera-cli run` script.
+    pub script: Vec<(String, Value)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -66,6 +70,7 @@ pub struct ChamferaApp {
     message: Option<(String, bool)>,
     screenshot: Option<(std::path::PathBuf, Shot)>,
     shot_image: Arc<Mutex<Option<Arc<egui::ColorImage>>>>,
+    sketch: sketch_ui::SketchUi,
 }
 
 /// A command's label, so menus show the same words as the command list.
@@ -83,6 +88,24 @@ fn color(c: chamfera_render::Rgba) -> Color32 {
 
 impl ChamferaApp {
     pub fn new(cc: &eframe::CreationContext<'_>, options: Options) -> ChamferaApp {
+        let gpu = cc.wgpu_render_state.as_ref().map(|rs| ViewGpu {
+            renderer: chamfera_gpu::ViewRenderer::new(&rs.device),
+            texture: None,
+        });
+        let mut app = ChamferaApp::with_gpu(gpu, &options);
+        if app.gpu.is_none() {
+            app.message = Some(("No GPU device: the viewport cannot draw.".into(), true));
+        }
+        app
+    }
+
+    /// An app without a window or GPU, for tests.
+    #[cfg(test)]
+    pub(crate) fn headless() -> ChamferaApp {
+        ChamferaApp::with_gpu(None, &Options::default())
+    }
+
+    fn with_gpu(gpu: Option<ViewGpu>, options: &Options) -> ChamferaApp {
         let mut app = ChamferaApp {
             session: Session::new(),
             theme_choice: match options.theme {
@@ -92,16 +115,15 @@ impl ChamferaApp {
             },
             theme: Theme::light(),
             styled_for: None,
-            gpu: cc.wgpu_render_state.as_ref().map(|rs| ViewGpu {
-                renderer: chamfera_gpu::ViewRenderer::new(&rs.device),
-                texture: None,
-            }),
+            gpu,
             drawn: None,
             viewport: Vec2::new(1280.0, 800.0),
-            fit_pending: true,
+            // A start-up script sets its own view.
+            fit_pending: options.script.is_empty(),
             message: None,
-            screenshot: options.screenshot.map(|p| (p, Shot::Waiting(4))),
+            screenshot: options.screenshot.clone().map(|p| (p, Shot::Waiting(4))),
             shot_image: Arc::new(Mutex::new(None)),
+            sketch: sketch_ui::SketchUi::default(),
         };
         if options.sample {
             app.run("body.sample", json!({}));
@@ -109,8 +131,14 @@ impl ChamferaApp {
         for f in &options.files {
             app.run("body.import_stl", json!({ "path": f.to_string_lossy() }));
         }
-        if app.gpu.is_none() {
-            app.message = Some(("No GPU device: the viewport cannot draw.".into(), true));
+        for (id, params) in &options.script {
+            if app.run(id, params.clone()).is_none() {
+                break;
+            }
+        }
+        if app.session.active_sketch.is_some() {
+            app.sketch.tool = Some(sketch_ui::Tool::Select);
+            app.refresh_sketch_status();
         }
         app
     }
@@ -181,6 +209,28 @@ impl ChamferaApp {
                     ui.separator();
                     if ui.button("Quit").clicked() {
                         ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                }
+            });
+            ui.menu_button("Sketch", |ui| {
+                ui.label(label("sketch.create"));
+                for (plane, text, view) in sketch_ui::PLANES {
+                    if ui
+                        .add_enabled(
+                            self.session.active_sketch.is_none(),
+                            egui::Button::new(text),
+                        )
+                        .clicked()
+                    {
+                        ui.close();
+                        self.create_sketch(plane, view);
+                    }
+                }
+                if self.session.active_sketch.is_some() {
+                    ui.separator();
+                    if ui.button(label("sketch.finish")).clicked() {
+                        ui.close();
+                        self.finish_sketch();
                     }
                 }
             });
@@ -268,8 +318,34 @@ impl ChamferaApp {
             .iter()
             .map(|b| (b.id, b.name.clone(), b.visible))
             .collect();
-        if rows.is_empty() {
-            ui.weak("No bodies yet. File → Insert Mesh (STL), or Insert Sample Part.");
+        let sketches: Vec<(u32, String)> = self
+            .session
+            .doc
+            .sketches
+            .iter()
+            .map(|s| (s.id, s.name.clone()))
+            .collect();
+        if rows.is_empty() && sketches.is_empty() {
+            ui.weak("Empty design. Sketch → Create Sketch, File → Insert Mesh (STL), or Insert Sample Part.");
+        }
+        for (id, name) in sketches {
+            ui.horizontal(|ui| {
+                let active = self.session.active_sketch == Some(id);
+                let text = egui::RichText::new(name.as_str());
+                let text = if active {
+                    text.color(color(self.theme.accent)).strong()
+                } else {
+                    text
+                };
+                ui.label(text);
+                if !active
+                    && self.session.active_sketch.is_none()
+                    && ui.small_button(label("sketch.edit")).clicked()
+                {
+                    self.run_sketch("sketch.edit", json!({ "sketch": id }));
+                    self.sketch.tool = Some(sketch_ui::Tool::Select);
+                }
+            });
         }
         for (id, name, visible) in rows {
             ui.horizontal(|ui| {
@@ -294,6 +370,14 @@ impl ChamferaApp {
 
     fn status_bar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
+            if self.session.active_sketch.is_some() {
+                ui.colored_label(sketch_ui::hint_color(self), sketch_ui::tool_hint(self));
+                if let Some(s) = &self.sketch.status {
+                    ui.separator();
+                    ui.label(s);
+                }
+                ui.separator();
+            }
             match &self.message {
                 Some((m, true)) => {
                     ui.colored_label(color(self.theme.error), m);
@@ -375,7 +459,11 @@ impl ChamferaApp {
                 self.run("view.zoom", p);
             }
         }
-        if response.clicked()
+        let used_by_sketch =
+            self.session.active_sketch.is_some() && self.sketch_input(ui, response, rect);
+        if !used_by_sketch
+            && self.session.active_sketch.is_none()
+            && response.clicked()
             && let Some(pos) = response.interact_pointer_pos()
         {
             let (x, y) = local(pos);
@@ -392,7 +480,7 @@ impl ChamferaApp {
             if keys.1 {
                 self.run("view.home", self.viewport_params());
             }
-            if keys.2 {
+            if keys.2 && self.session.active_sketch.is_none() {
                 self.run("select.clear", json!({}));
             }
         }
@@ -408,6 +496,14 @@ impl ChamferaApp {
         }
         self.navigate(ui, &response, rect);
 
+        // The drawing tool's preview rides along with the sketch overlays.
+        self.session
+            .scene
+            .overlays
+            .retain(|o| o.style != chamfera_render::OverlayStyle::Preview);
+        if let Some(preview) = self.sketch_preview() {
+            self.session.scene.overlays.push(preview);
+        }
         let ppp = ui.ctx().pixels_per_point();
         let size = (
             (rect.width() * ppp).round().max(1.0) as u32,
@@ -470,6 +566,9 @@ impl ChamferaApp {
                 Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
                 Color32::WHITE,
             );
+        }
+        if self.session.active_sketch.is_some() {
+            self.dimension_labels(ui, rect);
         }
         self.view_bar(ui, rect);
     }
@@ -573,6 +672,9 @@ impl eframe::App for ChamferaApp {
         let ctx = ui.ctx().clone();
         self.apply_theme(&ctx);
         egui::Panel::top("menu").show(ui, |ui| self.menu_bar(ui));
+        if self.session.active_sketch.is_some() {
+            egui::Panel::top("sketch toolbar").show(ui, |ui| self.sketch_toolbar(ui));
+        }
         egui::Panel::bottom("status").show(ui, |ui| self.status_bar(ui));
         egui::Panel::left("browser")
             .resizable(true)

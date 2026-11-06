@@ -17,5 +17,10 @@ The UI (`crates/ui/src/lib.rs`) is egui on wgpu, for the desktop and the browser
 - Default navigation: left-click selects, middle-drag pans, Shift+middle or right-drag orbits, the wheel zooms toward the cursor, F fits, H goes home, Esc clears the selection.
 - Desktop-only features (file dialogs, screenshots to disk) are behind `#[cfg(not(target_arch = "wasm32"))]`; `cargo xtask wasm` builds the browser app to check.
 
+## Sketch mode
+- `crates/ui/src/sketch_ui.rs`: the sketch toolbar, drawing tools, previews, dimension labels and inline value editing, all through `sketch.*` commands.
+- Tool clicks go through `sketch_click(x, y, w, h, shift)`, which tests call with pixels (see its tests) instead of a mouse.
+- Only use glyphs the bundled fonts have (Ø yes; ⌀, ✏, ✔ no): check a screenshot.
+
 ## Seeing your change
 Capture and look at a screenshot before you say a UI change is done: `skills/chamfera-agent-tools/SKILL.md`.

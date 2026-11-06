@@ -81,10 +81,10 @@ impl Session {
         } else {
             (spec.run)(self, params)
         };
-        // Sketch display follows the design, the active sketch and its selection. Camera
-        // commands (every mouse move) skip the rebuild.
+        // Sketch display follows the design, the active sketch and its selection. Commands
+        // that change none of these (camera moves, picks, queries: every mouse move) skip
+        // the rebuild.
         if spec.mutates
-            || id.starts_with("sketch.")
             || id.starts_with("edit.")
             || id.starts_with("design.")
             || (self.active_sketch, &self.sketch_selection) != (state.0, &state.1)
