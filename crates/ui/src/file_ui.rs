@@ -365,6 +365,7 @@ impl ChamferaApp {
     }
 
     /// Reports a STEP import: how many solids came in and how many were left out.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn after_step(&mut self, reply: Option<&serde_json::Value>) {
         let Some(v) = reply else {
             return;
@@ -734,6 +735,34 @@ impl ChamferaApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_theme_forced_at_start_survives_opening_a_design_until_the_user_picks_one() {
+        // `chamfera --theme dark` with light preferences: opening a design records it in
+        // the recent list, which applies the preferences again; that must not undo the
+        // forced theme (screenshots of scripts that open a design came out light).
+        let options = crate::Options {
+            theme: Some(chamfera_render::ThemeMode::Dark),
+            ..Default::default()
+        };
+        let prefs = crate::prefs::Preferences {
+            theme: crate::ThemeChoice::Light,
+            ..Default::default()
+        };
+        let mut app = ChamferaApp::with_gpu(None, &options, prefs);
+        assert_eq!(app.theme_choice, crate::ThemeChoice::Dark);
+        let dir = std::env::temp_dir().join(format!("chamfera-ui-theme-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("t.chamfera");
+        app.run("design.save", json!({ "path": path.to_string_lossy() }));
+        app.run("design.open", json!({ "path": path.to_string_lossy() }));
+        app.track_recent();
+        assert_eq!(app.theme_choice, crate::ThemeChoice::Dark);
+        // Choosing a theme in the preferences wins over the start-up option.
+        app.prefs.theme = crate::ThemeChoice::System;
+        app.preferences_changed();
+        assert_eq!(app.theme_choice, crate::ThemeChoice::System);
+    }
 
     #[test]
     fn insert_step_is_in_the_solid_insert_group_and_reports_what_came_in() {

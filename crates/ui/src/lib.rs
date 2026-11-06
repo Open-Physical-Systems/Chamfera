@@ -149,6 +149,9 @@ enum Shot {
 pub struct ChamferaApp {
     session: Session,
     theme_choice: ThemeChoice,
+    /// A theme forced at start (`--theme`) and the preferences' theme then: it holds until
+    /// the preferences pick another theme.
+    forced_theme: Option<(ThemeChoice, ThemeChoice)>,
     theme: Theme,
     styled_for: Option<ThemeMode>,
     icons: icons::Icons,
@@ -254,6 +257,11 @@ impl ChamferaApp {
                 None => prefs.theme,
                 Some(ThemeMode::Light) => ThemeChoice::Light,
                 Some(ThemeMode::Dark) => ThemeChoice::Dark,
+            },
+            forced_theme: match options.theme {
+                None => None,
+                Some(ThemeMode::Light) => Some((ThemeChoice::Light, prefs.theme)),
+                Some(ThemeMode::Dark) => Some((ThemeChoice::Dark, prefs.theme)),
             },
             theme: Theme::light(),
             styled_for: None,
