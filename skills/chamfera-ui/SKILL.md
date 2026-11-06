@@ -19,6 +19,7 @@ The UI (`crates/ui/src/lib.rs`) is egui on wgpu, for the desktop and the browser
 - Right-click menus (`crates/ui/src/context_menu.rs`): a right click (no drag) opens the menu for what is under the cursor; items are `Entry` rows whose `Act` runs a command or `run_action`, the same path as the ribbon. The Browser reuses them (`body_entries`, `show_entries`). Items that cannot run are shown disabled with the reason.
 - The selection filter (bottom-left of the viewport) goes to `select.pick` and `sketch.select` as `filter`; hover pre-highlight uses `Session::pick_filtered` only when the pointer or view moved, drawn in the `hover_highlight` token.
 - Default navigation: left-click selects, middle-drag pans, Shift+middle or right-drag orbits, the wheel zooms toward the cursor, F fits, H goes home, Esc clears the selection.
+- Selection is a set of bodies (`Scene::selected`; `Scene::is_selected` for drawing). Shift or Ctrl+click toggles, Ctrl+Shift+click removes, a plain click on empty space clears (`select.pick` `mode`). A left drag draws a box (`crates/ui/src/sketch_select.rs`, `select.box`): to the right a window (solid outline, `select_window` tokens, fully inside), to the left a crossing (dashed, `select_crossing` tokens, touched). In a sketch the Select tool boxes points and curves when the drag starts on empty space.
 - Desktop-only features (file dialogs, screenshots to disk) are behind `#[cfg(not(target_arch = "wasm32"))]`; `cargo xtask wasm` builds the browser app to check.
 
 ## Sketch mode

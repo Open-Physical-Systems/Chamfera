@@ -212,8 +212,8 @@ fn visibility(s: &mut Session, p: &Value) -> CmdResult {
     if let Some(b) = s.scene.body_mut(id) {
         b.visible = visible;
     }
-    if !visible && s.scene.selection.is_some_and(|h| h.body == id) {
-        s.scene.selection = None;
+    if !visible {
+        s.scene.deselect(|b| b == id);
     }
     Ok(summary(s, id))
 }
@@ -236,8 +236,6 @@ fn rename(s: &mut Session, p: &Value) -> CmdResult {
 fn remove(s: &mut Session, p: &Value) -> CmdResult {
     let id = body_id(s, p)?;
     s.scene.bodies.retain(|b| b.id != id);
-    if s.scene.selection.is_some_and(|h| h.body == id) {
-        s.scene.selection = None;
-    }
+    s.scene.deselect(|b| b == id);
     Ok(json!({ "removed": id }))
 }
