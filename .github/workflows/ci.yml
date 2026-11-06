@@ -54,17 +54,116 @@ jobs:
           path: target/appimage/Chamfera-*-x86_64.AppImage
           if-no-files-found: error
 
+  windows:
+    needs: ci
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Icon and installer tools (ImageMagick, NSIS)
+        shell: pwsh
+        run: |
+          if (-not (Get-Command magick -ErrorAction SilentlyContinue)) { choco install imagemagick -y --no-progress }
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\NSIS\makensis.exe")) { choco install nsis -y --no-progress }
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release
+      - name: Build the zip and the installer
+        shell: pwsh
+        run: |
+          # choco puts new tools on PATH only for later shells; refresh it for this one.
+          $env:Path = [Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + $env:Path
+          ./packaging/windows/build-windows.ps1 -RequireInstaller
+      - name: The zip runs
+        shell: pwsh
+        run: |
+          $zip = Get-Item target/windows/Chamfera-*-windows-x86_64.zip
+          Expand-Archive $zip.FullName -DestinationPath "$env:RUNNER_TEMP/zip"
+          $dir = (Get-ChildItem "$env:RUNNER_TEMP/zip" -Directory | Select-Object -First 1).FullName
+          Get-ChildItem $dir | Format-Table Name, Length
+          foreach ($f in "chamfera.exe", "chamfera-cli.exe", "LICENSE-MIT", "LICENSE-APACHE", "ATTRIBUTION.md") {
+            if (-not (Test-Path "$dir/$f")) { throw "$f missing from the zip" }
+          }
+          & "$dir/chamfera-cli.exe" --version; if ($LASTEXITCODE -ne 0) { throw "cli --version failed" }
+          & "$dir/chamfera-cli.exe" exec body.sample; if ($LASTEXITCODE -ne 0) { throw "cli exec failed" }
+          # chamfera.exe is a GUI-subsystem app; capturing its output makes PowerShell wait for it.
+          $v = (& "$dir/chamfera.exe" --version | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0 -or -not $v.StartsWith("chamfera ")) { throw "chamfera --version printed '$v'" }
+          Write-Output $v
+      - name: The installer installs, runs and uninstalls (silently)
+        shell: pwsh
+        run: |
+          $setup = (Get-Item target/windows/Chamfera-*-windows-x86_64-setup.exe).FullName
+          $dir = "$env:RUNNER_TEMP\installed"
+          Start-Process -FilePath $setup -ArgumentList "/S", "/D=$dir" -Wait
+          & "$dir\chamfera-cli.exe" --version; if ($LASTEXITCODE -ne 0) { throw "installed cli failed" }
+          if (-not (Test-Path "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Chamfera.lnk")) { throw "no Start menu shortcut" }
+          Start-Process -FilePath "$dir\uninstall.exe" -ArgumentList "/S", "_?=$dir" -Wait
+          if (Test-Path "$dir\chamfera.exe") { throw "uninstall left chamfera.exe behind" }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chamfera-windows
+          path: |
+            target/windows/Chamfera-*-windows-x86_64.zip
+            target/windows/Chamfera-*-windows-x86_64-setup.exe
+          if-no-files-found: error
+
+  macos:
+    needs: ci
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Icon tool (rsvg-convert)
+        run: command -v rsvg-convert || brew install librsvg
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release
+      - run: packaging/macos/build-macos.sh
+      - name: The disk image mounts and the app runs
+        run: |
+          DMG=$(ls target/macos/Chamfera-*-macos-universal.dmg)
+          MNT="$RUNNER_TEMP/dmg"
+          hdiutil attach -nobrowse -readonly -mountpoint "$MNT" "$DMG"
+          ls -la "$MNT" "$MNT/Chamfera.app/Contents/MacOS" "$MNT/Chamfera.app/Contents/Resources"
+          for bin in chamfera chamfera-cli; do
+            archs=$(lipo -archs "$MNT/Chamfera.app/Contents/MacOS/$bin")
+            echo "$bin: $archs"
+            [[ "$archs" == *arm64* && "$archs" == *x86_64* ]]
+          done
+          plutil -p "$MNT/Chamfera.app/Contents/Info.plist"
+          "$MNT/Chamfera.app/Contents/MacOS/chamfera-cli" --version
+          "$MNT/Chamfera.app/Contents/MacOS/chamfera-cli" exec body.sample
+          v=$("$MNT/Chamfera.app/Contents/MacOS/chamfera" --version)
+          echo "$v"
+          [[ "$v" == "chamfera "* ]]
+          hdiutil detach "$MNT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chamfera-macos
+          path: target/macos/Chamfera-*-macos-universal.dmg
+          if-no-files-found: error
+
   release:
-    # A tag vX.Y.Z (on main) publishes the AppImage as a GitHub release.
+    # A tag vX.Y.Z (on main) publishes the AppImage, the Windows zip and installer, and the
+    # macOS disk image as a GitHub release.
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: appimage
+    needs: [appimage, windows, macos]
     runs-on: ubuntu-22.04
     permissions:
       contents: write
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: chamfera-appimage
+          pattern: chamfera-*
+          merge-multiple: true
       - env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" Chamfera-*-x86_64.AppImage --repo "$GITHUB_REPOSITORY" --generate-notes
+        run: |
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --generate-notes \
+            Chamfera-*-x86_64.AppImage \
+            Chamfera-*-windows-x86_64.zip \
+            Chamfera-*-windows-x86_64-setup.exe \
+            Chamfera-*-macos-universal.dmg

@@ -16,5 +16,9 @@ The user interface uses the default fonts bundled by egui (`epaint_default_fonts
 The licence texts ship with the crate (`fonts/*.txt` in `epaint_default_fonts`).
 
 ## Build tools
-The AppImage is assembled with [appimagetool](https://github.com/AppImage/appimagetool)
-(downloaded at build time, not shipped).
+Used at build time only; none of them ship inside the packages:
+- [appimagetool](https://github.com/AppImage/appimagetool) assembles the Linux AppImage.
+- [NSIS](https://nsis.sourceforge.io) (zlib licence) builds the Windows installer.
+- [ImageMagick](https://imagemagick.org) and [librsvg](https://gitlab.gnome.org/GNOME/librsvg) turn the
+  icon SVG into PNG, ICO and ICNS images.
+- `winresource` (MIT, a Rust build-dependency) embeds the icon and version into the Windows exe.

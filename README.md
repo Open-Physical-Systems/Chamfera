@@ -13,7 +13,9 @@ CAM (toolpaths and G-code) comes after the CAD core.
 ```sh
 cargo run --release -p chamfera -- --sample          # the desktop app with a sample part
 cargo run -p chamfera-cli -- snapshot --sample --out shot.png
-packaging/linux/build-appimage.sh                    # target/appimage/Chamfera-*.AppImage
+packaging/linux/build-appimage.sh                    # Linux: target/appimage/Chamfera-*.AppImage
+pwsh packaging/windows/build-windows.ps1             # Windows: target/windows/ zip (+ setup.exe with NSIS)
+packaging/macos/build-macos.sh                       # macOS: target/macos/Chamfera-*-macos-universal.dmg
 cargo run -p chamfera-cli -- commands
 cargo run -p chamfera-cli -- exec param.set '{"name":"width","value":50}'
 cargo run -p chamfera-cli -- run examples/parameters.json

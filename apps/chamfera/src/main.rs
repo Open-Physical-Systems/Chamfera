@@ -4,6 +4,9 @@
 //! chamfera [part.stl ...] [--sample] [--theme light|dark] [--screenshot shot.png]
 //! ```
 
+// Release builds on Windows open no console window; chamfera-cli stays a console app.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 use std::process::ExitCode;
 
 const USAGE: &str =
