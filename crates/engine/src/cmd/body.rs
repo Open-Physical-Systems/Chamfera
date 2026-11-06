@@ -21,6 +21,36 @@ pub static COMMANDS: &[CommandSpec] = &[
         run: crate::display::appearance,
     },
     CommandSpec {
+        id: "body.import_3mf",
+        label: "Insert Mesh (3MF)",
+        params: "path: string (required) - a .3mf file; each build item becomes a mesh body, \
+                 in mm",
+        mutates: false,
+        run: import_3mf,
+    },
+    CommandSpec {
+        id: "body.import_3mf_bytes",
+        label: "Insert Mesh (3MF)",
+        params: "data: string (required) - the .3mf file's contents, base64",
+        mutates: false,
+        run: import_3mf_bytes,
+    },
+    CommandSpec {
+        id: "body.import_obj",
+        label: "Insert Mesh (OBJ)",
+        params: "path: string (required) - an .obj file, in mm; its faces become one mesh body",
+        mutates: false,
+        run: import_obj,
+    },
+    CommandSpec {
+        id: "body.import_obj_bytes",
+        label: "Insert Mesh (OBJ)",
+        params: "data: string (required) - the .obj file's contents, base64\n\
+                 name: string (optional) - the body's name; default \"Mesh\"",
+        mutates: false,
+        run: import_obj_bytes,
+    },
+    CommandSpec {
         id: "body.import_step",
         label: "Insert STEP Solids",
         params: "path: string (required) - a .step/.stp file (AP203, AP214, AP242); its B-rep solids become exact bodies, solids it cannot import yet are listed in `skipped`",
@@ -133,6 +163,79 @@ fn import_stl_bytes(s: &mut Session, p: &Value) -> CmdResult {
         .unwrap_or("Mesh");
     let name: String = name.chars().filter(|c| !c.is_control()).take(64).collect();
     add(s, &name, mesh)
+}
+
+/// A body name from a file name: no extension, no control characters, at most 64
+/// characters, never empty.
+fn body_name(name: Option<&str>, extension: &str) -> String {
+    let name = name.map(str::trim).unwrap_or("");
+    let stem = match name.rsplit_once('.') {
+        Some((stem, ext)) if ext.eq_ignore_ascii_case(extension) => stem,
+        _ => name,
+    };
+    let clean: String = stem.chars().filter(|c| !c.is_control()).take(64).collect();
+    if clean.trim().is_empty() {
+        "Mesh".to_owned()
+    } else {
+        clean
+    }
+}
+
+fn import_obj(s: &mut Session, p: &Value) -> CmdResult {
+    let path = params::req_str(p, "path")?;
+    let file = std::path::Path::new(path);
+    let bytes = chamfera_io::read_limited(file, chamfera_io::obj::MAX_OBJ_BYTES)?;
+    let mesh = chamfera_io::obj::read(&bytes)?;
+    let name = body_name(file.file_name().and_then(|n| n.to_str()), "obj");
+    add(s, &name, mesh)
+}
+
+fn import_obj_bytes(s: &mut Session, p: &Value) -> CmdResult {
+    let bytes =
+        super::design::decode_base64(params::req_str(p, "data")?, chamfera_io::obj::MAX_OBJ_BYTES)?;
+    let mesh = chamfera_io::obj::read(&bytes)?;
+    let name = body_name(params::opt_str(p, "name")?, "obj");
+    add(s, &name, mesh)
+}
+
+/// Adds each build item of a 3MF file as a mesh body; all or none.
+fn add_3mf(s: &mut Session, bytes: &[u8]) -> CmdResult {
+    let items = chamfera_io::threemf::read(bytes)?;
+    if s.scene.bodies.len() + items.len() > chamfera_render::MAX_BODIES {
+        return Err(CommandError::Unavailable(format!(
+            "the scene holds at most {} bodies",
+            chamfera_render::MAX_BODIES
+        )));
+    }
+    let mut bodies = Vec::new();
+    let mut triangles = 0;
+    for item in items {
+        triangles += item.mesh.triangles.len();
+        let name = body_name(Some(&item.name), "3mf");
+        bodies.push(add(s, &name, item.mesh)?);
+    }
+    let name = bodies
+        .first()
+        .map(|b| b["name"].clone())
+        .unwrap_or_default();
+    Ok(json!({ "bodies": bodies, "name": name, "triangles": triangles }))
+}
+
+fn import_3mf(s: &mut Session, p: &Value) -> CmdResult {
+    let path = params::req_str(p, "path")?;
+    let bytes = chamfera_io::read_limited(
+        std::path::Path::new(path),
+        chamfera_io::threemf::MAX_3MF_BYTES,
+    )?;
+    add_3mf(s, &bytes)
+}
+
+fn import_3mf_bytes(s: &mut Session, p: &Value) -> CmdResult {
+    let bytes = super::design::decode_base64(
+        params::req_str(p, "data")?,
+        chamfera_io::threemf::MAX_3MF_BYTES,
+    )?;
+    add_3mf(s, &bytes)
 }
 
 /// Imports the complete solids of a STEP file into the design (imported bodies are

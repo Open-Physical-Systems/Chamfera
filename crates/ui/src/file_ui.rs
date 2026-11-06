@@ -1,14 +1,37 @@
 //! The File menu: New, Open, Save, Save As, Export, Insert, and the question before
 //! unsaved changes are thrown away. Keyboard shortcuts for files and undo live here too.
 //!
-//! The desktop uses file dialogs and paths. In the browser (wasm32) Open and Insert Mesh
-//! use the browser's file picker, Save and Export download the file, and the design is
+//! Export writes STEP, STL, 3MF, OBJ or glTF binary; Insert Mesh takes STL, OBJ or 3MF;
+//! Insert DXF draws a DXF file into the sketch being edited.
+//!
+//! The desktop uses file dialogs and paths. In the browser (wasm32) Open and the Insert
+//! items use the browser's file picker, Save and Export download the file, and the design is
 //! kept in local storage (`crate::web`); there is no Save As or Quit.
 
 use crate::icons::Icon;
 use crate::widgets;
 use crate::{ChamferaApp, label};
 use serde_json::json;
+
+/// The mesh exports after STEP and STL: what the dialog calls the file, its extensions,
+/// and the command.
+pub(crate) const MESH_EXPORTS: [(&str, &[&str], &str); 3] = [
+    ("3MF", &["3mf"], "design.export_3mf"),
+    ("OBJ mesh", &["obj"], "design.export_obj"),
+    ("glTF binary", &["glb"], "design.export_glb"),
+];
+
+/// The command that inserts a mesh file, by its name's extension (STL when unknown).
+pub(crate) fn mesh_import_command(name: &str) -> &'static str {
+    let ext = name.rsplit_once('.').map_or("", |(_, e)| e);
+    if ext.eq_ignore_ascii_case("obj") {
+        "body.import_obj"
+    } else if ext.eq_ignore_ascii_case("3mf") {
+        "body.import_3mf"
+    } else {
+        "body.import_stl"
+    }
+}
 
 /// Something that would discard unsaved changes, waiting for the user's answer.
 #[derive(Debug, Clone, PartialEq)]
@@ -36,8 +59,8 @@ impl ChamferaApp {
         let look = self.look();
         // Where each item is, for tests in the browser (`crate::web`).
         let mut drawn: Vec<(String, egui::Rect)> = Vec::new();
-        let mut item = |ui: &mut egui::Ui, icon: Icon, text: &str, keys: &str| {
-            let r = widgets::menu_item(ui, look, icon, text, true);
+        let mut item_if = |ui: &mut egui::Ui, icon: Icon, text: &str, keys: &str, on: bool| {
+            let r = widgets::menu_item(ui, look, icon, text, on);
             drawn.push((text.to_owned(), r.rect));
             if !keys.is_empty() {
                 ui.painter().text(
@@ -51,10 +74,10 @@ impl ChamferaApp {
             r.clicked()
         };
         ui.set_min_width(240.0);
-        let new = item(ui, Icon::New, "New", "Ctrl+N");
-        let open = item(ui, Icon::Open, "Open…", "Ctrl+O");
+        let new = item_if(ui, Icon::New, "New", "Ctrl+N", true);
+        let open = item_if(ui, Icon::Open, "Open…", "Ctrl+O", true);
         ui.separator();
-        let save = item(ui, Icon::Save, "Save", "Ctrl+S");
+        let save = item_if(ui, Icon::Save, "Save", "Ctrl+S", true);
         #[cfg(not(target_arch = "wasm32"))]
         let mut recent_pick: Option<std::path::PathBuf> = None;
         #[cfg(not(target_arch = "wasm32"))]
@@ -75,38 +98,52 @@ impl ChamferaApp {
             }
         }
         #[cfg(not(target_arch = "wasm32"))]
-        let save_as = item(ui, Icon::Save, "Save As…", "Ctrl+Shift+S");
+        let save_as = item_if(ui, Icon::Save, "Save As…", "Ctrl+Shift+S", true);
         ui.separator();
-        let step = item(
+        let step = item_if(
             ui,
             Icon::Export,
             &format!("{}…", label("design.export_step")),
             "",
+            true,
         );
-        let stl = item(
+        let stl = item_if(
             ui,
             Icon::Export,
             &format!("{}…", label("design.export_stl")),
             "",
+            true,
         );
-        let post_linuxcnc = item(ui, Icon::CamPost, "Post G-code (LinuxCNC)…", "");
-        let post_grbl = item(ui, Icon::CamPost, "Post G-code (GRBL)…", "");
+        let mut mesh_export = None;
+        for (i, (_, _, command)) in MESH_EXPORTS.iter().enumerate() {
+            if item_if(ui, Icon::Export, &format!("{}…", label(command)), "", true) {
+                mesh_export = Some(i);
+            }
+        }
+        let post_linuxcnc = item_if(ui, Icon::CamPost, "Post G-code (LinuxCNC)…", "", true);
+        let post_grbl = item_if(ui, Icon::CamPost, "Post G-code (GRBL)…", "", true);
         // While the DRAWING tab is open: the sheet's exports (`drawing_ui.rs`).
         let drawing_export = self.drawing_export_items(ui, look);
         ui.separator();
-        let import = item(
+        let import = item_if(
             ui,
             Icon::ImportMesh,
-            &format!("{}…", label("body.import_stl")),
+            "Insert Mesh (STL, OBJ, 3MF)…",
             "",
+            true,
         );
-        let sample = item(ui, Icon::Body, label("body.sample"), "");
+        let sketching = self.session.active_sketch.is_some();
+        let dxf_text = format!("{} into Sketch…", label("sketch.import_dxf"));
+        let dxf = item_if(ui, Icon::ImportMesh, &dxf_text, "", sketching);
+        let dxf_out_text = format!("{}…", label("sketch.export_dxf"));
+        let dxf_out = item_if(ui, Icon::Export, &dxf_out_text, "", sketching);
+        let sample = item_if(ui, Icon::Body, label("body.sample"), "", true);
         ui.separator();
-        let preferences = item(ui, Icon::Parameters, "Preferences…", "Ctrl+,");
+        let preferences = item_if(ui, Icon::Parameters, "Preferences…", "Ctrl+,", true);
         #[cfg(not(target_arch = "wasm32"))]
         let quit = {
             ui.separator();
-            item(ui, Icon::Close, "Quit", "")
+            item_if(ui, Icon::Close, "Quit", "", true)
         };
         #[cfg(target_arch = "wasm32")]
         for (text, rect) in &drawn {
@@ -148,6 +185,10 @@ impl ChamferaApp {
             ui.close();
             self.export("STL mesh", &["stl"], "design.export_stl");
         }
+        if let Some((kind, extensions, command)) = mesh_export.and_then(|i| MESH_EXPORTS.get(i)) {
+            ui.close();
+            self.export(kind, extensions, command);
+        }
         if post_linuxcnc || post_grbl {
             ui.close();
             self.post_dialog(if post_grbl { "grbl" } else { "linuxcnc" });
@@ -159,6 +200,14 @@ impl ChamferaApp {
         if import {
             ui.close();
             self.import_dialog();
+        }
+        if dxf {
+            ui.close();
+            self.dxf_dialog();
+        }
+        if dxf_out {
+            ui.close();
+            self.export("DXF drawing", &["dxf"], "sketch.export_dxf");
         }
         if sample {
             ui.close();
@@ -250,10 +299,58 @@ impl ChamferaApp {
         self.web.pick(crate::web::Kind::Design, ".chamfera", false);
     }
 
-    /// The browser's file picker for STL meshes, inserted in `browser_files` once read.
+    /// The browser's file picker for meshes, inserted in `browser_files` once read.
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn import_dialog(&mut self) {
-        self.web.pick(crate::web::Kind::Mesh, ".stl,.STL", true);
+        self.web.pick(
+            crate::web::Kind::Mesh,
+            ".stl,.STL,.obj,.OBJ,.3mf,.3MF",
+            true,
+        );
+    }
+
+    /// The browser's file picker for a DXF drawing, drawn into the active sketch once read.
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn dxf_dialog(&mut self) {
+        self.web.pick(crate::web::Kind::Dxf, ".dxf,.DXF", false);
+    }
+
+    /// Asks for a DXF file and draws it into the sketch being edited.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn dxf_dialog(&mut self) {
+        let Some(path) = rfd::FileDialog::new()
+            .set_title(label("sketch.import_dxf"))
+            .add_filter("DXF drawing", &["dxf", "DXF"])
+            .pick_file()
+        else {
+            return;
+        };
+        let reply = self.run(
+            "sketch.import_dxf",
+            json!({ "path": path.to_string_lossy() }),
+        );
+        self.after_dxf(reply.as_ref());
+    }
+
+    /// Reports a DXF import.
+    pub(crate) fn after_dxf(&mut self, reply: Option<&serde_json::Value>) {
+        let Some(v) = reply else {
+            return;
+        };
+        let skipped: u64 = v["skipped"].as_object().map_or(0, |m| {
+            m.values().filter_map(serde_json::Value::as_u64).sum()
+        });
+        let mut text = format!(
+            "Inserted {} curves ({}), {} profiles",
+            v["curves"],
+            v["units"].as_str().unwrap_or("mm"),
+            v["profiles"].as_array().map_or(0, Vec::len)
+        );
+        if skipped > 0 {
+            text.push_str(&format!("; {skipped} entities left out"));
+        }
+        self.message = Some((text, false));
+        self.refresh_sketch_status();
     }
 
     /// Opens the design this browser kept (local storage), if any, at start.
@@ -304,12 +401,14 @@ impl ChamferaApp {
                         self.message = Some((format!("Opened {}", picked.name), false));
                     }
                 }
+                crate::web::Kind::Dxf => {
+                    let reply = self.run("sketch.import_dxf_bytes", json!({ "data": data }));
+                    self.after_dxf(reply.as_ref());
+                }
                 crate::web::Kind::Mesh => {
                     let name = picked.name.as_str();
-                    if let Some(v) = self.run(
-                        "body.import_stl_bytes",
-                        json!({ "data": data, "name": name }),
-                    ) {
+                    let command = format!("{}_bytes", mesh_import_command(name));
+                    if let Some(v) = self.run(&command, json!({ "data": data, "name": name })) {
                         self.message = Some((
                             format!(
                                 "Inserted {} ({} triangles)",
@@ -387,20 +486,30 @@ impl ChamferaApp {
     #[cfg(target_arch = "wasm32")]
     fn export(&mut self, _kind: &str, extensions: &[&str], command: &str) {
         let ext = extensions.first().copied().unwrap_or("out");
-        let format = if command == "design.export_step" {
-            "step"
+        let format = command
+            .strip_prefix("design.export_")
+            .or_else(|| command.strip_prefix("sketch.export_"))
+            .unwrap_or("stl");
+        let reply = if command == "sketch.export_dxf" {
+            self.run("sketch.export_dxf_bytes", json!({}))
         } else {
-            "stl"
+            let mut params = json!({ "format": format });
+            if format == "step" {
+                params["timestamp"] = json!(crate::web::now_iso8601());
+            }
+            self.run("design.export_bytes", params)
         };
-        let params = json!({ "format": format, "timestamp": crate::web::now_iso8601() });
-        let Some(v) = self.run("design.export_bytes", params) else {
+        let Some(v) = reply else {
             return;
         };
         let name = format!("{}.{ext}", self.design_name());
-        let mime = if format == "step" {
-            "model/step"
-        } else {
-            "model/stl"
+        let mime = match format {
+            "step" => "model/step",
+            "3mf" => "model/3mf",
+            "obj" => "model/obj",
+            "glb" => "model/gltf-binary",
+            "dxf" => "image/vnd.dxf",
+            _ => "model/stl",
         };
         match crate::web::download(&name, mime, v["data"].as_str().unwrap_or("")) {
             Ok(()) => self.message = Some((format!("Downloaded {name}"), false)),
@@ -592,5 +701,16 @@ mod tests {
         app.do_pending(action);
         assert!(app.session.doc.parameters.is_empty());
         assert!(!app.session.has_unsaved_changes());
+    }
+
+    #[test]
+    fn mesh_files_go_to_the_command_for_their_extension() {
+        assert_eq!(mesh_import_command("a.OBJ"), "body.import_obj");
+        assert_eq!(mesh_import_command("dir.v2/part.3mf"), "body.import_3mf");
+        assert_eq!(mesh_import_command("part.stl"), "body.import_stl");
+        assert_eq!(mesh_import_command("noext"), "body.import_stl");
+        for (_, _, command) in MESH_EXPORTS {
+            assert!(chamfera_engine::cmd::find(command).is_some(), "{command}");
+        }
     }
 }

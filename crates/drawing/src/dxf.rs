@@ -3,9 +3,22 @@
 //! SOLID entities on the layers VISIBLE, HIDDEN, CENTER, DIM and BORDER. Units are mm.
 
 use crate::sheet::SheetGeometry;
-use crate::svg::num;
 use crate::{Align, Layer, Shape};
 use std::fmt::Write;
+
+/// A number for DXF: plain decimal, at most 10 places, no trailing zeros. Sketches go out
+/// through here too (`sketch.export_dxf`), so arcs keep their endpoints to well under a
+/// micrometre even at a metre's radius.
+fn num(v: f64) -> String {
+    let v = if v.is_finite() { v } else { 0.0 };
+    let s = format!("{v:.10}");
+    let s = s.trim_end_matches('0').trim_end_matches('.');
+    if s == "-0" || s.is_empty() {
+        "0".to_owned()
+    } else {
+        s.to_owned()
+    }
+}
 
 struct Dxf(String);
 

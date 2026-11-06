@@ -1,4 +1,4 @@
-//! `design.*`: new, open and save.
+//! `design.*`: new, open and save, and exports (STEP, STL, 3MF, OBJ, glTF binary).
 //!
 //! Path access: the CLI runs as the user, so any path the user names is allowed. The MCP
 //! server (M6) will restrict these to allowed folders before calling them.
@@ -15,6 +15,31 @@ use std::path::Path;
 
 pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec {
+        id: "design.export_3mf",
+        label: "Export 3MF",
+        params: "path: string (required) - where to write the .3mf file (the selected bodies, \
+                 else all shown bodies, with their colours, in mm)",
+        mutates: false,
+        run: export_3mf,
+    },
+    CommandSpec {
+        id: "design.export_glb",
+        label: "Export glTF Binary",
+        params: "path: string (required) - where to write the .glb file (the selected bodies, \
+                 else all shown bodies, with their colours; glTF is in metres, Y up)",
+        mutates: false,
+        run: export_glb,
+    },
+    CommandSpec {
+        id: "design.export_obj",
+        label: "Export OBJ",
+        params: "path: string (required) - where to write the .obj file (the selected bodies, \
+                 else all shown bodies, in mm); their colours go in a .mtl file of the same \
+                 name next to it",
+        mutates: false,
+        run: export_obj,
+    },
+    CommandSpec {
         id: "design.export_step",
         label: "Export STEP",
         params: "path: string (required) - where to write the .step file (all solids)",
@@ -24,8 +49,9 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         id: "design.export_bytes",
         label: "Export",
-        params: "format: string (required) - \"stl\" (binary, all shown solids) or \"step\" (all \
-                 solids)\ntimestamp: string (optional) - the STEP header time, \
+        params: "format: string (required) - \"stl\" (binary, all shown solids), \"step\" (all \
+                 solids), or \"3mf\", \"obj\" or \"glb\" (the selected bodies, else all shown \
+                 bodies; OBJ without materials)\ntimestamp: string (optional) - the STEP header time, \
                  YYYY-MM-DDThh:mm:ss\nReplies with the file as base64 `data`; writes no file",
         mutates: false,
         run: export_bytes,
@@ -209,9 +235,19 @@ fn export_bytes(s: &mut Session, p: &Value) -> CmdResult {
             let text = chamfera_io::step::write(&bodies, &options)?;
             (text.into_bytes(), "solids", bodies.len())
         }
+        format @ ("3mf" | "obj" | "glb") => {
+            let bodies = mesh_bodies(s)?;
+            let list = as_mesh_bodies(&bodies);
+            let bytes = match format {
+                "3mf" => chamfera_io::threemf::write(&list)?,
+                "obj" => chamfera_io::obj::write(&list, None)?.0.into_bytes(),
+                _ => chamfera_io::gltf::write_glb(&list)?,
+            };
+            (bytes, "bodies", bodies.len())
+        }
         other => {
             return Err(CommandError::BadParams(format!(
-                "`format` is \"stl\" or \"step\", not {other:?}"
+                "`format` is \"stl\", \"step\", \"3mf\", \"obj\" or \"glb\", not {other:?}"
             )));
         }
     };
@@ -294,6 +330,103 @@ fn export_stl(s: &mut Session, p: &Value) -> CmdResult {
     let bytes = chamfera_io::stl::write_binary(&mesh)?;
     std::fs::write(path, bytes).map_err(chamfera_io::IoError::from)?;
     Ok(json!({ "path": path, "triangles": mesh.triangles.len() }))
+}
+
+/// The bodies a mesh export writes: the selected bodies, else every shown body, each with
+/// its name, mesh and colour (`body.appearance`).
+fn mesh_bodies(
+    s: &Session,
+) -> Result<Vec<(String, chamfera_geom::TriMesh, [u8; 3])>, CommandError> {
+    let chosen: Vec<&chamfera_render::SceneBody> = if s.scene.selected.is_empty() {
+        s.scene.bodies.iter().filter(|b| b.visible).collect()
+    } else {
+        s.scene
+            .selected
+            .iter()
+            .filter_map(|id| s.scene.body(*id))
+            .collect()
+    };
+    // A body's own appearance colour, else the light theme's body colour (with its
+    // component tint), as the viewport shows it.
+    let theme = chamfera_render::Theme::light();
+    let out: Vec<_> = chosen
+        .into_iter()
+        .filter(|b| !b.mesh.triangles.is_empty())
+        .map(|b| {
+            let c = b
+                .appearance
+                .colour
+                .unwrap_or_else(|| theme.body_colour(b.tint));
+            (b.name.clone(), b.mesh.clone(), [c.0, c.1, c.2])
+        })
+        .collect();
+    if out.is_empty() {
+        return Err(CommandError::Unavailable(
+            "there are no shown bodies to export".into(),
+        ));
+    }
+    Ok(out)
+}
+
+fn as_mesh_bodies(
+    bodies: &[(String, chamfera_geom::TriMesh, [u8; 3])],
+) -> Vec<chamfera_io::mesh::MeshBody<'_>> {
+    bodies
+        .iter()
+        .map(|(name, mesh, colour)| chamfera_io::mesh::MeshBody {
+            name,
+            mesh,
+            colour: *colour,
+        })
+        .collect()
+}
+
+fn export_3mf(s: &mut Session, p: &Value) -> CmdResult {
+    let path = params::req_str(p, "path")?;
+    let bodies = mesh_bodies(s)?;
+    let bytes = chamfera_io::threemf::write(&as_mesh_bodies(&bodies))?;
+    std::fs::write(path, bytes).map_err(chamfera_io::IoError::from)?;
+    Ok(json!({ "path": path, "bodies": bodies.len() }))
+}
+
+fn export_glb(s: &mut Session, p: &Value) -> CmdResult {
+    let path = params::req_str(p, "path")?;
+    let bodies = mesh_bodies(s)?;
+    let bytes = chamfera_io::gltf::write_glb(&as_mesh_bodies(&bodies))?;
+    std::fs::write(path, bytes).map_err(chamfera_io::IoError::from)?;
+    Ok(json!({ "path": path, "bodies": bodies.len() }))
+}
+
+fn export_obj(s: &mut Session, p: &Value) -> CmdResult {
+    let path = Path::new(params::req_str(p, "path")?);
+    let bodies = mesh_bodies(s)?;
+    if path
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("mtl"))
+    {
+        return Err(CommandError::BadParams(
+            "`path` is the .obj file; its materials go in a .mtl file beside it".into(),
+        ));
+    }
+    let mtl_path = path.with_extension("mtl");
+    // The path was checked (over MCP, canonicalized into an allowed folder); its sibling
+    // was not, so it must not lead elsewhere through a link.
+    if let Ok(meta) = std::fs::symlink_metadata(&mtl_path)
+        && !meta.is_file()
+    {
+        return Err(CommandError::Unavailable(format!(
+            "{} exists and is not a plain file, so the materials cannot be written there",
+            mtl_path.display()
+        )));
+    }
+    let mtl_name = mtl_path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .ok_or_else(|| CommandError::BadParams("`path` must name a file".into()))?;
+    let (obj, mtl) = chamfera_io::obj::write(&as_mesh_bodies(&bodies), Some(&mtl_name))?;
+    std::fs::write(path, obj).map_err(chamfera_io::IoError::from)?;
+    std::fs::write(&mtl_path, mtl).map_err(chamfera_io::IoError::from)?;
+    Ok(json!({ "path": path, "materials": mtl_path, "bodies": bodies.len() }))
 }
 
 const BASE64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -495,7 +628,7 @@ mod tests {
         // Bad formats and parameters are refused.
         for p in [
             json!({}),
-            json!({"format": "obj"}),
+            json!({"format": "dwg"}),
             json!({"format": 1}),
             json!({"format": "step", "timestamp": "x".repeat(100)}),
             json!({"format": "step", "timestamp": "\u{0}"}),
@@ -596,5 +729,124 @@ mod tests {
             .unwrap();
         let got = r["name"].as_str().unwrap();
         assert!(got.starts_with("abx") && got.chars().count() == 64, "{got}");
+    }
+
+    #[test]
+    fn mesh_exports_read_back_as_the_box() {
+        let mut s = Session::new();
+        for format in ["3mf", "obj", "glb"] {
+            assert!(
+                s.execute("design.export_bytes", &json!({ "format": format }))
+                    .is_err(),
+                "nothing to export as {format}"
+            );
+        }
+        boxed(&mut s);
+        // The body's appearance colour goes into the file.
+        let body = s.execute("body.list", &json!({})).unwrap()["bodies"][0]["body"].clone();
+        s.execute(
+            "body.appearance",
+            &json!({ "body": body, "colour": "#ff2000" }),
+        )
+        .unwrap();
+        // 3MF: inserted again as a mesh body of 12 triangles and volume 50 * 30 * 10.
+        let data = bytes_of(&mut s, "3mf");
+        let zip_bytes = decode_base64(&data, u64::MAX).unwrap();
+        let zip = chamfera_io::zip::Archive::parse(&zip_bytes).unwrap();
+        let model = zip
+            .read(zip.find("3D/3dmodel.model").unwrap(), 1 << 20)
+            .unwrap();
+        assert!(
+            String::from_utf8(model)
+                .unwrap()
+                .contains("displaycolor=\"#FF2000\"")
+        );
+        let r = s
+            .execute("body.import_3mf_bytes", &json!({ "data": data }))
+            .unwrap();
+        assert_eq!(r["triangles"], 12);
+        assert!((r["bodies"][0]["volume"].as_f64().unwrap() - 15_000.0).abs() < 1e-6);
+        // OBJ: the same.
+        let data = bytes_of(&mut s, "obj");
+        let r = s
+            .execute(
+                "body.import_obj_bytes",
+                &json!({ "data": data, "name": "copy.obj" }),
+            )
+            .unwrap();
+        assert_eq!(r["name"], "copy");
+        assert_eq!(r["triangles"], 24, "the box and the 3MF copy, both shown");
+        assert!((r["volume"].as_f64().unwrap() - 30_000.0).abs() < 1e-6);
+        // glTF binary: starts with its magic.
+        let glb = decode_base64(&bytes_of(&mut s, "glb"), u64::MAX).unwrap();
+        assert_eq!(&glb[0..4], b"glTF");
+    }
+
+    fn bytes_of(s: &mut Session, format: &str) -> String {
+        let r = s
+            .execute("design.export_bytes", &json!({ "format": format }))
+            .unwrap();
+        r["data"].as_str().unwrap().to_owned()
+    }
+
+    #[test]
+    fn mesh_files_are_written_and_read_by_path() {
+        let mut s = Session::new();
+        boxed(&mut s);
+        let dir = std::env::temp_dir().join(format!("chamfera-formats-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = |n: &str| dir.join(n).to_string_lossy().into_owned();
+        s.execute("design.export_3mf", &json!({ "path": path("b.3mf") }))
+            .unwrap();
+        s.execute("design.export_glb", &json!({ "path": path("b.glb") }))
+            .unwrap();
+        let r = s
+            .execute("design.export_obj", &json!({ "path": path("b.obj") }))
+            .unwrap();
+        assert!(
+            std::fs::read_to_string(dir.join("b.mtl"))
+                .unwrap()
+                .contains("newmtl")
+        );
+        assert!(r["materials"].as_str().unwrap().ends_with("b.mtl"));
+        assert!(
+            s.execute("design.export_obj", &json!({ "path": path("b.mtl") }))
+                .is_err()
+        );
+        let r = s
+            .execute("body.import_3mf", &json!({ "path": path("b.3mf") }))
+            .unwrap();
+        assert_eq!(r["triangles"], 12);
+        let r = s
+            .execute("body.import_obj", &json!({ "path": path("b.obj") }))
+            .unwrap();
+        assert_eq!(r["name"], "b");
+        // The OBJ was written before the 3MF copy came in: the box's 12 triangles.
+        assert_eq!(r["triangles"], 12);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn hostile_mesh_files_are_refused() {
+        let mut s = Session::new();
+        let zip =
+            chamfera_io::zip::write_stored(&[("3D/3dmodel.model", b"<model><build/></model>")])
+                .unwrap();
+        for (cmd, data) in [
+            ("body.import_3mf_bytes", encode_base64(&zip)),
+            (
+                "body.import_3mf_bytes",
+                encode_base64(&zip[..zip.len() / 2]),
+            ),
+            ("body.import_3mf_bytes", encode_base64(b"PK")),
+            (
+                "body.import_obj_bytes",
+                encode_base64(b"v nan 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n"),
+            ),
+            ("body.import_obj_bytes", encode_base64(b"f 1 2 3\n")),
+        ] {
+            assert!(s.execute(cmd, &json!({ "data": data })).is_err(), "{cmd}");
+        }
+        assert!(s.scene.bodies.is_empty());
     }
 }

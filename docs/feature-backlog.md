@@ -72,7 +72,8 @@ Close runners-up: selection filters and box selection (UI and NAV), splines (nee
 | Profile detection | Closed regions, holes, nested profiles found automatically | done | P0 | M | sketch |
 | Splitting curves at crossings for profiles | Overlapping curves form regions without trimming first | missing | P0 | M | sketch |
 | Large sketches | Sparse solver for sketches with thousands of entities | missing | P2 | L | sketch |
-| Import DXF/SVG into a sketch | Bring 2D drawings in as sketch curves | missing | P1 | M | io, sketch |
+| Import DXF into a sketch | Bring 2D drawings in as sketch curves (`sketch.import_dxf`) | branch (`io/formats`) | P1 | M | io, sketch |
+| Import SVG into a sketch | Bring vector drawings in as sketch curves | missing | P1 | M | io, sketch |
 | Copy and paste sketch geometry | Clipboard for curves between sketches | missing | P2 | S | engine, ui |
 
 ## 2. Sketch constraints and dimensions
@@ -276,10 +277,13 @@ Close runners-up: selection filters and box selection (UI and NAV), splines (nee
 | STEP import of B-splines, assemblies with placements, faceted B-reps | Much third-party STEP uses them | missing | P0 | L | io, kernel (K10) |
 | STL export | Tessellated bodies | done | P0 | S | io |
 | STL import | As mesh bodies | done | P0 | S | io |
-| 3MF export and import | Mesh with units and colour, for 3D printing | missing | P1 | M | io |
-| OBJ export | Mesh for rendering tools | missing | P2 | S | io |
-| DXF export of sketches and faces | 2D profiles for laser and waterjet | missing | P1 | M | io |
-| DXF and SVG import into sketches | See sketch | missing | P1 | M | io |
+| 3MF export and import | Mesh with units and colour, for 3D printing | branch (`io/formats`) | P1 | M | io |
+| OBJ export and import | Mesh for rendering tools, colours in a .mtl | branch (`io/formats`) | P2 | S | io |
+| glTF binary export | `.glb` meshes with colours, metres and Y up | branch (`io/formats`) | P2 | S | io |
+| DXF export of sketches | 2D profiles for laser and waterjet (R12: lines, arcs, circles, polylines) | branch (`io/formats`) | P1 | M | io |
+| DXF export of faces | A planar face's outline straight to DXF | missing | P1 | S | io |
+| DXF import into sketches | Lines, arcs, circles, polylines with bulges, ellipses, splines; $INSUNITS; joined endpoints | branch (`io/formats`) | P1 | M | io |
+| SVG import into sketches | See sketch | missing | P1 | M | io |
 | IGES | Older exchange format | missing | P2 | L | io |
 | Canvas image | Place a reference picture on a plane and calibrate its scale | missing | P1 | M | doc, gpu, ui |
 | Screenshot / image export | PNG of the viewport | done | P0 | S | gpu, apps |
