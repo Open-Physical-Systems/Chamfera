@@ -10,7 +10,7 @@
 //!
 //! A dimension stores the points it measures in its view's own 2D coordinates (model
 //! millimetres along the view's right and up axes), snapped to projected vertices and
-//! edges when it was made. Since format 30 it also stores what those points are on the
+//! edges when it was made. Since format 31 it also stores what those points are on the
 //! model ([`ModelRef`]: a vertex or an edge by its persistent name, with a K8
 //! [`Signature`]), so it follows the model when it changes; the stored points are what it
 //! falls back to, drawn as dangling, when a reference no longer resolves.
@@ -185,10 +185,10 @@ pub struct SheetView {
     /// The base view this one is projected from.
     #[serde(default)]
     pub parent: Option<u32>,
-    /// A section view: the model cut along a line on another view (format 30).
+    /// A section view: the model cut along a line on another view (format 31).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub section: Option<SectionCut>,
-    /// A detail view: part of another view inside a circle, enlarged (format 30).
+    /// A detail view: part of another view inside a circle, enlarged (format 31).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<DetailCircle>,
 }
@@ -327,8 +327,8 @@ pub struct SheetDimension {
     /// the outer point, negative for the other side), the leader's length (diameter and
     /// radius), or the arc's radius (angle).
     pub offset: f64,
-    /// What the points are on the model (format 30), see [`DimensionKind::ref_count`];
-    /// empty for a dimension that keeps its points (made before format 30, or on a point
+    /// What the points are on the model (format 31), see [`DimensionKind::ref_count`];
+    /// empty for a dimension that keeps its points (made before format 31, or on a point
     /// with no named vertex or edge).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub refs: Vec<ModelRef>,
@@ -663,10 +663,10 @@ pub struct Sheet {
     pub views: Vec<SheetView>,
     #[serde(default)]
     pub dimensions: Vec<SheetDimension>,
-    /// Notes, leaders, symbols, frames, centre lines and balloons (format 30).
+    /// Notes, leaders, symbols, frames, centre lines and balloons (format 31).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub annotations: Vec<Annotation>,
-    /// The parts list table, if the sheet shows one (format 30).
+    /// The parts list table, if the sheet shows one (format 31).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parts_list: Option<PartsList>,
 }
@@ -1164,7 +1164,7 @@ mod tests {
             .is_err(),
             "a balloon on a missing view"
         );
-        // A view of a design before format 30 reads with none of the new fields.
+        // A view of a design before format 31 reads with none of the new fields.
         let v: SheetView =
             serde_json::from_str(r#"{"id": 2, "direction": "front", "x": 1, "y": 2}"#).unwrap();
         assert!(v.is_plain() && v.source().is_none());

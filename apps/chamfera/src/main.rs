@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! chamfera [part.stl ...] [--sample] [--theme light|dark] [--script steps.json]
-//!          [--parameters] [--preferences PAGE] [--drawing] [--extrude] [--extrude-with JSON]
+//!          [--parameters] [--configurations] [--preferences PAGE] [--drawing] [--extrude] [--extrude-with JSON]
 //!          [--hole] [--box X1,Y1,X2,Y2] [--search QUERY] [--context-menu X,Y]
 //!          [--press-pull X,Y,D] [--ribbon-menu GROUP] [--size WxH]
 //!          [--zoom F] [--screenshot shot.png]
@@ -15,7 +15,7 @@
 use std::process::ExitCode;
 
 const USAGE: &str = "usage: chamfera [part.stl ...] [--sample] [--theme light|dark] \
-[--script steps.json] [--parameters] [--preferences PAGE] [--drawing] [--extrude] \
+[--script steps.json] [--parameters] [--configurations] [--preferences PAGE] [--drawing] [--extrude] \
 [--extrude-with JSON] [--hole] \
 [--box X1,Y1,X2,Y2] [--search QUERY] [--context-menu X,Y] [--press-pull X,Y,D] \
 [--ribbon-menu GROUP] [--size WxH] \
@@ -30,6 +30,7 @@ fn main() -> ExitCode {
         match a.as_str() {
             "--sample" => options.sample = true,
             "--parameters" => options.parameters = true,
+            "--configurations" => options.configurations = true,
             "--preferences" => match args.next() {
                 Some(page) => options.preferences = Some(page),
                 None => {

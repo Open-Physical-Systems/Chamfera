@@ -276,7 +276,7 @@ fn save(s: &mut Session, p: &Value) -> CmdResult {
     Ok(json!({ "path": path }))
 }
 
-fn export_step(s: &mut Session, p: &Value) -> CmdResult {
+pub(super) fn export_step(s: &mut Session, p: &Value) -> CmdResult {
     let path = params::req_str(p, "path")?;
     let bodies = solid_bodies(s)?;
     let options = chamfera_io::step::StepOptions {
@@ -324,7 +324,7 @@ fn shown_solids_mesh(s: &Session) -> Result<chamfera_geom::TriMesh, CommandError
     Ok(mesh)
 }
 
-fn export_stl(s: &mut Session, p: &Value) -> CmdResult {
+pub(super) fn export_stl(s: &mut Session, p: &Value) -> CmdResult {
     let path = params::req_str(p, "path")?;
     let mesh = shown_solids_mesh(s)?;
     let bytes = chamfera_io::stl::write_binary(&mesh)?;

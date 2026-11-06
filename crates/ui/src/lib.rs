@@ -19,6 +19,7 @@ mod blend_ui;
 mod browser;
 mod cam_ui;
 mod chrome;
+mod config_ui;
 mod construct_ui;
 mod context_menu;
 mod display_ui;
@@ -76,6 +77,8 @@ pub struct Options {
     pub script: Vec<Value>,
     /// Open the Parameters window at start.
     pub parameters: bool,
+    /// Open the Configurations window at start.
+    pub configurations: bool,
     /// Open the DRAWING workspace at start.
     pub drawing: bool,
     /// Open the Extrude tool at start and pick the profile under the viewport's centre,
@@ -175,6 +178,7 @@ pub struct ChamferaApp {
     shot_image: Arc<Mutex<Option<Arc<egui::ColorImage>>>>,
     sketch: sketch_ui::SketchUi,
     params: params_ui::ParamsUi,
+    configs: config_ui::ConfigUi,
     solid: solid_ui::SolidUi,
     /// The SHEET METAL workspace (`sheet_ui`).
     sheet_metal: sheet_ui::SheetUi,
@@ -284,6 +288,7 @@ impl ChamferaApp {
             shot_started: None,
             sketch: sketch_ui::SketchUi::default(),
             params: params_ui::ParamsUi::default(),
+            configs: config_ui::ConfigUi::default(),
             solid: solid_ui::SolidUi::default(),
             sheet_metal: sheet_ui::SheetUi::default(),
             assembly: assembly_ui::AssemblyUi::default(),
@@ -339,6 +344,7 @@ impl ChamferaApp {
             app.refresh_sketch_status();
         }
         app.params.open = options.parameters;
+        app.configs.open = options.configurations;
         app.drawing.active = options.drawing;
         if options.extrude {
             let mut tool = solid_ui::ExtrudeTool::default();
@@ -964,6 +970,7 @@ impl eframe::App for ChamferaApp {
             ctx.request_repaint();
         } else {
             self.parameters_window(&ctx);
+            self.configurations_window(&ctx);
             self.extrude_dialog(&ctx);
             self.blend_dialog(&ctx);
             self.joint_dialog(&ctx);

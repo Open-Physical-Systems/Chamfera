@@ -331,11 +331,11 @@ Close runners-up: selection filters and box selection (UI and NAV), splines (nee
 |---|---|---|---|---|---|
 | User parameters with expressions and units | Named values, formulas between them, mm/in/deg | done | P0 | M | doc |
 | Parameters window | Create, edit, remove | done | P0 | S | ui |
-| Model parameters listed | Every dimension and feature value, renamable, shown alongside user parameters | missing | P0 | S | doc, ui |
-| Parameter comments and favourites | Notes and a short list in the browser | missing | P2 | S | doc, ui |
-| Functions in expressions | sin, cos, sqrt, min, max, round and so on | missing | P1 | S | doc |
-| Design configurations | Rows of parameter values that make variants of one design | missing | P2 | L | doc |
-| Import/export parameters | CSV of parameters | missing | P2 | S | io |
+| Model parameters listed | Every dimension and feature value, renamable, shown alongside user parameters | done (`Extrude1.distance`, `Sketch1.d13`; usable in expressions) | P0 | S | doc, ui |
+| Parameter comments and favourites | Notes and a short list in the browser | done (in the parameter table; favourites pinned at the top) | P2 | S | doc, ui |
+| Functions in expressions | sin, cos, sqrt, min, max, round and so on | done (plus `if` with comparisons, `e`, `pi`) | P1 | S | doc |
+| Design configurations | Rows of parameter values that make variants of one design | done (parameter overrides and suppression; `config.export_all`) | P2 | L | doc |
+| Import/export parameters | CSV of parameters | done | P2 | S | io |
 
 ## 14. Rendering
 

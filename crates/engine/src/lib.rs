@@ -23,6 +23,8 @@ pub mod naming;
 #[cfg(test)]
 mod naming_tests;
 mod params;
+#[cfg(test)]
+mod params_tests;
 pub mod pick_filter;
 pub mod projection;
 pub mod script;

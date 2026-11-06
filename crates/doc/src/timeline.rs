@@ -487,6 +487,7 @@ impl Document {
     /// Renames a sketch, feature or group.
     pub fn rename_item(&mut self, id: u32, name: &str) -> Result<(), DocError> {
         let name = check_item_name(name)?;
+        let model_names = self.default_model_names(id);
         match self.item_kind(id) {
             Some(ItemKind::Sketch) => self.sketch_mut(id)?.name = name,
             Some(ItemKind::Feature) => self.feature_mut(id)?.name = name,
@@ -497,6 +498,8 @@ impl Document {
             }
             None => return Err(timeline_err(format!("no sketch, feature or group {id}"))),
         }
+        // Expressions that used `Old.distance` follow the new name.
+        self.follow_model_renames(&model_names);
         Ok(())
     }
 

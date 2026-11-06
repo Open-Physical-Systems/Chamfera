@@ -1,0 +1,275 @@
+[
+  {
+    "command": "param.set",
+    "params": {
+      "name": "w",
+      "expression": "50 mm",
+      "comment": "plate width"
+    }
+  },
+  {
+    "command": "param.set",
+    "params": {
+      "name": "h",
+      "expression": "30 mm",
+      "comment": "plate height"
+    }
+  },
+  {
+    "command": "param.set",
+    "params": {
+      "name": "d",
+      "expression": "if(w > 60 mm, 12 mm, 8 mm)",
+      "comment": "hole grows on big plates"
+    }
+  },
+  {
+    "command": "param.set",
+    "params": {
+      "name": "t",
+      "expression": "10 mm",
+      "comment": "thickness",
+      "favourite": true
+    }
+  },
+  {
+    "command": "param.set",
+    "params": {
+      "name": "edge",
+      "expression": "10 mm + 0.25 in",
+      "comment": "mixed units: 16.35 mm"
+    }
+  },
+  {
+    "command": "sketch.create",
+    "params": {
+      "plane": "xy"
+    }
+  },
+  {
+    "command": "sketch.rectangle",
+    "params": {
+      "x1": 0,
+      "y1": 0,
+      "x2": 50,
+      "y2": 30
+    },
+    "as": "r"
+  },
+  {
+    "command": "sketch.constrain",
+    "params": {
+      "constraint": {
+        "kind": "fix",
+        "point": "$r.points.0",
+        "at": {
+          "x": 0,
+          "y": 0
+        }
+      }
+    }
+  },
+  {
+    "command": "sketch.constrain",
+    "params": {
+      "constraint": {
+        "kind": "length",
+        "line": "$r.curves.0",
+        "value": 50
+      }
+    },
+    "as": "cw"
+  },
+  {
+    "command": "sketch.constrain",
+    "params": {
+      "constraint": {
+        "kind": "length",
+        "line": "$r.curves.1",
+        "value": 30
+      }
+    },
+    "as": "ch"
+  },
+  {
+    "command": "sketch.circle",
+    "params": {
+      "cx": 20,
+      "cy": 12,
+      "radius": 4
+    },
+    "as": "c"
+  },
+  {
+    "command": "sketch.constrain",
+    "params": {
+      "constraint": {
+        "kind": "fix",
+        "point": "$c.centre",
+        "at": {
+          "x": 20,
+          "y": 12
+        }
+      }
+    }
+  },
+  {
+    "command": "sketch.constrain",
+    "params": {
+      "constraint": {
+        "kind": "diameter",
+        "curve": "$c.curve",
+        "value": 8
+      }
+    },
+    "as": "cd"
+  },
+  {
+    "command": "sketch.dimension",
+    "params": {
+      "constraint": "$cw.constraint",
+      "expression": "w"
+    }
+  },
+  {
+    "command": "sketch.dimension",
+    "params": {
+      "constraint": "$ch.constraint",
+      "expression": "h"
+    }
+  },
+  {
+    "command": "sketch.dimension",
+    "params": {
+      "constraint": "$cd.constraint",
+      "expression": "d"
+    }
+  },
+  {
+    "command": "sketch.finish",
+    "params": {}
+  },
+  {
+    "command": "solid.extrude",
+    "params": {
+      "sketch": 1,
+      "profiles": [
+        {
+          "x": 2,
+          "y": 2
+        }
+      ],
+      "distance": "t"
+    }
+  },
+  {
+    "command": "param.annotate",
+    "params": {
+      "name": "Extrude1.distance",
+      "comment": "follows t"
+    }
+  },
+  {
+    "command": "config.add",
+    "params": {
+      "name": "Small"
+    }
+  },
+  {
+    "command": "config.set",
+    "params": {
+      "config": "Small",
+      "parameter": "w",
+      "expression": "40 mm"
+    }
+  },
+  {
+    "command": "config.set",
+    "params": {
+      "config": "Small",
+      "parameter": "h",
+      "expression": "20 mm"
+    }
+  },
+  {
+    "command": "config.set",
+    "params": {
+      "config": "Small",
+      "parameter": "t",
+      "expression": "5 mm"
+    }
+  },
+  {
+    "command": "config.add",
+    "params": {
+      "name": "Medium"
+    }
+  },
+  {
+    "command": "config.set",
+    "params": {
+      "config": "Medium",
+      "parameter": "w",
+      "expression": "50 mm"
+    }
+  },
+  {
+    "command": "config.set",
+    "params": {
+      "config": "Medium",
+      "parameter": "h",
+      "expression": "30 mm"
+    }
+  },
+  {
+    "command": "config.set",
+    "params": {
+      "config": "Medium",
+      "parameter": "t",
+      "expression": "10 mm"
+    }
+  },
+  {
+    "command": "config.add",
+    "params": {
+      "name": "Large"
+    }
+  },
+  {
+    "command": "config.set",
+    "params": {
+      "config": "Large",
+      "parameter": "w",
+      "expression": "100 mm"
+    }
+  },
+  {
+    "command": "config.set",
+    "params": {
+      "config": "Large",
+      "parameter": "h",
+      "expression": "60 mm"
+    }
+  },
+  {
+    "command": "config.set",
+    "params": {
+      "config": "Large",
+      "parameter": "t",
+      "expression": "15 mm"
+    }
+  },
+  {
+    "command": "config.activate",
+    "params": {
+      "config": "Large"
+    }
+  },
+  {
+    "command": "view.fit",
+    "params": {
+      "width": 1100,
+      "height": 760
+    }
+  }
+]

@@ -2,10 +2,16 @@
 //!
 //! - Numbers may carry a unit: mm, cm, m, in, ft (lengths) or deg, rad (angles). `°` and
 //!   `"` (inch) are accepted too.
-//! - Names are parameters; `pi` is π.
+//! - Names are parameters, user (`width`) or model (`Extrude1.distance`: dotted); `pi` is
+//!   π and `e` is Euler's number (a parameter named `e` wins over it).
 //! - Functions: sqrt, abs, min, max, sin, cos, tan, asin, acos, atan, atan2, round, floor,
-//!   ceil. The trigonometric ones take angles and return plain numbers (asin… return angles).
+//!   ceil, and `if(condition, then, else)`. The trigonometric ones take angles and return
+//!   plain numbers (asin… return angles).
 //! - Operators: `+ - * / ^`, parentheses, unary minus. `^` takes a plain-number exponent.
+//! - Comparisons `< <= > >= == !=` (one per expression level) give 1 or 0, for `if`. Both
+//!   sides must have one unit, and are compared in internal units (`41 mm > 1.6 in` is 1).
+//!   `==` and `!=` allow a relative tolerance of 1e-9.
+//! - NaN is never a value: an operation or function that would give one is an error.
 //!
 //! Every value has a dimension (powers of length and angle), checked as it is computed:
 //! `10 mm + 5 deg` is an error. Internally lengths are mm and angles radians.
@@ -109,6 +115,8 @@ pub enum ExprError {
     WrongUnit { expected: String, got: String },
     #[error("the result is not a finite number")]
     NotFinite,
+    #[error("cannot compare {left} with {right}")]
+    Compare { left: String, right: String },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -116,6 +124,8 @@ enum Tok {
     Num(f64),
     Ident(String),
     Op(char),
+    /// `<`, `<=`, `>`, `>=`, `==` or `!=`.
+    Cmp(&'static str),
     LParen,
     RParen,
     Comma,
@@ -162,15 +172,39 @@ fn tokenize(src: &str) -> Result<Vec<(Tok, usize)>, ExprError> {
             if c == '°' || c == '"' {
                 i += 1;
             } else {
-                while chars
-                    .get(i)
-                    .is_some_and(|c| c.is_alphanumeric() || *c == '_')
-                {
-                    i += 1;
+                // A dot joins name parts (`Extrude1.distance`) when a letter or _ follows.
+                while let Some(&c) = chars.get(i) {
+                    let joins = c == '.'
+                        && chars
+                            .get(i + 1)
+                            .is_some_and(|n| n.is_alphabetic() || *n == '_');
+                    if c.is_alphanumeric() || c == '_' || joins {
+                        i += 1;
+                    } else {
+                        break;
+                    }
                 }
             }
             let text: String = chars.get(start..i).unwrap_or_default().iter().collect();
             out.push((Tok::Ident(text), start));
+        } else if matches!(c, '<' | '>' | '=' | '!') {
+            let eq = chars.get(i + 1) == Some(&'=');
+            let t = match (c, eq) {
+                ('<', true) => "<=",
+                ('<', false) => "<",
+                ('>', true) => ">=",
+                ('>', false) => ">",
+                ('=', true) => "==",
+                ('!', true) => "!=",
+                _ => {
+                    return Err(ExprError::Unexpected {
+                        found: c.to_string(),
+                        at: i,
+                    });
+                }
+            };
+            out.push((Tok::Cmp(t), i));
+            i += if eq { 2 } else { 1 };
         } else {
             let t = match c {
                 '+' | '-' | '*' | '/' | '^' => Tok::Op(c),
@@ -245,6 +279,7 @@ impl<N: Names> Parser<'_, N> {
                     Tok::Num(v) => v.to_string(),
                     Tok::Ident(s) => s.clone(),
                     Tok::Op(c) => c.to_string(),
+                    Tok::Cmp(c) => (*c).to_owned(),
                     Tok::LParen => "(".into(),
                     Tok::RParen => ")".into(),
                     Tok::Comma => ",".into(),
@@ -266,7 +301,40 @@ impl<N: Names> Parser<'_, N> {
         Ok(())
     }
 
+    /// A sum, or two sums compared: 1 when the comparison holds, else 0.
     fn expr(&mut self) -> Result<Quantity, ExprError> {
+        let left = self.sum()?;
+        let Some(Tok::Cmp(op)) = self.peek().cloned() else {
+            return Ok(left);
+        };
+        self.pos += 1;
+        let right = self.sum()?;
+        if left.dim != right.dim {
+            return Err(ExprError::Compare {
+                left: left.dim.describe(),
+                right: right.dim.describe(),
+            });
+        }
+        if !left.value.is_finite() || !right.value.is_finite() {
+            return Err(ExprError::NotFinite);
+        }
+        let (a, b) = (left.value, right.value);
+        let close = (a - b).abs() <= 1e-9 * a.abs().max(b.abs()).max(1.0);
+        let holds = match op {
+            "<" => a < b && !close,
+            "<=" => a < b || close,
+            ">" => a > b && !close,
+            ">=" => a > b || close,
+            "==" => close,
+            _ => !close,
+        };
+        Ok(Quantity {
+            value: if holds { 1.0 } else { 0.0 },
+            dim: Dim::NONE,
+        })
+    }
+
+    fn sum(&mut self) -> Result<Quantity, ExprError> {
         self.enter()?;
         let mut left = self.term()?;
         while let Some(Tok::Op(c @ ('+' | '-'))) = self.peek().cloned() {
@@ -427,7 +495,11 @@ impl<N: Names> Parser<'_, N> {
                         }
                     }
                     self.pos += 1;
-                    return call(&name, &args);
+                    let q = call(&name, &args)?;
+                    if q.value.is_nan() {
+                        return Err(ExprError::NotFinite);
+                    }
+                    return Ok(q);
                 }
                 if name == "pi" {
                     return Ok(Quantity {
@@ -438,7 +510,16 @@ impl<N: Names> Parser<'_, N> {
                 if unit(&name).is_some() {
                     return Err(ExprError::BadArgument(name, "a number before it".into()));
                 }
-                self.names.get(&name).ok_or(ExprError::UnknownName(name))
+                if let Some(q) = self.names.get(&name) {
+                    return Ok(q);
+                }
+                if name == "e" {
+                    return Ok(Quantity {
+                        value: std::f64::consts::E,
+                        dim: Dim::NONE,
+                    });
+                }
+                Err(ExprError::UnknownName(name))
             }
             _ => Err(self.unexpected()),
         }
@@ -559,6 +640,20 @@ fn call(name: &str, args: &[Quantity]) -> Result<Quantity, ExprError> {
                 dim: Dim::ANGLE,
             })
         }
+        "if" => {
+            arity(3)?;
+            let (cond, a, b) = (first()?, args[1], args[2]);
+            if a.dim != b.dim {
+                return Err(ExprError::BadArgument(
+                    name.into(),
+                    "a then-value and an else-value of one unit".into(),
+                ));
+            }
+            if !cond.value.is_finite() {
+                return Err(ExprError::NotFinite);
+            }
+            Ok(if cond.value != 0.0 { a } else { b })
+        }
         "atan2" => {
             arity(2)?;
             let (y, x) = (args[0], args[1]);
@@ -644,13 +739,14 @@ pub fn evaluate_as_in(
     })
 }
 
-/// The parameter names an expression refers to (for dependency order and "used by").
-pub fn names_in(src: &str) -> Vec<String> {
+/// The name tokens of an expression that refer to parameters: (name, char position).
+/// Function names, units right after a number and `pi` are not names.
+fn name_tokens(src: &str) -> Vec<(String, usize)> {
     let Ok(toks) = tokenize(src) else {
         return Vec::new();
     };
     let mut out = Vec::new();
-    for (i, (t, _)) in toks.iter().enumerate() {
+    for (i, (t, at)) in toks.iter().enumerate() {
         if let Tok::Ident(name) = t {
             let is_call = toks.get(i + 1).is_some_and(|n| n.0 == Tok::LParen);
             let after_number_or_paren = i > 0
@@ -658,9 +754,48 @@ pub fn names_in(src: &str) -> Vec<String> {
                     .get(i - 1)
                     .is_some_and(|p| matches!(p.0, Tok::Num(_) | Tok::RParen));
             let is_unit = unit(name).is_some() && after_number_or_paren;
-            if !is_call && !is_unit && name != "pi" && !out.contains(name) {
-                out.push(name.clone());
+            if !is_call && !is_unit && name != "pi" {
+                out.push((name.clone(), *at));
             }
+        }
+    }
+    out
+}
+
+/// The parameter names an expression refers to (for dependency order and "used by").
+pub fn names_in(src: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for (name, _) in name_tokens(src) {
+        if !out.contains(&name) {
+            out.push(name);
+        }
+    }
+    out
+}
+
+/// `src` with every reference to the parameter `old` changed to `new`, leaving function
+/// names, units and other names alone: `rename_in("w/2 + w2", "w", "width")` is
+/// `"width/2 + w2"`. An expression that does not parse comes back unchanged.
+pub fn rename_in(src: &str, old: &str, new: &str) -> String {
+    let hits: Vec<usize> = name_tokens(src)
+        .into_iter()
+        .filter(|(n, _)| n == old)
+        .map(|(_, at)| at)
+        .collect();
+    if hits.is_empty() {
+        return src.to_owned();
+    }
+    let len = old.chars().count();
+    let chars: Vec<char> = src.chars().collect();
+    let mut out = String::with_capacity(src.len() + new.len() * hits.len());
+    let mut i = 0;
+    while let Some(c) = chars.get(i) {
+        if hits.contains(&i) {
+            out.push_str(new);
+            i += len;
+        } else {
+            out.push(*c);
+            i += 1;
         }
     }
     out
@@ -770,6 +905,121 @@ mod tests {
     }
 
     #[test]
+    fn mixed_units_add_in_millimetres() {
+        // 10 mm + 1 in = 10 + 25.4 = 35.4 mm (1 in is 25.4 mm by definition).
+        assert!((length("10 mm + 1 in") - 35.4).abs() < 1e-12);
+        // 1 rad + 90 deg = 1 + π/2 rad.
+        let a = evaluate_as("1 rad + 90 deg", Dim::ANGLE, &NoNames).unwrap();
+        assert!((a - (1.0 + PI / 2.0)).abs() < 1e-15);
+        // 2 ft - 1 in = 609.6 - 25.4 = 584.2 mm.
+        assert!((length("2 ft - 1 in") - 584.2).abs() < 1e-9);
+    }
+
+    #[test]
+    fn atan2_of_one_and_one_is_45_degrees() {
+        // atan2(1, 1) = π/4 = 45°.
+        let a = evaluate_as("atan2(1, 1)", Dim::ANGLE, &NoNames).unwrap();
+        assert!((a.to_degrees() - 45.0).abs() < 1e-12);
+        assert!((eval("e").unwrap().value - std::f64::consts::E).abs() < 1e-15);
+        assert!((eval("pi").unwrap().value - PI).abs() < 1e-15);
+        // Every function, against values known by hand.
+        for (src, want) in [
+            ("sqrt(16)", 4.0),
+            ("abs(-3)", 3.0),
+            ("min(4, 2, 9)", 2.0),
+            ("max(4, 2, 9)", 9.0),
+            ("round(2.5)", 3.0),
+            ("floor(-1.5)", -2.0),
+            ("ceil(1.1)", 2.0),
+            ("sin(90 deg)", 1.0),
+            ("cos(0)", 1.0),
+            ("tan(45 deg)", 1.0),
+        ] {
+            assert!((eval(src).unwrap().value - want).abs() < 1e-12, "{src}");
+        }
+        assert!((evaluate_as("asin(1)", Dim::ANGLE, &NoNames).unwrap() - PI / 2.0).abs() < 1e-15);
+        assert!((evaluate_as("acos(0)", Dim::ANGLE, &NoNames).unwrap() - PI / 2.0).abs() < 1e-15);
+        assert!((evaluate_as("atan(1)", Dim::ANGLE, &NoNames).unwrap() - PI / 4.0).abs() < 1e-15);
+    }
+
+    #[test]
+    fn if_switches_on_a_unit_aware_comparison() {
+        let mut p = BTreeMap::new();
+        let mut at = |w: f64| {
+            p.insert(
+                "w".to_owned(),
+                Quantity {
+                    value: w,
+                    dim: Dim::LENGTH,
+                },
+            );
+            evaluate_as("if(w > 40 mm, 2 mm, 1 mm)", Dim::LENGTH, &p).unwrap()
+        };
+        assert_eq!(at(50.0), 2.0, "50 mm > 40 mm");
+        assert_eq!(at(40.0), 1.0, "40 mm is not more than 40 mm");
+        assert_eq!(at(30.0), 1.0);
+        // Units convert before comparing: 41 mm > 1.6 in (40.64 mm), 40 mm < 1.6 in.
+        assert_eq!(eval("41 mm > 1.6 in").unwrap().value, 1.0);
+        assert_eq!(eval("40 mm > 1.6 in").unwrap().value, 0.0);
+        assert_eq!(eval("1 in == 25.4 mm").unwrap().value, 1.0);
+        assert_eq!(eval("1 in != 25.4 mm").unwrap().value, 0.0);
+        assert_eq!(eval("2 <= 2").unwrap().value, 1.0);
+        assert_eq!(eval("3 >= 4").unwrap().value, 0.0);
+        assert_eq!(eval("180 deg == (pi) rad").unwrap().value, 1.0);
+        assert!(matches!(
+            eval("1 mm > 1 deg"),
+            Err(ExprError::Compare { .. })
+        ));
+        assert!(eval("if(1, 2 mm, 3 deg)").is_err(), "branches of two units");
+        assert!(eval("if(1, 2)").is_err());
+        assert!(eval("1 < 2 < 3").is_err(), "one comparison per level");
+        assert!(eval("1 = 2").is_err());
+        assert!(eval("!1").is_err());
+    }
+
+    #[test]
+    fn nan_is_refused_even_when_hidden_in_a_comparison() {
+        assert_eq!(eval("if(sqrt(-1) > 0, 1, 2)"), Err(ExprError::NotFinite));
+        assert_eq!(eval("acos(2) * 0"), Err(ExprError::NotFinite));
+        assert_eq!(eval("1e308 * 1e308"), Err(ExprError::NotFinite));
+        assert_eq!(eval("(1e308 * 10) > 1"), Err(ExprError::NotFinite));
+    }
+
+    #[test]
+    fn dotted_model_names_parse_and_rename() {
+        let mut p = BTreeMap::new();
+        p.insert(
+            "Extrude1.distance".to_owned(),
+            Quantity {
+                value: 8.0,
+                dim: Dim::LENGTH,
+            },
+        );
+        assert_eq!(
+            evaluate_as("Extrude1.distance * 2", Dim::LENGTH, &p).unwrap(),
+            16.0
+        );
+        assert_eq!(
+            names_in("Extrude1.distance + 1.5"),
+            vec!["Extrude1.distance"]
+        );
+        assert_eq!(
+            rename_in("w/2 + w2 + max(w, 1 mm)", "w", "width"),
+            "width/2 + w2 + max(width, 1 mm)"
+        );
+        assert_eq!(
+            rename_in("2 m + m", "m", "len"),
+            "2 m + len",
+            "a unit is not a name"
+        );
+        assert_eq!(
+            rename_in("Extrude1.distance", "Extrude1.distance", "t"),
+            "t"
+        );
+        assert_eq!(rename_in("((", "w", "x"), "((");
+    }
+
+    #[test]
     fn bad_expressions_are_errors_not_panics() {
         for bad in [
             "",
@@ -799,5 +1049,19 @@ mod tests {
         assert_eq!(eval(&"(".repeat(200)), Err(ExprError::TooDeep));
         assert_eq!(eval(&"1+".repeat(600)), Err(ExprError::TooLong));
         assert!(eval(&"-".repeat(500).replace("--", "- ")).is_err());
+        assert_eq!(
+            eval(&"(".repeat(MAX_EXPRESSION_LEN)),
+            Err(ExprError::TooDeep)
+        );
+        assert_eq!(eval(&"1".repeat(100_000)), Err(ExprError::TooLong));
+        assert_eq!(eval(&"if(".repeat(300)), Err(ExprError::TooDeep));
+        // Twenty nested ifs are fine and pick the innermost 1.
+        let nested = format!("{}1{}", "if(1, ".repeat(20), ", 0)".repeat(20));
+        assert_eq!(eval(&nested).map(|q| q.value), Ok(1.0));
+        for bad in [
+            "<", "1 <", "== 2", "if(", "if(1,2,", "a.", ".a", "a..b", "e(1)",
+        ] {
+            assert!(eval(bad).is_err(), "{bad:?} should fail");
+        }
     }
 }

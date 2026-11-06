@@ -456,7 +456,7 @@ pub(super) fn edit(s: &mut Session, id: u32, p: &Value) -> CmdResult {
     let f = s.doc.feature_mut(id)?;
     f.kind = kind;
     if let Some(v) = suppressed {
-        f.suppressed = v;
+        s.doc.set_suppressed(id, v)?;
     }
     s.rebuild();
     if let Some(e) = s.feature_errors().get(&id) {

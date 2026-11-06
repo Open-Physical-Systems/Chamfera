@@ -5,6 +5,7 @@
 //! 3MF, OBJ and glTF binary and come in from 3MF and OBJ; sketches go out to and come in
 //! from 2D DXF.
 
+pub mod csv;
 pub mod dxf;
 pub mod gltf;
 pub mod mesh;

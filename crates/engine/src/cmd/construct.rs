@@ -267,7 +267,7 @@ pub(crate) fn construct_reply(s: &Session, id: u32) -> Value {
         "feature": id,
         "name": f.map(|f| f.name.clone()),
         "definition": f.map(|f| &f.kind),
-        "suppressed": f.map(|f| f.suppressed),
+        "suppressed": f.map(|f| s.doc.is_suppressed(f)),
         "geometry": geometry,
         "error": s.feature_errors().get(&id),
     })
