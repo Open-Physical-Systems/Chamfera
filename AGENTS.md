@@ -36,4 +36,4 @@ Status and the next milestone: `PLAN.md`. Layers: `docs/architecture.md`. Kernel
 | A panel, menu, the viewport, colours, camera input | `skills/chamfera-ui/SKILL.md` |
 | Running the app, screenshots, snapshots | `skills/chamfera-agent-tools/SKILL.md` |
 | Building a part as an agent over MCP | `skills/chamfera-modeling/SKILL.md` |
-| The AppImage, releases, packages | `skills/chamfera-packaging/SKILL.md` |
+| Packages (Linux AppImage, Windows zip and installer, macOS dmg), releases | `skills/chamfera-packaging/SKILL.md` |
