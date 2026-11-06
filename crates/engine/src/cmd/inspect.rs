@@ -210,6 +210,7 @@ fn describe(s: &Session, t: &Target) -> Result<Value, CommandError> {
                 Some((Curve::Circle(_), ..)) => "circle",
                 Some((Curve::Arc(_), ..)) => "arc",
                 Some((Curve::Ellipse(_) | Curve::EllipticalArc(_), ..)) => "ellipse",
+                Some((Curve::BSpline(_), ..)) => "spline",
                 None => "none",
             };
             out["curve"] = json!(curve);
@@ -227,6 +228,7 @@ fn describe(s: &Session, t: &Target) -> Result<Value, CommandError> {
                 Some((Surface::Cone(_), _)) => "cone",
                 Some((Surface::Sphere(_), _)) => "sphere",
                 Some((Surface::Torus(_), _)) => "torus",
+                Some((Surface::Extrusion(_), _)) => "extrusion",
                 None => "none",
             };
             out["surface"] = json!(surface);

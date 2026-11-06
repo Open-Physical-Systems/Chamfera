@@ -274,6 +274,27 @@ pub struct Blend {
 /// Most edges one blend may hold.
 pub const MAX_BLEND_EDGES: usize = 10_000;
 
+/// Most curves one sweep path may hold.
+pub const MAX_SWEEP_PATH_CURVES: usize = 1_000;
+/// Most profiles one loft may join.
+pub const MAX_LOFT_SECTIONS: usize = 1_000;
+
+/// A profile swept along a path: lines and arcs of another sketch, joined end to end and
+/// meeting tangentially, starting on the profile's plane.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Sweep {
+    /// The sketch the profiles come from.
+    pub sketch: u32,
+    /// A point inside each profile to sweep (sketch coordinates).
+    pub profiles: Vec<Point2>,
+    /// The sketch the path is drawn in.
+    pub path_sketch: u32,
+    /// The path's curves (ids in `path_sketch`), in any order.
+    pub path: Vec<u32>,
+    #[serde(default)]
+    pub operation: Operation,
+}
+
 /// The shape of a hole's mouth.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -404,6 +425,21 @@ pub struct Mirror {
     pub operation: Operation,
 }
 
+/// One profile of a loft: a point inside it in its sketch.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct LoftSection {
+    pub sketch: u32,
+    pub profile: Point2,
+}
+
+/// A solid through profiles on parallel planes, in order.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Loft {
+    pub sections: Vec<LoftSection>,
+    #[serde(default)]
+    pub operation: Operation,
+}
+
 /// How a move places bodies.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "transform", rename_all = "snake_case")]
@@ -462,6 +498,8 @@ pub enum FeatureKind {
     /// A construction plane, axis or point.
     Construct(crate::construct::Construction),
     Blend(Blend),
+    Sweep(Sweep),
+    Loft(Loft),
     Hole(Hole),
     Mirror(Mirror),
     Move(Move),
@@ -486,11 +524,14 @@ pub struct Feature {
 }
 
 impl FeatureKind {
-    /// The sketch the feature's profiles come from (patterns have none).
+    /// The sketch the feature's profiles come from (patterns have none; a loft's first
+    /// profile's).
     pub fn sketch(&self) -> Option<u32> {
         match self {
             FeatureKind::Extrude(e) => Some(e.sketch),
             FeatureKind::Revolve(r) => Some(r.sketch),
+            FeatureKind::Sweep(s) => Some(s.sketch),
+            FeatureKind::Loft(l) => l.sections.first().map(|s| s.sketch),
             FeatureKind::Hole(h) => h.sketch,
             FeatureKind::Pattern(_)
             | FeatureKind::Construct(_)
@@ -504,11 +545,26 @@ impl FeatureKind {
         }
     }
 
+    /// Every sketch the feature uses (a sweep's path sketch and every loft profile's
+    /// sketch too), without repeats.
+    pub fn sketches(&self) -> Vec<u32> {
+        let mut out: Vec<u32> = match self {
+            FeatureKind::Sweep(s) => vec![s.sketch, s.path_sketch],
+            FeatureKind::Loft(l) => l.sections.iter().map(|s| s.sketch).collect(),
+            other => other.sketch().into_iter().collect(),
+        };
+        let mut seen = std::collections::BTreeSet::new();
+        out.retain(|s| seen.insert(*s));
+        out
+    }
+
     /// The operation; a pattern repeats its source's (see the rebuild).
     pub fn operation(&self) -> Operation {
         match self {
             FeatureKind::Extrude(e) => e.operation,
             FeatureKind::Revolve(r) => r.operation,
+            FeatureKind::Sweep(s) => s.operation,
+            FeatureKind::Loft(l) => l.operation,
             FeatureKind::Hole(_) => Operation::Cut,
             FeatureKind::Mirror(m) => m.operation,
             FeatureKind::Pattern(_)
@@ -522,10 +578,13 @@ impl FeatureKind {
         }
     }
 
+    /// The seeds of the profiles in [`FeatureKind::sketch`] (a loft's are in its
+    /// sections).
     pub fn profiles(&self) -> &[Point2] {
         match self {
             FeatureKind::Extrude(e) => &e.profiles,
             FeatureKind::Revolve(r) => &r.profiles,
+            FeatureKind::Sweep(s) => &s.profiles,
             FeatureKind::Pattern(_)
             | FeatureKind::Hole(_)
             | FeatureKind::Construct(_)
@@ -533,6 +592,7 @@ impl FeatureKind {
             | FeatureKind::Shell(_)
             | FeatureKind::Mirror(_)
             | FeatureKind::Move(_)
+            | FeatureKind::Loft(_)
             | FeatureKind::OffsetFace(_)
             | FeatureKind::DeleteFace(_)
             | FeatureKind::MoveFace(_) => &[],
@@ -544,6 +604,8 @@ impl FeatureKind {
             FeatureKind::Extrude(_) => "Extrude",
             FeatureKind::Revolve(_) => "Revolve",
             FeatureKind::Pattern(_) => "Pattern",
+            FeatureKind::Sweep(_) => "Sweep",
+            FeatureKind::Loft(_) => "Loft",
             FeatureKind::Hole(_) => "Hole",
             FeatureKind::Construct(c) => c.kind().label(),
             FeatureKind::Blend(b) => match b.blend {
@@ -575,6 +637,7 @@ impl FeatureKind {
                 .collect(),
             FeatureKind::Revolve(r) => vec![r.angle.as_str()],
             FeatureKind::Blend(b) => vec![b.size.as_str()],
+            FeatureKind::Sweep(_) | FeatureKind::Loft(_) => Vec::new(),
             FeatureKind::Hole(h) => std::iter::once(&h.diameter)
                 .chain(
                     [
@@ -655,6 +718,9 @@ impl Document {
             }
             return Ok(());
         }
+        if let FeatureKind::Loft(l) = kind {
+            return self.check_loft(l);
+        }
         if let FeatureKind::Shell(s) = kind {
             if s.faces.len() > MAX_SHELL_FACES {
                 return Err(bad(format!("open at most {MAX_SHELL_FACES} faces")));
@@ -702,9 +768,11 @@ impl Document {
             | FeatureKind::Shell(_)
             | FeatureKind::Mirror(_)
             | FeatureKind::Move(_)
+            | FeatureKind::Loft(_)
             | FeatureKind::OffsetFace(_)
             | FeatureKind::DeleteFace(_)
             | FeatureKind::MoveFace(_) => {}
+            FeatureKind::Sweep(s) => self.check_sweep_path(s)?,
             FeatureKind::Revolve(r) => {
                 let a = self.evaluate_feature_value(&r.angle, expr::Dim::ANGLE)?;
                 if !a.is_finite()
@@ -728,6 +796,59 @@ impl Document {
                         )));
                     }
                 }
+            }
+        }
+        Ok(())
+    }
+
+    /// A sweep's path: 1 to [`MAX_SWEEP_PATH_CURVES`] distinct lines or arcs of its path
+    /// sketch. Whether they join up is the kernel's to say when the sweep is built.
+    fn check_sweep_path(&self, s: &Sweep) -> Result<(), DocError> {
+        let bad = |reason: String| DocError::BadFeature { reason };
+        let f = self.sketch(s.path_sketch)?;
+        if s.path.is_empty() || s.path.len() > MAX_SWEEP_PATH_CURVES {
+            return Err(bad(format!(
+                "pick 1 to {MAX_SWEEP_PATH_CURVES} lines or arcs for the path"
+            )));
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        for id in &s.path {
+            if !seen.insert(*id) {
+                return Err(bad(format!("the path uses curve {id} twice")));
+            }
+            match f.sketch.curve(chamfera_sketch::CurveId(*id)) {
+                Some(chamfera_sketch::Curve::Line { .. } | chamfera_sketch::Curve::Arc { .. }) => {}
+                Some(_) => {
+                    return Err(bad(format!(
+                        "curve {id} of {} is not a line or an arc",
+                        f.name
+                    )));
+                }
+                None => return Err(bad(format!("{} has no curve {id}", f.name))),
+            }
+        }
+        Ok(())
+    }
+
+    /// A loft: 2 to [`MAX_LOFT_SECTIONS`] profiles, each inside a closed region of its
+    /// sketch. Whether they can be joined is the kernel's to say.
+    fn check_loft(&self, l: &Loft) -> Result<(), DocError> {
+        let bad = |reason: String| DocError::BadFeature { reason };
+        if l.sections.len() < 2 || l.sections.len() > MAX_LOFT_SECTIONS {
+            return Err(bad(format!(
+                "pick 2 to {MAX_LOFT_SECTIONS} profiles, in order"
+            )));
+        }
+        for s in &l.sections {
+            let f = self.sketch(s.sketch)?;
+            if !s.profile.is_valid() {
+                return Err(bad("a profile point is not a finite coordinate".into()));
+            }
+            if f.sketch.region_at(s.profile).is_none() {
+                return Err(bad(format!(
+                    "no closed profile of {} contains ({:.3}, {:.3})",
+                    f.name, s.profile.x, s.profile.y
+                )));
             }
         }
         Ok(())
@@ -1095,6 +1216,7 @@ impl Document {
             });
         }
         self.check_feature(&kind)?;
+        self.check_new_item_dependencies(&crate::timeline::kind_dependencies(&kind))?;
         let id = self
             .last_feature_id
             .checked_add(1)
@@ -1111,6 +1233,8 @@ impl Document {
             suppressed: false,
             kind,
         });
+        self.timeline_insert(id);
+        self.assembly.adopt(id);
         Ok(id)
     }
 
@@ -1134,7 +1258,9 @@ impl Document {
             .iter()
             .position(|f| f.id == id)
             .ok_or(DocError::NoSuchFeature(id))?;
-        Ok(self.features.remove(i))
+        let f = self.features.remove(i);
+        self.timeline_remove();
+        Ok(f)
     }
 
     /// Sketches attached to a face of a feature or drawn on a construction plane, patterns
@@ -1173,6 +1299,8 @@ impl Document {
                 FeatureKind::Blend(_)
                 | FeatureKind::Shell(_)
                 | FeatureKind::Move(_)
+                | FeatureKind::Sweep(_)
+                | FeatureKind::Loft(_)
                 | FeatureKind::OffsetFace(_)
                 | FeatureKind::DeleteFace(_)
                 | FeatureKind::MoveFace(_) => false,
@@ -1185,7 +1313,7 @@ impl Document {
     pub fn sketch_users(&self, sketch: u32) -> Vec<String> {
         self.features
             .iter()
-            .filter(|f| f.kind.sketch() == Some(sketch))
+            .filter(|f| f.kind.sketches().contains(&sketch))
             .map(|f| f.name.clone())
             .collect()
     }

@@ -263,7 +263,7 @@ impl Draft {
                 moved.insert(v);
                 let surfaces = faces
                     .iter()
-                    .map(|f| face(*f).map(|f| f.surface))
+                    .map(|f| face(*f).map(|f| f.surface.clone()))
                     .collect::<KernelResult<Vec<_>>>()?;
                 solve_vertex(guess, &surfaces, &name)?
             } else {
@@ -294,16 +294,16 @@ impl Draft {
             let faces = uses.get(ei).cloned().unwrap_or_default();
             let surfaces = faces
                 .iter()
-                .map(|f| face(*f).map(|f| (f.surface, f.changed)))
+                .map(|f| face(*f).map(|f| (f.surface.clone(), f.changed)))
                 .collect::<KernelResult<Vec<_>>>()?;
             let dirty =
                 e.dirty || moved.contains(&a) || moved.contains(&b) || surfaces.iter().any(|s| s.1);
             let name = e.name.clone().unwrap_or_else(|| format!("edge {ei}"));
             let (curve, t0, t1) = if dirty {
-                let s: Vec<Surface> = surfaces.iter().map(|s| s.0).collect();
+                let s: Vec<Surface> = surfaces.iter().map(|s| s.0.clone()).collect();
                 new_edge_curve(e, a == b, [pa, pb], &s, &name)?
             } else {
-                (e.curve, e.t0, e.t1)
+                (e.curve.clone(), e.t0, e.t1)
             };
             let (Some(&ia), Some(&ib)) = (vertex_index.get(&a), vertex_index.get(&b)) else {
                 return Err(KernelError::InvalidResult(format!(
@@ -337,7 +337,7 @@ impl Draft {
                 })
                 .collect::<KernelResult<Vec<_>>>()?;
             list_faces.push(ListFace {
-                surface: f.surface,
+                surface: f.surface.clone(),
                 same_sense: f.same_sense,
                 name: f.name.clone(),
                 loops,
@@ -420,6 +420,9 @@ pub(super) fn implicit(s: &Surface, x: Point3) -> KernelResult<(f64, Vec3)> {
             }
             Ok((q - t.minor_radius(), (e * dr + f.z() * dz) * (1.0 / q)))
         }
+        Surface::Extrusion(_) => Err(KernelError::Unsupported(
+            "editing a face next to a spline surface (K10): planes, cylinders, cones, spheres and tori only".into(),
+        )),
     }
 }
 
@@ -524,7 +527,7 @@ fn straight_or_coaxial(
     ends: [Point3; 2],
 ) -> Option<(Curve, f64, f64)> {
     let old = [e.curve.point_at(e.t0), e.curve.point_at(e.t1)];
-    match e.curve {
+    match &e.curve {
         Curve::Line(_) | Curve::Segment(_) => {
             if closed || (ends[1] - ends[0]).dot(old[1] - old[0]) <= 0.0 {
                 return None;
@@ -533,8 +536,8 @@ fn straight_or_coaxial(
             Some((Curve::Segment(s), 0.0, 1.0))
         }
         Curve::Circle(_) | Curve::Arc(_) => {
-            let circle = match e.curve {
-                Curve::Circle(c) => c,
+            let circle = match &e.curve {
+                Curve::Circle(c) => *c,
                 Curve::Arc(a) => *a.circle(),
                 _ => return None,
             };
@@ -571,7 +574,7 @@ fn straight_or_coaxial(
             let c = Circle3::new(f, r).ok()?;
             Some((Curve::Circle(c), n0, n1))
         }
-        Curve::Ellipse(_) | Curve::EllipticalArc(_) => None,
+        Curve::Ellipse(_) | Curve::EllipticalArc(_) | Curve::BSpline(_) => None,
     }
 }
 
@@ -586,7 +589,7 @@ fn from_intersection(
 ) -> KernelResult<Option<(Curve, f64, f64)>> {
     let x = intersect_surfaces(a, b)?;
     for ic in x.curves() {
-        let found = match ic.curve {
+        let found = match &ic.curve {
             Curve::Line(l) => {
                 let on = |p: Point3| {
                     l.closest_point(p)
@@ -602,6 +605,7 @@ fn from_intersection(
                 }
             }
             Curve::Circle(c) => {
+                let c = *c;
                 let c = if c.d1(param_on(&Curve::Circle(c), ends[0])).dot(old_dir) < 0.0 {
                     c.reversed()
                 } else {
@@ -610,6 +614,7 @@ fn from_intersection(
                 periodic_range(Curve::Circle(c), closed, ends)
             }
             Curve::Ellipse(el) => {
+                let el = *el;
                 let el = if el.d1(param_on(&Curve::Ellipse(el), ends[0])).dot(old_dir) < 0.0 {
                     el.reversed()
                 } else {

@@ -146,6 +146,27 @@ impl SurfaceDomain for RevolutionDomain {
     }
 }
 
+/// A surface of linear extrusion (K10) in `(u, v) = (s_u t, w)`: `t` the curve
+/// parameter scaled by the curve's mean speed `s_u`, `w` the height. Not periodic, no
+/// singular points; the refinement in space corrects where the speed varies.
+pub(super) struct ExtrusionDomain {
+    surface: Surface,
+    su: f64,
+}
+
+impl SurfaceDomain for ExtrusionDomain {
+    fn surface_point(&self, uv: Point2) -> Point3 {
+        self.surface.point_at(uv.x / self.su, uv.y)
+    }
+    fn surface_uv(&self, p: Point3) -> Point2 {
+        let q = self.surface.parameters(p);
+        Point2::new(q.u * self.su, q.v)
+    }
+    fn surface_normal(&self, uv: Point2) -> Vec3 {
+        self.surface.normal_at(uv.x / self.su, uv.y)
+    }
+}
+
 /// The domain of a face on `surface`; `boundary` holds the face's boundary points (a
 /// cone's u scale is taken from them).
 pub(super) fn domain_for(
@@ -159,7 +180,7 @@ pub(super) fn domain_for(
             ));
         }
         let domain: Box<dyn SurfaceDomain> = Box::new(RevolutionDomain {
-            surface: *surface,
+            surface: surface.clone(),
             su,
             sv,
             curved_meridian,
@@ -167,6 +188,21 @@ pub(super) fn domain_for(
         Ok(domain)
     };
     match surface {
+        Surface::Extrusion(e) => {
+            // u scaled by the curve's mean speed, so (u, v) is about isometric.
+            let (lo, hi) = e.curve().domain();
+            let length = e.curve().length()?;
+            let su = length / (hi - lo);
+            if !(su.is_finite() && su > 0.0) {
+                return Err(KernelError::InvalidInput(
+                    "a spline face is too small to tessellate".into(),
+                ));
+            }
+            Ok(Box::new(ExtrusionDomain {
+                surface: surface.clone(),
+                su,
+            }))
+        }
         Surface::Plane(frame) => Ok(Box::new(PlaneDomain { frame: *frame })),
         Surface::Cylinder(c) => revolution(c.radius(), 1.0, false),
         Surface::Cone(c) => {

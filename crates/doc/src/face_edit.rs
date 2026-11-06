@@ -116,14 +116,14 @@ mod tests {
     fn face_edits_check_their_faces_and_values_and_round_trip() {
         let mut doc = Document::default();
         let ok = FeatureKind::OffsetFace(OffsetFace {
-            faces: vec!["2:top".into()],
+            faces: vec!["900:top".into()],
             distance: "5 mm".into(),
         });
         let id = doc.add_feature(ok).unwrap();
         assert_eq!(doc.feature(id).unwrap().name, "Offset Face1");
         for (faces, distance) in [
             (vec![], "5"),
-            (vec!["2:top".to_owned()], "0"),
+            (vec!["900:top".to_owned()], "0"),
             (vec!["".to_owned()], "1"),
         ] {
             let k = FeatureKind::OffsetFace(OffsetFace {
@@ -133,7 +133,7 @@ mod tests {
             assert!(doc.add_feature(k).is_err());
         }
         doc.add_feature(FeatureKind::DeleteFace(DeleteFace {
-            faces: vec!["5:fillet of 2:sweep 0".into()],
+            faces: vec!["900:fillet of 899:sweep 0".into()],
         }))
         .unwrap();
         assert!(
@@ -141,7 +141,7 @@ mod tests {
                 .is_err()
         );
         let turn = FeatureKind::MoveFace(MoveFace {
-            faces: vec!["2:top".into()],
+            faces: vec!["900:top".into()],
             direction: Vec3::new(0.0, 0.0, 1.0),
             distance: "0".into(),
             turn: Some(FaceTurn {
@@ -152,7 +152,7 @@ mod tests {
         });
         doc.add_feature(turn).unwrap();
         let still = FeatureKind::MoveFace(MoveFace {
-            faces: vec!["2:top".into()],
+            faces: vec!["900:top".into()],
             direction: Vec3::new(0.0, 0.0, 0.0),
             distance: "0".into(),
             turn: None,

@@ -56,6 +56,8 @@ pub enum SketchError {
     BadNextId,
     #[error("{0} is not a dimension and has no value")]
     NotADimension(ConstraintId),
+    #[error("{0}")]
+    BadSpline(String),
 }
 
 /// A 2D sketch: points, curves and the constraints between them.
@@ -200,7 +202,10 @@ impl Sketch {
             Curve::Arc { centre, start, .. } => {
                 Some(self.point(*start)?.distance(self.point(*centre)?))
             }
-            Curve::Line { .. } | Curve::Ellipse { .. } | Curve::EllipticalArc { .. } => None,
+            Curve::Line { .. }
+            | Curve::Ellipse { .. }
+            | Curve::EllipticalArc { .. }
+            | Curve::Spline { .. } => None,
         }
     }
 
@@ -519,6 +524,9 @@ impl Sketch {
                     _ => 0.0,
                 };
                 check_radius("arc radius", r)?;
+            }
+            Curve::Spline { points, closed, .. } => {
+                crate::spline::check_points(points, *closed)?;
             }
             Curve::Ellipse {
                 centre,

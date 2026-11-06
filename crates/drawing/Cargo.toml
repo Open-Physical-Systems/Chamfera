@@ -1,0 +1,18 @@
+[package]
+name = "chamfera-drawing"
+description = "2D engineering drawings from the model: projections, hidden lines, sheets, dimensions, SVG, DXF and PDF (layer 3)"
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+
+[dependencies]
+chamfera-doc.workspace = true
+chamfera-geom.workspace = true
+chamfera-kernel.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

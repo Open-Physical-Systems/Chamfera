@@ -14,6 +14,10 @@ description: "Use when running Chamfera to see a change working: the desktop app
 - Scripts can name a step's reply with `"as": "axis"` and use it later as `"$axis.curve"` (`crates/engine/src/script.rs`), in the CLI and in `--script`.
 - It needs a display (Wayland or X11). Without one, use the snapshot below.
 
+## Drawings
+- `drawing.new_sheet`, `drawing.add_view {view, x, y}`, `drawing.add_dimension {view, kind, x1, y1, x2, y2}` (sheet mm, snapped to projected vertices and edges) and `drawing.export {path}` (svg, dxf or pdf); `drawing.list` gives each view's place, box and line counts and each dimension's value.
+- `chamfera --script examples/drawing-sheet.json --drawing --screenshot shot.png` shows the sheet in the DRAWING workspace. An exported SVG can be looked at with `google-chrome --headless --screenshot`, a PDF with `pdftoppm -png`.
+
 ## Snapshots without a window
 `cargo run -p chamfera-cli -- snapshot --sample --out shot.png` renders the viewport with the same renderer the app uses. Options:
 - `--stl part.stl` (repeatable) and `--script steps.json`;
@@ -29,6 +33,7 @@ It uses the GPU if there is one, else a software Vulkan driver (lavapipe, `mesa-
 - `sketch.create {"plane": "xy"}` makes a sketch active; `sketch.line`, `sketch.rectangle`, `sketch.circle`, `sketch.arc` draw; `sketch.constrain {"constraint": {"kind": ..., ...}}` constrains; `sketch.get` returns points, curves, constraints, DOF, status and profile areas. Check DOF and areas against values you worked out.
 - Parameters: `param.set {"name": "width", "expression": "80 mm"}`; a dimension follows one with `sketch.dimension {"constraint": id, "expression": "width / 2"}` (`examples/parametric-plate.json`). `chamfera --parameters` opens the Parameters window at start.
 - Points, curves and constraints share one id counter per sketch: read ids from each reply instead of guessing them.
+- Splines: `sketch.spline {"points": [{"x", "y"} or {"point": id}], "kind": "fit"|"control", "closed"}` (`examples/spline-extrude.json`); the points are ordinary sketch points, so constrain or drag them to shape the spline.
 - Sketch tools: `sketch.trim {"curve", "x", "y"}`, `sketch.extend {"curve", "x", "y"}`, `sketch.split {}` (every crossing; do this before extruding overlapping shapes), `sketch.fillet {"point", "radius"}`, `sketch.chamfer {"point", "distance"}`, `sketch.offset {"curves": [id], "distance", "corners": "sharp"|"round"}`, `sketch.mirror {"axis", "curves"}`, `sketch.pattern.rectangular`, `sketch.pattern.circular`, `sketch.rectangle.centre`, `sketch.arc.three_point`, `sketch.arc.tangent`. Each replies with `created_curves`, `changed_curves`, `removed_curves` and the points and constraints, so a script can name the reply (`"as": "r"`) and use `"$r.created_curves.0"`.
 - Shapes, which reply the same way: `sketch.polygon {"cx", "cy", "x", "y", "sides", "mode": "inscribed"|"circumscribed"}`, `sketch.slot {"x1", "y1", "x2", "y2", "width", "overall"}`, `sketch.ellipse {"cx", "cy", "x", "y", "minor"}`, `sketch.ellipse.arc` (plus start and end directions `x1, y1, x2, y2`).
 - `sketch.project {"edges": ["2:top 0"]}` or `{"faces": [{"feature": 2, "face": "top"}]}` copies model edges into the active sketch as fixed curves that follow the model when it rebuilds (`"linked": false` for a plain copy); `examples/sketch-shapes.json` shows both.

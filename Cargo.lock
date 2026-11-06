@@ -306,10 +306,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "chamfera-drawing"
+version = "0.0.1"
+dependencies = [
+ "chamfera-doc",
+ "chamfera-geom",
+ "chamfera-kernel",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "chamfera-engine"
 version = "0.0.1"
 dependencies = [
  "chamfera-doc",
+ "chamfera-drawing",
  "chamfera-geom",
  "chamfera-io",
  "chamfera-kernel",
@@ -326,6 +337,7 @@ version = "0.0.1"
 dependencies = [
  "serde",
  "serde_json",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -394,6 +406,7 @@ name = "chamfera-ui"
 version = "0.0.1"
 dependencies = [
  "chamfera-doc",
+ "chamfera-drawing",
  "chamfera-engine",
  "chamfera-geom",
  "chamfera-gpu",

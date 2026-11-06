@@ -188,7 +188,7 @@ fn collapse_pairing(
             .faces
             .get(g)
             .and_then(Option::as_ref)
-            .map(|x| x.surface)
+            .map(|x| x.surface.clone())
             .ok_or_else(|| not_a_blend("a neighbour is gone"))
     };
     if intersect_surfaces(&surface(a)?, &surface(b)?)?

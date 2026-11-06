@@ -67,6 +67,7 @@ fn command_of(action: Action) -> Option<&'static str> {
             Tool::Arc => "sketch.arc",
             Tool::ThreePointArc => "sketch.arc.three_point",
             Tool::TangentArc => "sketch.arc.tangent",
+            Tool::Spline => "sketch.spline",
             Tool::Polygon => "sketch.polygon",
             Tool::Slot => "sketch.slot",
             Tool::Ellipse => "sketch.ellipse",
@@ -87,6 +88,8 @@ fn command_of(action: Action) -> Option<&'static str> {
         Action::Extrude => "solid.extrude",
         Action::Revolve => "solid.revolve",
         Action::PressPull => "solid.press_pull",
+        Action::Sweep => "solid.sweep",
+        Action::Loft => "solid.loft",
         Action::Fillet => "solid.fillet",
         Action::Chamfer => "solid.chamfer",
         Action::Parameters => "param.set",
@@ -117,6 +120,8 @@ fn ui_actions() -> Vec<Action> {
         Action::Extrude,
         Action::Revolve,
         Action::PressPull,
+        Action::Sweep,
+        Action::Loft,
         Action::Fillet,
         Action::Chamfer,
     ];
@@ -182,6 +187,8 @@ fn context_of(action: Action) -> &'static str {
         | Action::Extrude
         | Action::Revolve
         | Action::PressPull
+        | Action::Sweep
+        | Action::Loft
         | Action::Fillet
         | Action::Chamfer
         | Action::Parameters => "Solid",
@@ -215,6 +222,8 @@ pub(crate) fn icon_of(action: Action) -> Icon {
         Action::Extrude => Icon::Extrude,
         Action::Revolve => Icon::Revolve,
         Action::PressPull => Icon::PressPull,
+        Action::Sweep => Icon::Sweep,
+        Action::Loft => Icon::Loft,
         Action::Fillet => Icon::Fillet,
         Action::Chamfer => Icon::Chamfer,
         Action::Parameters => Icon::Parameters,
@@ -335,7 +344,9 @@ impl ChamferaApp {
     /// Why `action` cannot run now, in words, or `None` when it can.
     pub(crate) fn unavailable(&self, action: Action) -> Option<String> {
         let sketching = self.session.active_sketch.is_some();
-        let tool_free = self.solid.extrude.is_none() && self.solid.blend.is_none();
+        let tool_free = self.solid.extrude.is_none()
+            && self.solid.blend.is_none()
+            && self.solid.sweep.is_none();
         let has_solids = !self.session.solids().is_empty();
         let name = shortcuts::action_label(action);
         let desktop = cfg!(not(target_arch = "wasm32"));
@@ -360,6 +371,8 @@ impl ChamferaApp {
             | Action::Extrude
             | Action::Revolve
             | Action::PressPull
+            | Action::Sweep
+            | Action::Loft
             | Action::Fillet
             | Action::Chamfer
                 if sketching =>
@@ -369,7 +382,9 @@ impl ChamferaApp {
             Action::SketchOnFace | Action::Fillet | Action::Chamfer if !has_solids => {
                 format!("{name}: build a solid first")
             }
-            Action::Extrude | Action::Revolve if !self.has_profiles() => {
+            Action::Extrude | Action::Revolve | Action::Sweep | Action::Loft
+                if !self.has_profiles() =>
+            {
                 format!("{name}: draw a closed profile in a sketch first")
             }
             Action::PressPull if !has_solids && !self.has_profiles() => {
@@ -378,6 +393,8 @@ impl ChamferaApp {
             Action::Extrude
             | Action::Revolve
             | Action::PressPull
+            | Action::Sweep
+            | Action::Loft
             | Action::Fillet
             | Action::Chamfer
                 if !tool_free =>
@@ -499,6 +516,8 @@ impl ChamferaApp {
             Action::Extrude => self.open_extrude(false),
             Action::Revolve => self.open_extrude(true),
             Action::PressPull => self.open_press_pull(crate::press_pull_ui::PullMode::Auto),
+            Action::Sweep => self.open_sweep(false),
+            Action::Loft => self.open_sweep(true),
             Action::Fillet => self.open_blend(false),
             Action::Chamfer => self.open_blend(true),
             Action::Parameters => self.params.open = true,

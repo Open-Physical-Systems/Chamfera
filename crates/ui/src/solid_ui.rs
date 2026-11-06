@@ -374,6 +374,8 @@ pub struct SolidUi {
     pub shell: Option<crate::shell_ui::ShellTool>,
     /// The Press Pull, Offset Face or Delete Face tool (`press_pull_ui.rs`).
     pub press_pull: Option<crate::press_pull_ui::PressPullTool>,
+    /// The Sweep or Loft tool.
+    pub sweep: Option<crate::sweep_ui::SweepTool>,
     /// Waiting for a click on a flat face to sketch on.
     pub pick_face: bool,
     /// `--extrude`: pick the profile under the viewport's centre on the first frame.
@@ -399,7 +401,10 @@ impl ChamferaApp {
             && self.solid.transform.is_none()
             && self.solid.inspect.is_none()
             && self.solid.shell.is_none()
-            && self.solid.press_pull.is_none();
+            && self.solid.press_pull.is_none()
+            && self.solid.sweep.is_none();
+        let sweep_open = self.solid.sweep.as_ref().map(|t| t.loft);
+        let mut open_sweep: Option<bool> = None;
         let extruding = self.solid.extrude.as_ref().is_some_and(|t| !t.revolve);
         let revolving = self.solid.extrude.as_ref().is_some_and(|t| t.revolve);
         let mut plane: Option<(&str, &str)> = None;
@@ -462,6 +467,8 @@ impl ChamferaApp {
             {
                 open_tool = Some(true);
             }
+            open_sweep =
+                crate::sweep_ui::ribbon_buttons(ui, look, has_profiles, tool_free, sweep_open);
             open_hole = crate::hole_ui::hole_button(ui, look, has_solids, tool_free, holing);
         });
         // Create Sketch opens the list of planes under its button.
@@ -543,6 +550,9 @@ impl ChamferaApp {
         }
         if let Some(revolve) = open_tool {
             self.open_extrude(revolve);
+        }
+        if let Some(loft) = open_sweep {
+            self.open_sweep(loft);
         }
         let look = self.look();
         widgets::ribbon_divider(ui, look);
@@ -680,6 +690,7 @@ impl ChamferaApp {
             self.run("body.sample", json!({}));
             self.fit_pending = true;
         }
+        self.assemble_group(ui);
     }
 
     /// Waits for a click on a flat face to sketch on (Create Sketch > A flat face).

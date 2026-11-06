@@ -648,7 +648,7 @@ impl ViewRenderer {
                 let c = if selected {
                     frame.theme.body_selected
                 } else {
-                    frame.theme.body
+                    frame.theme.body_colour(b.tint)
                 };
                 queue.write_buffer(&g.uniform, 0, bytemuck::cast_slice(&c.linear()));
             }

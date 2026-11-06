@@ -2,16 +2,21 @@
 
 mod app;
 mod body;
+mod component;
 mod construct;
 mod design;
+pub mod drawing;
 mod edit;
 mod face_edit;
 mod feature;
 mod hole;
 mod inspect;
+mod joint;
 mod param;
 mod select;
 mod sketch;
+mod spline;
+mod timeline;
 mod transform;
 mod view;
 
@@ -37,16 +42,21 @@ pub fn registry() -> Vec<&'static CommandSpec> {
     for area in [
         app::COMMANDS,
         body::COMMANDS,
+        component::COMMANDS,
         construct::COMMANDS,
         design::COMMANDS,
+        drawing::COMMANDS,
         edit::COMMANDS,
         face_edit::COMMANDS,
         feature::COMMANDS,
         hole::COMMANDS,
         inspect::COMMANDS,
+        joint::COMMANDS,
         param::COMMANDS,
         select::COMMANDS,
         sketch::COMMANDS,
+        spline::COMMANDS,
+        timeline::COMMANDS,
         transform::COMMANDS,
         view::COMMANDS,
     ] {
