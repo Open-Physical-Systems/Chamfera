@@ -43,6 +43,15 @@ pub static COMMANDS: &[CommandSpec] = &[
         run: remove,
     },
     CommandSpec {
+        id: "body.rename",
+        label: "Rename Body",
+        params: "body: integer (required) - the body id; a solid takes its feature's name, \
+                 so rename that feature instead\n\
+                 name: string (required) - the new name, 1 to 80 characters",
+        mutates: false,
+        run: rename,
+    },
+    CommandSpec {
         id: "body.sample",
         label: "Insert Sample Part",
         params: "(none)",
@@ -203,8 +212,23 @@ fn visibility(s: &mut Session, p: &Value) -> CmdResult {
     if let Some(b) = s.scene.body_mut(id) {
         b.visible = visible;
     }
-    if !visible && s.scene.selection.is_some_and(|h| h.body == id) {
-        s.scene.selection = None;
+    if !visible {
+        s.scene.deselect(|b| b == id);
+    }
+    Ok(summary(s, id))
+}
+
+fn rename(s: &mut Session, p: &Value) -> CmdResult {
+    let id = body_id(s, p)?;
+    let name = params::req_display_name(p, "name")?;
+    if let Some(solid) = s.solids().iter().find(|x| x.scene_id == Some(id)) {
+        return Err(CommandError::Unavailable(format!(
+            "{} is built by feature {}: rename the feature (feature.rename)",
+            solid.name, solid.feature
+        )));
+    }
+    if let Some(b) = s.scene.body_mut(id) {
+        b.name = name;
     }
     Ok(summary(s, id))
 }
@@ -212,8 +236,6 @@ fn visibility(s: &mut Session, p: &Value) -> CmdResult {
 fn remove(s: &mut Session, p: &Value) -> CmdResult {
     let id = body_id(s, p)?;
     s.scene.bodies.retain(|b| b.id != id);
-    if s.scene.selection.is_some_and(|h| h.body == id) {
-        s.scene.selection = None;
-    }
+    s.scene.deselect(|b| b == id);
     Ok(json!({ "removed": id }))
 }

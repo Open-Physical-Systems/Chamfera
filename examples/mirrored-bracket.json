@@ -1,0 +1,37 @@
+[
+  { "command": "sketch.create", "params": { "plane": "xy" } },
+  { "command": "sketch.rectangle", "params": { "x1": 0, "y1": 0, "x2": 40, "y2": 30 } },
+  { "command": "sketch.finish", "params": {} },
+  {
+    "command": "solid.extrude",
+    "params": { "sketch": 1, "profiles": [{ "x": 20, "y": 15 }], "distance": 6 }
+  },
+  { "command": "sketch.create", "params": { "plane": "xy" } },
+  { "command": "sketch.rectangle", "params": { "x1": 32, "y1": 0, "x2": 40, "y2": 30 } },
+  { "command": "sketch.finish", "params": {} },
+  {
+    "command": "solid.extrude",
+    "params": {
+      "sketch": 3,
+      "profiles": [{ "x": 36, "y": 15 }],
+      "distance": 30,
+      "operation": "join"
+    }
+  },
+  { "command": "sketch.create", "params": { "plane": "xy" } },
+  { "command": "sketch.circle", "params": { "cx": 18, "cy": 15, "radius": 4 } },
+  { "command": "sketch.finish", "params": {} },
+  {
+    "command": "solid.extrude",
+    "params": {
+      "sketch": 5,
+      "profiles": [{ "x": 18, "y": 15 }],
+      "distance": 6,
+      "operation": "cut"
+    }
+  },
+  {
+    "command": "solid.mirror",
+    "params": { "bodies": ["Extrude1"], "plane": "yz", "operation": "join" }
+  }
+]

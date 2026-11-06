@@ -17,7 +17,11 @@ use std::sync::{Arc, Mutex};
 mod blend_ui;
 mod browser;
 mod chrome;
+mod construct_ui;
+mod context_menu;
 mod file_ui;
+mod hole_ui;
+mod inspect_ui;
 
 /// `--screenshot` gives up after this long without a drawn frame.
 const SHOT_TIMEOUT_SECS: f64 = 30.0;
@@ -25,9 +29,14 @@ const SHOT_TIMEOUT_SECS: f64 = 30.0;
 static SHOT_FAILED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 mod icons;
 mod params_ui;
+mod search;
+mod shell_ui;
+mod shortcuts;
+mod sketch_select;
 mod sketch_ui;
 mod solid_ui;
 mod timeline;
+mod transform_ui;
 mod viewcube;
 #[cfg(target_arch = "wasm32")]
 mod web;
@@ -56,10 +65,23 @@ pub struct Options {
     /// Extrude options for the tool `extrude` opens, as `solid.extrude` parameters (such as
     /// `{"taper": 5, "direction": "two_sides", "distance2": 4}`).
     pub extrude_with: Option<Value>,
+    /// Open the Hole tool at start, on the design's last hole feature if it has one.
+    pub hole: bool,
     /// The window's inner size in points, instead of the default 1400 x 900.
     pub window_size: Option<[f32; 2]>,
     /// Interface zoom (pixels per point multiplier), for checking crispness at 2x.
     pub zoom: Option<f32>,
+    /// Drawing-tool steps to run in the active sketch at start, for screenshots of snaps
+    /// and typed values: `tool line; click 0,0; hover 30,12; type 25` (see
+    /// `sketch_ui::parse_demo`).
+    pub sketch_input: Option<String>,
+    /// Show a selection box with these viewport corners (x1, y1, x2, y2) as if it were
+    /// being dragged, for screenshots of the window and crossing styles.
+    pub select_box: Option<[f32; 4]>,
+    /// Open the search palette at start with this query typed.
+    pub search: Option<String>,
+    /// Open the viewport's right-click menu at this viewport point once it has drawn.
+    pub context_menu: Option<[f32; 2]>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,7 +103,9 @@ struct Drawn {
     camera: Camera,
     bodies: Vec<(u32, bool, usize)>,
     selection: Option<Hit>,
+    selected: Vec<u32>,
     overlays: Vec<chamfera_render::Overlay>,
+    fills: Vec<chamfera_render::Fill>,
     theme: ThemeMode,
     size: (u32, u32),
     /// How many times the tool preview was rebuilt, and how many shapes it shows.
@@ -118,9 +142,13 @@ pub struct ChamferaApp {
     sketch: sketch_ui::SketchUi,
     params: params_ui::ParamsUi,
     solid: solid_ui::SolidUi,
+    construct: construct_ui::ConstructUi,
     file: file_ui::FileUi,
     browser: browser::BrowserUi,
     timeline: timeline::TimelineUi,
+    search: search::SearchUi,
+    /// Right-click menus, the selection filter and hover pre-highlight.
+    ctx_menu: context_menu::ContextMenuUi,
     /// The browser's file picker, downloads and local storage.
     #[cfg(target_arch = "wasm32")]
     web: web::WebFiles,
@@ -131,6 +159,10 @@ pub struct ChamferaApp {
     /// Frames drawn so far (up to a few): dialogs wait until the layout has settled, so
     /// their first position is beside the real viewport.
     frames: u8,
+    /// A box selection being dragged (`sketch_select`).
+    select_box: Option<sketch_select::BoxDrag>,
+    /// `--box`: viewport corners of a box to show as if dragged, until the next drag.
+    box_preview: Option<[f32; 4]>,
 }
 
 /// A command's label, so menus show the same words as the command list.
@@ -192,14 +224,19 @@ impl ChamferaApp {
             sketch: sketch_ui::SketchUi::default(),
             params: params_ui::ParamsUi::default(),
             solid: solid_ui::SolidUi::default(),
+            construct: construct_ui::ConstructUi::default(),
             file: file_ui::FileUi::default(),
             browser: browser::BrowserUi::default(),
             timeline: timeline::TimelineUi::default(),
+            search: search::SearchUi::default(),
+            ctx_menu: context_menu::ContextMenuUi::default(),
             #[cfg(target_arch = "wasm32")]
             web: web::WebFiles::default(),
             ctx_close: false,
             zoom: None,
             frames: 0,
+            select_box: None,
+            box_preview: None,
         };
         if options.sample {
             app.run("body.sample", json!({}));
@@ -207,10 +244,11 @@ impl ChamferaApp {
         for f in &options.files {
             app.run("body.import_stl", json!({ "path": f.to_string_lossy() }));
         }
-        if !options.script.is_empty()
-            && let Err(e) = chamfera_engine::script::run_steps(&mut app.session, &options.script)
-        {
-            app.message = Some((e.to_string(), true));
+        if !options.script.is_empty() {
+            match chamfera_engine::script::run_steps(&mut app.session, &options.script) {
+                Ok(replies) => app.inspect_from_script(&options.script, &replies),
+                Err(e) => app.message = Some((e.to_string(), true)),
+            }
         }
         if app.session.active_sketch.is_some() {
             app.sketch.tool = Some(sketch_ui::Tool::Select);
@@ -225,7 +263,22 @@ impl ChamferaApp {
             app.solid.extrude = Some(tool);
             app.solid.pick_centre = true;
         }
+        if options.hole {
+            app.open_hole_on_last();
+        }
         app.zoom = options.zoom;
+        if let Some(text) = &options.sketch_input {
+            match sketch_ui::parse_demo(text) {
+                Ok(steps) => app.sketch.demo = steps,
+                Err(e) => app.message = Some((e, true)),
+            }
+        }
+        app.ctx_menu.open_at = options.context_menu;
+        app.box_preview = options.select_box;
+        if let Some(q) = &options.search {
+            app.run_action(shortcuts::Action::Search);
+            app.search.query = q.chars().take(120).collect();
+        }
         app
     }
 
@@ -317,6 +370,12 @@ impl ChamferaApp {
                 ),
             )
         });
+        let pressed = ui.input(|i| i.pointer.any_down());
+        let hover = response
+            .hover_pos()
+            .filter(|_| !pressed)
+            .map(|p| (local(p).0, local(p).1, w, h));
+        self.hover_update(hover);
         let delta = response.drag_delta();
         if delta != Vec2::ZERO {
             let (dx, dy) = (f64::from(delta.x), f64::from(delta.y));
@@ -356,6 +415,14 @@ impl ChamferaApp {
             self.extrude_target_click(x, y, w, h);
             return;
         }
+        if self.construct.tool.is_some()
+            && response.clicked()
+            && let Some(pos) = response.interact_pointer_pos()
+        {
+            let (x, y) = local(pos);
+            self.construct_click(x, y, w, h);
+            return;
+        }
         if self.solid.pick_face
             && response.clicked()
             && let Some(pos) = response.interact_pointer_pos()
@@ -363,6 +430,17 @@ impl ChamferaApp {
             let (x, y) = local(pos);
             self.face_click(x, y, w, h);
             return;
+        }
+        if self.solid.hole.is_some() {
+            let at = response.hover_pos().map(local);
+            self.hole_hover(at, w, h);
+            if response.clicked()
+                && let Some(pos) = response.interact_pointer_pos()
+            {
+                let (x, y) = local(pos);
+                self.hole_click(x, y, w, h);
+                return;
+            }
         }
         if self.solid.blend.is_some() {
             let at = response.hover_pos().map(local);
@@ -375,6 +453,30 @@ impl ChamferaApp {
                 return;
             }
         }
+        if self.solid.transform.is_some()
+            && response.clicked()
+            && let Some(pos) = response.interact_pointer_pos()
+        {
+            let (x, y) = local(pos);
+            self.transform_click(x, y, w, h);
+            return;
+        }
+        if self.solid.inspect.is_some()
+            && response.clicked()
+            && let Some(pos) = response.interact_pointer_pos()
+        {
+            let (x, y) = local(pos);
+            self.inspect_click(x, y, w, h);
+            return;
+        }
+        if self.solid.shell.is_some()
+            && response.clicked()
+            && let Some(pos) = response.interact_pointer_pos()
+        {
+            let (x, y) = local(pos);
+            self.shell_click(x, y, w, h);
+            return;
+        }
         if self.solid.extrude.is_some()
             && response.clicked()
             && let Some(pos) = response.interact_pointer_pos()
@@ -385,15 +487,29 @@ impl ChamferaApp {
         }
         let used_by_sketch =
             self.session.active_sketch.is_some() && self.sketch_input(ui, response, rect);
+        if !used_by_sketch {
+            self.context_click(response, rect);
+        }
+        if self.session.active_sketch.is_none() {
+            // A left drag from anywhere draws a selection box (`sketch_select`).
+            if response.drag_started_by(PointerButton::Primary) && self.select_box.is_none() {
+                self.box_begin(ui, rect, false);
+            }
+            if self.box_input(ui, response, rect) {
+                return;
+            }
+        }
         if !used_by_sketch
             && self.session.active_sketch.is_none()
             && response.clicked()
             && let Some(pos) = response.interact_pointer_pos()
         {
             let (x, y) = local(pos);
+            let mode = sketch_select::pick_mode(ui.input(|i| i.modifiers));
             self.run(
                 "select.pick",
-                json!({ "x": x, "y": y, "width": w, "height": h }),
+                json!({ "x": x, "y": y, "width": w, "height": h, "mode": mode,
+                        "filter": self.filter_param() }),
             );
         }
         let typing = ui.ctx().egui_wants_keyboard_input();
@@ -436,17 +552,24 @@ impl ChamferaApp {
             .scene
             .overlays
             .retain(|o| o.style != chamfera_render::OverlayStyle::Preview);
+        // Tool and hover overlays are added for this frame's picture only.
+        let base_overlays = self.session.scene.overlays.len();
         if let Some(preview) = self.sketch_preview() {
             self.session.scene.overlays.push(preview);
         }
         let blends = self.blend_overlays();
         self.session.scene.overlays.extend(blends);
+        let holes = self.hole_overlays();
+        self.session.scene.overlays.extend(holes);
+        self.inspect_overlays();
         if let Some(picked) = self.extrude_overlay() {
             self.session.scene.overlays.push(Overlay {
                 style: chamfera_render::OverlayStyle::Highlight,
                 ..picked
             });
         }
+        let picks = self.pick_overlays();
+        self.session.scene.overlays.extend(picks);
         let ppp = ui.ctx().pixels_per_point();
         let size = (
             (rect.width() * ppp).round().max(1.0) as u32,
@@ -462,7 +585,9 @@ impl ChamferaApp {
                 .map(|b| (b.id, b.visible, b.mesh.triangles.len()))
                 .collect(),
             selection: self.session.scene.selection,
+            selected: self.session.scene.selected.clone(),
             overlays: self.session.scene.overlays.clone(),
+            fills: self.session.scene.fills.clone(),
             theme: self.theme.mode,
             size,
             previews: (self.preview_version, self.session.scene.previews.len()),
@@ -503,6 +628,7 @@ impl ChamferaApp {
             }
             self.drawn = Some(now);
         }
+        self.session.scene.overlays.truncate(base_overlays);
         if let Some(Some(id)) = self.gpu.as_ref().map(|g| g.texture) {
             ui.painter().image(
                 id,
@@ -514,8 +640,17 @@ impl ChamferaApp {
         if self.session.active_sketch.is_some() {
             self.dimension_labels(ui, rect);
         }
+        self.inspect_labels(ui, rect);
+        self.paint_box(ui, rect);
         self.view_cube(ui, rect);
         self.viewport_hint(ui, rect);
+        self.selection_filter_bar(ui.ctx(), rect);
+        if self.frames >= 2
+            && let Some([x, y]) = self.ctx_menu.open_at.take()
+        {
+            self.open_context_menu(rect.min + Vec2::new(x, y), rect);
+        }
+        self.context_menu_window(ui.ctx());
     }
 
     /// `--screenshot`: wait a few frames for the view to settle, grab the window, save, quit.
@@ -593,6 +728,10 @@ fn save_png(_: &std::path::Path, _: &egui::ColorImage) -> Result<(), String> {
 }
 
 impl eframe::App for ChamferaApp {
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        self.sketch_raw_input(ctx, raw_input);
+    }
+
     /// Runs every frame, even when the window is covered or minimised (then eframe skips
     /// `ui`). `--screenshot` lives here and asks for painting while hidden, so a covered
     /// window still draws, captures and quits instead of waiting forever.
@@ -612,6 +751,10 @@ impl eframe::App for ChamferaApp {
             ctx.set_zoom_factor(z.clamp(0.5, 4.0));
         }
         self.apply_theme(&ctx);
+        self.track_last_used();
+        // Keys first, so the palette and the shortcuts take theirs before anything else.
+        self.search_keys(&ctx);
+        self.shortcut_keys(&ctx);
         let chrome = egui::Frame::new()
             .fill(color(self.theme.chrome))
             .inner_margin(egui::Margin::symmetric(widgets::S3 as i8, 0));
@@ -653,9 +796,18 @@ impl eframe::App for ChamferaApp {
             self.parameters_window(&ctx);
             self.extrude_dialog(&ctx);
             self.blend_dialog(&ctx);
+            self.hole_dialog(&ctx);
+            self.transform_dialog(&ctx);
+            self.inspect_dialog(&ctx);
+            self.shell_dialog(&ctx);
             self.feature_dialog(&ctx);
+            self.construct_dialog(&ctx);
+            self.rename_dialog(&ctx);
+            self.properties_window(&ctx);
         }
         self.unsaved_dialog(&ctx);
+        self.shortcuts_window(&ctx);
+        self.search_window(&ctx);
         self.file_shortcuts(&ctx);
         #[cfg(target_arch = "wasm32")]
         self.browser_files(&ctx);
@@ -694,13 +846,26 @@ mod input_tests {
 
     /// Runs one frame of the real UI with these input events.
     fn frame(app: &mut ChamferaApp, ctx: &egui::Context, t: f64, events: Vec<egui::Event>) {
+        frame_with(app, ctx, t, events, egui::Modifiers::NONE);
+    }
+
+    /// One frame with these keys held (Shift, Ctrl).
+    fn frame_with(
+        app: &mut ChamferaApp,
+        ctx: &egui::Context,
+        t: f64,
+        events: Vec<egui::Event>,
+        modifiers: egui::Modifiers,
+    ) {
+        let mut all = vec![egui::Event::ModifiersChanged(modifiers)];
+        all.extend(events);
         let raw = egui::RawInput {
             screen_rect: Some(Rect::from_min_size(
                 egui::Pos2::ZERO,
                 Vec2::new(1400.0, 900.0),
             )),
             time: Some(t),
-            events,
+            events: all,
             ..Default::default()
         };
         let mut f = eframe::Frame::_new_kittest();
@@ -779,5 +944,291 @@ mod input_tests {
             .curves()
             .count();
         assert!(n >= 1, "no line drawn");
+    }
+
+    /// A left drag from `a` to `b` in small steps, with these keys held.
+    fn drag(
+        app: &mut ChamferaApp,
+        ctx: &egui::Context,
+        t: &mut f64,
+        (a, b): (egui::Pos2, egui::Pos2),
+        button: egui::PointerButton,
+        modifiers: egui::Modifiers,
+    ) {
+        let press = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button,
+            pressed,
+            modifiers,
+        };
+        frame_with(app, ctx, *t, vec![egui::Event::PointerMoved(a)], modifiers);
+        *t += 0.05;
+        frame_with(app, ctx, *t, vec![press(a, true)], modifiers);
+        for k in 1..=8 {
+            *t += 0.03;
+            let p = a + (b - a) * (k as f32 / 8.0);
+            frame_with(app, ctx, *t, vec![egui::Event::PointerMoved(p)], modifiers);
+        }
+        *t += 0.03;
+        frame_with(app, ctx, *t, vec![press(b, false)], modifiers);
+        *t += 0.05;
+        frame_with(app, ctx, *t, vec![], modifiers);
+        *t += 0.05;
+    }
+
+    /// A left click at `at` with these keys held.
+    fn click_with(
+        app: &mut ChamferaApp,
+        ctx: &egui::Context,
+        t: &mut f64,
+        at: egui::Pos2,
+        modifiers: egui::Modifiers,
+    ) {
+        let press = |pressed| egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers,
+        };
+        frame_with(app, ctx, *t, vec![egui::Event::PointerMoved(at)], modifiers);
+        *t += 0.05;
+        frame_with(app, ctx, *t, vec![press(true)], modifiers);
+        *t += 0.08;
+        frame_with(app, ctx, *t, vec![press(false)], modifiers);
+        *t += 0.05;
+        frame_with(app, ctx, *t, vec![], modifiers);
+        *t += 0.05;
+    }
+
+    /// Orthographic top view centred on model (cx, cy) with a 30 mm half height, so the
+    /// viewport (height H points) shows H / 60 points per mm. Returns model (x, y) to
+    /// screen position: the viewport centre plus (x - cx, -(y - cy)) times that scale.
+    fn top_view(
+        app: &mut ChamferaApp,
+        cx: f64,
+        cy: f64,
+    ) -> impl Fn(f64, f64) -> egui::Pos2 + use<> {
+        app.run("view.standard", json!({ "view": "top" }));
+        app.session.camera.projection = chamfera_render::Projection::Orthographic;
+        app.session.camera.target = chamfera_geom::Point3::new(cx, cy, 0.0);
+        app.session.camera.distance = 30.0 / (app.session.camera.fov_y * 0.5).tan();
+        let r = app.viewport_rect;
+        let per_mm = f64::from(r.height()) / 60.0;
+        let c = r.center();
+        move |x, y| {
+            egui::pos2(
+                c.x + ((x - cx) * per_mm) as f32,
+                c.y - ((y - cy) * per_mm) as f32,
+            )
+        }
+    }
+
+    /// Two 10 mm cubes: A at x 0..10, B at x 30..40, both y 0..10. The view is centred
+    /// on (20, 5).
+    fn two_cubes(
+        ctx: &egui::Context,
+        t: &mut f64,
+    ) -> (
+        ChamferaApp,
+        u32,
+        u32,
+        impl Fn(f64, f64) -> egui::Pos2 + use<>,
+    ) {
+        use chamfera_geom::{Point3, TriMesh};
+        let mut app = ChamferaApp::headless();
+        let a = app
+            .session
+            .scene
+            .add(
+                "A",
+                TriMesh::cuboid(Point3::ORIGIN, Point3::new(10.0, 10.0, 10.0)),
+            )
+            .unwrap();
+        let b = app
+            .session
+            .scene
+            .add(
+                "B",
+                TriMesh::cuboid(Point3::new(30.0, 0.0, 0.0), Point3::new(40.0, 10.0, 10.0)),
+            )
+            .unwrap();
+        for _ in 0..4 {
+            frame(&mut app, ctx, *t, vec![]);
+            *t += 0.05;
+        }
+        let px = top_view(&mut app, 20.0, 5.0);
+        (app, a, b, px)
+    }
+
+    fn selected(app: &ChamferaApp) -> Vec<u32> {
+        let mut ids = app.session.scene.selected_bodies();
+        ids.sort();
+        ids
+    }
+
+    #[test]
+    fn a_left_drag_to_the_right_is_a_window_and_to_the_left_a_crossing() {
+        let ctx = egui::Context::default();
+        let mut t = 0.0;
+        let (mut app, a, b, px) = two_cubes(&ctx, &mut t);
+        let none = egui::Modifiers::NONE;
+        let left = egui::PointerButton::Primary;
+        // Window from (-2, 12) to (35, -2): all of A, half of B. Only A is fully inside.
+        drag(
+            &mut app,
+            &ctx,
+            &mut t,
+            (px(-2.0, 12.0), px(35.0, -2.0)),
+            left,
+            none,
+        );
+        assert!(app.select_box.is_none(), "the box ends with the drag");
+        assert_eq!(selected(&app), vec![a]);
+        // The same box dragged the other way is a crossing: it touches both.
+        drag(
+            &mut app,
+            &ctx,
+            &mut t,
+            (px(35.0, -2.0), px(-2.0, 12.0)),
+            left,
+            none,
+        );
+        assert_eq!(selected(&app), vec![a, b]);
+        // A crossing over the gap only (x 15..25) selects nothing, replacing the set.
+        drag(
+            &mut app,
+            &ctx,
+            &mut t,
+            (px(25.0, 12.0), px(15.0, -2.0)),
+            left,
+            none,
+        );
+        assert!(selected(&app).is_empty());
+    }
+
+    #[test]
+    fn shift_and_ctrl_clicks_toggle_ctrl_shift_removes_and_empty_space_or_esc_clears() {
+        let ctx = egui::Context::default();
+        let mut t = 0.0;
+        let (mut app, a, b, px) = two_cubes(&ctx, &mut t);
+        let (none, shift, ctrl) = (
+            egui::Modifiers::NONE,
+            egui::Modifiers::SHIFT,
+            egui::Modifiers::CTRL,
+        );
+        // Cube centres: A (5, 5), B (35, 5); the gap at (20, 5).
+        click_with(&mut app, &ctx, &mut t, px(5.0, 5.0), none);
+        assert_eq!(selected(&app), vec![a]);
+        click_with(&mut app, &ctx, &mut t, px(35.0, 5.0), shift);
+        assert_eq!(selected(&app), vec![a, b]);
+        click_with(&mut app, &ctx, &mut t, px(5.0, 5.0), ctrl);
+        assert_eq!(selected(&app), vec![b], "Ctrl+click toggles A off");
+        click_with(&mut app, &ctx, &mut t, px(5.0, 5.0), ctrl);
+        click_with(&mut app, &ctx, &mut t, px(35.0, 5.0), ctrl | shift);
+        assert_eq!(selected(&app), vec![a], "Ctrl+Shift+click removes B");
+        // A Shift box adds B back.
+        drag(
+            &mut app,
+            &ctx,
+            &mut t,
+            (px(28.0, 12.0), px(42.0, -2.0)),
+            egui::PointerButton::Primary,
+            shift,
+        );
+        assert_eq!(selected(&app), vec![a, b]);
+        // A plain click on empty space clears.
+        click_with(&mut app, &ctx, &mut t, px(20.0, 5.0), none);
+        assert!(selected(&app).is_empty());
+        // Esc clears too.
+        click_with(&mut app, &ctx, &mut t, px(5.0, 5.0), none);
+        let esc = |pressed| egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed,
+            repeat: false,
+            modifiers: none,
+        };
+        frame(&mut app, &ctx, t, vec![esc(true)]);
+        t += 0.05;
+        frame(&mut app, &ctx, t, vec![esc(false)]);
+        assert!(selected(&app).is_empty());
+    }
+
+    #[test]
+    fn a_right_drag_still_orbits_and_draws_no_box() {
+        let ctx = egui::Context::default();
+        let mut t = 0.0;
+        let (mut app, _, _, px) = two_cubes(&ctx, &mut t);
+        let yaw = app.session.camera.yaw;
+        drag(
+            &mut app,
+            &ctx,
+            &mut t,
+            (px(-2.0, 12.0), px(35.0, -2.0)),
+            egui::PointerButton::Secondary,
+            egui::Modifiers::NONE,
+        );
+        assert!((app.session.camera.yaw - yaw).abs() > 1e-3, "no orbit");
+        assert!(selected(&app).is_empty());
+    }
+
+    #[test]
+    fn in_a_sketch_a_drag_on_empty_space_boxes_and_a_drag_on_a_point_moves_it() {
+        let ctx = egui::Context::default();
+        let mut t = 0.0;
+        let mut app = ChamferaApp::headless();
+        for _ in 0..3 {
+            frame(&mut app, &ctx, t, vec![]);
+            t += 0.05;
+        }
+        app.create_sketch("xy", "top");
+        let line = app
+            .run(
+                "sketch.line",
+                json!({ "x1": 10, "y1": 10, "x2": 20, "y2": 10 }),
+            )
+            .unwrap();
+        app.sketch.tool = Some(sketch_ui::Tool::Select);
+        frame(&mut app, &ctx, t, vec![]);
+        t += 0.05;
+        let px = top_view(&mut app, 15.0, 10.0);
+        let left = egui::PointerButton::Primary;
+        // A window from (8, 13) to (22, 7) holds the whole line: both ends and the line.
+        drag(
+            &mut app,
+            &ctx,
+            &mut t,
+            (px(8.0, 13.0), px(22.0, 7.0)),
+            left,
+            egui::Modifiers::NONE,
+        );
+        let items = serde_json::to_value(&app.session.sketch_selection).unwrap();
+        let expected =
+            json!([{"point": line["start"]}, {"point": line["end"]}, {"curve": line["curve"]}]);
+        assert_eq!(items, expected);
+        // A crossing over the middle (x 14..16) picks just the line.
+        drag(
+            &mut app,
+            &ctx,
+            &mut t,
+            (px(16.0, 13.0), px(14.0, 7.0)),
+            left,
+            egui::Modifiers::NONE,
+        );
+        let items = serde_json::to_value(&app.session.sketch_selection).unwrap();
+        assert_eq!(items, json!([{"curve": line["curve"]}]));
+        // A drag that starts on the end point (20, 10) moves it to about (20, 15).
+        drag(
+            &mut app,
+            &ctx,
+            &mut t,
+            (px(20.0, 10.0), px(20.0, 15.0)),
+            left,
+            egui::Modifiers::NONE,
+        );
+        let sketch = app.session.active_sketch().unwrap();
+        let end = line["end"].as_u64().unwrap() as u32;
+        let p = sketch.sketch.point(chamfera_sketch::PointId(end)).unwrap();
+        assert!((p.y - 15.0).abs() < 0.5, "end point at {p:?}");
     }
 }

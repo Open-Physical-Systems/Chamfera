@@ -93,6 +93,8 @@ impl ChamferaApp {
                     Icon::PatternRectangular,
                     format!("Pattern × {} of feature {}", p.count, p.source),
                 ),
+                FeatureKind::Hole(h) => (Icon::Hole, crate::hole_ui::hole_details(h)),
+                FeatureKind::Construct(c) => (crate::construct_ui::feature_icon(c), c.describe()),
                 FeatureKind::Blend(b) => (
                     match b.blend {
                         chamfera_doc::BlendKind::Fillet => Icon::Fillet,
@@ -107,6 +109,19 @@ impl ChamferaApp {
                         b.size,
                         b.edges.len(),
                         if b.edges.len() == 1 { "" } else { "s" }
+                    ),
+                ),
+                FeatureKind::Mirror(m) => {
+                    (Icon::MirrorBody, crate::transform_ui::mirror_details(m))
+                }
+                FeatureKind::Move(m) => (Icon::Move, crate::transform_ui::move_details(m)),
+                FeatureKind::Shell(sh) => (
+                    Icon::Shell,
+                    format!(
+                        "Shell {} · {} open face{}",
+                        sh.thickness,
+                        sh.faces.len(),
+                        if sh.faces.len() == 1 { "" } else { "s" }
                     ),
                 ),
             };
@@ -260,6 +275,24 @@ impl ChamferaApp {
                 ui.close();
                 action = Some("edit");
             }
+            let rename = if item.sketch {
+                label("sketch.rename")
+            } else {
+                label("feature.rename")
+            };
+            if widgets::menu_item(ui, look, Icon::Edit, rename, true).clicked() {
+                ui.close();
+                action = Some("rename");
+            }
+            if item.sketch {
+                ui.separator();
+                if widgets::menu_item(ui, look, Icon::Delete, label("sketch.delete"), !item.active)
+                    .clicked()
+                {
+                    ui.close();
+                    action = Some("delete sketch");
+                }
+            }
             if !item.sketch {
                 let text = if item.suppressed {
                     "Unsuppress"
@@ -295,6 +328,17 @@ impl ChamferaApp {
             Some("delete") => {
                 self.run("feature.delete", json!({ "feature": item.id }));
             }
+            Some("delete sketch") => {
+                self.menu_act(crate::context_menu::Act::DeleteSketch(item.id));
+            }
+            Some("rename") => {
+                let target = if item.sketch {
+                    crate::context_menu::RenameTarget::Sketch(item.id)
+                } else {
+                    crate::context_menu::RenameTarget::Feature(item.id)
+                };
+                self.menu_act(crate::context_menu::Act::Rename(target));
+            }
             _ => {}
         }
     }
@@ -306,17 +350,31 @@ impl ChamferaApp {
             }
             return;
         }
-        let Ok(f) = self.session.doc.feature(item.id) else {
+        self.edit_feature(item.id);
+    }
+
+    /// Opens the Edit Feature dialog for a feature.
+    pub(crate) fn edit_feature(&mut self, id: u32) {
+        let Ok(f) = self.session.doc.feature(id) else {
             return;
         };
+        if let FeatureKind::Hole(h) = &f.kind {
+            self.solid.hole = Some(crate::hole_ui::HoleTool::editing(id, h));
+            return;
+        }
         let (distance, extrude) = match &f.kind {
             FeatureKind::Extrude(e) => (e.distance.clone(), Some(ExtrudeForm::from_extrude(e))),
             FeatureKind::Revolve(r) => (r.angle.clone(), None),
             FeatureKind::Pattern(p) => (p.count.clone(), None),
+            FeatureKind::Construct(_) => return self.edit_construct(id),
             FeatureKind::Blend(b) => (b.size.clone(), None),
+            FeatureKind::Hole(h) => (h.diameter.clone(), None),
+            FeatureKind::Mirror(m) => (crate::transform_ui::mirror_details(m), None),
+            FeatureKind::Move(m) => (crate::transform_ui::move_details(m), None),
+            FeatureKind::Shell(sh) => (sh.thickness.clone(), None),
         };
         self.timeline.editing = Some(FeatureEdit {
-            feature: item.id,
+            feature: id,
             distance,
             extrude,
             suppressed: f.suppressed,
@@ -336,11 +394,14 @@ impl ChamferaApp {
         // Extrudes edit distance and direction, fillets and chamfers their size; the
         // others show their value only.
         let extrude = matches!(feature.kind, FeatureKind::Extrude(_));
-        let blend = matches!(feature.kind, FeatureKind::Blend(_));
+        let shell = matches!(feature.kind, FeatureKind::Shell(_));
+        let blend = shell || matches!(feature.kind, FeatureKind::Blend(_));
         let revolve = !extrude && !blend;
         let value_label = match &feature.kind {
             FeatureKind::Revolve(_) => "Angle",
             FeatureKind::Pattern(_) => "Count",
+            FeatureKind::Mirror(_) | FeatureKind::Move(_) => "Definition",
+            FeatureKind::Shell(_) => "Thickness",
             _ => "Size",
         };
         const WIDTH: f32 = 300.0;
@@ -428,7 +489,9 @@ impl ChamferaApp {
         }
         if ok {
             let mut params = json!({ "feature": edit.feature, "suppressed": edit.suppressed });
-            if blend {
+            if shell {
+                params["thickness"] = json!(edit.distance.trim());
+            } else if blend {
                 params["size"] = json!(edit.distance.trim());
             } else if let Some(form) = &edit.extrude
                 && let (Some(p), serde_json::Value::Object(options)) =
