@@ -4,6 +4,8 @@
 //! All of this is display state: it never changes the design's geometry, and model
 //! decisions (picking aside) never read it.
 
+use crate::environment::EnvironmentPreset;
+use crate::material::{LIBRARY, LibraryMaterial, Material};
 use crate::{Camera, Projection, Rgba, Scene};
 use chamfera_geom::{Point3, Ray, TriMesh, Vec3};
 use serde::{Deserialize, Serialize};
@@ -23,6 +25,9 @@ pub enum VisualStyle {
     Wireframe,
     /// The edges you can see, no faces: faces only hide what is behind them.
     WireframeHidden,
+    /// Physically based materials in the lighting environment, with a floor and its
+    /// shadows (`chamfera_render::environment`); no edges.
+    Realistic,
 }
 
 /// How a style draws faces.
@@ -30,6 +35,8 @@ pub enum VisualStyle {
 pub enum FacePass {
     /// Lit, in the body's colour.
     Shaded,
+    /// Physically based materials, the environment's lights, the floor and shadows.
+    Realistic,
     /// Into the depth buffer only, so they hide edges behind them but are not seen.
     DepthOnly,
     /// Not at all.
@@ -53,12 +60,13 @@ pub struct StylePlan {
 }
 
 impl VisualStyle {
-    pub const ALL: [VisualStyle; 5] = [
+    pub const ALL: [VisualStyle; 6] = [
         VisualStyle::Shaded,
         VisualStyle::ShadedEdges,
         VisualStyle::ShadedHiddenEdges,
         VisualStyle::Wireframe,
         VisualStyle::WireframeHidden,
+        VisualStyle::Realistic,
     ];
 
     /// The command parameter value (`view.style`).
@@ -69,6 +77,7 @@ impl VisualStyle {
             VisualStyle::ShadedHiddenEdges => "shaded_hidden_edges",
             VisualStyle::Wireframe => "wireframe",
             VisualStyle::WireframeHidden => "wireframe_hidden",
+            VisualStyle::Realistic => "realistic",
         }
     }
 
@@ -80,6 +89,7 @@ impl VisualStyle {
             VisualStyle::ShadedHiddenEdges => "Shaded with Hidden Edges",
             VisualStyle::Wireframe => "Wireframe",
             VisualStyle::WireframeHidden => "Wireframe, Hidden Lines Removed",
+            VisualStyle::Realistic => "Realistic",
         }
     }
 
@@ -111,6 +121,10 @@ impl VisualStyle {
                 faces: FacePass::DepthOnly,
                 edges: &[Visible],
             },
+            VisualStyle::Realistic => StylePlan {
+                faces: FacePass::Realistic,
+                edges: &[],
+            },
         }
     }
 }
@@ -120,20 +134,37 @@ pub const MIN_OPACITY: f32 = 0.05;
 /// Below this opacity a body counts as transparent (drawn blended, after opaque ones).
 pub const OPAQUE: f32 = 0.999;
 
-/// A body's colour and opacity.
+/// A body's colour, opacity and physically based material.
 ///
 /// `colour` is the user's choice and is data, not a theme colour: it is what the body is
-/// made of, the same in either theme. Without one, the body takes `theme.body`.
+/// made of, the same in either theme. Without one, the body takes `theme.body`. The
+/// material numbers are read by the realistic style and the path tracer only.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Appearance {
     #[serde(default)]
     pub colour: Option<Rgba>,
     #[serde(default = "one")]
     pub opacity: f32,
+    #[serde(default)]
+    pub metallic: f32,
+    #[serde(default = "default_roughness")]
+    pub roughness: f32,
+    #[serde(default)]
+    pub transmission: f32,
+    #[serde(default = "default_ior")]
+    pub ior: f32,
 }
 
 fn one() -> f32 {
     1.0
+}
+
+fn default_roughness() -> f32 {
+    crate::material::DEFAULT_ROUGHNESS
+}
+
+fn default_ior() -> f32 {
+    crate::material::DEFAULT_IOR
 }
 
 impl Default for Appearance {
@@ -141,6 +172,10 @@ impl Default for Appearance {
         Appearance {
             colour: None,
             opacity: 1.0,
+            metallic: 0.0,
+            roughness: default_roughness(),
+            transmission: 0.0,
+            ior: default_ior(),
         }
     }
 }
@@ -158,9 +193,20 @@ impl Appearance {
     pub fn is_transparent(&self) -> bool {
         self.opacity() < OPAQUE
     }
+
+    /// The material for shading, with `fallback` as the colour when it has none.
+    pub fn material(&self, fallback: Rgba) -> Material {
+        Material::new(
+            self.colour.unwrap_or(fallback),
+            self.metallic,
+            self.roughness,
+            self.transmission,
+            self.ior,
+        )
+    }
 }
 
-/// A named appearance the UI offers.
+/// A named appearance the UI offers: an entry of the material library.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Preset {
     pub id: &'static str,
@@ -168,39 +214,29 @@ pub struct Preset {
     pub appearance: Appearance,
 }
 
-const fn preset(id: &'static str, label: &'static str, c: Rgba, opacity: f32) -> Preset {
+/// The appearance library: the material library (`crate::material::LIBRARY`) with each
+/// entry's appearance.
+pub fn presets() -> impl Iterator<Item = Preset> {
+    LIBRARY.iter().map(preset_of)
+}
+
+fn preset_of(x: &LibraryMaterial) -> Preset {
     Preset {
-        id,
-        label,
+        id: x.id,
+        label: x.label,
         appearance: Appearance {
-            colour: Some(c),
-            opacity,
+            colour: Some(x.colour),
+            opacity: x.opacity,
+            metallic: x.metallic,
+            roughness: x.roughness,
+            transmission: x.transmission,
+            ior: x.ior,
         },
     }
 }
 
-/// The appearance library. These colours are material data (what a part is made of), not
-/// theme colours, so they are allowed outside `theme.rs`.
-pub const PRESETS: &[Preset] = &[
-    preset("steel", "Steel", Rgba(168, 172, 178, 255), 1.0),
-    preset("aluminium", "Aluminium", Rgba(206, 210, 214, 255), 1.0),
-    preset("brass", "Brass", Rgba(196, 160, 82, 255), 1.0),
-    preset("copper", "Copper", Rgba(184, 115, 70, 255), 1.0),
-    preset("paint_red", "Painted Red", Rgba(186, 40, 36, 255), 1.0),
-    preset("paint_blue", "Painted Blue", Rgba(36, 84, 168, 255), 1.0),
-    preset(
-        "paint_yellow",
-        "Painted Yellow",
-        Rgba(226, 178, 30, 255),
-        1.0,
-    ),
-    preset("paint_black", "Painted Black", Rgba(38, 40, 44, 255), 1.0),
-    preset("glass", "Glass", Rgba(170, 210, 230, 255), 0.3),
-    preset("rubber", "Rubber", Rgba(30, 30, 32, 255), 1.0),
-];
-
-pub fn preset_by_id(id: &str) -> Option<&'static Preset> {
-    PRESETS.iter().find(|p| p.id == id)
+pub fn preset_by_id(id: &str) -> Option<Preset> {
+    crate::material::by_id(id).map(preset_of)
 }
 
 /// A section plane: the side its normal points to is cut away, so you look into the part.
@@ -300,6 +336,9 @@ pub struct Display {
     pub style: VisualStyle,
     #[serde(default)]
     pub section: Option<Section>,
+    /// The lighting of the realistic style and of renders (`render.environment`).
+    #[serde(default)]
+    pub environment: EnvironmentPreset,
 }
 
 /// The order bodies are drawn in: opaque bodies (in scene order), then transparent bodies
@@ -526,13 +565,13 @@ mod tests {
         assert_eq!(draw_order(&s, &cam).1, vec![near, far]);
         // Opacity 1 is opaque; hostile opacities are repaired.
         let a = Appearance {
-            colour: None,
             opacity: f32::NAN,
+            ..Appearance::default()
         };
         assert!(!a.is_transparent());
         let a = Appearance {
-            colour: None,
             opacity: -3.0,
+            ..Appearance::default()
         };
         assert_eq!(a.opacity(), MIN_OPACITY);
     }
@@ -543,5 +582,8 @@ mod tests {
         assert!((g.appearance.opacity - 0.3).abs() < 1e-6);
         assert!(g.appearance.is_transparent());
         assert!(preset_by_id("unobtainium").is_none());
+        // Glass is fully transmissive in the realistic style.
+        assert!(g.appearance.material(Rgba(0, 0, 0, 255)).is_glass());
+        assert!(presets().count() >= 20);
     }
 }

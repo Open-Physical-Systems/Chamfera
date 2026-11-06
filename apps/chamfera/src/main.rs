@@ -3,8 +3,10 @@
 //! ```text
 //! chamfera [part.stl ...] [--sample] [--theme light|dark] [--script steps.json]
 //!          [--parameters] [--configurations] [--preferences PAGE] [--drawing] [--extrude] [--extrude-with JSON]
+//!          [--render] [--render-window WxH,SAMPLES]
 //!          [--hole] [--box X1,Y1,X2,Y2] [--search QUERY] [--context-menu X,Y]
 //!          [--press-pull X,Y,D] [--ribbon-menu GROUP] [--assistant-demo] [--size WxH]
+//!          [--history] [--recovery-demo]
 //!          [--zoom F] [--screenshot shot.png]
 //!          [--sketch-input "tool line; click 0,0; hover 30,12; type 25"]
 //! ```
@@ -18,10 +20,24 @@ const USAGE: &str = "usage: chamfera [part.stl ...] [--sample] [--theme light|da
 [--script steps.json] [--parameters] [--configurations] [--preferences PAGE] [--drawing] [--extrude] \
 [--extrude-with JSON] [--hole] \
 [--box X1,Y1,X2,Y2] [--search QUERY] [--context-menu X,Y] [--press-pull X,Y,D] \
-[--ribbon-menu GROUP] [--assistant-demo] [--size WxH] \
+[--ribbon-menu GROUP] [--assistant-demo] [--history] [--recovery-demo] [--render] [--render-window WxH,SAMPLES] [--size WxH] \
 [--zoom F] \
 [--screenshot shot.png] \
 [--sketch-input \"tool line; click X,Y; hover X,Y; shift; type 25; tab\"]";
+
+/// `WIDTHxHEIGHT,SAMPLES`, each 1 to 4096.
+fn parse_render(text: &str) -> Option<[u32; 3]> {
+    let (size, samples) = text.split_once(',')?;
+    let (w, h) = size.split_once('x')?;
+    let v = [w, h, samples].map(|t| t.trim().parse::<u32>().ok());
+    let [Some(w), Some(h), Some(s)] = v else {
+        return None;
+    };
+    [w, h, s]
+        .iter()
+        .all(|n| (1..=4096).contains(n))
+        .then_some([w, h, s])
+}
 
 fn main() -> ExitCode {
     let mut options = chamfera_ui::Options::default();
@@ -38,7 +54,18 @@ fn main() -> ExitCode {
                 }
             },
             "--drawing" => options.drawing = true,
+            "--render" => options.render = true,
+            "--render-window" => match args.next().as_deref().and_then(parse_render) {
+                Some(r) => options.render_window = Some(r),
+                None => {
+                    return fail(
+                        "--render-window takes WIDTHxHEIGHT,SAMPLES, such as 640x400,64 (each 1 to 4096)",
+                    );
+                }
+            },
             "--assistant-demo" => options.assistant_demo = true,
+            "--history" => options.history = true,
+            "--recovery-demo" => options.recovery_demo = true,
             "--extrude" => options.extrude = true,
             "--extrude-with" => match args
                 .next()

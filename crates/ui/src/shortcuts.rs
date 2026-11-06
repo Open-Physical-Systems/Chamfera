@@ -65,6 +65,8 @@ pub enum Keys {
     Single { key: Key, ctrl: bool, shift: bool },
     /// Ctrl+Space, then this key (with Ctrl still held, or within about a second).
     CtrlSpaceThen(Key),
+    /// Ctrl (Cmd on a Mac) and Alt with this key.
+    CtrlAlt(Key),
 }
 
 impl Keys {
@@ -107,6 +109,7 @@ impl Keys {
                 s
             }
             Keys::CtrlSpaceThen(key) => format!("Ctrl+Space, {}", key_name(key)),
+            Keys::CtrlAlt(key) => format!("Ctrl+Alt+{}", key_name(key)),
         }
     }
 }
@@ -151,7 +154,7 @@ const fn row(action: Action, keys: Keys, context: &'static str, handler: Handler
 }
 
 /// Every default shortcut. Keys are unique (`no_two_shortcuts_share_a_key`).
-pub const SHORTCUTS: [Shortcut; 26] = [
+pub const SHORTCUTS: [Shortcut; 27] = [
     row(
         Action::Search,
         Keys::CtrlSpaceThen(Key::F),
@@ -271,6 +274,12 @@ pub const SHORTCUTS: [Shortcut; 26] = [
     row(
         Action::SaveAs,
         Keys::ctrl_shift(Key::S),
+        "Anywhere",
+        Handler::Elsewhere,
+    ),
+    row(
+        Action::Command("version.save"),
+        Keys::CtrlAlt(Key::S),
         "Anywhere",
         Handler::Elsewhere,
     ),

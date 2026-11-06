@@ -1,0 +1,17 @@
+{
+  "bytes": 686,
+  "format": "chamfera-version",
+  "hash": "9e3ede40a699428e",
+  "id": 9,
+  "kind": "save",
+  "note": "",
+  "summary": {
+    "bodies": 1,
+    "features": 1,
+    "parameters": 1,
+    "sketches": 1,
+    "volume": 14497.345175425633
+  },
+  "time": 1793982954,
+  "version": 1
+}

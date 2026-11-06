@@ -6,7 +6,7 @@
 use crate::icons::Icon;
 use crate::widgets::{self, Look, S2, S3, T_SMALL};
 use crate::{ChamferaApp, label};
-use chamfera_render::display::PRESETS;
+use chamfera_render::display::presets;
 use chamfera_render::{Projection, VisualStyle};
 use egui::{Color32, Rect, vec2};
 use serde_json::json;
@@ -302,7 +302,7 @@ impl ChamferaApp {
                             .num_columns(2)
                             .spacing([S2, S2])
                             .show(ui, |ui| {
-                                for (i, p) in PRESETS.iter().enumerate() {
+                                for (i, p) in presets().enumerate() {
                                     // A preset's colour is material data, not a theme
                                     // colour: the swatch shows what the body will look like.
                                     let c = p.appearance.colour.unwrap_or(self.theme.body);
@@ -361,7 +361,11 @@ impl ChamferaApp {
                         .inner;
                 });
             });
-        let selected_bodies = bodies.clone();
+        // By name: each change rebuilds the model and gives its bodies new ids.
+        let selected_bodies: Vec<String> = bodies
+            .iter()
+            .filter_map(|id| self.session.scene.body(*id).map(|b| b.name.clone()))
+            .collect();
         for body in selected_bodies {
             if let Some(p) = preset {
                 self.run("body.appearance", json!({ "body": body, "preset": p }));

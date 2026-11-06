@@ -96,6 +96,7 @@ impl ChamferaApp {
             }
         };
         self.styled_for = None;
+        self.session.history.limits = self.prefs.history_limits();
         let result = if self.prefs_store {
             prefs::save(&self.prefs)
         } else {
@@ -261,6 +262,50 @@ fn general_page(ui: &mut egui::Ui, look: Look, p: &mut Preferences) {
     if ui.button("Clear recent files").clicked() {
         p.recent.clear();
     }
+    ui.add_space(S2);
+    widgets::caption(ui, look, "AUTOSAVE AND HISTORY");
+    ui.horizontal(|ui| {
+        row_label(ui, look, "Autosave every");
+        let mut on = p.autosave_secs > 0;
+        if ui.checkbox(&mut on, "").changed() {
+            p.autosave_secs = if on { 60 } else { 0 };
+        }
+        if on {
+            let mut secs = p.autosave_secs.max(prefs::MIN_AUTOSAVE_SECS);
+            ui.add(
+                egui::DragValue::new(&mut secs)
+                    .range(prefs::MIN_AUTOSAVE_SECS..=prefs::MAX_AUTOSAVE_SECS)
+                    .suffix(" s"),
+            );
+            p.autosave_secs = secs;
+        }
+    });
+    hint(
+        ui,
+        look,
+        "Unsaved work goes to a recovery file, offered again after a crash.",
+    );
+    ui.horizontal(|ui| {
+        row_label(ui, look, "Versions kept");
+        let mut n = p.history_count;
+        ui.add(egui::DragValue::new(&mut n).range(1..=prefs::MAX_HISTORY_COUNT));
+        p.history_count = n.clamp(1, prefs::MAX_HISTORY_COUNT);
+    });
+    ui.horizontal(|ui| {
+        row_label(ui, look, "History size, at most");
+        let mut mb = p.history_mb;
+        ui.add(
+            egui::DragValue::new(&mut mb)
+                .range(1..=prefs::MAX_HISTORY_MB)
+                .suffix(" MB"),
+        );
+        p.history_mb = mb.clamp(1, prefs::MAX_HISTORY_MB);
+    });
+    hint(
+        ui,
+        look,
+        "Each save keeps a version in a folder beside the design file.",
+    );
 }
 
 fn unit_combo(ui: &mut egui::Ui, id: &str, unit: &mut LengthUnit) {

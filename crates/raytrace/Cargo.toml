@@ -1,0 +1,18 @@
+[package]
+name = "chamfera-raytrace"
+description = "A CPU path tracer for presentation renders of the display meshes (layer 3)"
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+
+[dependencies]
+chamfera-geom.workspace = true
+chamfera-render.workspace = true
+thiserror.workspace = true
+png.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+  <!-- Chamfera interface icon: lighting environment (a sky dome over the floor, a light in it). Original artwork, MIT OR Apache-2.0. -->
+  <path stroke="#2B313B" d="M2.5 19.5h19"/>
+  <path stroke="#2B313B" d="M4.5 19.5a7.5 7.5 0 0 1 15 0"/>
+  <circle cx="16" cy="6.5" r="2" stroke="#E8770E" fill="#E8770E"/>
+  <path stroke="#E8770E" d="M16 2v0.5M20.5 6.5h-0.5M19.2 3.3l-0.4 0.4"/>
+</svg>

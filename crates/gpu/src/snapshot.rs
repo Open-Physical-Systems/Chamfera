@@ -425,4 +425,38 @@ mod display_tests {
         assert!(g.iter().all(|&v| v > 170), "glass {g:?}");
         assert!(g[0] < bg[0], "glass {g:?} background {bg:?}");
     }
+
+    /// The realistic style draws the environment's sky behind the part, tone-mapped as
+    /// the path tracer does. Pixel (1, 1) of the 64 x 48 front view (perspective, field of
+    /// view 35 degrees): its centre is at x = 1.5 / 32 - 1 = -0.953, y = 1 - 1.5 / 24 =
+    /// 0.9375 in clip space, so with tan 17.5 = 0.3153 (and 0.4204 across, aspect 4:3) the
+    /// ray is (-0.4007, 1, 0.2956) / 1.1172 in world space (front looks along +Y, +X
+    /// right, +Z up): 0.2646 up from the horizon.
+    #[test]
+    fn the_realistic_style_shows_the_sky_and_lights_the_part() {
+        let _gpu = crate::snapshot::gpu_lock();
+        let (mut scene, _) = box_scene();
+        scene.display.style = VisualStyle::Realistic;
+        let Some(rgba) = render(&scene) else {
+            return;
+        };
+        let mut camera = Camera::default();
+        camera.set_view(StandardView::Front);
+        let env = chamfera_render::Environment::preset(scene.display.environment, &camera);
+        let d = Vec3::new(-0.4007, 1.0, 0.2956).normalized().unwrap();
+        let expected = env.display(env.sky(d));
+        let got = px(&rgba, 1, 1);
+        assert!(near(got, expected, 3), "sky {got:?}, expected {expected:?}");
+        // The studio sky is neutral grey; the box takes the theme's blue-grey body
+        // colour, so its face shows blue above red where the sky does not.
+        let face = px(&rgba, 35, 20);
+        assert!(
+            (i32::from(got[2]) - i32::from(got[0])).abs() <= 2,
+            "sky {got:?}"
+        );
+        assert!(
+            i32::from(face[2]) - i32::from(face[0]) >= 8,
+            "face {face:?}"
+        );
+    }
 }

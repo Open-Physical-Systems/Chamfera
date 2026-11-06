@@ -20,6 +20,12 @@ pub const MAX_UI_SCALE: f32 = 3.0;
 /// The fixed grid spacing range (mm).
 pub const MIN_GRID: f64 = 0.001;
 pub const MAX_GRID: f64 = 100_000.0;
+/// Autosave interval range in seconds (0 turns autosave off).
+pub const MIN_AUTOSAVE_SECS: u32 = 10;
+pub const MAX_AUTOSAVE_SECS: u32 = 3600;
+/// Version history limits: versions kept, and megabytes of snapshots.
+pub const MAX_HISTORY_COUNT: usize = 1000;
+pub const MAX_HISTORY_MB: u64 = 100_000;
 /// Longest path kept in the recent list.
 const MAX_PATH_LEN: usize = 4096;
 /// The browser's local storage key.
@@ -44,6 +50,12 @@ pub struct Preferences {
     pub snap_to_grid: bool,
     /// The Assistant panel (the API key is not here: it has a file of its own).
     pub assistant: AssistantPrefs,
+    /// Seconds of unsaved changes before they are written to a recovery file (0: never).
+    pub autosave_secs: u32,
+    /// Versions each design's history keeps (at least 1).
+    pub history_count: usize,
+    /// Megabytes of snapshots each design's history keeps (at least 1).
+    pub history_mb: u64,
 }
 
 /// The Assistant's settings.
@@ -83,6 +95,19 @@ impl Default for Preferences {
             grid_spacing: None,
             snap_to_grid: false,
             assistant: AssistantPrefs::default(),
+            autosave_secs: 60,
+            history_count: 50,
+            history_mb: 500,
+        }
+    }
+}
+
+impl Preferences {
+    /// The version history limits for the session.
+    pub fn history_limits(&self) -> chamfera_io::history::Limits {
+        chamfera_io::history::Limits {
+            max_count: self.history_count.clamp(1, MAX_HISTORY_COUNT),
+            max_bytes: self.history_mb.clamp(1, MAX_HISTORY_MB) * 1024 * 1024,
         }
     }
 }
@@ -139,6 +164,9 @@ impl Preferences {
                 "sensitivity": n.sensitivity,
             },
             "grid_spacing": self.grid_spacing,
+            "autosave_secs": self.autosave_secs,
+            "history_count": self.history_count,
+            "history_mb": self.history_mb,
             "snap_to_grid": self.snap_to_grid,
             "assistant": {
                 "model": self.assistant.model.id(),
@@ -204,6 +232,17 @@ impl Preferences {
         p.grid_spacing = number(&m, "grid_spacing", MIN_GRID, MAX_GRID);
         if let Some(b) = boolean(&m, "snap_to_grid") {
             p.snap_to_grid = b;
+        }
+        if let Some(a) = number(&m, "autosave_secs", 0.0, f64::from(MAX_AUTOSAVE_SECS))
+            .filter(|a| *a == 0.0 || *a >= f64::from(MIN_AUTOSAVE_SECS))
+        {
+            p.autosave_secs = a as u32;
+        }
+        if let Some(n) = number(&m, "history_count", 1.0, MAX_HISTORY_COUNT as f64) {
+            p.history_count = n as usize;
+        }
+        if let Some(n) = number(&m, "history_mb", 1.0, MAX_HISTORY_MB as f64) {
+            p.history_mb = n as u64;
         }
         if let Some(Value::Object(a)) = m.get("assistant") {
             let ap = &mut p.assistant;
@@ -348,6 +387,9 @@ mod tests {
                 confirm_destructive: false,
                 screenshots: false,
             },
+            autosave_secs: 30,
+            history_count: 7,
+            history_mb: 12,
         }
     }
 
@@ -385,6 +427,8 @@ mod tests {
             r#"{"grid_spacing": 0, "recent_count": 1e20}"#.into(),
             r#"{"assistant": {"model": "gpt", "effort": 3, "screenshots": "no"}}"#.into(),
             r#"{"assistant": [1], "api_key": "sk-ant-not-read-from-here"}"#.into(),
+            r#"{"autosave_secs": 5, "history_count": 0, "history_mb": 1e300}"#.into(),
+            r#"{"autosave_secs": -1, "history_count": "9", "history_mb": -4}"#.into(),
         ];
         for c in &cases {
             let p = Preferences::from_json(c);
@@ -399,6 +443,9 @@ mod tests {
             );
             assert_eq!(p.assistant, AssistantPrefs::default());
             assert!(!p.to_json().contains("sk-ant"));
+            // Below the shortest interval, or not a count: the defaults stay.
+            assert_eq!(p.autosave_secs, 60);
+            assert_eq!((p.history_count, p.history_mb), (50, 500));
         }
         // Good fields survive next to bad ones.
         let p = Preferences::from_json(

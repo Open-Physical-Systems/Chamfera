@@ -125,7 +125,10 @@ use thiserror::Error;
 /// - 33: 3D machining operations in the CAM section: `parallel` (raster finishing),
 ///   `waterline` (Z-level finishing) and `adaptive` (bounded-engagement roughing). Older
 ///   files open unchanged: they hold none.
-pub const FORMAT_VERSION: u32 = 33;
+/// - 34: physically based materials in body appearances (`metallic`, `roughness`,
+///   `transmission`, `ior`), read by the realistic style and the path tracer. Older files
+///   open unchanged: their bodies take a satin, opaque, non-metal material.
+pub const FORMAT_VERSION: u32 = 34;
 /// The tag every design file starts with, so other JSON is not mistaken for a design.
 pub const FORMAT_TAG: &str = "chamfera";
 /// Longest parameter name.

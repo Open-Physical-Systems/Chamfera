@@ -5,11 +5,14 @@
 //! 3MF, OBJ and glTF binary and come in from 3MF and OBJ; sketches go out to and come in
 //! from 2D DXF.
 
+pub mod atomic;
 pub mod csv;
 pub mod dxf;
 pub mod gltf;
+pub mod history;
 pub mod mesh;
 pub mod obj;
+pub mod recovery;
 pub mod step;
 pub mod stl;
 pub mod threemf;
@@ -35,8 +38,8 @@ pub const MAX_DESIGN_BYTES: u64 = 256 * 1024 * 1024;
 
 pub fn save_design(doc: &Document, path: &std::path::Path) -> Result<(), IoError> {
     let text = doc.to_json().map_err(|e| IoError::Format(e.to_string()))?;
-    std::fs::write(path, text)?;
-    Ok(())
+    // Atomic: a crash while saving leaves the old file whole, never a broken one.
+    atomic::write_atomic(path, text.as_bytes())
 }
 
 pub fn open_design(path: &std::path::Path) -> Result<Document, IoError> {

@@ -1,0 +1,17 @@
+{
+  "bytes": 770,
+  "format": "chamfera-version",
+  "hash": "73f3dc2ead36b1b8",
+  "id": 12,
+  "kind": "note",
+  "note": "Plate widened to 60 mm",
+  "summary": {
+    "bodies": 1,
+    "features": 1,
+    "parameters": 1,
+    "sketches": 1,
+    "volume": 17497.345175425613
+  },
+  "time": 1793982954,
+  "version": 1
+}

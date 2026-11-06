@@ -22,6 +22,9 @@ pub const PATH_COMMANDS: &[(&str, Access)] = &[
     // Its `dir` is resolved like a written path: the folder or its parent must be inside.
     ("config.export_all", Access::Write),
     ("design.open", Access::Read),
+    // Reads `path` and makes `design_path` the file Save writes: both are resolved as
+    // written paths (an existing file is followed to where it really is).
+    ("design.recover", Access::Write),
     ("design.export_3mf", Access::Write),
     ("design.export_glb", Access::Write),
     // Also writes the .mtl file of the same name beside it, in the same allowed folder.
@@ -31,6 +34,8 @@ pub const PATH_COMMANDS: &[(&str, Access)] = &[
     ("design.save", Access::Write),
     ("param.export_csv", Access::Write),
     ("param.import_csv", Access::Read),
+    ("render.image", Access::Write),
+    ("render.save", Access::Write),
     ("sheet.export_flat", Access::Write),
     ("drawing.export", Access::Write),
     ("sketch.export_dxf", Access::Write),

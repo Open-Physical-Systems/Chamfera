@@ -91,6 +91,10 @@ pub struct Theme {
     /// Simulated stock cut below the part: a gouge.
     pub gouge: Rgba,
     // assemblies
+    /// Version comparison (`version.compare`): the first version's bodies, shaded.
+    pub compare_a: Rgba,
+    /// The second version's bodies, see-through over the first.
+    pub compare_b: Rgba,
     /// Where bodies overlap (`inspect.interference`): the outline, drawn over everything.
     pub interference: Rgba,
     /// The see-through fill of an overlap.
@@ -203,6 +207,8 @@ impl Theme {
             toolpath_feed: Rgba(96, 72, 204, 255),
             toolpath_rapid: Rgba(200, 50, 60, 220),
             stock: Rgba(196, 170, 120, 255),
+            compare_a: Rgba(222, 120, 40, 255),
+            compare_b: Rgba(30, 112, 214, 120),
             gouge: Rgba(222, 32, 48, 255),
             interference: Rgba(214, 30, 60, 255),
             interference_fill: Rgba(230, 40, 70, 120),
@@ -281,6 +287,8 @@ impl Theme {
             toolpath_feed: Rgba(170, 150, 255, 255),
             toolpath_rapid: Rgba(255, 110, 110, 220),
             stock: Rgba(178, 152, 104, 255),
+            compare_a: Rgba(236, 140, 60, 255),
+            compare_b: Rgba(80, 160, 255, 120),
             gouge: Rgba(255, 64, 80, 255),
             interference: Rgba(255, 80, 110, 255),
             interference_fill: Rgba(255, 70, 100, 120),

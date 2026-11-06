@@ -86,10 +86,22 @@ pub static COMMANDS: &[CommandSpec] = &[
         run: open_bytes,
     },
     CommandSpec {
+        id: "design.recover",
+        label: "Recover Unsaved Work",
+        params: "path: string (required) - a recovery file the app wrote while the design had \
+                 unsaved changes\ndesign_path: string (optional) - the design file the work \
+                 belongs to; it becomes the file Save writes, and the recovered work counts as \
+                 unsaved changes to it",
+        mutates: false,
+        run: recover,
+    },
+    CommandSpec {
         id: "design.save",
         label: "Save Design",
-        params: "path: string (optional) - where to write the .chamfera file; default the file it \
-                 was opened from or last saved to",
+        params: "path: string (optional) - where to write the .chamfera file (atomically: a \
+                 crash never leaves a broken file); default the file it was opened from or \
+                 last saved to. Each save also keeps a version in the history folder beside \
+                 the file (`version.list`)",
         mutates: false,
         run: save,
     },
@@ -273,7 +285,40 @@ fn save(s: &mut Session, p: &Value) -> CmdResult {
     };
     chamfera_io::save_design(&s.doc, &path)?;
     s.mark_saved(path.clone());
-    Ok(json!({ "path": path }))
+    let mut reply = json!({ "path": path });
+    // The save itself succeeded: a history that cannot be written is reported, not fatal.
+    if s.history.enabled {
+        match crate::versions::keep(s, chamfera_io::history::Kind::Save, "") {
+            Ok(added) => {
+                reply["version"] = json!(added.version.id);
+                reply["version_unchanged"] = json!(added.unchanged);
+            }
+            Err(e) => reply["history_error"] = json!(e.to_string()),
+        }
+    }
+    Ok(reply)
+}
+
+fn recover(s: &mut Session, p: &Value) -> CmdResult {
+    let path = params::req_str(p, "path")?;
+    let design_path = params::opt_str(p, "design_path")?.map(Path::new);
+    let doc = chamfera_io::open_design(Path::new(path))?;
+    // What the design file holds now, so only the work since then counts as unsaved.
+    let saved = design_path.and_then(|d| chamfera_io::open_design(d).ok());
+    s.replace_document(doc);
+    if let Some(saved) = saved {
+        s.saved = saved;
+    } else {
+        s.saved = Document::default();
+    }
+    s.path = design_path.map(Path::to_path_buf);
+    Ok(json!({
+        "path": path,
+        "design_path": s.path,
+        "unsaved": s.has_unsaved_changes(),
+        "parameters": s.doc.parameters.len(),
+        "features": s.doc.features.len(),
+    }))
 }
 
 pub(super) fn export_step(s: &mut Session, p: &Value) -> CmdResult {

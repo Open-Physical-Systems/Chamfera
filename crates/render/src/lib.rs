@@ -6,8 +6,13 @@
 pub use chamfera_geom as geom;
 
 pub mod display;
+pub mod environment;
+pub mod material;
+pub mod normals;
 mod theme;
 pub use display::{Appearance, Display, Section, VisualStyle};
+pub use environment::{Environment, EnvironmentPreset};
+pub use material::Material;
 pub use theme::{Rgba, Theme, ThemeMode};
 
 use chamfera_geom::{Aabb, Point3, Ray, TriMesh, Vec3};
@@ -486,6 +491,32 @@ pub struct StockMesh {
     pub mesh: TriMesh,
 }
 
+/// Which version a comparison mesh shows (`version.compare`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompareSide {
+    /// The first version (`theme.compare_a`), shaded.
+    A,
+    /// The second version (`theme.compare_b`), see-through over the first.
+    B,
+}
+
+impl CompareSide {
+    pub fn color(self, theme: &Theme) -> Rgba {
+        match self {
+            CompareSide::A => theme.compare_a,
+            CompareSide::B => theme.compare_b,
+        }
+    }
+}
+
+/// A body of one of two compared versions. Display only.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CompareMesh {
+    pub side: CompareSide,
+    pub mesh: TriMesh,
+}
+
 /// Most overlay lines plus points one scene holds (hostile-input limit).
 pub const MAX_OVERLAY_ITEMS: usize = 2_000_000;
 
@@ -515,6 +546,10 @@ pub struct Scene {
     /// which are not drawn.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub stock: Vec<StockMesh>,
+    /// Two versions of the design over each other (`version.compare`): while they show,
+    /// they stand in for the bodies, which are not drawn.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub compare: Vec<CompareMesh>,
     /// The ground grid's fixed spacing in mm, or `None` for the automatic grid that
     /// follows the zoom (`view.grid`). A view setting, not part of the design.
     #[serde(default)]
@@ -569,6 +604,7 @@ impl Scene {
             .filter_map(|b| b.mesh.bounds())
             .chain(self.previews.iter().filter_map(TriMesh::bounds))
             .chain(self.stock.iter().filter_map(|s| s.mesh.bounds()))
+            .chain(self.compare.iter().filter_map(|c| c.mesh.bounds()))
             .chain(overlays)
             .reduce(Aabb::union)
     }
