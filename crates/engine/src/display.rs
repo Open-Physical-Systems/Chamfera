@@ -38,6 +38,13 @@ impl Session {
             b.appearance = appearance;
         }
     }
+
+    /// Marks a scene body as a surface body (drawn in the surface colour).
+    pub(crate) fn mark_surface(&mut self, id: Option<u32>, surface: bool) {
+        if let Some(b) = id.and_then(|id| self.scene.body_mut(id)) {
+            b.surface = surface;
+        }
+    }
 }
 
 /// The display state as a reply.

@@ -137,11 +137,15 @@ fn not_closed(e: usize, n: usize) -> KernelError {
 /// Gives every edge exactly two uses: an edge where more than two kept faces meet (two
 /// solids touching along it) is split into one edge per pair of faces that bound the same
 /// wedge of material, found by sorting the faces around the edge.
-fn pair_edges(faces: &mut [OutFace], reg: &mut Registry) -> KernelResult<()> {
+fn pair_edges(faces: &mut [OutFace], reg: &mut Registry, open: bool) -> KernelResult<()> {
     let mut m: Vec<(usize, Vec<(At, bool)>)> = uses_of(faces).into_iter().collect();
     m.sort_by_key(|x| x.0);
     for (e, us) in m {
         let n = us.len();
+        if open && n == 1 {
+            // A rim edge of a surface.
+            continue;
+        }
         if n == 2 {
             if us[0].1 == us[1].1 {
                 return Err(not_closed(e, n));
@@ -520,12 +524,24 @@ fn split_fans(faces: &[OutFace], reg: &mut Registry) -> KernelResult<()> {
 
 /// Sews the kept faces into a body: pairs edges, merges faces that are one, joins split
 /// edges, separates touching solids, and assembles and validates the result.
-pub(super) fn sew(faces: Vec<OutFace>, mut reg: Registry) -> KernelResult<Body> {
+pub(super) fn sew(faces: Vec<OutFace>, reg: Registry) -> KernelResult<Body> {
+    sew_with(faces, reg, false)
+}
+
+/// [`sew`] for a surface: edges used once stay as the rim of an open shell, and fans are
+/// not separated (sheets touching at a point are refused when the body is assembled).
+pub(super) fn sew_open(faces: Vec<OutFace>, reg: Registry) -> KernelResult<Body> {
+    sew_with(faces, reg, true)
+}
+
+fn sew_with(faces: Vec<OutFace>, mut reg: Registry, open: bool) -> KernelResult<Body> {
     let mut faces = faces;
-    pair_edges(&mut faces, &mut reg)?;
+    pair_edges(&mut faces, &mut reg, open)?;
     let mut faces = merge_faces(faces, &reg)?;
     join_edges(&mut faces, &mut reg)?;
-    split_fans(&faces, &mut reg)?;
+    if !open {
+        split_fans(&faces, &mut reg)?;
+    }
     // Compact the registry into a face list.
     let mut vmap: HashMap<usize, usize> = HashMap::new();
     let mut emap: HashMap<usize, usize> = HashMap::new();
@@ -578,6 +594,18 @@ pub(super) fn sew(faces: Vec<OutFace>, mut reg: Registry) -> KernelResult<Body> 
             name: f.name.clone(),
             loops,
         });
+    }
+    if open {
+        let body = Body::from_face_list_open(&vertices, &edges, &list)?;
+        let mode = if body.is_open() {
+            crate::topology::Validation::Surface
+        } else {
+            crate::topology::Validation::Solid
+        };
+        body.validate_as(mode).map_err(|e| {
+            KernelError::InvalidResult(format!("the trimmed surface is not valid: {e}"))
+        })?;
+        return Ok(body);
     }
     let body = Body::from_face_list(&vertices, &edges, &list)?;
     body.validate().map_err(|e| {

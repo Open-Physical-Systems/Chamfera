@@ -125,6 +125,7 @@ const fn group(tab: Tab, caption: &'static str) -> Group {
 pub const GROUPS: &[Group] = &[
     group(Tab::Solid, "CREATE"),
     group(Tab::Solid, "MODIFY"),
+    group(Tab::Solid, "SURFACE"),
     group(Tab::Solid, "ASSEMBLE"),
     group(Tab::Solid, "CONSTRUCT"),
     group(Tab::Solid, "INSPECT"),
@@ -430,6 +431,60 @@ pub const TOOLS: &[RibbonTool] = &[
         "Named values and formulas that dimensions and features follow",
     )
     .sep(),
+    // SOLID > SURFACE
+    tool(
+        P,
+        "SURFACE",
+        Action::Tool("surface.extrude"),
+        Icon::SurfaceExtrude,
+        "Surface Extrude",
+        "Pull profiles or open curves straight out into open sheets, without caps",
+    )
+    .short("Extrude")
+    .primary(),
+    tool(
+        P,
+        "SURFACE",
+        Action::Tool("surface.revolve"),
+        Icon::SurfaceRevolve,
+        "Surface Revolve",
+        "Turn profiles or open curves about a sketch line into open sheets",
+    ),
+    tool(
+        P,
+        "SURFACE",
+        Action::Tool("surface.sweep"),
+        Icon::SurfaceSweep,
+        "Surface Sweep",
+        "Sweep profiles or open curves along a path of lines and arcs",
+    ),
+    tool(
+        P,
+        "SURFACE",
+        Action::Tool("surface.patch"),
+        Icon::Patch,
+        "Patch",
+        "Fill a closed sketch profile, or a closed flat loop of edges, with a flat face",
+    )
+    .primary(),
+    tool(
+        P,
+        "SURFACE",
+        Action::Tool("surface.stitch"),
+        Icon::Stitch,
+        "Stitch",
+        "Join surfaces along their shared edges; a closed result becomes a solid",
+    )
+    .primary(),
+    tool(
+        P,
+        "SURFACE",
+        Action::Tool("surface.trim"),
+        Icon::SurfaceTrim,
+        "Trim Surface",
+        "Cut a surface with a plane or a body and keep one side",
+    )
+    .short("Trim"),
     // SOLID > ASSEMBLE
     tool(
         P,
@@ -1117,6 +1172,13 @@ fn body_tool_kind(id: &str) -> Option<crate::body_tools_ui::BodyToolKind> {
         .find(|k| k.command() == id)
 }
 
+/// The surface tool of a `surface.*` id.
+fn surface_kind(id: &str) -> Option<crate::surface_ui::SurfaceKind> {
+    crate::surface_ui::SurfaceKind::ALL
+        .into_iter()
+        .find(|k| k.command() == id)
+}
+
 /// The sheet tool of a `drawing.view.*` or `drawing.dim.*` id.
 fn draw_tool(id: &str) -> Option<crate::drawing_ui::DrawTool> {
     use crate::drawing_ui::DrawTool;
@@ -1350,6 +1412,7 @@ impl ChamferaApp {
             || s.press_pull.is_some()
             || s.sweep.is_some()
             || s.body_tool.is_some()
+            || s.surface.is_some()
             || self.construct.tool.is_some()
             || self.assembly.joint.is_some()
             || self.sheet_tool_open()
@@ -1394,6 +1457,8 @@ impl ChamferaApp {
                 _ => {
                     if let Some(k) = body_tool_kind(id) {
                         s.body_tool.as_ref().is_some_and(|t| t.kind == k)
+                    } else if let Some(k) = surface_kind(id) {
+                        s.surface.as_ref().is_some_and(|t| t.kind == k)
                     } else if let Some(k) = transform_kind(id) {
                         s.transform.as_ref().is_some_and(|t| t.kind == k)
                     } else if let Some(k) = construct_kind(id) {
@@ -1457,6 +1522,21 @@ impl ChamferaApp {
                 "view.explode" => return None,
                 "solid.remove" if has_solids && self.session.scene.selected_bodies().is_empty() => {
                     format!("{name}: select the bodies to remove first")
+                }
+                _ if surface_kind(id)
+                    .is_some_and(|k| k.needs_sketch() && !self.has_sketch_curves()) =>
+                {
+                    format!("{name}: draw a sketch first")
+                }
+                _ if surface_kind(id).is_some_and(|k| {
+                    k == crate::surface_ui::SurfaceKind::Patch && self.has_sketch_curves()
+                }) || surface_kind(id).is_some_and(|k| k.needs_sketch()) =>
+                {
+                    if self.tool_open() {
+                        format!("{name}: close the open tool first")
+                    } else {
+                        return None;
+                    }
                 }
                 _ if !has_solids && construct_kind(id).is_none_or(|k| k.needs_solid()) => {
                     format!("{name}: build a solid first")
@@ -1583,6 +1663,8 @@ impl ChamferaApp {
             _ => {
                 if let Some(k) = body_tool_kind(id) {
                     self.open_body_tool(k);
+                } else if let Some(k) = surface_kind(id) {
+                    self.open_surface_tool(k);
                 } else if let Some(kind) = id.strip_prefix("constraint.") {
                     self.run_sketch("sketch.constrain_selection", json!({ "kind": kind }));
                 } else if let Some(k) = transform_kind(id) {

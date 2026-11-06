@@ -425,6 +425,9 @@ impl Body {
                 "`density` must be a positive number up to {MAX_DENSITY}"
             )));
         }
+        if self.is_open() {
+            return Err(crate::topology::open_volume());
+        }
         let bounds = self
             .bounding_box()
             .ok_or_else(|| KernelError::InvalidInput("the body has no vertices".into()))?;

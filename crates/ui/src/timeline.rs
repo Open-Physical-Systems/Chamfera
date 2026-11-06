@@ -148,6 +148,7 @@ impl ChamferaApp {
                 continue;
             };
             let (icon, details) = match &f.kind {
+                FeatureKind::Surface(sf) => crate::surface_ui::details(sf),
                 k @ (FeatureKind::SheetBase(_)
                 | FeatureKind::SheetFlange(_)
                 | FeatureKind::SheetUnfold(_)) => {
@@ -1038,6 +1039,10 @@ impl ChamferaApp {
             return;
         }
         let (distance, extrude) = match &f.kind {
+            FeatureKind::Surface(chamfera_doc::SurfaceFeature::Extrude(e)) => {
+                (e.distance.clone(), None)
+            }
+            FeatureKind::Surface(sf) => (crate::surface_ui::details(sf).1, None),
             FeatureKind::Extrude(e) => (e.distance.clone(), Some(ExtrudeForm::from_extrude(e))),
             FeatureKind::Revolve(r) => (r.angle.clone(), None),
             FeatureKind::Pattern(p) => (p.count.clone(), None),
@@ -1089,7 +1094,9 @@ impl ChamferaApp {
         // Offset and move face edit their distance in the same field.
         let face_edit = matches!(
             feature.kind,
-            FeatureKind::OffsetFace(_) | FeatureKind::MoveFace(_)
+            FeatureKind::OffsetFace(_)
+                | FeatureKind::MoveFace(_)
+                | FeatureKind::Surface(chamfera_doc::SurfaceFeature::Extrude(_))
         );
         let blend = shell || face_edit || matches!(feature.kind, FeatureKind::Blend(_));
         let revolve = !extrude && !blend;
@@ -1099,6 +1106,8 @@ impl ChamferaApp {
             FeatureKind::Mirror(_) | FeatureKind::Move(_) => "Definition",
             FeatureKind::Shell(_) | FeatureKind::Thicken(_) => "Thickness",
             FeatureKind::OffsetFace(_) | FeatureKind::MoveFace(_) => "Distance",
+            FeatureKind::Surface(chamfera_doc::SurfaceFeature::Extrude(_)) => "Distance",
+            FeatureKind::Surface(_) => "Definition",
             FeatureKind::DeleteFace(_) => "Faces",
             FeatureKind::Combine(_)
             | FeatureKind::SplitBody(_)
@@ -1123,6 +1132,7 @@ impl ChamferaApp {
             FeatureKind::Sweep(_) => Icon::Sweep,
             FeatureKind::Loft(_) => Icon::Loft,
             ref k if k.is_body_tool() => crate::body_tools_ui::details(k).0,
+            FeatureKind::Surface(ref sf) => crate::surface_ui::details(sf).0,
             _ if revolve => Icon::Revolve,
             _ => Icon::Extrude,
         };

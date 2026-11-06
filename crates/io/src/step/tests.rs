@@ -1074,3 +1074,38 @@ mod splines {
         assert_eq!(s.solids.len(), 1);
     }
 }
+
+#[test]
+fn a_surface_body_is_a_shell_based_surface_model_of_open_shells() {
+    // The four open sides of a 50 x 30 rectangle extruded by 10: 4 faces, 12 edges
+    // (4 at each rim, 4 struts), 8 vertices; each strut is used twice, each rim edge once:
+    // 4 * 2 + 8 = 16 oriented edges.
+    let rect = chamfera_kernel::Profile::polygon(&[
+        Point2::new(0.0, 0.0),
+        Point2::new(50.0, 0.0),
+        Point2::new(50.0, 30.0),
+        Point2::new(0.0, 30.0),
+    ]);
+    let tube = chamfera_kernel::surface_extrude(
+        &Frame::XY,
+        &chamfera_kernel::SurfaceProfile::Closed(rect),
+        10.0,
+    )
+    .unwrap();
+    let (_, ex) = export(&[("tube", &tube)]);
+    assert_eq!(ex.count("ADVANCED_FACE"), tube.faces().len());
+    assert_eq!(ex.count("ADVANCED_FACE"), 4);
+    assert_eq!(ex.count("EDGE_CURVE"), 12);
+    assert_eq!(ex.count("VERTEX_POINT"), 8);
+    assert_eq!(ex.count("ORIENTED_EDGE"), 16);
+    assert_eq!(ex.count("OPEN_SHELL"), 1);
+    assert_eq!(ex.count("CLOSED_SHELL"), 0);
+    assert_eq!(ex.count("SHELL_BASED_SURFACE_MODEL"), 1);
+    assert_eq!(ex.count("MANIFOLD_SURFACE_SHAPE_REPRESENTATION"), 1);
+    assert_eq!(ex.count("MANIFOLD_SOLID_BREP"), 0);
+    // With a solid beside it: both representations, related.
+    let (_, ex) = export(&[("tube", &tube), ("box", &box_50_30_10())]);
+    assert_eq!(ex.count("ADVANCED_FACE"), 10);
+    assert_eq!(ex.count("ADVANCED_BREP_SHAPE_REPRESENTATION"), 1);
+    assert_eq!(ex.count("SHAPE_REPRESENTATION_RELATIONSHIP"), 1);
+}

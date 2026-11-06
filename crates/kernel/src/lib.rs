@@ -50,6 +50,11 @@
 //! Rung K12 (first part) is here: [`shell`] hollows a solid of planes, cylinders and
 //! cones into walls of a thickness, with chosen faces open (an inward offset subtracted).
 //!
+//! Surface bodies are here: open shells ([`Body::is_open`], [`Validation::Surface`]),
+//! swept surfaces without caps ([`surface_extrude`], [`surface_revolve`],
+//! [`surface_sweep`]), planar patches ([`patch_profile`], [`patch_edges`]), [`stitch`]
+//! and trimming ([`trim_by_plane`], [`trim_by_solid`]).
+//!
 //! Body tools are here: [`split_body`] cuts a solid by a plane, [`split_faces`] imprints a
 //! plane on flat faces, and [`thicken`] gives a flat or cylindrical face a thickness.
 
@@ -73,6 +78,7 @@ mod shell;
 mod spline_tests;
 mod ssi;
 mod surface;
+mod surfacing;
 mod sweep;
 mod sweep_path;
 mod tessellate;
@@ -108,6 +114,10 @@ pub use ssi::{
     intersect_curve_surface, intersect_curve_surface_on, intersect_surfaces,
 };
 pub use surface::{Cone, Cylinder, Sphere, Surface, SurfaceParameters, SurfacePoint, Torus};
+pub use surfacing::{
+    MAX_SURFACE_EDGES, SurfaceProfile, patch_edges, patch_profile, stitch, surface_extrude,
+    surface_revolve, surface_sweep, trim_by_plane, trim_by_solid,
+};
 pub use sweep::{MAX_TAPER, extrude, extrude_symmetric, extrude_tapered, revolve};
 pub use sweep_path::{MAX_PATH_SEGMENTS, PATH_TANGENT_TOLERANCE, PathSegment, sweep_path};
 pub use tessellate::{BodyMesh, TessOptions, tessellate};
@@ -115,7 +125,7 @@ pub use topology::{
     Body, Curve, CurveId, EdgeCurve, EdgeId, FaceId, HalfEdgeId, LoopId, MAX_NAME_LENGTH,
     MAX_PROFILE_VERTICES, MAX_TOPOLOGY_ENTITIES, Mvfs, PointId, PointOnFace,
     SURFACE_QUADRATURE_TOLERANCE, ShellId, ShellReport, SurfaceId, TopologyError, TopologyReport,
-    TopologySummary, VertexId,
+    TopologySummary, Validation, VertexId,
 };
 pub(crate) use topology::{ListEdge, ListFace, ListVertex};
 

@@ -351,6 +351,10 @@ pub struct SceneBody {
     /// A component tint: an index into the theme's `component_tints`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tint: Option<u8>,
+    /// A surface body (an open shell): drawn from both sides in the theme's
+    /// `surface_body` colour.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub surface: bool,
 }
 
 /// What a click picked.
@@ -507,6 +511,7 @@ impl Scene {
             edges: Vec::new(),
             appearance: Appearance::default(),
             tint: None,
+            surface: false,
         });
         Some(id)
     }

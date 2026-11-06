@@ -218,7 +218,7 @@ fn context_of(action: Action) -> &'static str {
         Action::Tool(id) => crate::ribbon::by_id(id).map_or("Command", |t| t.tab.context()),
         Action::Command(id) => match id.split('.').next() {
             Some("sketch") => "Sketch",
-            Some("solid" | "feature" | "param") => "Solid",
+            Some("solid" | "feature" | "param" | "surface") => "Solid",
             Some("view" | "select") => "View",
             Some("design" | "body") => "File",
             Some("edit") => "Edit",
@@ -263,6 +263,10 @@ pub(crate) fn icon_of(action: Action) -> Icon {
         Action::ShowShortcuts | Action::Search => Icon::Select,
         Action::Tool(id) => crate::ribbon::by_id(id).map_or(Icon::Origin, |t| t.icon),
         Action::Command(id) => match id.split('.').next() {
+            Some("surface") => crate::surface_ui::SurfaceKind::ALL
+                .into_iter()
+                .find(|k| k.command() == id)
+                .map_or(Icon::SurfaceExtrude, |k| k.icon()),
             Some("sketch") => Icon::Sketch,
             Some("solid" | "feature" | "body") => Icon::Body,
             Some("param") => Icon::Parameters,

@@ -14,6 +14,7 @@ pub mod joint;
 pub mod motion;
 pub mod naming;
 pub mod sheet;
+pub mod surface;
 pub mod timeline;
 pub mod units;
 
@@ -38,6 +39,10 @@ pub use motion::{Motion, MotionKey};
 pub use sheet::{
     FlangePosition, FlangeSide, FlangeValues, ReliefShape, SheetBase, SheetFlange, SheetRule,
     SheetUnfold,
+};
+pub use surface::{
+    SurfaceExtrude, SurfaceFeature, SurfacePatch, SurfaceRevolve, SurfaceShapes, SurfaceStitch,
+    SurfaceSweep, SurfaceTrim, TrimKeep, TrimTool,
 };
 pub use timeline::{Group, ItemKind, Timeline};
 pub use units::{DisplayUnits, LengthUnit};
@@ -94,6 +99,9 @@ use thiserror::Error;
 ///   the shape, normal or axis, a point and the neighbouring faces of what it was made
 ///   on), so split pieces (`2:top#2`) and renamed faces resolve (rung K8). Older files
 ///   open unchanged and resolve by name alone, as before.
+/// - 28: surface features (`kind: surface`, with `surface`: `extrude`, `revolve`,
+///   `sweep`, `patch`, `stitch` or `trim`), making surface bodies (open shells). Older
+///   files open unchanged: they hold none.
 /// - 29: motion studies: keyframes of joint values over time (`motion.keys`: joint,
 ///   time in seconds, value). Older files open with no keys.
 pub const FORMAT_VERSION: u32 = 29;
