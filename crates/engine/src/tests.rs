@@ -225,6 +225,12 @@ fn hostile_params_never_panic() {
         json!({"item": 2, "to": 0, "position": 0.5, "items": [], "name": "\u{7}"}),
         json!({"item": 1, "to": 1, "position": 1e7, "items": [1, 1, 1], "group": 99, "name": long}),
         json!({"item": [1], "to": "end", "position": "0", "items": 3, "sketch": 1, "name": 5}),
+        json!({"view": "front", "x": 1e300, "y": -1e300, "scale": 0, "body": long, "sheet": 0}),
+        json!({"view": "iso", "x": 100, "y": 100, "scale": 1e-300, "sheet": 4294967295u64}),
+        json!({"view": 1, "kind": "angular", "x1": 1e300, "y1": 0, "x2": 0, "y2": 0, "offset": 1e300}),
+        json!({"view": 2, "kind": "diameter", "x1": 0, "y1": 0, "format": "exe", "path": "/dev/null"}),
+        json!({"paper": "a0", "orientation": 5, "projection": "second", "part_name": long, "date": "\u{1}"}),
+        json!({"sheet": 1, "dimension": -1, "view": [1], "format": "pdf", "kind": "radius"}),
         json!({"face": "2:top", "points": [{"x": 1e300, "y": 0}], "diameter": 1e300, "through_all": true}),
         json!({"face": "2:top", "points": [{"x": 0, "y": 0}], "diameter": "6 mm", "depth": f64::MAX, "tip_angle": 1e-300}),
         json!({"face": ":", "points": [{"x": 0, "y": 0, "width": 0, "height": -1}], "diameter": 6, "depth": 4}),
@@ -282,12 +288,26 @@ fn hostile_params_never_panic() {
             "to": {"pick": {"x": 1e300, "y": -1, "width": 0, "height": 0}}, "clear": "yes"}),
         json!({"sketch": 1, "profiles": [{"x": 10, "y": 10}], "distance": 5, "to": [1],
             "taper": [5], "start_offset": {"x": 1}, "distance2": true, "clear": true}),
+        json!({"style": 5, "plane": "2:top", "offset": 1e308, "flip": "yes", "body": 1}),
+        json!({"style": long, "plane": long, "offset": f64::NAN, "flip": 1, "colour": long}),
+        json!({"style": "wireframe", "plane": "1:top", "offset": -1e7, "flip": true}),
+        json!({"body": 1, "colour": "#zzzzzz", "opacity": 2, "preset": long}),
+        json!({"body": 1, "colour": "#ff8000", "opacity": 0.3, "preset": "glass"}),
+        json!({"body": 1, "colour": 5, "opacity": "half", "preset": ["glass"]}),
+        json!({"body": 1, "colour": "#\u{e9}\u{e9}\u{e9}", "opacity": 1e-300, "preset": "default"}),
         json!({"cx": 0, "cy": 0, "x": 1e300, "y": 0, "sides": 1e9, "mode": 5, "minor": f64::NAN, "width": -1, "overall": "no"}),
         json!({"cx": 0, "cy": 0, "x": 5, "y": 0, "sides": 64, "mode": "circumscribed", "minor": 1e-300, "width": 1e300, "overall": true, "x1": 0, "y1": 0, "x2": 1e-9, "y2": 0}),
         json!({"cx": 1, "cy": 1, "x": 1, "y": 1, "sides": 3, "minor": 3, "x1": 1, "y1": 1, "x2": 1, "y2": 1, "width": 0}),
         json!({"edges": [long], "faces": [{"feature": 4294967296u64, "face": long}], "linked": 1}),
         json!({"faces": "top", "pick": {"x": 1e300}, "edges": [null], "linked": null}),
         json!({"faces": [{"feature": 2, "face": "top"}], "edges": ["2:top 0"], "pick": {"x": 400, "y": 300, "width": 800, "height": 600}}),
+        json!({"sketch": 1, "profiles": [{"x": 0, "y": 0}], "path_sketch": 1, "path_curves": [1, 2, 99999]}),
+        json!({"sketch": 1, "profiles": [{"x": 0, "y": 0}], "path_sketch": -1, "path_curves": [-1, 1e300]}),
+        json!({"sketch": 1, "profiles": [{"x": 0, "y": 0}], "path_sketch": 1, "path_curves": "all"}),
+        json!({"sections": [{"sketch": 1, "x": 0, "y": 0}, {"sketch": 1, "x": 1e300, "y": 0}]}),
+        json!({"sections": [{"sketch": 1, "x": 5, "y": 5}, {"sketch": 99, "x": 0}], "feature": 1}),
+        json!({"sections": "two", "path_curves": null, "operation": "join", "plane": "xy", "offset": 1e300}),
+        json!({"plane": "xz", "offset": f64::NAN, "feature": 1, "path_curves": [1]}),
     ];
     for c in registry() {
         for p in &hostile {
@@ -2089,6 +2109,216 @@ fn body_import_step_adds_exact_solids_that_undo_save_and_open_keep() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// A 50 x 30 x 10 plate with a through hole of diameter 6 at (25, 15), by commands.
+fn plate_with_hole(s: &mut Session) {
+    s.execute("sketch.create", &json!({"plane": "xy"})).unwrap();
+    s.execute(
+        "sketch.rectangle",
+        &json!({"x1": 0, "y1": 0, "x2": 50, "y2": 30}),
+    )
+    .unwrap();
+    s.execute("sketch.circle", &json!({"cx": 25, "cy": 15, "radius": 3}))
+        .unwrap();
+    s.execute("sketch.finish", &json!({})).unwrap();
+    s.execute(
+        "solid.extrude",
+        &json!({"sketch": 1, "profiles": [{"x": 5, "y": 5}], "distance": 10}),
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_drawing_of_the_plate_has_projected_views_dimensions_and_exports() {
+    let mut s = Session::new();
+    plate_with_hole(&mut s);
+    let r = s
+        .execute(
+            "drawing.new_sheet",
+            &json!({"paper": "a3", "part_name": "Plate", "drawn_by": "CI"}),
+        )
+        .unwrap();
+    assert_eq!(
+        (r["width"].as_f64(), r["height"].as_f64()),
+        (Some(420.0), Some(297.0))
+    );
+    let front = s
+        .execute(
+            "drawing.add_view",
+            &json!({"view": "front", "x": 120, "y": 150}),
+        )
+        .unwrap();
+    let front_id = front["view"].as_u64().unwrap();
+    let top = s
+        .execute(
+            "drawing.add_view",
+            &json!({"view": "top", "x": 100, "y": 220}),
+        )
+        .unwrap();
+    // The top view is projected from the front view (third angle: above it, aligned).
+    assert_eq!(top["parent"].as_u64(), Some(front_id));
+    s.execute(
+        "drawing.add_view",
+        &json!({"view": "right", "x": 200, "y": 150}),
+    )
+    .unwrap();
+    s.execute(
+        "drawing.add_view",
+        &json!({"view": "iso", "x": 320, "y": 200}),
+    )
+    .unwrap();
+    let list = s.execute("drawing.list", &json!({})).unwrap();
+    let views = list["sheets"][0]["views"].as_array().unwrap().clone();
+    assert_eq!(views.len(), 4);
+    assert_eq!(
+        views[1]["x"].as_f64(),
+        Some(120.0),
+        "aligned with the front view"
+    );
+    // Front view: the 50 x 10 outline at (95..145, 145..155), and the hole's two hidden
+    // silhouettes.
+    let b = views[0]["bounds"].as_array().unwrap();
+    let b: Vec<f64> = b.iter().map(|v| v.as_f64().unwrap()).collect();
+    assert!(
+        (b[2] - b[0] - 50.0).abs() < 1e-6 && (b[3] - b[1] - 10.0).abs() < 1e-6,
+        "{b:?}"
+    );
+    assert_eq!(views[0]["hidden_curves"].as_u64(), Some(2));
+    // A horizontal dimension across the front view's bottom corners: 50.
+    let d = s
+        .execute(
+            "drawing.add_dimension",
+            &json!({"view": front_id, "kind": "horizontal", "x1": 95.5, "y1": 145.3, "x2": 144.8, "y2": 145.0, "offset": -10}),
+        )
+        .unwrap();
+    assert!((d["value"].as_f64().unwrap() - 50.0).abs() < 1e-9);
+    assert_eq!(d["text"], "50");
+    // The hole in the top view (centre at (120, 220)): Ø6.
+    let top_id = top["view"].as_u64().unwrap();
+    let d = s
+        .execute(
+            "drawing.add_dimension",
+            &json!({"view": top_id, "kind": "diameter", "x1": 123.2, "y1": 220.4}),
+        )
+        .unwrap();
+    assert_eq!(d["text"], "Ø6");
+    assert!(
+        s.execute(
+            "drawing.add_dimension",
+            &json!({"view": 4, "kind": "horizontal", "x1": 0, "y1": 0, "x2": 1, "y2": 1})
+        )
+        .is_err()
+    );
+    // Exports.
+    let dir = std::env::temp_dir().join(format!("chamfera-drawing-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    for ext in ["svg", "dxf", "pdf"] {
+        let path = dir.join(format!("plate.{ext}"));
+        let r = s
+            .execute("drawing.export", &json!({"path": path.to_str().unwrap()}))
+            .unwrap();
+        assert_eq!(r["format"], ext);
+        let bytes = std::fs::read(&path).unwrap();
+        assert_eq!(r["bytes"].as_u64(), Some(bytes.len() as u64));
+    }
+    assert!(
+        std::fs::read(dir.join("plate.pdf"))
+            .unwrap()
+            .starts_with(b"%PDF-1.4")
+    );
+    assert!(
+        s.execute(
+            "drawing.export",
+            &json!({"path": dir.join("x.txt").to_str().unwrap()})
+        )
+        .is_err()
+    );
+    // The drawing is saved with the design and reopens the same.
+    let path = dir.join("plate.chamfera");
+    s.execute("design.save", &json!({"path": path.to_str().unwrap()}))
+        .unwrap();
+    let saved = s.doc.drawing.clone();
+    let mut t = Session::new();
+    t.execute("design.open", &json!({"path": path.to_str().unwrap()}))
+        .unwrap();
+    assert_eq!(t.doc.drawing, saved);
+    assert_eq!(t.doc.version, chamfera_doc::FORMAT_VERSION);
+    let _ = std::fs::remove_dir_all(&dir);
+    // Deleting the front view takes the views projected from it and the dimensions.
+    s.execute("drawing.delete", &json!({"view": front_id}))
+        .unwrap();
+    let sheet = &s.doc.drawing.sheets[0];
+    assert_eq!(sheet.views.len(), 1, "only the iso view is left");
+    assert!(sheet.dimensions.is_empty());
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.doc.drawing.sheets[0].views.len(), 4);
+}
+
+#[test]
+fn views_follow_the_model() {
+    let mut s = Session::new();
+    plate_with_hole(&mut s);
+    s.execute(
+        "drawing.add_view",
+        &json!({"view": "front", "x": 150, "y": 150}),
+    )
+    .unwrap();
+    let width = |s: &mut Session| {
+        let l = s.execute("drawing.list", &json!({})).unwrap();
+        let b: Vec<f64> = l["sheets"][0]["views"][0]["bounds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_f64().unwrap())
+            .collect();
+        (b[2] - b[0], b[3] - b[1])
+    };
+    let (w, h) = width(&mut s);
+    assert!((w - 50.0).abs() < 1e-6 && (h - 10.0).abs() < 1e-6);
+    // Extruding 20 instead of 10 makes the front view 20 high.
+    let f = s.doc.features[0].id;
+    s.execute("feature.edit", &json!({"feature": f, "distance": 20}))
+        .unwrap();
+    let (w, h) = width(&mut s);
+    assert!(
+        (w - 50.0).abs() < 1e-6 && (h - 20.0).abs() < 1e-6,
+        "{w} x {h}"
+    );
+}
+
+#[test]
+fn drawing_commands_with_a_solid_refuse_hostile_input() {
+    let mut s = Session::new();
+    plate_with_hole(&mut s);
+    s.execute(
+        "drawing.add_view",
+        &json!({"view": "front", "x": 150, "y": 150}),
+    )
+    .unwrap();
+    for p in [
+        json!({"view": "front", "x": 1e5, "y": 0}),
+        json!({"view": "top", "x": 0, "y": 0, "body": "Nope"}),
+        json!({"view": "top", "x": 0, "y": 0, "scale": 1e9}),
+        json!({"view": 2, "kind": "horizontal", "x1": 150, "y1": 150, "x2": 150, "y2": 150}),
+        json!({"view": 2, "kind": "angular", "x1": 125, "y1": 145, "x2": 175, "y2": 145}),
+        json!({"view": 2, "kind": "radius", "x1": 10, "y1": 10}),
+        json!({"paper": "a4", "part_name": "x".repeat(65)}),
+        json!({"sheet": 99}),
+    ] {
+        let before = s.doc.clone();
+        for id in [
+            "drawing.add_view",
+            "drawing.add_dimension",
+            "drawing.new_sheet",
+            "drawing.edit_sheet",
+            "drawing.delete",
+        ] {
+            if s.execute(id, &p).is_err() {
+                assert_eq!(s.doc, before, "{id} {p}");
+            }
+            s.doc = before.clone();
+        }
+    }
+}
 /// A box from a rectangle `(x1, y1)..(x2, y2)` on the XY plane extruded by `h`, with the
 /// given operation. Returns the extrude's reply.
 fn box_feature(s: &mut Session, corners: [f64; 4], h: f64, operation: &str) -> serde_json::Value {
@@ -3678,5 +3908,388 @@ fn projecting_needs_a_sketch_and_real_edges() {
     assert!(
         s.execute("sketch.project", &json!({"edges": ["2:top 1"]}))
             .is_err()
+    );
+}
+
+/// A circle of radius `r` on the YZ plane at the origin (sketch 1) and the L path (sketch
+/// 2, on XY): 30 along +x, a quarter arc of radius 20 about (30, 20), 30 along +y.
+fn sweep_design(r: f64) -> (Session, Vec<u64>) {
+    let mut s = Session::new();
+    s.execute("sketch.create", &json!({"plane": "yz"})).unwrap();
+    s.execute("sketch.circle", &json!({"cx": 0, "cy": 0, "radius": r}))
+        .unwrap();
+    s.execute("sketch.finish", &json!({})).unwrap();
+    s.execute("sketch.create", &json!({"plane": "xy"})).unwrap();
+    let mut path = Vec::new();
+    for (cmd, p) in [
+        ("sketch.line", json!({"x1": 0, "y1": 0, "x2": 30, "y2": 0})),
+        (
+            "sketch.arc",
+            json!({"cx": 30, "cy": 20, "x1": 30, "y1": 0, "x2": 50, "y2": 20}),
+        ),
+        (
+            "sketch.line",
+            json!({"x1": 50, "y1": 20, "x2": 50, "y2": 50}),
+        ),
+    ] {
+        path.push(s.execute(cmd, &p).unwrap()["curve"].as_u64().unwrap());
+    }
+    s.execute("sketch.finish", &json!({})).unwrap();
+    (s, path)
+}
+
+#[test]
+fn sweeping_a_circle_along_an_l_path_gives_the_sum_of_its_parts() {
+    let (mut s, path) = sweep_design(2.0);
+    let r = s
+        .execute(
+            "solid.sweep",
+            &json!({"sketch": 1, "profiles": [{"x": 0, "y": 0}], "path_sketch": 2, "path_curves": path}),
+        )
+        .unwrap();
+    // π r² (30 + 10π + 30), Pappus for the quarter arc of radius 20.
+    let v = r["solids"][0]["volume"].as_f64().unwrap();
+    let exact = std::f64::consts::PI * 4.0 * (60.0 + 10.0 * std::f64::consts::PI);
+    assert!((v - exact).abs() < 1e-6 * exact, "{v} vs {exact}");
+    assert!(s.feature_errors().is_empty());
+    assert!(s.display_errors().is_empty(), "{:?}", s.display_errors());
+    // Editing the path down to the first line leaves a cylinder of π r² 30.
+    let id = r["feature"].as_u64().unwrap();
+    let r = s
+        .execute(
+            "feature.edit",
+            &json!({"feature": id, "path_curves": [path[0]]}),
+        )
+        .unwrap();
+    let v = r["solids"][0]["volume"].as_f64().unwrap();
+    assert!((v - std::f64::consts::PI * 4.0 * 30.0).abs() < 1e-6, "{v}");
+    // The design round-trips through a file.
+    let back = chamfera_doc::Document::from_json(&s.doc.to_json().unwrap()).unwrap();
+    assert_eq!(back, s.doc);
+}
+
+#[test]
+fn a_sweep_that_cannot_be_built_changes_nothing() {
+    // A profile of radius 25 cannot bend around the arc of radius 20.
+    let (mut s, path) = sweep_design(25.0);
+    let before = s.doc.clone();
+    let undo = s.undo.len();
+    let e = s
+        .execute(
+            "solid.sweep",
+            &json!({"sketch": 1, "profiles": [{"x": 0, "y": 0}], "path_sketch": 2, "path_curves": path}),
+        )
+        .unwrap_err();
+    assert!(e.to_string().contains("radius"), "{e}");
+    assert_eq!(s.doc, before);
+    assert_eq!(s.undo.len(), undo);
+    // A path curve that is not there, an empty path, a curve twice.
+    for bad in [json!([999]), json!([]), json!([1, 1])] {
+        assert!(
+            s.execute(
+                "solid.sweep",
+                &json!({"sketch": 1, "profiles": [{"x": 0, "y": 0}], "path_sketch": 2, "path_curves": bad}),
+            )
+            .is_err()
+        );
+    }
+    assert_eq!(s.doc, before);
+}
+
+#[test]
+fn picking_one_curve_of_a_path_picks_its_chain() {
+    let (s, path) = sweep_design(2.0);
+    let f = s.doc.sketch(2).unwrap();
+    let ids: Vec<u32> = path.iter().map(|p| *p as u32).collect();
+    for c in &ids {
+        assert_eq!(crate::solids::path_chain(&f.sketch, *c).len(), 3);
+    }
+}
+
+#[test]
+fn lofting_squares_and_circles_gives_frusta() {
+    let mut s = Session::new();
+    for (offset, half) in [(0.0, 10.0), (10.0, 5.0)] {
+        s.execute("sketch.create", &json!({"plane": "xy", "offset": offset}))
+            .unwrap();
+        s.execute(
+            "sketch.rectangle",
+            &json!({"x1": -half, "y1": -half, "x2": half, "y2": half}),
+        )
+        .unwrap();
+        s.execute("sketch.finish", &json!({})).unwrap();
+    }
+    for (offset, r) in [(0.0, 10.0), (10.0, 5.0)] {
+        s.execute(
+            "sketch.create",
+            &json!({"plane": "xz", "offset": offset - 100.0}),
+        )
+        .unwrap();
+        s.execute("sketch.circle", &json!({"cx": 0, "cy": 0, "radius": r}))
+            .unwrap();
+        s.execute("sketch.finish", &json!({})).unwrap();
+    }
+    let r = s
+        .execute(
+            "solid.loft",
+            &json!({"sections": [{"sketch": 1, "x": 0, "y": 0}, {"sketch": 2, "x": 0, "y": 0}]}),
+        )
+        .unwrap();
+    // h/3 (A1 + A2 + √(A1 A2)) = 10/3 (400 + 100 + 200).
+    let v = r["solids"][0]["volume"].as_f64().unwrap();
+    assert!((v - 7000.0 / 3.0).abs() < 1e-9, "{v}");
+    let r = s
+        .execute(
+            "solid.loft",
+            &json!({"sections": [{"sketch": 3, "x": 0, "y": 0}, {"sketch": 4, "x": 0, "y": 0}]}),
+        )
+        .unwrap();
+    // π h/3 (R² + R r + r²) with R = 10, r = 5, h = 10.
+    let v = r["solids"][0]["volume"].as_f64().unwrap();
+    let exact = std::f64::consts::PI * 10.0 / 3.0 * 175.0;
+    assert!((v - exact).abs() < 1e-9 * exact, "{v}");
+    assert!(s.display_errors().is_empty(), "{:?}", s.display_errors());
+    // A square to a circle has no exact surface yet: refused, nothing changes.
+    let before = s.doc.clone();
+    let undo = s.undo.len();
+    assert!(
+        s.execute(
+            "solid.loft",
+            &json!({"sections": [{"sketch": 1, "x": 0, "y": 0}, {"sketch": 3, "x": 0, "y": 0}]}),
+        )
+        .is_err()
+    );
+    assert!(
+        s.execute(
+            "solid.loft",
+            &json!({"sections": [{"sketch": 1, "x": 0, "y": 0}]}),
+        )
+        .is_err()
+    );
+    assert_eq!(s.doc, before);
+    assert_eq!(s.undo.len(), undo);
+    // The sketches are in use by the lofts.
+    assert!(!s.doc.sketch_users(2).is_empty());
+}
+
+#[test]
+fn the_swept_pipe_and_loft_example_has_its_exact_volumes() {
+    let text = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../examples/swept-pipe-and-loft.json"
+    ))
+    .unwrap();
+    let steps: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let mut s = Session::new();
+    for step in steps.as_array().unwrap() {
+        let params = step.get("params").cloned().unwrap_or(json!({}));
+        s.execute(step["command"].as_str().unwrap(), &params)
+            .unwrap();
+    }
+    let pi = std::f64::consts::PI;
+    let v: Vec<f64> = s
+        .solids()
+        .iter()
+        .map(|x| x.body.volume().unwrap())
+        .collect();
+    // Pipe: annulus π(6² - 4²) along 40 + 15π + 40 (Pappus for the bend of radius 30).
+    // Squares 40 -> 20 over 30 and 20 -> 30 over 20: 30/3 (1600 + 400 + 800) +
+    // 20/3 (400 + 900 + 600). Cone r 15 -> 8 over 25: π 25/3 (225 + 120 + 64).
+    let exact = [
+        20.0 * pi * (80.0 + 15.0 * pi),
+        28_000.0 + 38_000.0 / 3.0,
+        pi * 25.0 / 3.0 * 409.0,
+    ];
+    assert_eq!(v.len(), 3);
+    for (a, b) in v.iter().zip(exact) {
+        assert!((a - b).abs() < 1e-6 * b, "{a} vs {b}");
+    }
+    assert!(s.display_errors().is_empty());
+}
+
+fn only_body(s: &Session) -> &chamfera_render::SceneBody {
+    assert_eq!(s.scene.bodies.len(), 1);
+    &s.scene.bodies[0]
+}
+
+#[test]
+fn a_solid_shows_its_exact_edges_and_keeps_its_appearance_through_save_and_open() {
+    let mut s = Session::new();
+    extruded_plate(&mut s, json!(10));
+    // A box has 12 B-rep edges, each drawn as its own polyline.
+    assert_eq!(only_body(&s).edges.len(), 12);
+    assert_eq!(
+        only_body(&s).appearance,
+        chamfera_render::Appearance::default()
+    );
+    let body = only_body(&s).id;
+    let r = s
+        .execute("body.appearance", &json!({"body": body, "preset": "glass"}))
+        .unwrap();
+    assert_eq!(r["feature"], 2);
+    assert_eq!(r["saved"], true);
+    // The glass preset: (170, 210, 230) at 30% opacity, stored for feature 2.
+    let a = only_body(&s).appearance;
+    assert_eq!(a.colour, Some(chamfera_render::Rgba(170, 210, 230, 255)));
+    assert!((a.opacity - 0.3).abs() < 1e-6);
+    assert!(s.can_undo());
+    // A colour on its own keeps the opacity.
+    let body = only_body(&s).id;
+    s.execute(
+        "body.appearance",
+        &json!({"body": body, "colour": "#ff8000"}),
+    )
+    .unwrap();
+    let a = only_body(&s).appearance;
+    assert_eq!(a.colour, Some(chamfera_render::Rgba(255, 128, 0, 255)));
+    assert!((a.opacity - 0.3).abs() < 1e-6);
+
+    let dir = std::env::temp_dir().join(format!("chamfera-look-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("glass.chamfera");
+    s.execute("design.save", &json!({"path": path.to_str().unwrap()}))
+        .unwrap();
+    let mut t = Session::new();
+    t.execute("design.open", &json!({"path": path.to_str().unwrap()}))
+        .unwrap();
+    assert_eq!(t.doc, s.doc);
+    let a = only_body(&t).appearance;
+    assert_eq!(a.colour, Some(chamfera_render::Rgba(255, 128, 0, 255)));
+    assert!((a.opacity - 0.3).abs() < 1e-6);
+    std::fs::remove_dir_all(&dir).unwrap();
+
+    // Undo goes back to plain glass; default clears it from the design.
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(
+        only_body(&s).appearance.colour,
+        Some(chamfera_render::Rgba(170, 210, 230, 255))
+    );
+    let body = only_body(&s).id;
+    s.execute(
+        "body.appearance",
+        &json!({"body": body, "preset": "default"}),
+    )
+    .unwrap();
+    assert!(s.doc.appearances.is_empty());
+    assert_eq!(
+        only_body(&s).appearance,
+        chamfera_render::Appearance::default()
+    );
+}
+
+#[test]
+fn bad_appearances_are_refused_and_change_nothing() {
+    let mut s = Session::new();
+    extruded_plate(&mut s, json!(10));
+    let body = only_body(&s).id;
+    for p in [
+        json!({"body": body}),
+        json!({"body": body, "opacity": 0.0}),
+        json!({"body": body, "opacity": 1.5}),
+        json!({"body": body, "colour": "red"}),
+        json!({"body": body, "preset": "unobtainium"}),
+        json!({"body": 999, "opacity": 0.5}),
+    ] {
+        assert!(s.execute("body.appearance", &p).is_err(), "{p}");
+    }
+    assert!(s.doc.appearances.is_empty());
+    assert!(!s.can_undo() || s.doc.appearances.is_empty());
+}
+
+#[test]
+fn a_mesh_body_takes_an_appearance_for_the_session_only() {
+    let mut s = Session::new();
+    let body = s.execute("body.sample", &json!({})).unwrap()["body"]
+        .as_u64()
+        .unwrap();
+    let r = s
+        .execute("body.appearance", &json!({"body": body, "opacity": 0.5}))
+        .unwrap();
+    assert_eq!(r["saved"], false);
+    assert!(s.doc.appearances.is_empty());
+    let b = s.scene.body(body as u32).unwrap();
+    assert!((b.appearance.opacity - 0.5).abs() < 1e-6);
+    assert_eq!(b.appearance.colour, None);
+}
+
+#[test]
+fn a_section_on_a_face_cuts_the_view_at_its_offset() {
+    // The plate is 50 x 30 x 10 from the origin. A section on its top face (z = 10,
+    // normal +Z) moved 4 mm down sits at z = 6 and cuts away everything above.
+    let mut s = Session::new();
+    extruded_plate(&mut s, json!(10));
+    let r = s
+        .execute("view.section", &json!({"plane": "2:top", "offset": -4}))
+        .unwrap();
+    assert!(
+        (r["section"]["origin"]["z"].as_f64().unwrap() - 6.0).abs() < 1e-9,
+        "{r}"
+    );
+    let sec = s.scene.display.section.unwrap();
+    assert!((sec.normal.z - 1.0).abs() < 1e-9);
+    // Looking straight down at the middle, the top is gone: the first face hit is the
+    // bottom (z = 0), seen from inside.
+    let ray = chamfera_geom::Ray::new(
+        chamfera_geom::Point3::new(25.0, 15.0, 100.0),
+        -chamfera_geom::Vec3::Z,
+    )
+    .unwrap();
+    assert!(s.scene.pick(&ray).unwrap().point.z.abs() < 1e-9);
+    // The design is untouched: a section is a display state, not a feature.
+    assert!(!s.can_undo() || s.doc.features.len() == 1);
+    assert_eq!(s.doc.features.len(), 1);
+    // Flipped, it keeps the top 4 mm instead: the pick lands on the top face.
+    s.execute(
+        "view.section",
+        &json!({"plane": "2:top", "offset": -4, "flip": true}),
+    )
+    .unwrap();
+    assert!((s.scene.pick(&ray).unwrap().point.z - 10.0).abs() < 1e-9);
+    // An origin plane: xz is the front plane, its normal along Y.
+    s.execute("view.section", &json!({"plane": "xz", "offset": 15}))
+        .unwrap();
+    let sec = s.scene.display.section.unwrap();
+    assert!((sec.normal.y.abs() - 1.0).abs() < 1e-9);
+    assert!((sec.origin.y.abs() - 15.0).abs() < 1e-9);
+    for bad in [
+        json!({"plane": "diagonal"}),
+        json!({"plane": "9:nowhere"}),
+        json!({"plane": "xy", "offset": 1e300}),
+        json!({"plane": "xy", "flip": "yes"}),
+    ] {
+        assert!(s.execute("view.section", &bad).is_err(), "{bad}");
+    }
+    let r = s.execute("view.section_clear", &json!({})).unwrap();
+    assert!(r["section"].is_null());
+    assert!(s.scene.display.section.is_none());
+}
+
+#[test]
+fn the_visual_style_is_set_by_name_and_reported_by_view_get() {
+    let mut s = Session::new();
+    for name in [
+        "shaded",
+        "shaded_edges",
+        "shaded_hidden_edges",
+        "wireframe",
+        "wireframe_hidden",
+    ] {
+        s.execute("view.style", &json!({"style": name})).unwrap();
+        assert_eq!(
+            s.execute("view.get", &json!({})).unwrap()["display"]["style"],
+            name
+        );
+    }
+    assert_eq!(
+        s.scene.display.style,
+        chamfera_render::VisualStyle::WireframeHidden
+    );
+    assert!(
+        s.execute("view.style", &json!({"style": "cartoon"}))
+            .is_err()
+    );
+    assert_eq!(
+        s.scene.display.style,
+        chamfera_render::VisualStyle::WireframeHidden
     );
 }

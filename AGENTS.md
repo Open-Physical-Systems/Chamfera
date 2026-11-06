@@ -12,7 +12,7 @@ Status and the next milestone: `PLAN.md`. Layers: `docs/architecture.md`. Kernel
 - Never crash: no unwrap/expect/panic/todo/unsafe in non-test code; errors are `Result`; all input is hostile: clippy `-D warnings`, `hostile_params_never_panic`.
 - Model decisions use exact geometry; meshes are for display and export only.
 - Everything is a command, and programmatic calls never open dialogs: `skills/chamfera-commands/SKILL.md`.
-- Layering: geom (0) -> sketch, kernel, render (1) -> doc (2) -> io (3) -> engine (4) -> gpu (5) -> ui, mcp (6) -> apps (7). Nothing below layer 5 uses egui, winit, wgpu or rfd: `cargo xtask layers`.
+- Layering: geom (0) -> sketch, kernel, render (1) -> doc (2) -> io, drawing (3) -> engine (4) -> gpu (5) -> ui, mcp (6) -> apps (7). Nothing below layer 5 uses egui, winit, wgpu or rfd: `cargo xtask layers`.
 - Colours come from the theme tokens in `crates/render/src/theme.rs`; camera input goes only through `view.*` commands: `skills/chamfera-ui/SKILL.md`.
 - Show visible changes with a real screenshot you captured (`chamfera --screenshot`, `chamfera-cli snapshot`) and looked at: `skills/chamfera-agent-tools/SKILL.md`.
 - Libraries below the UI build for wasm: `cargo xtask wasm`.

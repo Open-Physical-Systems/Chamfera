@@ -87,6 +87,8 @@ fn command_of(action: Action) -> Option<&'static str> {
         Action::FinishSketch => "sketch.finish",
         Action::Extrude => "solid.extrude",
         Action::Revolve => "solid.revolve",
+        Action::Sweep => "solid.sweep",
+        Action::Loft => "solid.loft",
         Action::Fillet => "solid.fillet",
         Action::Chamfer => "solid.chamfer",
         Action::Parameters => "param.set",
@@ -120,6 +122,8 @@ fn ui_actions() -> Vec<Action> {
     let mut v = vec![
         Action::Extrude,
         Action::Revolve,
+        Action::Sweep,
+        Action::Loft,
         Action::Fillet,
         Action::Chamfer,
     ];
@@ -185,6 +189,8 @@ fn context_of(action: Action) -> &'static str {
         | Action::SketchOnFace
         | Action::Extrude
         | Action::Revolve
+        | Action::Sweep
+        | Action::Loft
         | Action::Fillet
         | Action::Chamfer
         | Action::Parameters => "Solid",
@@ -218,6 +224,8 @@ pub(crate) fn icon_of(action: Action) -> Icon {
         Action::FinishSketch => Icon::SketchFinish,
         Action::Extrude => Icon::Extrude,
         Action::Revolve => Icon::Revolve,
+        Action::Sweep => Icon::Sweep,
+        Action::Loft => Icon::Loft,
         Action::Fillet => Icon::Fillet,
         Action::Chamfer => Icon::Chamfer,
         Action::Parameters => Icon::Parameters,
@@ -339,7 +347,9 @@ impl ChamferaApp {
     /// Why `action` cannot run now, in words, or `None` when it can.
     pub(crate) fn unavailable(&self, action: Action) -> Option<String> {
         let sketching = self.session.active_sketch.is_some();
-        let tool_free = self.solid.extrude.is_none() && self.solid.blend.is_none();
+        let tool_free = self.solid.extrude.is_none()
+            && self.solid.blend.is_none()
+            && self.solid.sweep.is_none();
         let has_solids = !self.session.solids().is_empty();
         let name = shortcuts::action_label(action);
         let desktop = cfg!(not(target_arch = "wasm32"));
@@ -363,6 +373,8 @@ impl ChamferaApp {
             | Action::SketchOnFace
             | Action::Extrude
             | Action::Revolve
+            | Action::Sweep
+            | Action::Loft
             | Action::Fillet
             | Action::Chamfer
                 if sketching =>
@@ -372,10 +384,19 @@ impl ChamferaApp {
             Action::SketchOnFace | Action::Fillet | Action::Chamfer if !has_solids => {
                 format!("{name}: build a solid first")
             }
-            Action::Extrude | Action::Revolve if !self.has_profiles() => {
+            Action::Extrude | Action::Revolve | Action::Sweep | Action::Loft
+                if !self.has_profiles() =>
+            {
                 format!("{name}: draw a closed profile in a sketch first")
             }
-            Action::Extrude | Action::Revolve | Action::Fillet | Action::Chamfer if !tool_free => {
+            Action::Extrude
+            | Action::Revolve
+            | Action::Sweep
+            | Action::Loft
+            | Action::Fillet
+            | Action::Chamfer
+                if !tool_free =>
+            {
                 format!("{name}: close the open tool first")
             }
             Action::Undo if !self.session.can_undo() => "Nothing to undo".into(),
@@ -492,6 +513,8 @@ impl ChamferaApp {
             Action::FinishSketch => self.finish_sketch(),
             Action::Extrude => self.open_extrude(false),
             Action::Revolve => self.open_extrude(true),
+            Action::Sweep => self.open_sweep(false),
+            Action::Loft => self.open_sweep(true),
             Action::Fillet => self.open_blend(false),
             Action::Chamfer => self.open_blend(true),
             Action::Parameters => self.params.open = true,

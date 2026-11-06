@@ -186,6 +186,8 @@ impl FeatureKind {
                 )
                 .collect(),
             FeatureKind::Revolve(_) => Vec::new(),
+            // Sweeps and lofts take their sizes from their sketches.
+            FeatureKind::Sweep(_) | FeatureKind::Loft(_) => Vec::new(),
             FeatureKind::Blend(b) => vec![&mut b.size],
             FeatureKind::Hole(h) => std::iter::once(&mut h.diameter)
                 .chain(

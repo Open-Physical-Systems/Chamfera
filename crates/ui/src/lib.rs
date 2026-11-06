@@ -17,9 +17,12 @@ use std::sync::{Arc, Mutex};
 mod assembly_ui;
 mod blend_ui;
 mod browser;
+mod cam_ui;
 mod chrome;
 mod construct_ui;
 mod context_menu;
+mod display_ui;
+mod drawing_ui;
 mod file_ui;
 mod hole_ui;
 mod inspect_ui;
@@ -41,6 +44,7 @@ mod sketch_shapes;
 mod sketch_ui;
 mod solid_ui;
 mod spline_ui;
+mod sweep_ui;
 mod timeline;
 mod transform_ui;
 mod viewcube;
@@ -65,6 +69,8 @@ pub struct Options {
     pub script: Vec<Value>,
     /// Open the Parameters window at start.
     pub parameters: bool,
+    /// Open the DRAWING workspace at start.
+    pub drawing: bool,
     /// Open the Extrude tool at start and pick the profile under the viewport's centre,
     /// as a click there would.
     pub extrude: bool,
@@ -115,6 +121,9 @@ struct Drawn {
     selected: Vec<u32>,
     overlays: Vec<chamfera_render::Overlay>,
     fills: Vec<chamfera_render::Fill>,
+    /// Visual style and section plane, and each body's appearance.
+    display: chamfera_render::Display,
+    appearances: Vec<chamfera_render::Appearance>,
     theme: ThemeMode,
     size: (u32, u32),
     grid: Option<u64>,
@@ -153,6 +162,7 @@ pub struct ChamferaApp {
     params: params_ui::ParamsUi,
     solid: solid_ui::SolidUi,
     assembly: assembly_ui::AssemblyUi,
+    drawing: drawing_ui::DrawingUi,
     construct: construct_ui::ConstructUi,
     file: file_ui::FileUi,
     browser: browser::BrowserUi,
@@ -160,6 +170,10 @@ pub struct ChamferaApp {
     search: search::SearchUi,
     /// Right-click menus, the selection filter and hover pre-highlight.
     ctx_menu: context_menu::ContextMenuUi,
+    /// The Manufacture workspace.
+    cam: cam_ui::CamUi,
+    /// Visual style, section and the Appearance panel.
+    display: display_ui::DisplayUi,
     /// The browser's file picker, downloads and local storage.
     #[cfg(target_arch = "wasm32")]
     web: web::WebFiles,
@@ -246,12 +260,15 @@ impl ChamferaApp {
             params: params_ui::ParamsUi::default(),
             solid: solid_ui::SolidUi::default(),
             assembly: assembly_ui::AssemblyUi::default(),
+            drawing: drawing_ui::DrawingUi::default(),
             construct: construct_ui::ConstructUi::default(),
             file: file_ui::FileUi::default(),
             browser: browser::BrowserUi::default(),
             timeline: timeline::TimelineUi::default(),
             search: search::SearchUi::default(),
             ctx_menu: context_menu::ContextMenuUi::default(),
+            cam: cam_ui::CamUi::default(),
+            display: display_ui::DisplayUi::default(),
             #[cfg(target_arch = "wasm32")]
             web: web::WebFiles::default(),
             ctx_close: false,
@@ -282,11 +299,14 @@ impl ChamferaApp {
                 Err(e) => app.message = Some((e.to_string(), true)),
             }
         }
+        // A script that generated toolpaths opens in the Manufacture workspace.
+        app.cam.active = app.session.toolpaths_visible() && app.session.active_sketch.is_none();
         if app.session.active_sketch.is_some() {
             app.sketch.tool = Some(sketch_ui::Tool::Select);
             app.refresh_sketch_status();
         }
         app.params.open = options.parameters;
+        app.drawing.active = options.drawing;
         if options.extrude {
             let mut tool = solid_ui::ExtrudeTool::default();
             if let Some(p) = &options.extrude_with {
@@ -416,6 +436,14 @@ impl ChamferaApp {
         self.hover_update(hover);
         let drag = self.navigate_drag(ui, response, rect);
         self.navigate_zoom(ui, response, rect);
+        if self.cam_picking()
+            && response.clicked()
+            && let Some(pos) = response.interact_pointer_pos()
+        {
+            let (x, y) = local(pos);
+            self.cam_click(x, y, w, h);
+            return;
+        }
         if self.picking_extrude_target()
             && response.clicked()
             && let Some(pos) = response.interact_pointer_pos()
@@ -487,6 +515,14 @@ impl ChamferaApp {
         {
             let (x, y) = local(pos);
             self.inspect_click(x, y, w, h);
+            return;
+        }
+        if self.solid.sweep.is_some()
+            && response.clicked()
+            && let Some(pos) = response.interact_pointer_pos()
+        {
+            let (x, y) = local(pos);
+            self.sweep_click(x, y, w, h);
             return;
         }
         if self.solid.shell.is_some()
@@ -593,6 +629,9 @@ impl ChamferaApp {
                 ..picked
             });
         }
+        if let Some(picked) = self.sweep_overlay() {
+            self.session.scene.overlays.push(picked);
+        }
         let picks = self.pick_overlays();
         self.session.scene.overlays.extend(picks);
         let ppp = ui.ctx().pixels_per_point();
@@ -613,6 +652,14 @@ impl ChamferaApp {
             selected: self.session.scene.selected.clone(),
             overlays: self.session.scene.overlays.clone(),
             fills: self.session.scene.fills.clone(),
+            display: self.session.scene.display,
+            appearances: self
+                .session
+                .scene
+                .bodies
+                .iter()
+                .map(|b| b.appearance)
+                .collect(),
             theme: self.theme.mode,
             size,
             grid: self.session.scene.grid_spacing.map(f64::to_bits),
@@ -671,6 +718,7 @@ impl ChamferaApp {
         self.view_cube(ui, rect);
         self.viewport_hint(ui, rect);
         self.selection_filter_bar(ui.ctx(), rect);
+        self.display_bar(ui.ctx(), rect);
         if self.frames >= 2
             && let Some([x, y]) = self.ctx_menu.open_at.take()
         {
@@ -813,8 +861,20 @@ impl eframe::App for ChamferaApp {
             .resizable(true)
             .default_size(248.0)
             .size_range(180.0..=420.0)
-            .show(ui, |ui| self.browser(ui));
-        egui::CentralPanel::no_frame().show(ui, |ui| self.viewport(ui, frame));
+            .show(ui, |ui| {
+                if self.cam.active {
+                    self.cam_tree(ui);
+                } else {
+                    self.browser(ui);
+                }
+            });
+        egui::CentralPanel::no_frame().show(ui, |ui| {
+            if self.drawing.active && self.session.active_sketch.is_none() {
+                self.drawing_canvas(ui);
+            } else {
+                self.viewport(ui, frame);
+            }
+        });
         if self.frames < 2 {
             self.frames += 1;
             ctx.request_repaint();
@@ -827,11 +887,14 @@ impl eframe::App for ChamferaApp {
             self.transform_dialog(&ctx);
             self.inspect_dialog(&ctx);
             self.shell_dialog(&ctx);
+            self.sweep_dialog(&ctx);
             self.feature_dialog(&ctx);
             self.timeline_error_window(&ctx);
             self.construct_dialog(&ctx);
             self.rename_dialog(&ctx);
             self.properties_window(&ctx);
+            self.cam_dialogs(&ctx);
+            self.appearance_window(&ctx);
         }
         if self.frames >= 2 {
             self.preferences_window(&ctx);

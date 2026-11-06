@@ -6,7 +6,9 @@
 //! timeline) and the rest of the timeline still builds, as CAD users expect.
 
 use crate::Session;
-use chamfera_doc::{Blend, BlendKind, Extrude, ExtrudeDirection, FeatureKind, Operation, Revolve};
+use chamfera_doc::{
+    Blend, BlendKind, Extrude, ExtrudeDirection, FeatureKind, Loft, Operation, Revolve, Sweep,
+};
 use chamfera_geom::{Point2, Point3};
 use chamfera_kernel::{Body, EdgeId, Line2, Profile, ProfileEdge, TessOptions, tessellate};
 use chamfera_sketch::{Curve, ProfileLoop, Region, Sketch};
@@ -927,6 +929,134 @@ fn build_revolve(
         .collect()
 }
 
+/// A sweep's path as kernel segments in space (lines, and arcs counter-clockwise about
+/// the path sketch's normal as the sketch stores them).
+fn sweep_path_segments(
+    f: &chamfera_doc::SketchFeature,
+    curves: &[u32],
+) -> Result<Vec<chamfera_kernel::PathSegment>, String> {
+    use chamfera_kernel::PathSegment;
+    let gone = || format!("a curve of the path in {} is gone", f.name);
+    curves
+        .iter()
+        .map(|id| {
+            let at = |p: chamfera_sketch::PointId| {
+                f.sketch
+                    .point(p)
+                    .map(|q| f.plane.from_plane(q))
+                    .ok_or_else(gone)
+            };
+            match f.sketch.curve(chamfera_sketch::CurveId(*id)) {
+                Some(Curve::Line { start, end, .. }) => Ok(PathSegment::Line {
+                    start: at(*start)?,
+                    end: at(*end)?,
+                }),
+                Some(Curve::Arc {
+                    centre, start, end, ..
+                }) => {
+                    PathSegment::arc_from_points(at(*centre)?, f.plane.z(), at(*start)?, at(*end)?)
+                        .map_err(|e| format!("an arc of the path: {e}"))
+                }
+                Some(_) => Err(format!("curve {id} of {} is not a line or an arc", f.name)),
+                None => Err(gone()),
+            }
+        })
+        .collect()
+}
+
+/// The ends of a line or an arc (`None` for other curves).
+fn curve_ends(c: &Curve) -> Option<[chamfera_sketch::PointId; 2]> {
+    match c {
+        Curve::Line { start, end, .. } | Curve::Arc { start, end, .. } => Some([*start, *end]),
+        _ => None,
+    }
+}
+
+/// The lines and arcs of `sketch` joined end to end with `curve` (ends at the same
+/// place), in order along the chain. A place where more than two lines and arcs end
+/// ends the chain (a branch).
+pub fn path_chain(sketch: &Sketch, curve: u32) -> Vec<u32> {
+    let tol = chamfera_geom::LINEAR_TOLERANCE;
+    let ends: Vec<(u32, [Point2; 2])> = sketch
+        .curves()
+        .filter_map(|(id, c)| {
+            let [a, b] = curve_ends(c)?;
+            Some((id.0, [sketch.point(a)?, sketch.point(b)?]))
+        })
+        .collect();
+    let users = |p: Point2| -> Vec<u32> {
+        ends.iter()
+            .filter(|(_, e)| e.iter().any(|q| q.distance(p) <= tol))
+            .map(|(id, _)| *id)
+            .collect()
+    };
+    let Some(&(_, start)) = ends.iter().find(|(id, _)| *id == curve) else {
+        return Vec::new();
+    };
+    // Walk from the curve out of each of its ends.
+    let walk = |from: Point2| -> Vec<u32> {
+        let mut out = Vec::new();
+        let (mut at, mut prev) = (from, curve);
+        for _ in 0..ends.len() {
+            let u = users(at);
+            if u.len() != 2 {
+                break;
+            }
+            let Some(next) = u.into_iter().find(|c| *c != prev) else {
+                break;
+            };
+            if next == curve || out.contains(&next) {
+                break;
+            }
+            let Some((_, e)) = ends.iter().find(|(id, _)| *id == next) else {
+                break;
+            };
+            out.push(next);
+            at = if e[0].distance(at) <= tol { e[1] } else { e[0] };
+            prev = next;
+        }
+        out
+    };
+    let mut chain = walk(start[0]);
+    chain.reverse();
+    chain.push(curve);
+    for c in walk(start[1]) {
+        if !chain.contains(&c) {
+            chain.push(c);
+        }
+    }
+    chain
+}
+
+/// The bodies one sweep makes: one per profile, along the same path.
+fn build_sweep(doc: &chamfera_doc::Document, s: &Sweep) -> Result<Vec<Body>, String> {
+    let f = doc.sketch(s.sketch).map_err(|x| x.to_string())?;
+    let p = doc.sketch(s.path_sketch).map_err(|x| x.to_string())?;
+    let path = sweep_path_segments(p, &s.path)?;
+    feature_profiles(f, &s.profiles)?
+        .iter()
+        .map(|profile| {
+            chamfera_kernel::sweep_path(&f.plane, profile, &path).map_err(|x| format!("sweep: {x}"))
+        })
+        .collect()
+}
+
+/// The body one loft makes, through its profiles in order.
+fn build_loft(doc: &chamfera_doc::Document, l: &Loft) -> Result<Vec<Body>, String> {
+    let mut sections = Vec::with_capacity(l.sections.len());
+    for s in &l.sections {
+        let f = doc.sketch(s.sketch).map_err(|x| x.to_string())?;
+        let profile = feature_profiles(f, &[s.profile])?
+            .into_iter()
+            .next()
+            .ok_or("a loft profile is missing")?;
+        sections.push((f.plane, profile));
+    }
+    chamfera_kernel::loft(&sections)
+        .map(|b| vec![b])
+        .map_err(|x| format!("loft: {x}"))
+}
+
 impl Session {
     /// Rebuilds every feature, in timeline order, and replaces the solid bodies in the
     /// scene. Meshes and other bodies (imported STL) are left alone.
@@ -955,8 +1085,13 @@ impl Session {
             if feature.suppressed {
                 continue;
             }
-            if let Some(sketch) = feature.kind.sketch()
-                && let Some(e) = built.sketch_errors.get(&sketch)
+            // Every sketch the feature uses (a sweep's path, a loft's sections too) was
+            // followed in timeline order before it.
+            if let Some((sketch, e)) = feature
+                .kind
+                .sketches()
+                .into_iter()
+                .find_map(|s| built.sketch_errors.get(&s).map(|e| (s, e.clone())))
             {
                 let name = feature_name(&self.doc, sketch);
                 built.errors.insert(feature.id, format!("{name}: {e}"));
@@ -1091,6 +1226,8 @@ impl Session {
                     let bodies: Vec<&Body> = made.iter().map(|m| &m.2).collect();
                     build_extrude(&self.doc, e, &bodies)
                 }
+                FeatureKind::Sweep(s) => build_sweep(&self.doc, s),
+                FeatureKind::Loft(l) => build_loft(&self.doc, l),
                 FeatureKind::Revolve(r) => build_revolve(&self.doc, r, &built.constructs),
                 FeatureKind::Pattern(_)
                 | FeatureKind::Construct(_)
@@ -1156,6 +1293,18 @@ impl Session {
             .iter()
             .filter_map(|s| s.scene_id)
             .collect();
+        // Selected solids stay selected through the rebuild (by the feature that made
+        // them), so a panel working on the selection, such as Appearance, keeps it.
+        let reselect: Vec<u32> = self
+            .built
+            .solids
+            .iter()
+            .filter(|x| {
+                x.scene_id
+                    .is_some_and(|id| self.scene.selected.contains(&id))
+            })
+            .map(|x| x.feature)
+            .collect();
         self.scene.bodies.retain(|b| !old.contains(&b.id));
         self.scene.deselect(|b| old.contains(&b));
         let options = TessOptions::default();
@@ -1169,6 +1318,7 @@ impl Session {
                     faces = m.face_of_triangle;
                     edges = m.edge_polylines;
                     let id = self.scene.add(&name, m.mesh);
+                    self.dress_body(id, feature, edges.iter().map(|(_, l)| l.clone()).collect());
                     if id.is_none() {
                         built
                             .display_errors
@@ -1195,7 +1345,17 @@ impl Session {
             });
         }
         self.show_imported(&mut built);
+        for x in &built.solids {
+            if let Some(id) = x.scene_id
+                && reselect.contains(&x.feature)
+                && !self.scene.selected.contains(&id)
+            {
+                self.scene.selected.push(id);
+            }
+        }
         self.built = built;
+        // Toolpaths follow the model.
+        self.regenerate_cam();
     }
 
     /// Moves an attached sketch's plane onto its face or construction plane, and its
@@ -1424,6 +1584,58 @@ impl Session {
             }
         }
         best.map(|(_, s, p, a)| (s, p, a))
+    }
+
+    /// The sketch line or arc nearest pixel `(x, y)` on screen (within
+    /// [`crate::sketching::PICK_CURVE_PX`]), in any sketch, and the chain of lines and
+    /// arcs joined end to end with it (through points no third curve uses), for picking
+    /// a sweep path in one click: (sketch, curve, chain in path order).
+    pub fn path_at(&self, x: f64, y: f64, w: f64, h: f64) -> Option<(u32, u32, Vec<u32>)> {
+        use chamfera_render::{mat_mul, transform_point};
+        if !(w >= 1.0 && h >= 1.0 && x.is_finite() && y.is_finite()) {
+            return None;
+        }
+        let bounds = self.scene.bounds();
+        let vp = mat_mul(
+            &self.camera.projection_matrix(w / h, bounds.as_ref()),
+            &self.camera.view_matrix(),
+        );
+        let screen = |p: Point3| -> Option<(f64, f64)> {
+            let n = transform_point(&vp, p)?;
+            if !(0.0..=1.0).contains(&n[2]) {
+                return None;
+            }
+            Some(((n[0] + 1.0) * 0.5 * w, (1.0 - n[1]) * 0.5 * h))
+        };
+        let mut best: Option<(f64, u32, u32)> = None;
+        for f in &self.doc.sketches {
+            for (id, curve) in f.sketch.curves() {
+                if !matches!(curve, Curve::Line { .. } | Curve::Arc { .. }) {
+                    continue;
+                }
+                let pts: Vec<(f64, f64)> = crate::sketching::curve_polyline(&f.sketch, curve)
+                    .into_iter()
+                    .filter_map(|p| screen(f.plane.from_plane(p)))
+                    .collect();
+                for pair in pts.windows(2) {
+                    let [a, b] = pair else { continue };
+                    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+                    let len2 = dx * dx + dy * dy;
+                    let t = if len2 > 1e-12 {
+                        (((x - a.0) * dx + (y - a.1) * dy) / len2).clamp(0.0, 1.0)
+                    } else {
+                        0.0
+                    };
+                    let d = (a.0 + t * dx - x).hypot(a.1 + t * dy - y);
+                    if d <= crate::sketching::PICK_CURVE_PX && best.is_none_or(|bb| d < bb.0) {
+                        best = Some((d, f.id, id.0));
+                    }
+                }
+            }
+        }
+        let (_, sketch, curve) = best?;
+        let f = self.doc.sketch(sketch).ok()?;
+        Some((sketch, curve, path_chain(&f.sketch, curve)))
     }
 
     /// The outline (outer loop and holes) of the region at `seed`, as world line segments.

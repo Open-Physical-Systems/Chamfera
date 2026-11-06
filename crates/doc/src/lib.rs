@@ -1,7 +1,10 @@
 //! Layer 2: the design document: parameters and sketches now, the feature timeline from M4.
 
+pub mod appearance;
+pub mod cam;
 pub mod component;
 pub mod construct;
+pub mod drawing;
 pub mod expr;
 pub mod feature;
 pub mod imported;
@@ -9,14 +12,16 @@ pub mod joint;
 pub mod timeline;
 pub mod units;
 
+pub use appearance::Appearance;
 pub use component::{Assembly, Component, ROOT};
 pub use construct::{
     AxisRef, ConstructKind, Construction, EdgeRef, OriginAxis, OriginPlane, PlaneRef, PointRef,
 };
+pub use drawing::Drawing;
 pub use feature::{
     Blend, BlendKind, Extrude, ExtrudeDirection, ExtrudeExtent, ExtrudeTo, ExtrudeValues, Feature,
-    FeatureKind, Hole, HoleKind, HoleSizes, Mirror, MirrorPlane, Move, MoveTransform, Operation,
-    Pattern, PatternLayout, Revolve, Shell,
+    FeatureKind, Hole, HoleKind, HoleSizes, Loft, LoftSection, Mirror, MirrorPlane, Move,
+    MoveTransform, Operation, Pattern, PatternLayout, Revolve, Shell, Sweep,
 };
 pub use imported::ImportedBody;
 pub use joint::{EdgeEnd, Joint, JointKind, JointOrigin, OriginAt};
@@ -53,7 +58,13 @@ use thiserror::Error;
 /// - 16: the timeline: an explicit build order of sketches and features, the rollback
 ///   marker and groups (`timeline`). Older files open in id order with the marker at
 ///   the end, as their timeline showed them.
+/// - 17: sweeps along a path and lofts between profiles.
+/// - 18: drawings: sheets with views of the solids and dimensions (`drawing`).
+///   Older files open with no sheets.
 /// - 19: projected (linked) sketch curves and ellipses.
+/// - 20: the CAM section: setups, tools and machining operations (`cam`).
+/// - 21: body appearances (a colour and opacity per feature's body). Older files open
+///   with every body in the theme's colour.
 /// - 24: the design's display units (`units`: length unit and decimal places). A plain
 ///   number in an expression means the design's length unit. Older files open in mm with
 ///   two decimals, as before.
@@ -104,6 +115,8 @@ pub enum DocError {
     BadFeature { reason: String },
     #[error("timeline: {0}")]
     Timeline(String),
+    #[error("drawing: {reason}")]
+    BadDrawing { reason: String },
 }
 
 /// What a parameter measures. Values are stored in internal units: mm and radians.
@@ -231,6 +244,15 @@ pub struct Document {
     /// Components and joints (format 15). A design without them is one root component.
     #[serde(default, skip_serializing_if = "Assembly::is_empty")]
     pub assembly: Assembly,
+    /// Drawing sheets (format 18).
+    #[serde(default, skip_serializing_if = "Drawing::is_empty")]
+    pub drawing: Drawing,
+    /// How the bodies a feature (or an import) made look, by its id. Display data only.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub appearances: BTreeMap<u32, Appearance>,
+    /// Manufacturing: setups, tools and operations (format 20). Older files have none.
+    #[serde(default, skip_serializing_if = "cam::Cam::is_empty")]
+    pub cam: cam::Cam,
     /// How values are shown and typed: the length unit and decimal places.
     #[serde(default, skip_serializing_if = "DisplayUnits::is_default")]
     pub units: DisplayUnits,
@@ -248,6 +270,9 @@ impl Default for Document {
             imported: Vec::new(),
             timeline: Timeline::default(),
             assembly: Assembly::default(),
+            drawing: Drawing::default(),
+            appearances: BTreeMap::new(),
+            cam: cam::Cam::default(),
             units: DisplayUnits::default(),
         }
     }
@@ -656,6 +681,12 @@ impl Document {
         checked.assembly = doc.assembly;
         checked.timeline = doc.timeline;
         checked.check_timeline(&mut seen)?;
+        doc.drawing.check()?;
+        checked.drawing = doc.drawing;
+        appearance::check(&doc.appearances, checked.last_feature_id)?;
+        checked.appearances = doc.appearances;
+        doc.cam.validate()?;
+        checked.cam = doc.cam;
         // Values in the file must agree with their expressions.
         checked.evaluate()?;
         Ok(checked)

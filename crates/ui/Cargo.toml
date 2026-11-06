@@ -10,6 +10,7 @@ authors.workspace = true
 
 [dependencies]
 chamfera-doc.workspace = true
+chamfera-drawing.workspace = true
 chamfera-engine.workspace = true
 chamfera-geom.workspace = true
 chamfera-gpu.workspace = true

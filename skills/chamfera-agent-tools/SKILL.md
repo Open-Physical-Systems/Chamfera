@@ -14,6 +14,10 @@ description: "Use when running Chamfera to see a change working: the desktop app
 - Scripts can name a step's reply with `"as": "axis"` and use it later as `"$axis.curve"` (`crates/engine/src/script.rs`), in the CLI and in `--script`.
 - It needs a display (Wayland or X11). Without one, use the snapshot below.
 
+## Drawings
+- `drawing.new_sheet`, `drawing.add_view {view, x, y}`, `drawing.add_dimension {view, kind, x1, y1, x2, y2}` (sheet mm, snapped to projected vertices and edges) and `drawing.export {path}` (svg, dxf or pdf); `drawing.list` gives each view's place, box and line counts and each dimension's value.
+- `chamfera --script examples/drawing-sheet.json --drawing --screenshot shot.png` shows the sheet in the DRAWING workspace. An exported SVG can be looked at with `google-chrome --headless --screenshot`, a PDF with `pdftoppm -png`.
+
 ## Snapshots without a window
 `cargo run -p chamfera-cli -- snapshot --sample --out shot.png` renders the viewport with the same renderer the app uses. Options:
 - `--stl part.stl` (repeatable) and `--script steps.json`;
@@ -38,6 +42,10 @@ It uses the GPU if there is one, else a software Vulkan driver (lavapipe, `mesa-
 - `construct.plane_offset {"base": "xy" | {"feature", "face"} | plane id, "distance"}`, `construct.plane_angle`, `construct.plane_midplane`, `construct.plane_three_points`, `construct.plane_tangent`, `construct.axis_cylinder`, `construct.axis_edge`, `construct.axis_two_points`, `construct.axis_two_planes`, `construct.point_vertex`, `construct.point_centre`, `construct.point_coordinates`; each replies with its `geometry` (origin, normal, direction or point) to check against hand values.
 - `construct.pick {x, y, width, height}` names the face, nearest edge and vertex under a pixel in the form these commands take.
 - `sketch.create {"plane": <plane id>}` sketches on a construction plane and follows it; `solid.revolve` and `solid.pattern_circular` take `axis_feature` (`examples/construction-planes.json`).
+
+## Manufacture (CAM)
+- `cam.setup`, `cam.tool_add`, `cam.op_add {"kind": "facing"|"contour"|"pocket"|"drill", "tool", ...}`, `cam.op_edit`, `cam.generate`, `cam.list`, `cam.post {"dialect": "linuxcnc"|"grbl", "path"}` (without `path` the G-code comes back as `gcode`). Faces are named like `4:top` (feature id, role); `examples/cam-plate.json` builds a pocketed plate and all four operations.
+- Check `cam.generate`'s reply (lengths, minutes, per-operation `error`) against values you worked out; a script that runs `cam.generate` opens the app in the MANUFACTURE tab with the toolpaths drawn.
 
 ## Commands and scripts
 - `chamfera-cli commands` lists every command; `chamfera-cli exec <id> '<json>'` runs one.

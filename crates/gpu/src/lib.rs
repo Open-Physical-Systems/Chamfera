@@ -5,7 +5,8 @@
 //! CLI and tests see exactly what users see.
 
 use chamfera_geom::{Point3, TriMesh};
-use chamfera_render::{Camera, MAX_OVERLAY_ITEMS, Projection, Scene, Theme, mat_mul};
+use chamfera_render::display::{EdgePass, FacePass, draw_order};
+use chamfera_render::{Camera, MAX_OVERLAY_ITEMS, Projection, Scene, SceneBody, Theme, mat_mul};
 use std::collections::HashMap;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -25,6 +26,13 @@ pub const EDGE_ANGLE: f64 = std::f64::consts::PI / 6.0;
 pub const MAX_SIZE: u32 = 8192;
 /// Overlay point size in logical pixels (multiplied by [`Frame::scale`]).
 pub const POINT_SIZE: f32 = 7.0;
+/// Dash period of hidden edges, in logical pixels (half dash, half gap).
+pub const DASH_PIXELS: f32 = 8.0;
+/// Hatch period on section caps, in physical pixels; the stripe is
+/// [`HATCH_STRIPE_PIXELS`] of it. The stripes run at 45 degrees: a pixel `(x, y)` is
+/// striped when `(x + y) mod HATCH_PIXELS < HATCH_STRIPE_PIXELS`.
+pub const HATCH_PIXELS: u32 = 10;
+pub const HATCH_STRIPE_PIXELS: u32 = 2;
 
 /// What to draw.
 pub struct Frame<'a> {
@@ -47,6 +55,15 @@ struct Globals {
     background_top: [f32; 4],
     background_bottom: [f32; 4],
     viewport: [f32; 4],
+    /// The section plane: xyz its normal (towards the removed side), w minus its distance
+    /// from the origin, so `dot(normal, p) + w > 0` is cut away.
+    section: [f32; 4],
+    /// x: 1 with a section; y: pixels per mm at the target (hidden-edge dashes); z: the
+    /// dash period in pixels; w: the hatch period in pixels.
+    display: [f32; 4],
+    section_cap: [f32; 4],
+    section_hatch: [f32; 4],
+    edge_hidden: [f32; 4],
 }
 
 #[repr(C)]
@@ -61,11 +78,13 @@ struct MeshVertex {
 struct LineVertex {
     position: [f32; 3],
     color: [f32; 4],
+    /// Length along the edge from its start (mm), for dashes; 0 for other lines.
+    arc: f32,
 }
 
 struct GpuBody {
-    /// Triangle and vertex counts of the mesh the buffers were built from.
-    key: (usize, usize),
+    /// Triangle, vertex and edge counts of the body the buffers were built from.
+    key: (usize, usize, usize),
     triangles: wgpu::Buffer,
     triangle_vertices: u32,
     edges: wgpu::Buffer,
@@ -173,7 +192,13 @@ pub struct ViewRenderer {
     body_layout: wgpu::BindGroupLayout,
     background: wgpu::RenderPipeline,
     mesh: wgpu::RenderPipeline,
+    /// Blended, without depth writes, for bodies that are not opaque.
+    mesh_transparent: wgpu::RenderPipeline,
+    /// Faces into the depth buffer only (wireframe with hidden lines removed).
+    mesh_depth_only: wgpu::RenderPipeline,
     edges: wgpu::RenderPipeline,
+    /// Edges behind faces, dashed (the hidden-edge style).
+    hidden_edges: wgpu::RenderPipeline,
     grid: wgpu::RenderPipeline,
     /// See-through fills (construction planes): hidden by bodies, hiding nothing.
     fills: wgpu::RenderPipeline,
@@ -244,7 +269,7 @@ impl ViewRenderer {
         });
 
         let mesh_attrs = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3];
-        let line_attrs = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x4];
+        let line_attrs = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x4, 2 => Float32];
         let mesh_buffers = [Some(wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<MeshVertex>() as u64,
             step_mode: wgpu::VertexStepMode::Vertex,
@@ -272,6 +297,7 @@ impl ViewRenderer {
             compare: wgpu::CompareFunction,
             bias: wgpu::DepthBiasState,
             blend: Option<wgpu::BlendState>,
+            write: wgpu::ColorWrites,
         }
         let make = |s: Spec| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -305,7 +331,7 @@ impl ViewRenderer {
                     targets: &[Some(wgpu::ColorTargetState {
                         format: COLOR_FORMAT,
                         blend: s.blend,
-                        write_mask: wgpu::ColorWrites::ALL,
+                        write_mask: s.write,
                     })],
                     compilation_options: Default::default(),
                 }),
@@ -314,6 +340,13 @@ impl ViewRenderer {
             })
         };
         let no_bias = wgpu::DepthBiasState::default();
+        let all = wgpu::ColorWrites::ALL;
+        // Faces are pushed slightly back so their edges draw cleanly on top.
+        let face_bias = wgpu::DepthBiasState {
+            constant: 2,
+            slope_scale: 1.5,
+            clamp: 0.0,
+        };
         let background = make(Spec {
             label: "background",
             layout: &base_layout,
@@ -325,8 +358,8 @@ impl ViewRenderer {
             compare: wgpu::CompareFunction::Always,
             bias: no_bias,
             blend: None,
+            write: all,
         });
-        // Faces are pushed slightly back so their edges draw cleanly on top.
         let mesh = make(Spec {
             label: "mesh",
             layout: &mesh_layout,
@@ -336,24 +369,62 @@ impl ViewRenderer {
             topology: wgpu::PrimitiveTopology::TriangleList,
             depth_write: true,
             compare: wgpu::CompareFunction::Less,
-            bias: wgpu::DepthBiasState {
-                constant: 2,
-                slope_scale: 1.5,
-                clamp: 0.0,
-            },
+            bias: face_bias,
             blend: None,
+            write: all,
+        });
+        let mesh_transparent = make(Spec {
+            label: "mesh (transparent)",
+            layout: &mesh_layout,
+            vs: "mesh_vs",
+            fs: "mesh_fs",
+            buffers: &mesh_buffers,
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            depth_write: false,
+            compare: wgpu::CompareFunction::Less,
+            bias: face_bias,
+            blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+            write: all,
+        });
+        let mesh_depth_only = make(Spec {
+            label: "mesh (depth only)",
+            layout: &mesh_layout,
+            vs: "mesh_vs",
+            fs: "mesh_fs",
+            buffers: &mesh_buffers,
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            depth_write: true,
+            compare: wgpu::CompareFunction::Less,
+            bias: face_bias,
+            blend: None,
+            write: wgpu::ColorWrites::empty(),
         });
         let edges = make(Spec {
             label: "edges",
             layout: &base_layout,
-            vs: "line_vs",
-            fs: "line_fs",
+            vs: "edge_vs",
+            fs: "edge_fs",
             buffers: &line_buffers,
             topology: wgpu::PrimitiveTopology::LineList,
             depth_write: true,
             compare: wgpu::CompareFunction::LessEqual,
             bias: no_bias,
             blend: None,
+            write: all,
+        });
+        // Only where a face is in front: the faces' depth bias keeps visible edges out.
+        let hidden_edges = make(Spec {
+            label: "hidden edges",
+            layout: &base_layout,
+            vs: "edge_vs",
+            fs: "hidden_edge_fs",
+            buffers: &line_buffers,
+            topology: wgpu::PrimitiveTopology::LineList,
+            depth_write: false,
+            compare: wgpu::CompareFunction::Greater,
+            bias: no_bias,
+            blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+            write: all,
         });
         let grid = make(Spec {
             label: "grid",
@@ -366,6 +437,7 @@ impl ViewRenderer {
             compare: wgpu::CompareFunction::LessEqual,
             bias: no_bias,
             blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+            write: all,
         });
         let fills = make(Spec {
             label: "fills",
@@ -378,6 +450,7 @@ impl ViewRenderer {
             compare: wgpu::CompareFunction::LessEqual,
             bias: no_bias,
             blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+            write: all,
         });
         // Overlays draw over everything, in order, blended.
         let overlay_lines = make(Spec {
@@ -391,6 +464,7 @@ impl ViewRenderer {
             compare: wgpu::CompareFunction::Always,
             bias: no_bias,
             blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+            write: all,
         });
         let overlay_points = make(Spec {
             label: "overlay points",
@@ -403,6 +477,7 @@ impl ViewRenderer {
             compare: wgpu::CompareFunction::Always,
             bias: no_bias,
             blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+            write: all,
         });
         // Previews blend over the bodies and hide behind them, without hiding anything.
         let preview = make(Spec {
@@ -416,6 +491,7 @@ impl ViewRenderer {
             compare: wgpu::CompareFunction::LessEqual,
             bias: no_bias,
             blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+            write: all,
         });
         let overlay_lines_depth = make(Spec {
             label: "overlay lines (depth tested)",
@@ -428,6 +504,7 @@ impl ViewRenderer {
             compare: wgpu::CompareFunction::LessEqual,
             bias: no_bias,
             blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+            write: all,
         });
         let overlay_points_depth = make(Spec {
             label: "overlay points (depth tested)",
@@ -440,6 +517,7 @@ impl ViewRenderer {
             compare: wgpu::CompareFunction::LessEqual,
             bias: no_bias,
             blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+            write: all,
         });
         ViewRenderer {
             globals,
@@ -447,7 +525,10 @@ impl ViewRenderer {
             body_layout,
             background,
             mesh,
+            mesh_transparent,
+            mesh_depth_only,
             edges,
+            hidden_edges,
             grid,
             fills,
             overlay_lines,
@@ -550,12 +631,16 @@ impl ViewRenderer {
         use wgpu::util::DeviceExt;
         self.bodies.retain(|id, _| scene.body(*id).is_some());
         for b in &scene.bodies {
-            let key = (b.mesh.triangles.len(), b.mesh.positions.len());
+            let key = (
+                b.mesh.triangles.len(),
+                b.mesh.positions.len(),
+                b.edges.len(),
+            );
             if self.bodies.get(&b.id).is_some_and(|g| g.key == key) {
                 continue;
             }
             let tris = mesh_vertices(&b.mesh);
-            let edges = edge_vertices(&b.mesh, theme.edge.linear());
+            let edges = edge_vertices(b, theme.edge.linear());
             let buffer = |label, contents: &[u8]| {
                 device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some(label),
@@ -622,6 +707,16 @@ impl ViewRenderer {
             0.0
         };
         let e = cam.eye();
+        let section = match frame.scene.display.section {
+            Some(s) => {
+                let n = s.normal;
+                let w = -(s.origin - Point3::ORIGIN).dot(n);
+                [n.x as f32, n.y as f32, n.z as f32, w as f32]
+            }
+            None => [0.0; 4],
+        };
+        let scale = frame.scale.clamp(0.25, 8.0);
+        let px_per_mm = f64::from(h) / (2.0 * cam.half_height()).max(1e-9);
         let globals = Globals {
             view_proj,
             eye: [e.x as f32, e.y as f32, e.z as f32, 1.0],
@@ -634,23 +729,37 @@ impl ViewRenderer {
             ],
             background_top: frame.theme.background_top.linear(),
             background_bottom: frame.theme.background_bottom.linear(),
-            viewport: [
-                w as f32,
-                h as f32,
-                POINT_SIZE * frame.scale.clamp(0.25, 8.0),
-                0.0,
+            viewport: [w as f32, h as f32, POINT_SIZE * scale, 0.0],
+            section,
+            display: [
+                if frame.scene.display.section.is_some() {
+                    1.0
+                } else {
+                    0.0
+                },
+                px_per_mm as f32,
+                DASH_PIXELS * scale,
+                HATCH_PIXELS as f32,
             ],
+            section_cap: frame.theme.section_cap.linear(),
+            section_hatch: frame.theme.section_hatch.linear(),
+            edge_hidden: frame.theme.edge_hidden.linear(),
         };
         queue.write_buffer(&self.globals, 0, bytemuck::bytes_of(&globals));
         for b in &frame.scene.bodies {
             if let Some(g) = self.bodies.get(&b.id) {
                 let selected = frame.scene.is_selected(b.id);
+                // A chosen colour is the body's own data; without one the theme decides.
                 let c = if selected {
                     frame.theme.body_selected
                 } else {
-                    frame.theme.body_colour(b.tint)
+                    b.appearance
+                        .colour
+                        .unwrap_or_else(|| frame.theme.body_colour(b.tint))
                 };
-                queue.write_buffer(&g.uniform, 0, bytemuck::cast_slice(&c.linear()));
+                let mut c = c.linear();
+                c[3] = b.appearance.opacity();
+                queue.write_buffer(&g.uniform, 0, bytemuck::cast_slice(&c));
             }
         }
         let grid = grid_vertices(cam, frame.theme, frame.scene.grid_spacing);
@@ -688,7 +797,7 @@ impl ViewRenderer {
             .scene
             .previews
             .iter()
-            .flat_map(|m| edge_vertices(m, frame.theme.sketch_preview.linear()))
+            .flat_map(|m| mesh_edge_vertices(m, frame.theme.sketch_preview.linear()))
             .collect();
         let preview = (!preview_tris.is_empty()).then(|| {
             let tris = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -745,25 +854,47 @@ impl ViewRenderer {
             pass.set_pipeline(&self.background);
             pass.draw(0..3, 0..1);
 
-            let visible: Vec<&GpuBody> = frame
-                .scene
-                .bodies
-                .iter()
-                .filter(|b| b.visible)
-                .filter_map(|b| self.bodies.get(&b.id))
-                .collect();
-            pass.set_pipeline(&self.mesh);
-            for g in &visible {
-                pass.set_bind_group(1, &g.bind, &[]);
-                pass.set_vertex_buffer(0, g.triangles.slice(..));
-                pass.draw(0..g.triangle_vertices, 0..1);
-            }
-            pass.set_pipeline(&self.edges);
-            for g in &visible {
-                if g.edge_vertices > 0 {
-                    pass.set_vertex_buffer(0, g.edges.slice(..));
-                    pass.draw(0..g.edge_vertices, 0..1);
+            let plan = frame.scene.display.style.plan();
+            let (opaque, transparent) = draw_order(frame.scene, cam);
+            let gpu = |ids: &[u32]| -> Vec<&GpuBody> {
+                ids.iter().filter_map(|id| self.bodies.get(id)).collect()
+            };
+            let (opaque, transparent) = (gpu(&opaque), gpu(&transparent));
+            let draw_faces = |pass: &mut wgpu::RenderPass, bodies: &[&GpuBody]| {
+                for g in bodies {
+                    pass.set_bind_group(1, &g.bind, &[]);
+                    pass.set_vertex_buffer(0, g.triangles.slice(..));
+                    pass.draw(0..g.triangle_vertices, 0..1);
                 }
+            };
+            match plan.faces {
+                FacePass::Shaded => {
+                    pass.set_pipeline(&self.mesh);
+                    draw_faces(&mut pass, &opaque);
+                }
+                FacePass::DepthOnly => {
+                    pass.set_pipeline(&self.mesh_depth_only);
+                    draw_faces(&mut pass, &opaque);
+                    draw_faces(&mut pass, &transparent);
+                }
+                FacePass::None => {}
+            }
+            for edge_pass in plan.edges {
+                pass.set_pipeline(match edge_pass {
+                    EdgePass::Visible => &self.edges,
+                    EdgePass::Hidden => &self.hidden_edges,
+                });
+                for g in opaque.iter().chain(&transparent) {
+                    if g.edge_vertices > 0 {
+                        pass.set_vertex_buffer(0, g.edges.slice(..));
+                        pass.draw(0..g.edge_vertices, 0..1);
+                    }
+                }
+            }
+            // Transparent faces last, back to front, over the edges seen through them.
+            if plan.faces == FacePass::Shaded && !transparent.is_empty() {
+                pass.set_pipeline(&self.mesh_transparent);
+                draw_faces(&mut pass, &transparent);
             }
             if !grid.is_empty() {
                 pass.set_pipeline(&self.grid);
@@ -852,10 +983,12 @@ fn overlay_vertices(
                 lines.push(LineVertex {
                     position: f3(*a),
                     color,
+                    arc: 0.0,
                 });
                 lines.push(LineVertex {
                     position: f3(*b),
                     color,
+                    arc: 0.0,
                 });
             }
         }
@@ -865,6 +998,7 @@ fn overlay_vertices(
                 points.push(LineVertex {
                     position: f3(*p),
                     color,
+                    arc: 0.0,
                 });
             }
         }
@@ -885,6 +1019,7 @@ fn fill_vertices(scene: &Scene, theme: &Theme) -> Vec<LineVertex> {
                 out.extend(t.iter().map(|p| LineVertex {
                     position: f3(*p),
                     color,
+                    arc: 0.0,
                 }));
             }
         }
@@ -911,22 +1046,50 @@ fn mesh_vertices(mesh: &TriMesh) -> Vec<MeshVertex> {
     out
 }
 
-fn edge_vertices(mesh: &TriMesh, color: [f32; 4]) -> Vec<LineVertex> {
-    mesh.feature_edges(EDGE_ANGLE)
-        .into_iter()
-        .flat_map(|[a, b]| {
-            [
-                LineVertex {
-                    position: f3(a),
-                    color,
-                },
-                LineVertex {
-                    position: f3(b),
-                    color,
-                },
-            ]
-        })
-        .collect()
+/// A mesh's sharp edges as vertex pairs, each carrying its length along the edge.
+fn mesh_edge_vertices(mesh: &TriMesh, color: [f32; 4]) -> Vec<LineVertex> {
+    let mut out = Vec::new();
+    for [a, b] in mesh.feature_edges(EDGE_ANGLE) {
+        out.push(LineVertex {
+            position: f3(a),
+            color,
+            arc: 0.0,
+        });
+        out.push(LineVertex {
+            position: f3(b),
+            color,
+            arc: (b - a).length() as f32,
+        });
+    }
+    out
+}
+
+/// A body's edge lines as vertex pairs: its exact B-rep edges when it has them, else the
+/// mesh's sharp edges. Each vertex carries its length along the edge, for dashes.
+fn edge_vertices(body: &SceneBody, color: [f32; 4]) -> Vec<LineVertex> {
+    if body.edges.is_empty() {
+        return mesh_edge_vertices(&body.mesh, color);
+    }
+    let vertex = |p: Point3, arc: f64| LineVertex {
+        position: f3(p),
+        color,
+        arc: arc as f32,
+    };
+    let mut out = Vec::new();
+    for line in &body.edges {
+        let mut arc = 0.0;
+        for pair in line.windows(2) {
+            let [a, b] = pair else { continue };
+            if !(a.is_valid() && b.is_valid()) {
+                continue;
+            }
+            let next = arc + (*b - *a).length();
+            out.push(vertex(*a, arc));
+            out.push(vertex(*b, next));
+            arc = next;
+        }
+    }
+    out
 }
 
 /// Grid spacing (mm) for a camera distance: a power of ten, about 1/10 of the distance.
@@ -981,6 +1144,7 @@ fn grid_vertices(cam: &Camera, theme: &Theme, spacing: Option<f64>) -> Vec<LineV
                 out.push(LineVertex {
                     position: [x as f32, y as f32, 0.0],
                     color: fade(x, y, c),
+                    arc: 0.0,
                 });
             }
         }
@@ -1016,6 +1180,7 @@ fn grid_vertices(cam: &Camera, theme: &Theme, spacing: Option<f64>) -> Vec<LineV
         out.push(LineVertex {
             position: p,
             color: z,
+            arc: 0.0,
         });
     }
     out
