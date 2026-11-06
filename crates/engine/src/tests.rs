@@ -164,6 +164,15 @@ fn hostile_params_never_panic() {
         json!({"constraint": {"kind": "teleport"}, "kind": "nonsense", "point": 1, "x": 1e300, "y": 0}),
         json!({"constraint": "horizontal", "value": 1e300, "sketch": 1, "curve": 1, "construction": true}),
         json!({"constraint": 1, "value": f64::MIN_POSITIVE, "point": 1, "x": 3, "y": 4, "snap": "yes"}),
+        json!({"name": "w", "expression": "w + 1", "constraint": 5, "unit": "length"}),
+        json!({"name": "w", "expression": "((((((", "constraint": 13}),
+        json!({"name": "w", "expression": 5, "constraint": 13, "value": 3}),
+        json!({"name": "q", "expression": "1e308 * 1e308", "constraint": 14}),
+        json!({"sketch": 1, "profiles": [{"x": 10, "y": 10}], "distance": "5", "feature": 99}),
+        json!({"sketch": 1, "profiles": [{"x": 1e300, "y": 10}], "distance": 0, "direction": "up"}),
+        json!({"sketch": 1, "profiles": "all", "distance": [1], "suppressed": "no", "feature": 0}),
+        json!({"sketch": 1, "profiles": [{"x": 10, "y": 10}], "distance": "1e7 mm"}),
+        json!({"sketch": 1, "profiles": [{"x": 10, "y": 10}], "distance": -8, "direction": "symmetric"}),
     ];
     for c in registry() {
         for p in &hostile {
@@ -451,10 +460,18 @@ fn a_finished_fully_constrained_sketch_draws_in_the_constrained_colour() {
         !styles.contains(&OverlayStyle::Sketch),
         "everything is determined: {styles:?}"
     );
+    assert!(
+        s.scene.overlays.iter().all(|o| o.on_top),
+        "the sketch being edited is on top"
+    );
     s.execute("sketch.finish", &json!({})).unwrap();
     assert!(
         s.scene.overlays.iter().all(|o| o.points.is_empty()),
         "points show only while editing"
+    );
+    assert!(
+        s.scene.overlays.iter().all(|o| !o.on_top),
+        "finished sketches are hidden by bodies in front"
     );
 }
 
@@ -547,4 +564,207 @@ fn a_design_with_a_sketch_saves_and_opens() {
         .unwrap();
     assert_eq!(t.doc, s.doc);
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn a_parameter_drives_a_sketch_dimension_through_the_commands() {
+    let mut s = Session::new();
+    s.execute(
+        "param.set",
+        &json!({"name": "width", "expression": "50 mm"}),
+    )
+    .unwrap();
+    let (_, lines) = dimensioned_rectangle(&mut s);
+    let width = s.doc.sketches[0]
+        .sketch
+        .constraints()
+        .find(|(_, c)| matches!(c, chamfera_sketch::Constraint::Length { line, .. } if u64::from(line.0) == lines[0]))
+        .map(|(id, _)| id.0)
+        .unwrap();
+    s.execute(
+        "sketch.dimension",
+        &json!({"constraint": width, "expression": "width * 2"}),
+    )
+    .unwrap();
+    let area = |s: &mut Session| {
+        s.execute("sketch.get", &json!({})).unwrap()["profiles"][0]["area"]
+            .as_f64()
+            .unwrap()
+    };
+    assert!((area(&mut s) - 3000.0).abs() < 1e-6, "100 x 30");
+    s.execute("param.set", &json!({"name": "width", "expression": "60"}))
+        .unwrap();
+    assert!((area(&mut s) - 3600.0).abs() < 1e-6, "120 x 30");
+    // In use: the parameter cannot be removed while the dimension refers to it.
+    assert!(
+        s.execute("param.remove", &json!({"name": "width"}))
+            .is_err()
+    );
+    // Undo goes back to width = 50, so 100 x 30.
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!((area(&mut s) - 3000.0).abs() < 1e-6);
+    // A plain value takes over from the expression.
+    s.execute(
+        "sketch.dimension",
+        &json!({"constraint": width, "value": 10}),
+    )
+    .unwrap();
+    s.execute("param.set", &json!({"name": "width", "expression": "99"}))
+        .unwrap();
+    assert!(
+        (area(&mut s) - 300.0).abs() < 1e-6,
+        "10 x 30, no longer driven"
+    );
+}
+
+/// The plate of `dimensioned_rectangle` (50 x 30, fixed at the origin) extruded.
+fn extruded_plate(s: &mut Session, distance: serde_json::Value) -> serde_json::Value {
+    dimensioned_rectangle(s);
+    s.execute("sketch.finish", &json!({})).unwrap();
+    s.execute(
+        "solid.extrude",
+        &json!({"sketch": 1, "profiles": [{"x": 25, "y": 15}], "distance": distance}),
+    )
+    .unwrap()
+}
+
+#[test]
+fn extruding_a_rectangle_makes_a_box_with_its_exact_volume() {
+    let mut s = Session::new();
+    let r = extruded_plate(&mut s, json!(10));
+    let v = r["solids"][0]["volume"].as_f64().unwrap();
+    assert!((v - 15_000.0).abs() < 1e-6, "{v}");
+    let a = r["solids"][0]["area"].as_f64().unwrap();
+    assert!((a - 4_600.0).abs() < 1e-6, "{a}");
+    // It is in the scene as a displayed body, and its mesh has the same volume.
+    let mesh_volume = s
+        .scene
+        .bodies
+        .iter()
+        .map(|b| b.mesh.signed_volume())
+        .sum::<f64>();
+    assert!((mesh_volume - 15_000.0).abs() < 1e-6, "{mesh_volume}");
+}
+
+#[test]
+fn a_parameter_drives_the_extrude_and_the_sketch_and_undo_follows() {
+    let mut s = Session::new();
+    s.execute("param.set", &json!({"name": "t", "expression": "10 mm"}))
+        .unwrap();
+    extruded_plate(&mut s, json!("t * 2"));
+    let volume = |s: &mut Session| {
+        s.execute("feature.list", &json!({})).unwrap()["features"][0]["solids"][0]["volume"]
+            .as_f64()
+            .unwrap()
+    };
+    assert!((volume(&mut s) - 30_000.0).abs() < 1e-6, "50 x 30 x 20");
+    s.execute("param.set", &json!({"name": "t", "expression": "4"}))
+        .unwrap();
+    assert!((volume(&mut s) - 12_000.0).abs() < 1e-6, "50 x 30 x 8");
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!((volume(&mut s) - 30_000.0).abs() < 1e-6);
+    // The sketch still drives it: a new width rebuilds the solid.
+    let width = s.doc.sketches[0]
+        .sketch
+        .constraints()
+        .find(|(_, c)| matches!(c, chamfera_sketch::Constraint::Length { value, .. } if *value == 50.0))
+        .map(|(id, _)| id.0)
+        .unwrap();
+    s.execute("sketch.edit", &json!({"sketch": 1})).unwrap();
+    s.execute(
+        "sketch.dimension",
+        &json!({"constraint": width, "value": 100}),
+    )
+    .unwrap();
+    assert!((volume(&mut s) - 60_000.0).abs() < 1e-6, "100 x 30 x 20");
+}
+
+#[test]
+fn a_hole_in_the_profile_goes_through_the_solid() {
+    // An 80 x 50 plate with a centred square 10 x 10 hole, 5 thick: (4000 - 100) * 5.
+    let mut s = Session::new();
+    s.execute("sketch.create", &json!({"plane": "xy"})).unwrap();
+    s.execute(
+        "sketch.rectangle",
+        &json!({"x1": 0, "y1": 0, "x2": 80, "y2": 50}),
+    )
+    .unwrap();
+    s.execute(
+        "sketch.rectangle",
+        &json!({"x1": 35, "y1": 20, "x2": 45, "y2": 30}),
+    )
+    .unwrap();
+    s.execute("sketch.finish", &json!({})).unwrap();
+    let r = s
+        .execute(
+            "solid.extrude",
+            &json!({"sketch": 1, "profiles": [{"x": 5, "y": 5}], "distance": 5}),
+        )
+        .unwrap();
+    let v = r["solids"][0]["volume"].as_f64().unwrap();
+    assert!((v - 19_500.0).abs() < 1e-6, "{v}");
+}
+
+#[test]
+fn directions_place_the_solid_on_either_side_or_both() {
+    for (direction, zmin, zmax) in [
+        ("normal", 0.0, 10.0),
+        ("reversed", -10.0, 0.0),
+        ("symmetric", -5.0, 5.0),
+    ] {
+        let mut s = Session::new();
+        dimensioned_rectangle(&mut s);
+        s.execute(
+            "solid.extrude",
+            &json!({"sketch": 1, "profiles": [{"x": 25, "y": 15}], "distance": 10, "direction": direction}),
+        )
+        .unwrap();
+        let b = s.scene.bodies[0].mesh.bounds().unwrap();
+        assert!(
+            (b.min.z - zmin).abs() < 1e-9 && (b.max.z - zmax).abs() < 1e-9,
+            "{direction}: {b:?}"
+        );
+    }
+}
+
+#[test]
+fn a_bad_extrude_changes_nothing_and_a_broken_profile_is_reported() {
+    let mut s = Session::new();
+    extruded_plate(&mut s, json!(10));
+    let before = s.doc.clone();
+    let bodies = s.scene.bodies.len();
+    // A seed outside every profile, and a zero distance, are refused.
+    for p in [
+        json!({"sketch": 1, "profiles": [{"x": 500, "y": 5}], "distance": 5}),
+        json!({"sketch": 1, "profiles": [{"x": 5, "y": 5}], "distance": 0}),
+    ] {
+        assert!(s.execute("solid.extrude", &p).is_err());
+        assert_eq!(s.doc, before);
+        assert_eq!(s.scene.bodies.len(), bodies);
+    }
+    // Deleting the sketch is refused while the extrude uses it.
+    assert!(s.execute("sketch.delete", &json!({"sketch": 1})).is_err());
+    // Suppressing hides the solid, unsuppressing brings it back.
+    s.execute("feature.edit", &json!({"feature": 2, "suppressed": true}))
+        .unwrap();
+    assert_eq!(s.solids().len(), 0);
+    s.execute("feature.edit", &json!({"feature": 2, "suppressed": false}))
+        .unwrap();
+    assert_eq!(s.solids().len(), 1);
+}
+
+#[test]
+fn clicking_inside_a_profile_finds_it() {
+    let mut s = Session::new();
+    dimensioned_rectangle(&mut s);
+    s.execute("view.standard", &json!({"view": "top"})).unwrap();
+    s.camera.target = chamfera_geom::Point3::new(25.0, 15.0, 0.0);
+    let r = s
+        .execute(
+            "solid.profile_at",
+            &json!({"x": 400, "y": 300, "width": 800, "height": 600}),
+        )
+        .unwrap();
+    assert_eq!(r["sketch"], 1);
+    assert!((r["area"].as_f64().unwrap() - 1500.0).abs() < 1e-6);
 }

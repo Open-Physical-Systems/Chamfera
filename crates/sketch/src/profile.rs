@@ -843,3 +843,184 @@ mod hole_tests {
         assert!((plate.area - (6000.0 - 5.0 * 25.0 * PI)).abs() < 1e-9);
     }
 }
+
+/// Segments per full turn when a loop is turned into a polyline for containment tests.
+const LOOP_SEGMENTS_PER_TURN: f64 = 128.0;
+
+impl Sketch {
+    /// A loop as a closed polyline (first point not repeated), arcs subdivided. Returns an
+    /// empty list if a curve of the loop is gone.
+    pub fn loop_polyline(&self, l: &ProfileLoop) -> Vec<Point2> {
+        let mut out = Vec::new();
+        for seg in &l.segments {
+            let mut pts: Vec<Point2> = match self.curve(seg.curve) {
+                Some(Curve::Line { start, end, .. }) => {
+                    match (self.point(*start), self.point(*end)) {
+                        (Some(a), Some(b)) => vec![a, b],
+                        _ => return Vec::new(),
+                    }
+                }
+                Some(Curve::Circle { centre, radius, .. }) => match self.point(*centre) {
+                    Some(c) => {
+                        let n = LOOP_SEGMENTS_PER_TURN as usize;
+                        (0..=n)
+                            .map(|k| {
+                                let a = TAU * k as f64 / n as f64;
+                                c + Vec2::new(a.cos(), a.sin()) * *radius
+                            })
+                            .collect()
+                    }
+                    None => return Vec::new(),
+                },
+                Some(Curve::Arc {
+                    centre, start, end, ..
+                }) => {
+                    let (Some(c), Some(s), Some(e)) =
+                        (self.point(*centre), self.point(*start), self.point(*end))
+                    else {
+                        return Vec::new();
+                    };
+                    let Some(Geo::Arc { c, r, a0, sweep }) = arc_geo(c, s, e) else {
+                        return Vec::new();
+                    };
+                    let n = ((LOOP_SEGMENTS_PER_TURN * sweep / TAU).ceil() as usize).max(2);
+                    (0..=n)
+                        .map(|k| {
+                            let a = a0 + sweep * k as f64 / n as f64;
+                            c + Vec2::new(a.cos(), a.sin()) * r
+                        })
+                        .collect()
+                }
+                None => return Vec::new(),
+            };
+            if seg.reversed {
+                pts.reverse();
+            }
+            // Each segment's last point is the next one's first.
+            pts.pop();
+            out.extend(pts);
+        }
+        out
+    }
+
+    /// The region that contains `p` (inside its outer loop, outside its holes), the
+    /// smallest if several do. This is how features refer to a profile across edits: by a
+    /// point inside it, not by an index that changes when the sketch changes.
+    pub fn region_at(&self, p: Point2) -> Option<Region> {
+        self.profiles()
+            .into_iter()
+            .filter(|r| self.region_contains(r, p))
+            .min_by(|a, b| a.area.total_cmp(&b.area))
+    }
+
+    /// True when `p` is inside the region's outer loop and outside all its holes.
+    pub fn region_contains(&self, r: &Region, p: Point2) -> bool {
+        polygon_contains(&self.loop_polyline(&r.outer), p)
+            && !r
+                .holes
+                .iter()
+                .any(|h| polygon_contains(&self.loop_polyline(h), p))
+    }
+
+    /// A point well inside the region (not on or near its boundary): the middle of the
+    /// widest inside span along a horizontal line through the region. Used to remember
+    /// which profile a feature uses.
+    pub fn region_interior_point(&self, r: &Region) -> Option<Point2> {
+        let loops: Vec<Vec<Point2>> = std::iter::once(&r.outer)
+            .chain(r.holes.iter())
+            .map(|l| self.loop_polyline(l))
+            .collect();
+        let outer = loops.first()?;
+        let (lo, hi) = outer
+            .iter()
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), p| {
+                (lo.min(p.y), hi.max(p.y))
+            });
+        let span = hi - lo;
+        if !span.is_finite() || span <= LINEAR_TOLERANCE {
+            return None;
+        }
+        let mut best: Option<(f64, Point2)> = None;
+        // Lines at fractions that avoid vertices on round numbers.
+        for k in 0..23 {
+            let y = lo + (hi - lo) * ((k as f64 + 0.5) / 23.0 + 0.003);
+            let mut xs: Vec<f64> = Vec::new();
+            for poly in &loops {
+                for i in 0..poly.len() {
+                    let (Some(a), Some(b)) = (poly.get(i), poly.get((i + 1) % poly.len())) else {
+                        continue;
+                    };
+                    if (a.y > y) != (b.y > y) {
+                        xs.push(a.x + (y - a.y) * (b.x - a.x) / (b.y - a.y));
+                    }
+                }
+            }
+            xs.sort_by(f64::total_cmp);
+            for pair in xs.chunks(2) {
+                if let [x0, x1] = pair {
+                    let w = x1 - x0;
+                    let mid = Point2::new((x0 + x1) * 0.5, y);
+                    if best.is_none_or(|(bw, _)| w > bw) && self.region_contains(r, mid) {
+                        best = Some((w, mid));
+                    }
+                }
+            }
+        }
+        best.map(|(_, p)| p)
+    }
+}
+
+/// Even-odd point-in-polygon test for a closed polyline.
+fn polygon_contains(poly: &[Point2], p: Point2) -> bool {
+    let n = poly.len();
+    let mut inside = false;
+    for i in 0..n {
+        let (Some(a), Some(b)) = (poly.get(i), poly.get((i + 1) % n)) else {
+            continue;
+        };
+        if line_crosses(*a, *b, p) {
+            inside = !inside;
+        }
+    }
+    inside
+}
+
+#[cfg(test)]
+mod region_lookup_tests {
+    use super::*;
+
+    /// An 80 x 50 plate with a centred r = 10 hole: the plate's interior point is not in
+    /// the hole (where a centroid would be), and looking it up finds the plate again; the
+    /// hole's centre finds the disc.
+    #[test]
+    fn interior_points_find_their_region_again() {
+        let mut s = Sketch::new();
+        let p: Vec<PointId> = [(0.0, 0.0), (80.0, 0.0), (80.0, 50.0), (0.0, 50.0)]
+            .iter()
+            .map(|(x, y)| s.add_point(Point2::new(*x, *y)).unwrap())
+            .collect();
+        for i in 0..4 {
+            s.add_line(p[i], p[(i + 1) % 4]).unwrap();
+        }
+        let c = s.add_point(Point2::new(40.0, 25.0)).unwrap();
+        s.add_circle(c, 10.0).unwrap();
+        let plate = s
+            .profiles()
+            .into_iter()
+            .max_by(|a, b| a.area.total_cmp(&b.area))
+            .unwrap();
+        let seed = s.region_interior_point(&plate).unwrap();
+        assert!(
+            seed.distance(Point2::new(40.0, 25.0)) > 10.0,
+            "{seed:?} is in the hole"
+        );
+        let again = s.region_at(seed).unwrap();
+        assert!((again.area - (4000.0 - 100.0 * PI)).abs() < 1e-9);
+        let disc = s.region_at(Point2::new(40.0, 25.0)).unwrap();
+        assert!((disc.area - 100.0 * PI).abs() < 1e-9);
+        assert!(s.region_at(Point2::new(200.0, 0.0)).is_none());
+        // The loop polyline of the plate has its 4 corners, the circle 128 points.
+        assert_eq!(s.loop_polyline(&plate.outer).len(), 4);
+        assert_eq!(s.loop_polyline(&disc.outer).len(), 128);
+    }
+}

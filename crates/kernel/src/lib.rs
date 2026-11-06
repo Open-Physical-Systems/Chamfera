@@ -29,6 +29,7 @@ mod planar;
 mod profile;
 mod surface;
 mod sweep;
+mod tessellate;
 mod topology;
 
 pub use curve3::{
@@ -43,6 +44,7 @@ pub use planar::{Arc2, Circle2, Line2, Segment2};
 pub use profile::{PROFILE_JOIN_TOLERANCE, Profile, ProfileEdge, polygon_edges};
 pub use surface::{Cone, Cylinder, Sphere, Surface, SurfaceParameters, SurfacePoint, Torus};
 pub use sweep::{extrude, extrude_symmetric, revolve};
+pub use tessellate::{BodyMesh, TessOptions, tessellate};
 pub use topology::{
     Body, Curve, CurveId, EdgeCurve, EdgeId, FaceId, HalfEdgeId, LoopId, MAX_NAME_LENGTH,
     MAX_PROFILE_VERTICES, MAX_TOPOLOGY_ENTITIES, Mvfs, PointId, PointOnFace,

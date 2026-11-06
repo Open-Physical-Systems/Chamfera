@@ -494,6 +494,7 @@ impl ChamferaApp {
             style: OverlayStyle::Preview,
             lines,
             points: vec![w(hover)],
+            on_top: true,
         })
     }
 
@@ -532,7 +533,14 @@ impl ChamferaApp {
             if Some(u64::from(l.constraint)) == editing_id {
                 continue;
             }
-            let text = display_value(&l.kind, l.value);
+            let expression = self
+                .session
+                .active_sketch()
+                .and_then(|f| f.expressions.get(&l.constraint).cloned());
+            let text = match &expression {
+                Some(e) => format!("{} = {e}", display_value(&l.kind, l.value)),
+                None => display_value(&l.kind, l.value),
+            };
             let galley = ui
                 .painter()
                 .layout_no_wrap(text.clone(), font.clone(), text_c);
@@ -550,7 +558,8 @@ impl ChamferaApp {
             ui.painter()
                 .galley(r.center() - galley.size() * 0.5, galley, text_c);
             if resp.clicked() {
-                self.sketch.editing = Some((u64::from(l.constraint), l.kind.clone(), text));
+                let start = expression.unwrap_or_else(|| display_value(&l.kind, l.value));
+                self.sketch.editing = Some((u64::from(l.constraint), l.kind.clone(), start));
             }
         }
         self.dimension_editor(ui, rect);
@@ -587,17 +596,14 @@ impl ChamferaApp {
                     if esc {
                         keep = false;
                     } else if enter {
-                        match parse_value(&kind, &text) {
-                            Some(v) => {
-                                self.run_sketch(
-                                    "sketch.dimension",
-                                    json!({ "constraint": id, "value": v }),
-                                );
-                                keep = false;
-                            }
-                            None => {
-                                self.message = Some((format!("{text:?} is not a number"), true));
-                            }
+                        // A plain number sets the value; anything else (a parameter, a
+                        // formula) becomes an expression the dimension follows.
+                        let params = match parse_value(&kind, &text) {
+                            Some(v) => json!({ "constraint": id, "value": v }),
+                            None => json!({ "constraint": id, "expression": text.trim() }),
+                        };
+                        if self.run_sketch("sketch.dimension", params).is_some() {
+                            keep = false;
                         }
                     }
                 });

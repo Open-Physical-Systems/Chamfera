@@ -5,6 +5,7 @@
 //! chamfera-cli exec <id> [json]         run one command, print its reply
 //! chamfera-cli run <script.json>        run a script: a JSON list of {"command", "params"}
 //! chamfera-cli snapshot [options]       render the viewport to a PNG, no window needed
+//! chamfera-cli mcp [--allow-path DIR]... serve MCP on stdio for AI agents (docs/mcp.md)
 //! ```
 
 use chamfera_engine::{Session, registry};
@@ -22,6 +23,7 @@ const USAGE: &str = "usage:
                         [--view iso|front|back|left|right|top|bottom]
                         [--projection perspective|orthographic] [--theme light|dark]
                         [--size 1280x800] [--pick X,Y]
+  chamfera-cli mcp [--allow-path DIR]...
   chamfera-cli --version";
 
 fn main() -> ExitCode {
@@ -57,12 +59,29 @@ fn run(args: &[String]) -> Result<(), String> {
         }
         Some("run") => run_script(args.get(1).ok_or(USAGE)?, &mut Session::new()).map(|_| ()),
         Some("snapshot") => snapshot(&args[1..]),
+        Some("mcp") => mcp(&args[1..]),
         Some("--version") => {
             println!("chamfera-cli {}", env!("CARGO_PKG_VERSION"));
             Ok(())
         }
         _ => Err(USAGE.to_owned()),
     }
+}
+
+/// `mcp`: serve the MCP server on stdio. File commands may use only the `--allow-path`
+/// folders and a scratch folder.
+fn mcp(args: &[String]) -> Result<(), String> {
+    let mut config = chamfera_mcp::Config::default();
+    let mut it = args.iter();
+    while let Some(flag) = it.next() {
+        match flag.as_str() {
+            "--allow-path" => config
+                .allow
+                .push(it.next().ok_or("--allow-path needs a folder")?.into()),
+            other => return Err(format!("unknown option {other:?}\n{USAGE}")),
+        }
+    }
+    chamfera_mcp::serve_stdio(config)
 }
 
 /// Runs each step in order and prints one JSON reply per line. Stops at the first failure.
