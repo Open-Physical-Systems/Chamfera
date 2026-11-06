@@ -26,29 +26,29 @@ impl Default for BrowserUi {
 
 /// How a tree row looks.
 #[derive(Default)]
-struct Row<'a> {
-    depth: usize,
+pub(crate) struct Row<'a> {
+    pub(crate) depth: usize,
     /// `Some(open)` for a section that folds.
-    fold: Option<bool>,
-    icon: Option<Icon>,
-    brand: bool,
-    text: &'a str,
+    pub(crate) fold: Option<bool>,
+    pub(crate) icon: Option<Icon>,
+    pub(crate) brand: bool,
+    pub(crate) text: &'a str,
     /// Small muted text after the name (a count, a state).
-    note: Option<&'a str>,
-    active: bool,
-    selected: bool,
-    dimmed: bool,
-    error: bool,
+    pub(crate) note: Option<&'a str>,
+    pub(crate) active: bool,
+    pub(crate) selected: bool,
+    pub(crate) dimmed: bool,
+    pub(crate) error: bool,
     /// An eye toggle on the right: `Some(visible)`.
-    eye: Option<bool>,
+    pub(crate) eye: Option<bool>,
 }
 
-struct RowResponse {
-    row: egui::Response,
-    eye: Option<egui::Response>,
+pub(crate) struct RowResponse {
+    pub(crate) row: egui::Response,
+    pub(crate) eye: Option<egui::Response>,
 }
 
-fn tree_row(ui: &mut Ui, look: Look, id: egui::Id, row: &Row) -> RowResponse {
+pub(crate) fn tree_row(ui: &mut Ui, look: Look, id: egui::Id, row: &Row) -> RowResponse {
     let width = ui.available_width();
     let (rect, _) = ui.allocate_exact_size(vec2(width, ROW_HEIGHT), Sense::hover());
     let response = ui.interact(rect, id, Sense::click());
@@ -146,7 +146,7 @@ fn tree_row(ui: &mut Ui, look: Look, id: egui::Id, row: &Row) -> RowResponse {
 }
 
 impl ChamferaApp {
-    fn section(
+    pub(crate) fn section(
         &mut self,
         ui: &mut Ui,
         key: &'static str,
@@ -244,6 +244,8 @@ impl ChamferaApp {
             }
         }
 
+        self.browser_construction(ui);
+
         let sketches: Vec<(u32, String, bool)> = self
             .session
             .doc
@@ -286,6 +288,13 @@ impl ChamferaApp {
                 });
                 if can_edit && row.double_clicked() {
                     self.edit_sketch(id);
+                }
+                // F2 on the row renames the sketch (in a box over the row).
+                if row.hovered()
+                    && !ui.ctx().egui_wants_keyboard_input()
+                    && ui.input(|i| i.key_pressed(egui::Key::F2))
+                {
+                    self.start_rename(id, row.rect, false);
                 }
                 let entries = vec![
                     Entry::Item {

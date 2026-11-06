@@ -57,10 +57,18 @@ Ids: the rectangle is points 1-4, lines 5-8, constraints 9-12; fix, lengths 13-1
 
 ## 6. Check, then look
 - Compare `dof`, `status` and every profile area from `sketch.get` or `design_summary` with your hand values. DOF above 0: something can still move, add a constraint. `OverConstrained`: remove the redundant constraint (`sketch.remove {"constraint": id}`).
+- For solids, `inspect.mass {"body": name}` (centre of mass, inertia) and `inspect.measure {"a", "b"}` (distance, angle between faces or edges) check them against your hand values.
 - `snapshot {"view": "top"}` and look at the image: the outline, the holes where you meant them, construction lines in their own colour. Fully determined geometry of the sketch being edited is drawn in the constrained colour.
 - `sketch.finish` ends editing; `design.save {"path": "plate.chamfera"}` saves into the scratch folder (or a path inside an `--allow-path` folder).
 
-## 7. Assemblies: components and joints
+## 7. Solids from the sketch
+`solid.extrude {"sketch", "profiles": [{x, y}], "distance"}` pulls the profiles containing those points out of the sketch. Options: `direction` (`normal`, `reversed`, `symmetric`, `two_sides` with `distance2`), `extent` (`through_all` past every body, or `to_object` with `to: {feature, face}` or `{plane: {origin, normal}}`, parallel only), `start_offset`, `taper` (degrees, positive narrows) and `operation` (`join`, `cut`, `intersect`). Work the volume out by hand first: a taper `θ` over height `h` moves each edge in by `h tan θ`, so a rectangle's volume is the prismatoid `h/6 (A₀ + 4 A_mid + A_top)`. `solid.extrude_preview` takes the same parameters and replies with the volume and bounds without changing the design.
+
+## 8. Symmetric parts, moves and copies
+- Model half, then `solid.mirror {"bodies": ["Extrude1"], "plane": "yz", "operation": "join"}`: the half joined to its mirror is one symmetric body of twice the volume (`examples/mirrored-bracket.json`). `plane` is `xy`, `xz`, `yz`, `{"feature", "face"}` or `{"origin", "normal"}`; `features: [id]` mirrors a feature's own shape instead, with that operation (a mirrored cut drills the twin hole).
+- `solid.move {"bodies": [...], "dx", "dy", "dz"}`, or `"angle"` with `"axis"` and `"origin"`, or `"from"` and `"to"`; `"copy": true` keeps the original. Without `bodies`, both act on the selected body. Body names are the `name` in each solid of a reply.
+
+## 9. Assemblies: components and joints
 - `component.new {"name"}` makes an empty component and activates it: features you add next go into it. `component.new {"from_bodies": [feature]}` moves existing bodies (by the feature that made each) into a new one. `component.activate {"component": 0}` returns to the root (the design).
 - `component.move {"component", "transform": {"translate": {x, y, z}, "rotate": {"axis", "angle"}}}` places a component; `component.copy` makes a linked copy; `component.ground` fixes one in place.
 - `joint.create {"type": "revolute", "a": {...}, "b": {...}, "value": 60}` moves B so its origin meets A's, then turns or slides it by the value (degrees, or mm for a slider). An origin is `{"face": "2:top"}`, `{"edge": ...}` or `{"component", "point", "axis"}` in that component's coordinates. `joint.set_value` drives it; joints that would close a loop are refused.

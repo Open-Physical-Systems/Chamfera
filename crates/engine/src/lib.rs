@@ -7,9 +7,12 @@
 pub mod assembly;
 pub mod box_select;
 pub mod cmd;
+pub mod construct;
+pub mod hole;
 mod imported;
 mod params;
 pub mod pick_filter;
+pub mod projection;
 pub mod script;
 pub mod sketching;
 pub mod solids;
@@ -105,6 +108,7 @@ impl Session {
             || id.starts_with("feature.")
             || id.starts_with("component.")
             || id.starts_with("joint.")
+            || id.starts_with("construct.")
             || id == "body.import_step";
         if (spec.mutates && (result.is_err() || !rebuilt_itself))
             || (id.starts_with("edit.") && result.is_ok())

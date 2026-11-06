@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+  <!-- Chamfera interface icon: plane at angle. Original artwork, MIT OR Apache-2.0. -->
+  <polygon points="2.75,20 6.25,15.5 21.25,15.5 17.75,20" stroke="#2B313B"/>
+  <polygon points="2.75,20 6.75,4.75 21.25,4.75 17.75,20" stroke="#E8770E"/>
+  <path stroke="#2B313B" d="M12.25 20a4.5 4.5 0 0 1 1.25-4"/>
+</svg>

@@ -1,5 +1,6 @@
-//! `sketch.*`: create sketches on a plane, draw, constrain, dimension and drag, and the
-//! sketch tools (trim, extend, split, fillet, chamfer, offset, mirror, patterns).
+//! `sketch.*`: create sketches on a plane, draw, constrain, dimension and drag, the
+//! sketch tools (trim, extend, split, fillet, chamfer, offset, mirror, patterns), the
+//! shapes (polygon, slot, ellipse) and projecting model edges into a sketch.
 //!
 //! Drawing commands act on the active sketch (`sketch.create` or `sketch.edit` makes one
 //! active, `sketch.finish` ends editing). Coordinates are sketch-plane millimetres.
@@ -58,8 +59,10 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         id: "sketch.constrain",
         label: "Add Constraint",
-        params: "constraint: object (required) - {\"kind\": ..., ids and value}, for example \
-                 {\"kind\": \"horizontal\", \"line\": 3} or {\"kind\": \"length\", \"line\": 3, \"value\": 50}",
+        params: "constraint: object (required unless constraints) - {\"kind\": ..., ids and value}, for example \
+                 {\"kind\": \"horizontal\", \"line\": 3} or {\"kind\": \"length\", \"line\": 3, \"value\": 50}\n\
+                 constraints: array of objects (optional) - several at once, as one undo step; each one that \
+                 would conflict or is already implied is left out and counted in `skipped`",
         mutates: true,
         run: constrain,
     },
@@ -81,7 +84,8 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         id: "sketch.create",
         label: "Create Sketch",
-        params: "plane: string (required) - xy, xz or yz (top, front, right)",
+        params: "plane: string or integer (required) - xy, xz or yz (top, front, right), or the\n\
+                 id of a construction plane (the sketch follows it when the design rebuilds)",
         mutates: true,
         run: create,
     },
@@ -131,6 +135,26 @@ pub static COMMANDS: &[CommandSpec] = &[
         params: "sketch: integer (required)",
         mutates: false,
         run: edit,
+    },
+    CommandSpec {
+        id: "sketch.ellipse",
+        label: "Ellipse",
+        params: "cx, cy: number (required) - centre\n\
+                 x, y: number (required) - the end of one axis\n\
+                 minor: number (required) - mm, the other semi-axis",
+        mutates: true,
+        run: ellipse,
+    },
+    CommandSpec {
+        id: "sketch.ellipse.arc",
+        label: "Elliptical Arc",
+        params: "cx, cy: number (required) - centre\n\
+                 x, y: number (required) - the end of one axis\n\
+                 minor: number (required) - mm, the other semi-axis\n\
+                 x1, y1, x2, y2: number (required) - start and end directions from the centre; \
+                 the arc runs counter-clockwise",
+        mutates: true,
+        run: ellipse_arc,
     },
     CommandSpec {
         id: "sketch.extend",
@@ -232,6 +256,26 @@ pub static COMMANDS: &[CommandSpec] = &[
         run: point,
     },
     CommandSpec {
+        id: "sketch.polygon",
+        label: "Polygon",
+        params: "cx, cy: number (required) - centre\n\
+                 x, y: number (required) - a corner, or with circumscribed the middle of a side\n\
+                 sides: integer (required) - 3 to 64\n\
+                 mode: string (optional) - inscribed (default) or circumscribed",
+        mutates: true,
+        run: polygon,
+    },
+    CommandSpec {
+        id: "sketch.project",
+        label: "Project",
+        params: "edges: list of strings (optional) - model edges by name (solid.edges)\n\
+                 faces: list of {feature: integer, face: string} (optional) - every edge of each face\n\
+                 pick: {x, y, width, height} (optional) - the edge under this pixel, else that face's edges\n\
+                 linked: boolean (optional) - follow the edges when the model rebuilds (default true)",
+        mutates: true,
+        run: project,
+    },
+    CommandSpec {
         id: "sketch.rectangle",
         label: "Rectangle",
         params: "x1, y1, x2, y2: number (required) - opposite corners",
@@ -278,6 +322,16 @@ pub static COMMANDS: &[CommandSpec] = &[
         params: "(none)",
         mutates: false,
         run: select_clear,
+    },
+    CommandSpec {
+        id: "sketch.slot",
+        label: "Slot",
+        params: "x1, y1, x2, y2: number (required) - the centres of the round ends, or with \
+                 overall their tips\n\
+                 width: number (required) - mm\n\
+                 overall: boolean (optional) - the points are the tips (default false)",
+        mutates: true,
+        run: slot,
     },
     CommandSpec {
         id: "sketch.split",
@@ -341,6 +395,30 @@ fn solve(sk: &mut Sketch) -> Result<(), CommandError> {
 }
 
 fn create(s: &mut Session, p: &Value) -> CmdResult {
+    if p.get("plane").is_some_and(Value::is_number) {
+        let construct = params::req_id(p, "plane")?;
+        let plane = match s.constructs().get(&construct) {
+            Some(crate::construct::Constructed::Plane { frame, .. }) => *frame,
+            _ => {
+                return Err(bad(format!(
+                    "feature {construct} is not a built construction plane"
+                )));
+            }
+        };
+        let id = s.doc.add_sketch(plane)?;
+        if let Ok(f) = s.doc.sketch_mut(id) {
+            f.on_plane = Some(construct);
+        }
+        s.active_sketch = Some(id);
+        s.sketch_selection.clear();
+        let n = plane.z();
+        return Ok(json!({
+            "sketch": id,
+            "plane": construct,
+            "origin": plane.origin(),
+            "normal": { "x": n.x, "y": n.y, "z": n.z },
+        }));
+    }
     let plane = match params::req_str(p, "plane")? {
         "xy" => Frame::XY,
         "xz" => Frame::XZ,
@@ -401,6 +479,14 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
     s.active_sketch = Some(id);
     s.sketch_selection.clear();
     Ok(json!({ "sketch": id }))
+}
+
+fn rename(s: &mut Session, p: &Value) -> CmdResult {
+    let id = params::req_id(p, "sketch")?;
+    let name = params::req_display_name(p, "name")?;
+    s.doc.sketch(id)?;
+    s.doc.rename_item(id, &name)?;
+    Ok(json!({ "sketch": id, "name": s.doc.sketch(id)?.name }))
 }
 
 fn finish(s: &mut Session, p: &Value) -> CmdResult {
@@ -548,7 +634,13 @@ fn arc(s: &mut Session, p: &Value) -> CmdResult {
     Ok(json!({ "curve": id.0, "centre": centre.0, "start": start.0, "end": end.0 }))
 }
 
+/// At most this many constraints in one `sketch.constrain` call.
+const MAX_CONSTRAINT_BATCH: usize = 64;
+
 fn constrain(s: &mut Session, p: &Value) -> CmdResult {
+    if let Some(list) = p.get("constraints") {
+        return constrain_many(s, list);
+    }
     let raw = p
         .get("constraint")
         .ok_or_else(|| bad("`constraint` is required"))?;
@@ -557,6 +649,39 @@ fn constrain(s: &mut Session, p: &Value) -> CmdResult {
     let sk = active(s)?;
     let id = sk.try_add_constraint(c).map_err(sketch_err)?;
     Ok(json!({ "constraint": id.0 }))
+}
+
+/// Adds each constraint that solves and is not implied by the others; skips the rest.
+fn constrain_many(s: &mut Session, list: &Value) -> CmdResult {
+    let items = list
+        .as_array()
+        .ok_or_else(|| bad("`constraints` must be an array of constraint objects"))?;
+    if items.len() > MAX_CONSTRAINT_BATCH {
+        return Err(bad(format!(
+            "`constraints` takes at most {MAX_CONSTRAINT_BATCH} constraints"
+        )));
+    }
+    let mut parsed = Vec::with_capacity(items.len());
+    for (k, raw) in items.iter().enumerate() {
+        let c: Constraint = serde_json::from_value(raw.clone())
+            .map_err(|e| bad(format!("`constraints[{k}]`: {e}")))?;
+        parsed.push(c);
+    }
+    let sk = active(s)?;
+    let mut added = Vec::new();
+    let mut skipped = 0;
+    for c in parsed {
+        match sk.try_add_constraint(c) {
+            Ok((id, report)) if report.dof.redundant.contains(&id) => {
+                // Already implied: keep the sketch free of redundant constraints.
+                sk.remove_constraint(id).map_err(sketch_err)?;
+                skipped += 1;
+            }
+            Ok((id, _)) => added.push(id.0),
+            Err(_) => skipped += 1,
+        }
+    }
+    Ok(json!({ "constraints": added, "skipped": skipped }))
 }
 
 fn dimension(s: &mut Session, p: &Value) -> CmdResult {
@@ -744,6 +869,11 @@ fn dimension_selection(s: &mut Session, p: &Value) -> CmdResult {
                 curve: *c,
                 value: sk.radius(*c).ok_or_else(|| bad("the arc has no radius"))?,
             },
+            Some(Curve::Ellipse { .. } | Curve::EllipticalArc { .. }) => {
+                return Err(bad(
+                    "dimension an ellipse by its points: select its centre and an axis end",
+                ));
+            }
             None => return Err(bad("the selected curve is gone")),
         },
         ([a, b], []) => Constraint::Distance {
@@ -832,13 +962,6 @@ fn plane_point(s: &mut Session, p: &Value) -> CmdResult {
     Ok(json!({ "x": at.x, "y": at.y }))
 }
 
-fn rename(s: &mut Session, p: &Value) -> CmdResult {
-    let id = params::req_id(p, "sketch")?;
-    let name = params::req_display_name(p, "name")?;
-    s.doc.sketch_mut(id)?.name = name.clone();
-    Ok(json!({ "sketch": id, "name": name }))
-}
-
 fn select(s: &mut Session, p: &Value) -> CmdResult {
     let (x, y, w, h) = params::pixel(p)?;
     let add = match p.get("add") {
@@ -912,7 +1035,8 @@ fn get(s: &mut Session, p: &Value) -> CmdResult {
 
 // ----- sketch tools (`chamfera_sketch::ToolOp`) -----
 
-/// Forgets the expressions of dimensions that are gone, so the design still loads.
+/// Forgets the expressions of dimensions and the projections of curves that are gone, so
+/// the design still loads.
 fn prune_expressions(s: &mut Session) -> Result<(), CommandError> {
     let id = active_id(s)?;
     let f = s.doc.sketch_mut(id)?;
@@ -922,6 +1046,8 @@ fn prune_expressions(s: &mut Session) -> Result<(), CommandError> {
             .constraint(chamfera_sketch::ConstraintId(*c))
             .is_some()
     });
+    f.projections
+        .retain(|p| sketch.curve(CurveId(p.curve)).is_some());
     Ok(())
 }
 
@@ -1159,4 +1285,162 @@ fn arc_tangent(s: &mut Session, p: &Value) -> CmdResult {
     let from = PointId(params::req_id(p, "point")?);
     let to = pt(p, "x", "y")?;
     run_tool(s, ToolOp::TangentArc { from, to })
+}
+
+// ----- shapes and projection -----
+
+fn polygon(s: &mut Session, p: &Value) -> CmdResult {
+    let centre = pt(p, "cx", "cy")?;
+    let corner = pt(p, "x", "y")?;
+    let sides = count(p, "sides", chamfera_sketch::MAX_POLYGON_SIDES)?;
+    let inscribed = match params::opt_str(p, "mode")? {
+        None | Some("inscribed") => true,
+        Some("circumscribed") => false,
+        Some(other) => {
+            return Err(bad(format!(
+                "unknown mode {other:?}: use inscribed or circumscribed"
+            )));
+        }
+    };
+    run_tool(
+        s,
+        ToolOp::Polygon {
+            centre,
+            corner,
+            sides,
+            inscribed,
+        },
+    )
+}
+
+fn slot(s: &mut Session, p: &Value) -> CmdResult {
+    let start = pt(p, "x1", "y1")?;
+    let end = pt(p, "x2", "y2")?;
+    let width = params::req_f64(p, "width")?;
+    let overall = match p.get("overall") {
+        None | Some(Value::Null) => false,
+        Some(_) => params::req_bool(p, "overall")?,
+    };
+    run_tool(
+        s,
+        ToolOp::Slot {
+            start,
+            end,
+            width,
+            overall,
+        },
+    )
+}
+
+fn ellipse(s: &mut Session, p: &Value) -> CmdResult {
+    let centre = pt(p, "cx", "cy")?;
+    let major = pt(p, "x", "y")?;
+    let minor = params::req_f64(p, "minor")?;
+    run_tool(
+        s,
+        ToolOp::Ellipse {
+            centre,
+            major,
+            minor,
+        },
+    )
+}
+
+fn ellipse_arc(s: &mut Session, p: &Value) -> CmdResult {
+    let centre = pt(p, "cx", "cy")?;
+    let major = pt(p, "x", "y")?;
+    let minor = params::req_f64(p, "minor")?;
+    let start = pt(p, "x1", "y1")?;
+    let end = pt(p, "x2", "y2")?;
+    run_tool(
+        s,
+        ToolOp::EllipticalArc {
+            centre,
+            major,
+            minor,
+            start,
+            end,
+        },
+    )
+}
+
+/// Most edges and faces one projection takes.
+const MAX_PROJECT_ITEMS: usize = 10_000;
+
+/// The edge names a projection asks for: listed edges, every edge of listed faces, or the
+/// edge (else the face) under a pixel.
+fn project_targets(s: &Session, p: &Value) -> Result<Vec<String>, CommandError> {
+    let mut names: Vec<String> = Vec::new();
+    match p.get("edges") {
+        None | Some(Value::Null) => {}
+        Some(Value::Array(list)) if list.len() <= MAX_PROJECT_ITEMS => {
+            for e in list {
+                let name = e
+                    .as_str()
+                    .ok_or_else(|| bad("`edges` must be a list of edge names"))?;
+                if name.chars().count() > chamfera_doc::MAX_EDGE_REF_LEN {
+                    return Err(bad("an edge name is too long"));
+                }
+                names.push(name.to_owned());
+            }
+        }
+        Some(_) => return Err(bad("`edges` must be a list of edge names")),
+    }
+    match p.get("faces") {
+        None | Some(Value::Null) => {}
+        Some(Value::Array(list)) if list.len() <= MAX_PROJECT_ITEMS => {
+            for f in list {
+                let feature = params::req_id(f, "feature")?;
+                let face = params::req_str(f, "face")?;
+                names.extend(s.face_edge_refs(feature, face).map_err(bad)?);
+            }
+        }
+        Some(_) => return Err(bad("`faces` must be a list of {feature, face}")),
+    }
+    match p.get("pick") {
+        None | Some(Value::Null) => {}
+        Some(pick) => {
+            let (x, y) = (params::req_f64(pick, "x")?, params::req_f64(pick, "y")?);
+            let (w, h) = (
+                params::req_f64(pick, "width")?,
+                params::req_f64(pick, "height")?,
+            );
+            if let Some((_, _, name)) = s.edge_at(x, y, w, h) {
+                names.push(name);
+            } else if let Some((feature, face, _)) = s.face_at(x, y, w, h) {
+                names.extend(s.face_edge_refs(feature, &face).map_err(bad)?);
+            } else {
+                return Err(CommandError::Unavailable(
+                    "there is no model edge or face under that pixel".into(),
+                ));
+            }
+        }
+    }
+    if names.is_empty() {
+        return Err(bad("give `edges`, `faces` or `pick`"));
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    names.retain(|n| seen.insert(n.clone()));
+    Ok(names)
+}
+
+fn project(s: &mut Session, p: &Value) -> CmdResult {
+    let sketch = active_id(s)?;
+    let linked = match p.get("linked") {
+        None | Some(Value::Null) => true,
+        Some(_) => params::req_bool(p, "linked")?,
+    };
+    let names = project_targets(s, p)?;
+    let made = s
+        .project_edges(sketch, &names, linked)
+        .map_err(CommandError::Unavailable)?;
+    let projected: Vec<Value> = made
+        .iter()
+        .map(|(edge, curve)| json!({ "edge": edge, "curve": curve }))
+        .collect();
+    Ok(json!({
+        "projected": projected,
+        "curves": made.iter().map(|m| m.1).collect::<Vec<_>>(),
+        "linked": linked,
+    }))
 }
