@@ -520,7 +520,37 @@ pub struct SolidSummary {
     /// Coordinates of the distinct vertices, in instance-number order.
     pub vertex_points: Vec<[f64; 3]>,
     pub face_names: Vec<String>,
+    /// Each face's surface: its entity name (`PLANE`, `CYLINDRICAL_SURFACE`, ...) and
+    /// numeric parameters (radii, angles) after the placement, in face order.
+    pub face_surfaces: Vec<SurfaceSummary>,
 }
+
+/// A face's surface as written.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct SurfaceSummary {
+    pub entity: String,
+    /// The placement: origin, axis (z) and ref_direction (x).
+    pub origin: [f64; 3],
+    pub axis: [f64; 3],
+    pub ref_direction: [f64; 3],
+    /// The numbers after the placement (radius; radius and semi-angle; major and minor
+    /// radius), in order.
+    pub values: Vec<f64>,
+    /// `select_outer` of a `DEGENERATE_TOROIDAL_SURFACE`.
+    pub select_outer: Option<bool>,
+    /// The face's `same_sense`.
+    pub same_sense: bool,
+}
+
+/// Entities a face may lie on, with how many numbers follow the placement.
+const SURFACES: [(&str, usize); 6] = [
+    ("PLANE", 0),
+    ("CYLINDRICAL_SURFACE", 1),
+    ("CONICAL_SURFACE", 2),
+    ("SPHERICAL_SURFACE", 1),
+    ("TOROIDAL_SURFACE", 2),
+    ("DEGENERATE_TOROIDAL_SURFACE", 2),
+];
 
 /// The B-rep content of a file.
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -623,9 +653,10 @@ fn solid(v: &View<'_>, id: u64) -> Result<SolidSummary, IoError> {
         let fp = v.get(f, "ADVANCED_FACE")?;
         s.faces += 1;
         s.face_names.push(as_string(param(fp, 0, f)?, f)?);
-        as_bool(param(fp, 3, f)?, f)?;
+        let same_sense = as_bool(param(fp, 3, f)?, f)?;
         let surface = as_ref(param(fp, 2, f)?, f)?;
-        v.get_any(surface)?;
+        s.face_surfaces
+            .push(surface_summary(v, surface, same_sense)?);
         for b in as_list(param(fp, 1, f)?, f)? {
             let b = as_ref(b, f)?;
             let (kind, bp) = v.get_any(b)?;
@@ -698,6 +729,61 @@ fn solid(v: &View<'_>, id: u64) -> Result<SolidSummary, IoError> {
     s.vertices = vertices.len();
     s.vertex_points = vertices.into_values().collect();
     Ok(s)
+}
+
+/// A face's surface: one of [`SURFACES`] on an `AXIS2_PLACEMENT_3D`, with positive
+/// finite radii (and, for a cone, `0 <= radius`, `0 < semi_angle < π/2`; for a
+/// degenerate torus `major < minor`).
+fn surface_summary(v: &View<'_>, id: u64, same_sense: bool) -> Result<SurfaceSummary, IoError> {
+    let (name, ps) = v.get_any(id)?;
+    let Some(&(_, count)) = SURFACES.iter().find(|(n, _)| *n == name) else {
+        return Err(err(format!("#{id} is a {name}, not a surface we know")));
+    };
+    let place = as_ref(param(ps, 1, id)?, id)?;
+    let pp = v.get(place, "AXIS2_PLACEMENT_3D")?;
+    let point = |i: usize| -> Result<[f64; 3], IoError> {
+        let r = as_ref(param(pp, i, place)?, place)?;
+        let (kind, cp) = v.get_any(r)?;
+        if (i == 1) != (kind == "CARTESIAN_POINT") || (i > 1 && kind != "DIRECTION") {
+            return Err(err(format!("#{r} has the wrong type in a placement")));
+        }
+        match as_list(param(cp, 1, r)?, r)? {
+            [x, y, z] => Ok([as_real(x, r)?, as_real(y, r)?, as_real(z, r)?]),
+            _ => Err(err(format!("#{r} should have three coordinates"))),
+        }
+    };
+    let mut values = Vec::with_capacity(count);
+    for i in 0..count {
+        let x = as_real(param(ps, 2 + i, id)?, id)?;
+        if !x.is_finite() || x < 0.0 {
+            return Err(err(format!(
+                "#{id}: its numbers must be finite and not negative"
+            )));
+        }
+        values.push(x);
+    }
+    let select_outer = if name == "DEGENERATE_TOROIDAL_SURFACE" {
+        Some(as_bool(param(ps, 4, id)?, id)?)
+    } else {
+        None
+    };
+    let ok = match (name, values.as_slice()) {
+        ("CONICAL_SURFACE", [_, a]) => *a > 0.0 && *a < std::f64::consts::FRAC_PI_2,
+        ("DEGENERATE_TOROIDAL_SURFACE", [big, small]) => *big > 0.0 && big < small,
+        (_, vs) => vs.iter().all(|x| *x > 0.0),
+    };
+    if !ok {
+        return Err(err(format!("#{id}: its radii or angle are out of range")));
+    }
+    Ok(SurfaceSummary {
+        entity: name.to_owned(),
+        origin: point(1)?,
+        axis: point(2)?,
+        ref_direction: point(3)?,
+        values,
+        select_outer,
+        same_sense,
+    })
 }
 
 fn vertex_point(v: &View<'_>, id: u64) -> Result<[f64; 3], IoError> {
