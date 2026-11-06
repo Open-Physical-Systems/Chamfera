@@ -122,6 +122,11 @@ impl ChamferaApp {
         let mut cancel = false;
         let command = tool.command();
         let title = label(command);
+        let icon = if tool.chamfer {
+            Icon::Chamfer
+        } else {
+            Icon::Fillet
+        };
         let ready = !tool.edges.is_empty() && !tool.size.trim().is_empty();
         egui::Window::new(title)
             .id(egui::Id::unique("blend dialog"))
@@ -135,7 +140,7 @@ impl ChamferaApp {
             .resizable(false)
             .show(ctx, |ui| {
                 ui.set_width(WIDTH);
-                if widgets::dialog_title(ui, look, Icon::Edit, title) {
+                if widgets::dialog_title(ui, look, icon, title) {
                     cancel = true;
                 }
                 widgets::dialog_body(ui, |ui| {

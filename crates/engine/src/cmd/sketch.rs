@@ -1,4 +1,5 @@
-//! `sketch.*`: create sketches on a plane, draw, constrain, dimension and drag.
+//! `sketch.*`: create sketches on a plane, draw, constrain, dimension and drag, and the
+//! sketch tools (trim, extend, split, fillet, chamfer, offset, mirror, patterns).
 //!
 //! Drawing commands act on the active sketch (`sketch.create` or `sketch.edit` makes one
 //! active, `sketch.finish` ends editing). Coordinates are sketch-plane millimetres.
@@ -8,7 +9,7 @@ use super::CommandSpec;
 use crate::sketching::SketchItem;
 use crate::{CmdResult, CommandError, Session, params};
 use chamfera_geom::{Frame, Point2};
-use chamfera_sketch::{Constraint, Curve, CurveId, PointId, Sketch};
+use chamfera_sketch::{Constraint, Curve, CurveId, OffsetCorners, PointId, Sketch, ToolOp};
 use serde_json::{Value, json};
 
 pub static COMMANDS: &[CommandSpec] = &[
@@ -20,6 +21,32 @@ pub static COMMANDS: &[CommandSpec] = &[
                  x2, y2: number (required) - end direction; the arc runs counter-clockwise",
         mutates: true,
         run: arc,
+    },
+    CommandSpec {
+        id: "sketch.arc.tangent",
+        label: "Tangent Arc",
+        params: "point: integer (required) - the free end of a line or arc to continue from\n\
+                 x, y: number (required) - where the arc ends",
+        mutates: true,
+        run: arc_tangent,
+    },
+    CommandSpec {
+        id: "sketch.arc.three_point",
+        label: "3-Point Arc",
+        params: "x1, y1: number (required) - start\n\
+                 x2, y2: number (required) - a point the arc passes through\n\
+                 x3, y3: number (required) - end",
+        mutates: true,
+        run: arc_three_point,
+    },
+    CommandSpec {
+        id: "sketch.chamfer",
+        label: "Sketch Chamfer",
+        params: "point: integer (required) - the corner where two lines meet\n\
+                 distance: number (required) - mm along each line from the corner\n\
+                 distance2: number (optional) - mm along the second line instead",
+        mutates: true,
+        run: chamfer,
     },
     CommandSpec {
         id: "sketch.circle",
@@ -106,6 +133,22 @@ pub static COMMANDS: &[CommandSpec] = &[
         run: edit,
     },
     CommandSpec {
+        id: "sketch.extend",
+        label: "Extend",
+        params: "curve: integer (required) - a line or arc\n\
+                 x, y: number (required) - near the end to lengthen; it runs on to the first curve it meets",
+        mutates: true,
+        run: extend,
+    },
+    CommandSpec {
+        id: "sketch.fillet",
+        label: "Sketch Fillet",
+        params: "point: integer (required) - the corner where two lines meet\n\
+                 radius: number (required) - mm",
+        mutates: true,
+        run: fillet,
+    },
+    CommandSpec {
         id: "sketch.finish",
         label: "Finish Sketch",
         params: "(none)",
@@ -127,6 +170,45 @@ pub static COMMANDS: &[CommandSpec] = &[
                  snap: boolean (optional) - add horizontal or vertical within 2 degrees",
         mutates: true,
         run: line,
+    },
+    CommandSpec {
+        id: "sketch.mirror",
+        label: "Mirror",
+        params: "axis: integer (required) - the line to mirror in\n\
+                 curves, points: array of integers (optional) - what to mirror; default the selection",
+        mutates: true,
+        run: mirror,
+    },
+    CommandSpec {
+        id: "sketch.offset",
+        label: "Offset",
+        params: "curves: array of integers (optional) - a chain of lines and arcs, one curve for its \
+                 whole chain, or a circle; default the selection\n\
+                 distance: number (required) - mm; positive outward (closed chains) or to the left\n\
+                 x, y: number (optional) - offset toward this side instead\n\
+                 corners: string (optional) - sharp (default) or round\n\
+                 dimension: boolean (optional) - add the distance dimensions (default true)",
+        mutates: true,
+        run: offset,
+    },
+    CommandSpec {
+        id: "sketch.pattern.circular",
+        label: "Circular Pattern",
+        params: "curves, points: array of integers (optional) - what to copy; default the selection\n\
+                 cx, cy: number (required) - the centre\n\
+                 count: integer (required) - instances in all, 2 or more\n\
+                 angle: number (optional) - radians to spread them over; default a full turn",
+        mutates: true,
+        run: pattern_circular,
+    },
+    CommandSpec {
+        id: "sketch.pattern.rectangular",
+        label: "Rectangular Pattern",
+        params: "curves, points: array of integers (optional) - what to copy; default the selection\n\
+                 columns: integer (required) - instances along X; dx: number (required) - spacing\n\
+                 rows: integer (optional) - instances along Y, default 1; dy: number (optional) - spacing",
+        mutates: true,
+        run: pattern_rectangular,
     },
     CommandSpec {
         id: "sketch.pick",
@@ -157,6 +239,14 @@ pub static COMMANDS: &[CommandSpec] = &[
         run: rectangle,
     },
     CommandSpec {
+        id: "sketch.rectangle.centre",
+        label: "Centre Rectangle",
+        params: "cx, cy: number (required) - centre\n\
+                 x, y: number (required) - a corner",
+        mutates: true,
+        run: rectangle_centre,
+    },
+    CommandSpec {
         id: "sketch.remove",
         label: "Delete",
         params: "(none) - deletes the selected points and curves, and what depends on them\n\
@@ -178,6 +268,22 @@ pub static COMMANDS: &[CommandSpec] = &[
         params: "(none)",
         mutates: false,
         run: select_clear,
+    },
+    CommandSpec {
+        id: "sketch.split",
+        label: "Split",
+        params: "curve: integer (optional) - split this curve and the curves crossing it where they \
+                 cross; without it every crossing in the sketch, so overlapping shapes give their regions",
+        mutates: true,
+        run: split,
+    },
+    CommandSpec {
+        id: "sketch.trim",
+        label: "Trim",
+        params: "curve: integer (required)\n\
+                 x, y: number (required) - on the piece to remove, between the neighbouring crossings",
+        mutates: true,
+        run: trim,
     },
 ];
 
@@ -677,6 +783,7 @@ fn remove(s: &mut Session, p: &Value) -> CmdResult {
         let sk = active(s)?;
         sk.remove_constraint(id).map_err(sketch_err)?;
         solve(sk)?;
+        prune_expressions(s)?;
         return Ok(json!({ "removed_constraint": id.0 }));
     }
     let (points, curves) = selection(s);
@@ -695,6 +802,7 @@ fn remove(s: &mut Session, p: &Value) -> CmdResult {
         }
     }
     solve(sk)?;
+    prune_expressions(s)?;
     s.sketch_selection.clear();
     Ok(json!({ "removed_points": points.len(), "removed_curves": curves.len() }))
 }
@@ -782,4 +890,255 @@ fn get(s: &mut Session, p: &Value) -> CmdResult {
         "expressions": f.expressions,
         "selection": s.sketch_selection,
     }))
+}
+
+// ----- sketch tools (`chamfera_sketch::ToolOp`) -----
+
+/// Forgets the expressions of dimensions that are gone, so the design still loads.
+fn prune_expressions(s: &mut Session) -> Result<(), CommandError> {
+    let id = active_id(s)?;
+    let f = s.doc.sketch_mut(id)?;
+    let sketch = &f.sketch;
+    f.expressions.retain(|c, _| {
+        sketch
+            .constraint(chamfera_sketch::ConstraintId(*c))
+            .is_some()
+    });
+    Ok(())
+}
+
+/// Runs a tool on the active sketch and reports what it made, changed and removed.
+fn run_tool(s: &mut Session, op: ToolOp) -> CmdResult {
+    let sk = active(s)?;
+    let r = sk.apply_tool(&op).map_err(sketch_err)?;
+    prune_expressions(s)?;
+    if let Some(f) = s.active_sketch() {
+        let keep: Vec<SketchItem> = s
+            .sketch_selection
+            .iter()
+            .copied()
+            .filter(|i| match i {
+                SketchItem::Point(p) => f.sketch.point(PointId(*p)).is_some(),
+                SketchItem::Curve(c) => f.sketch.curve(CurveId(*c)).is_some(),
+            })
+            .collect();
+        s.sketch_selection = keep;
+    }
+    let curves = |v: &[CurveId]| v.iter().map(|c| c.0).collect::<Vec<_>>();
+    let points = |v: &[PointId]| v.iter().map(|c| c.0).collect::<Vec<_>>();
+    Ok(json!({
+        "created_curves": curves(&r.created_curves),
+        "changed_curves": curves(&r.changed_curves),
+        "removed_curves": curves(&r.removed_curves),
+        "created_points": points(&r.created_points),
+        "removed_points": points(&r.removed_points),
+        "created_constraints": r.created_constraints.iter().map(|c| c.0).collect::<Vec<_>>(),
+        "removed_constraints": r.removed_constraints.iter().map(|c| c.0).collect::<Vec<_>>(),
+    }))
+}
+
+/// A list of ids, or `None` when the key is missing.
+fn opt_ids(p: &Value, key: &str) -> Result<Option<Vec<u32>>, CommandError> {
+    match p.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Array(items)) => {
+            if items.len() > chamfera_sketch::MAX_CURVES + chamfera_sketch::MAX_POINTS {
+                return Err(bad(format!("`{key}` is too long")));
+            }
+            items
+                .iter()
+                .map(|v| {
+                    v.as_u64()
+                        .and_then(|n| u32::try_from(n).ok())
+                        .ok_or_else(|| bad(format!("`{key}` must list whole number ids")))
+                })
+                .collect::<Result<Vec<_>, _>>()
+                .map(Some)
+        }
+        Some(_) => Err(bad(format!("`{key}` must be a list of ids"))),
+    }
+}
+
+/// The curves and points to act on: the lists given, or else the selection.
+fn targets(s: &Session, p: &Value) -> Result<(Vec<CurveId>, Vec<PointId>), CommandError> {
+    let curves = opt_ids(p, "curves")?;
+    let points = opt_ids(p, "points")?;
+    if curves.is_none() && points.is_none() {
+        let (points, curves) = selection(s);
+        return Ok((curves, points));
+    }
+    Ok((
+        curves
+            .unwrap_or_default()
+            .into_iter()
+            .map(CurveId)
+            .collect(),
+        points
+            .unwrap_or_default()
+            .into_iter()
+            .map(PointId)
+            .collect(),
+    ))
+}
+
+/// A whole number from 0 to `max`.
+fn count(p: &Value, key: &str, max: u32) -> Result<u32, CommandError> {
+    let v = params::req_f64(p, key)?;
+    if v.fract() != 0.0 || !(0.0..=f64::from(max)).contains(&v) {
+        return Err(bad(format!(
+            "`{key}` must be a whole number from 0 to {max}"
+        )));
+    }
+    Ok(v as u32)
+}
+
+fn trim(s: &mut Session, p: &Value) -> CmdResult {
+    let curve = CurveId(params::req_id(p, "curve")?);
+    let at = pt(p, "x", "y")?;
+    run_tool(s, ToolOp::Trim { curve, at })
+}
+
+fn extend(s: &mut Session, p: &Value) -> CmdResult {
+    let curve = CurveId(params::req_id(p, "curve")?);
+    let at = pt(p, "x", "y")?;
+    run_tool(s, ToolOp::Extend { curve, at })
+}
+
+fn split(s: &mut Session, p: &Value) -> CmdResult {
+    let curve = match p.get("curve") {
+        None | Some(Value::Null) => None,
+        Some(_) => Some(CurveId(params::req_id(p, "curve")?)),
+    };
+    run_tool(s, ToolOp::Split { curve })
+}
+
+fn fillet(s: &mut Session, p: &Value) -> CmdResult {
+    let corner = PointId(params::req_id(p, "point")?);
+    let radius = params::req_f64(p, "radius")?;
+    run_tool(s, ToolOp::Fillet { corner, radius })
+}
+
+fn chamfer(s: &mut Session, p: &Value) -> CmdResult {
+    let corner = PointId(params::req_id(p, "point")?);
+    let distance = params::req_f64(p, "distance")?;
+    let distance2 = params::opt_f64(p, "distance2")?;
+    run_tool(
+        s,
+        ToolOp::Chamfer {
+            corner,
+            distance,
+            distance2,
+        },
+    )
+}
+
+fn offset(s: &mut Session, p: &Value) -> CmdResult {
+    let (curves, _) = targets(s, p)?;
+    let distance = params::req_f64(p, "distance")?;
+    let side = match (p.get("x"), p.get("y")) {
+        (None | Some(Value::Null), None | Some(Value::Null)) => None,
+        _ => Some(pt(p, "x", "y")?),
+    };
+    let corners = match params::opt_str(p, "corners")? {
+        None | Some("sharp") => OffsetCorners::Sharp,
+        Some("round") => OffsetCorners::Round,
+        Some(other) => {
+            return Err(bad(format!(
+                "unknown corners {other:?}: use sharp or round"
+            )));
+        }
+    };
+    let dimension = match p.get("dimension") {
+        None | Some(Value::Null) => true,
+        Some(_) => params::req_bool(p, "dimension")?,
+    };
+    run_tool(
+        s,
+        ToolOp::Offset {
+            curves,
+            distance,
+            side,
+            corners,
+            dimension,
+        },
+    )
+}
+
+fn mirror(s: &mut Session, p: &Value) -> CmdResult {
+    let axis = CurveId(params::req_id(p, "axis")?);
+    let (curves, points) = targets(s, p)?;
+    run_tool(
+        s,
+        ToolOp::Mirror {
+            curves,
+            points,
+            axis,
+        },
+    )
+}
+
+fn pattern_rectangular(s: &mut Session, p: &Value) -> CmdResult {
+    let (curves, points) = targets(s, p)?;
+    let limit = chamfera_sketch::MAX_PATTERN_COPIES as u32 + 1;
+    let columns = count(p, "columns", limit)?;
+    let dx = params::req_f64(p, "dx")?;
+    let rows = match p.get("rows") {
+        None | Some(Value::Null) => 1,
+        Some(_) => count(p, "rows", limit)?,
+    };
+    let dy = params::opt_f64(p, "dy")?.unwrap_or(0.0);
+    run_tool(
+        s,
+        ToolOp::RectangularPattern {
+            curves,
+            points,
+            columns,
+            rows,
+            dx,
+            dy,
+        },
+    )
+}
+
+fn pattern_circular(s: &mut Session, p: &Value) -> CmdResult {
+    let (curves, points) = targets(s, p)?;
+    let centre = pt(p, "cx", "cy")?;
+    let count = count(p, "count", chamfera_sketch::MAX_PATTERN_COPIES as u32 + 1)?;
+    let angle = params::opt_f64(p, "angle")?.unwrap_or(std::f64::consts::TAU);
+    run_tool(
+        s,
+        ToolOp::CircularPattern {
+            curves,
+            points,
+            centre,
+            count,
+            angle,
+        },
+    )
+}
+
+fn rectangle_centre(s: &mut Session, p: &Value) -> CmdResult {
+    let centre = pt(p, "cx", "cy")?;
+    let corner = pt(p, "x", "y")?;
+    run_tool(s, ToolOp::CentreRectangle { centre, corner })
+}
+
+fn arc_three_point(s: &mut Session, p: &Value) -> CmdResult {
+    let start = pt(p, "x1", "y1")?;
+    let through = pt(p, "x2", "y2")?;
+    let end = pt(p, "x3", "y3")?;
+    run_tool(
+        s,
+        ToolOp::ThreePointArc {
+            start,
+            through,
+            end,
+        },
+    )
+}
+
+fn arc_tangent(s: &mut Session, p: &Value) -> CmdResult {
+    let from = PointId(params::req_id(p, "point")?);
+    let to = pt(p, "x", "y")?;
+    run_tool(s, ToolOp::TangentArc { from, to })
 }

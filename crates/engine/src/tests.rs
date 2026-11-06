@@ -178,6 +178,18 @@ fn hostile_params_never_panic() {
         json!({"sketch": 1, "profiles": [{"x": 10, "y": 10}], "axis": 1, "angle": [0]}),
         json!({"feature": 2, "face": "top", "x": 0, "y": 0, "z": 0}),
         json!({"feature": 99, "face": "nowhere", "x": 1e300, "y": 0, "z": f64::NAN}),
+        json!({"curve": 1, "x": 5, "y": 0, "point": 1, "radius": 1, "distance": 1}),
+        json!({"curve": 6, "x": 1e300, "y": f64::NAN, "point": 2, "radius": 1e300, "distance": -1}),
+        json!({"curves": [1, 2, 3, 4], "distance": 2, "corners": "round", "dimension": false}),
+        json!({"curves": [5], "distance": 1e9, "x": 10, "y": 10, "corners": 5}),
+        json!({"curves": "all", "points": [-1], "axis": 1, "distance": 0}),
+        json!({"curves": [1, 99999], "points": [2], "axis": 6}),
+        json!({"curves": [5], "cx": 0, "cy": 0, "count": 1e9, "angle": 1e300}),
+        json!({"curves": [5], "cx": 0, "cy": 0, "count": 3, "angle": -0.5}),
+        json!({"curves": [5], "columns": 1001, "rows": 1001, "dx": 1, "dy": 1}),
+        json!({"curves": [5], "columns": 2, "rows": -1, "dx": 0, "dy": f64::NAN}),
+        json!({"x1": 0, "y1": 0, "x2": 1, "y2": 1, "x3": 2, "y3": 2, "cx": 0, "cy": 0}),
+        json!({"point": 3, "x": 50, "y": 0, "distance2": 0, "curve": null}),
         json!({"sketch": 1, "profiles": [{"x": 10, "y": 10}], "distance": 5, "operation": "cut"}),
         json!({"sketch": 1, "profiles": [{"x": 10, "y": 10}], "distance": 5, "operation": "smash"}),
         json!({"feature": 2, "count": 1e9, "direction": {"x": 0, "y": 0, "z": 0}, "spacing": 0}),
@@ -1379,6 +1391,278 @@ fn clicking_near_a_visible_edge_picks_it_and_fillets_it() {
     let v = exact_volume(&r);
     let removed = (1.0 - std::f64::consts::FRAC_PI_4) * 4.0 * 50.0;
     assert!((v - (15_000.0 - removed)).abs() < 1e-6, "{v}");
+}
+
+// ----- sketch tools -----
+
+fn ids(v: &serde_json::Value) -> Vec<u64> {
+    v.as_array()
+        .unwrap()
+        .iter()
+        .map(|x| x.as_u64().unwrap())
+        .collect()
+}
+
+fn sketch_areas(s: &mut Session) -> Vec<f64> {
+    let g = s.execute("sketch.get", &json!({})).unwrap();
+    let mut a: Vec<f64> = g["profiles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["area"].as_f64().unwrap())
+        .collect();
+    a.sort_by(f64::total_cmp);
+    a
+}
+
+#[test]
+fn filleting_a_dimensioned_rectangle_keeps_it_fully_constrained_and_undo_restores_it() {
+    let mut s = Session::new();
+    s.execute(
+        "param.set",
+        &json!({"name": "width", "expression": "50 mm"}),
+    )
+    .unwrap();
+    let (pts, lines) = dimensioned_rectangle(&mut s);
+    let width = s.doc.sketches[0]
+        .sketch
+        .constraints()
+        .find(|(_, c)| matches!(c, chamfera_sketch::Constraint::Length { line, .. } if u64::from(line.0) == lines[0]))
+        .map(|(id, _)| id.0)
+        .unwrap();
+    s.execute(
+        "sketch.dimension",
+        &json!({"constraint": width, "expression": "width"}),
+    )
+    .unwrap();
+    for p in &pts {
+        let r = s
+            .execute("sketch.fillet", &json!({"point": p, "radius": 5}))
+            .unwrap();
+        assert_eq!(ids(&r["created_curves"]).len(), 1);
+    }
+    let g = s.execute("sketch.get", &json!({})).unwrap();
+    // The side lengths became distances to the kept sharp corners: still no freedom.
+    assert_eq!(g["dof"], 0);
+    assert_eq!(g["status"], "FullyConstrained");
+    let filleted = |w: f64| w * 30.0 - (4.0 - std::f64::consts::PI) * 25.0;
+    let a = sketch_areas(&mut s);
+    assert!((a[0] - filleted(50.0)).abs() < 1e-6, "{a:?}");
+    // The width parameter still drives the bottom side through its corners.
+    s.execute("param.set", &json!({"name": "width", "expression": "60"}))
+        .unwrap();
+    let a = sketch_areas(&mut s);
+    assert!((a[0] - filleted(60.0)).abs() < 1e-6, "{a:?}");
+    for _ in 0..5 {
+        s.execute("edit.undo", &json!({})).unwrap();
+    }
+    let a = sketch_areas(&mut s);
+    assert!((a[0] - 1500.0).abs() < 1e-6, "{a:?}");
+}
+
+#[test]
+fn trim_extend_and_split_through_the_commands() {
+    let mut s = Session::new();
+    s.execute("sketch.create", &json!({"plane": "xy"})).unwrap();
+    let h = s
+        .execute(
+            "sketch.line",
+            &json!({"x1": -10, "y1": 0, "x2": 10, "y2": 0}),
+        )
+        .unwrap()["curve"]
+        .as_u64()
+        .unwrap();
+    s.execute(
+        "sketch.line",
+        &json!({"x1": 0, "y1": -10, "x2": 0, "y2": 10}),
+    )
+    .unwrap();
+    let r = s
+        .execute("sketch.trim", &json!({"curve": h, "x": 5, "y": 0}))
+        .unwrap();
+    assert_eq!(ids(&r["changed_curves"]), vec![h]);
+    let g = s.execute("sketch.get", &json!({})).unwrap();
+    assert_eq!(g["curves"].as_array().unwrap().len(), 2);
+    // Its free end has nothing ahead of it: refused, nothing changes.
+    assert!(
+        s.execute("sketch.extend", &json!({"curve": h, "x": -9, "y": 0}))
+            .is_err()
+    );
+    // A line at x = -15 gives it something to reach: the end moves from -10 to -15.
+    s.execute(
+        "sketch.line",
+        &json!({"x1": -15, "y1": -5, "x2": -15, "y2": 5}),
+    )
+    .unwrap();
+    s.execute("sketch.extend", &json!({"curve": h, "x": -9, "y": 0}))
+        .unwrap();
+    let g = s.execute("sketch.get", &json!({})).unwrap();
+    assert!(
+        g["points"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|q| (q["x"].as_f64().unwrap() + 15.0).abs() < 1e-9
+                && q["y"].as_f64().unwrap().abs() < 1e-9)
+    );
+    // Two crossing squares split into their three regions; undo puts them back.
+    let mut s = Session::new();
+    s.execute("sketch.create", &json!({"plane": "xy"})).unwrap();
+    s.execute(
+        "sketch.rectangle",
+        &json!({"x1": 0, "y1": 0, "x2": 20, "y2": 20}),
+    )
+    .unwrap();
+    s.execute(
+        "sketch.rectangle",
+        &json!({"x1": 10, "y1": 10, "x2": 30, "y2": 30}),
+    )
+    .unwrap();
+    s.execute("sketch.split", &json!({})).unwrap();
+    let a = sketch_areas(&mut s);
+    assert_eq!(a.len(), 3);
+    assert!((a[0] - 100.0).abs() < 1e-6 && (a[2] - 300.0).abs() < 1e-6);
+    s.execute("edit.undo", &json!({})).unwrap();
+    let g = s.execute("sketch.get", &json!({})).unwrap();
+    assert_eq!(g["curves"].as_array().unwrap().len(), 8);
+}
+
+#[test]
+fn offset_mirror_and_patterns_through_the_commands() {
+    let mut s = Session::new();
+    s.execute("sketch.create", &json!({"plane": "xy"})).unwrap();
+    let r = s
+        .execute(
+            "sketch.rectangle",
+            &json!({"x1": 0, "y1": 0, "x2": 50, "y2": 30}),
+        )
+        .unwrap();
+    let sides = ids(&r["curves"]);
+    s.execute(
+        "sketch.offset",
+        &json!({"curves": [sides[0]], "distance": 2, "corners": "round"}),
+    )
+    .unwrap();
+    // The ring around the original: 2 · (50 + 30) · 2 + π 2².
+    let a = sketch_areas(&mut s);
+    assert!(
+        (a[0] - (320.0 + 4.0 * std::f64::consts::PI)).abs() < 1e-6,
+        "{a:?}"
+    );
+    assert!(
+        s.execute(
+            "sketch.offset",
+            &json!({"curves": [sides[0]], "distance": 2, "corners": "bevel"}),
+        )
+        .is_err()
+    );
+
+    // Mirror a circle in a vertical line, using the selection.
+    let mut s = Session::new();
+    s.execute("sketch.create", &json!({"plane": "xy"})).unwrap();
+    let axis = s
+        .execute(
+            "sketch.line",
+            &json!({"x1": 0, "y1": -10, "x2": 0, "y2": 10}),
+        )
+        .unwrap()["curve"]
+        .as_u64()
+        .unwrap();
+    let c = s
+        .execute("sketch.circle", &json!({"cx": 4, "cy": 2, "radius": 1}))
+        .unwrap()["curve"]
+        .as_u64()
+        .unwrap();
+    s.sketch_selection = vec![crate::sketching::SketchItem::Curve(c as u32)];
+    let r = s.execute("sketch.mirror", &json!({"axis": axis})).unwrap();
+    let copy = ids(&r["created_curves"]);
+    assert_eq!(copy.len(), 1);
+    let g = s.execute("sketch.get", &json!({})).unwrap();
+    let centre = g["curves"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|k| k["curve"] == copy[0])
+        .unwrap()["geometry"]["centre"]
+        .clone();
+    let p = g["points"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|q| q["point"] == centre)
+        .unwrap();
+    assert!((p["x"].as_f64().unwrap() + 4.0).abs() < 1e-9);
+    assert!((p["y"].as_f64().unwrap() - 2.0).abs() < 1e-9);
+
+    // Six around the origin, then a 3 x 2 grid of the original.
+    let r = s
+        .execute(
+            "sketch.pattern.circular",
+            &json!({"curves": [c], "cx": 0, "cy": 0, "count": 6}),
+        )
+        .unwrap();
+    assert_eq!(ids(&r["created_curves"]).len(), 5);
+    let r = s
+        .execute(
+            "sketch.pattern.rectangular",
+            &json!({"curves": [c], "columns": 3, "dx": 10, "rows": 2, "dy": 5}),
+        )
+        .unwrap();
+    assert_eq!(ids(&r["created_curves"]).len(), 5);
+    assert!(
+        s.execute(
+            "sketch.pattern.rectangular",
+            &json!({"curves": [c], "columns": 2.5, "dx": 10}),
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn centre_rectangle_arc_and_chamfer_commands_draw_exact_shapes() {
+    let mut s = Session::new();
+    s.execute("sketch.create", &json!({"plane": "xy"})).unwrap();
+    s.execute(
+        "sketch.rectangle.centre",
+        &json!({"cx": 10, "cy": 10, "x": 15, "y": 13}),
+    )
+    .unwrap();
+    let a = sketch_areas(&mut s);
+    assert!((a[0] - 60.0).abs() < 1e-6, "10 x 6");
+    let r = s
+        .execute(
+            "sketch.arc.three_point",
+            &json!({"x1": 5, "y1": 0, "x2": 0, "y2": 5, "x3": -5, "y3": 0}),
+        )
+        .unwrap();
+    assert_eq!(ids(&r["created_curves"]).len(), 1);
+    let l = s
+        .execute(
+            "sketch.line",
+            &json!({"x1": 30, "y1": 0, "x2": 40, "y2": 0}),
+        )
+        .unwrap();
+    let r = s
+        .execute(
+            "sketch.arc.tangent",
+            &json!({"point": l["end"], "x": 40, "y": 10}),
+        )
+        .unwrap();
+    assert_eq!(ids(&r["created_curves"]).len(), 1);
+    // A chamfer on the centre rectangle's corner (15, 13): 60 - 2 · 2 / 2.
+    let g = s.execute("sketch.get", &json!({})).unwrap();
+    let corner = g["points"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|q| q["x"] == 15.0 && q["y"] == 13.0)
+        .unwrap()["point"]
+        .clone();
+    s.execute("sketch.chamfer", &json!({"point": corner, "distance": 2}))
+        .unwrap();
+    let a = sketch_areas(&mut s);
+    let largest = a.iter().cloned().fold(0.0, f64::max);
+    assert!((largest - 58.0).abs() < 1e-6, "{a:?}");
 }
 
 #[test]

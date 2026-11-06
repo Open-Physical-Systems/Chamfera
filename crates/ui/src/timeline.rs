@@ -89,11 +89,14 @@ impl ChamferaApp {
                     format!("Revolve {} · from {}", r.angle, sketch_name(r.sketch)),
                 ),
                 FeatureKind::Pattern(p) => (
-                    Icon::Extrude,
+                    Icon::PatternRectangular,
                     format!("Pattern × {} of feature {}", p.count, p.source),
                 ),
                 FeatureKind::Blend(b) => (
-                    Icon::Extrude,
+                    match b.blend {
+                        chamfera_doc::BlendKind::Fillet => Icon::Fillet,
+                        chamfera_doc::BlendKind::Chamfer => Icon::Chamfer,
+                    },
                     format!(
                         "{} {} · {} edge{}",
                         match b.blend {

@@ -233,7 +233,7 @@ impl ChamferaApp {
                 if widgets::tool_button(
                     ui,
                     look,
-                    Icon::Edit,
+                    if chamfer { Icon::Chamfer } else { Icon::Fillet },
                     text,
                     has_solids && (tool_free || on),
                     on,

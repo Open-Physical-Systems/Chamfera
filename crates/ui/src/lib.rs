@@ -666,7 +666,10 @@ mod input_tests {
     /// Runs one frame of the real UI with these input events.
     fn frame(app: &mut ChamferaApp, ctx: &egui::Context, t: f64, events: Vec<egui::Event>) {
         let raw = egui::RawInput {
-            screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(1400.0, 900.0))),
+            screen_rect: Some(Rect::from_min_size(
+                egui::Pos2::ZERO,
+                Vec2::new(1400.0, 900.0),
+            )),
             time: Some(t),
             events,
             ..Default::default()
@@ -738,7 +741,14 @@ mod input_tests {
         click(&mut app, &ctx, &mut t, c);
         click(&mut app, &ctx, &mut t, c + Vec2::new(120.0, 7.0));
         let sketch = app.session.active_sketch.unwrap();
-        let n = app.session.doc.sketch(sketch).unwrap().sketch.curves().count();
+        let n = app
+            .session
+            .doc
+            .sketch(sketch)
+            .unwrap()
+            .sketch
+            .curves()
+            .count();
         assert!(n >= 1, "no line drawn");
     }
 }
