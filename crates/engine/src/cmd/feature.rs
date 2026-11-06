@@ -2,7 +2,7 @@
 
 use super::CommandSpec;
 use crate::{CmdResult, CommandError, Session, params};
-use chamfera_doc::{Extrude, ExtrudeDirection, FeatureKind, Revolve};
+use chamfera_doc::{Extrude, ExtrudeDirection, FeatureKind, Operation, Revolve};
 use chamfera_geom::Point2;
 use serde_json::{Value, json};
 
@@ -20,6 +20,7 @@ pub static COMMANDS: &[CommandSpec] = &[
         params: "feature: integer (required)\n\
                  distance: string or number (optional) - new extrude distance expression\n\
                  direction: string (optional) - normal, reversed or symmetric\n\
+                 operation: string (optional) - new_body, join, cut or intersect\n\
                  suppressed: boolean (optional)",
         mutates: true,
         run: edit,
@@ -37,7 +38,8 @@ pub static COMMANDS: &[CommandSpec] = &[
         params: "sketch: integer (required)\n\
                  profiles: list of {x, y} (required) - a point inside each profile, in sketch mm\n\
                  distance: string or number (required) - such as 10, \"10 mm\" or \"thickness * 2\"\n\
-                 direction: string (optional) - normal (default), reversed or symmetric",
+                 direction: string (optional) - normal (default), reversed or symmetric\n\
+                 operation: string (optional) - new_body (default), join, cut or intersect",
         mutates: true,
         run: extrude,
     },
@@ -47,7 +49,8 @@ pub static COMMANDS: &[CommandSpec] = &[
         params: "sketch: integer (required)\n\
                  profiles: list of {x, y} (required) - a point inside each profile, in sketch mm\n\
                  axis: integer (required) - a line of the same sketch to turn around\n\
-                 angle: string or number (optional) - default 360 deg; a plain number is degrees",
+                 angle: string or number (optional) - default 360 deg; a plain number is degrees\n\
+                 operation: string (optional) - new_body (default), join, cut or intersect",
         mutates: true,
         run: revolve,
     },
@@ -86,6 +89,17 @@ fn direction(p: &Value) -> Result<Option<ExtrudeDirection>, CommandError> {
             )));
         }
     })
+}
+
+fn operation(p: &Value) -> Result<Option<Operation>, CommandError> {
+    match params::opt_str(p, "operation")? {
+        None => Ok(None),
+        Some(o) => Operation::parse(o).map(Some).ok_or_else(|| {
+            bad(format!(
+                "unknown operation {o:?}: use new_body, join, cut or intersect"
+            ))
+        }),
+    }
 }
 
 fn seeds(p: &Value) -> Result<Vec<Point2>, CommandError> {
@@ -144,6 +158,7 @@ fn extrude(s: &mut Session, p: &Value) -> CmdResult {
         profiles: seeds(p)?,
         distance,
         direction: direction(p)?.unwrap_or_default(),
+        operation: operation(p)?.unwrap_or_default(),
     });
     let id = s.doc.add_feature(kind)?;
     s.rebuild();
@@ -167,6 +182,7 @@ fn revolve(s: &mut Session, p: &Value) -> CmdResult {
         profiles: seeds(p)?,
         axis,
         angle,
+        operation: operation(p)?.unwrap_or_default(),
     });
     let id = s.doc.add_feature(kind)?;
     s.rebuild();
@@ -180,11 +196,18 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
     let id = params::req_id(p, "feature")?;
     let new_distance = distance(p)?;
     let new_direction = direction(p)?;
+    let new_operation = operation(p)?;
     let suppressed = match p.get("suppressed") {
         None | Some(Value::Null) => None,
         Some(_) => Some(params::req_bool(p, "suppressed")?),
     };
     let mut kind = s.doc.feature(id)?.kind.clone();
+    if let Some(o) = new_operation {
+        match &mut kind {
+            FeatureKind::Extrude(e) => e.operation = o,
+            FeatureKind::Revolve(r) => r.operation = o,
+        }
+    }
     if let FeatureKind::Extrude(e) = &mut kind {
         if let Some(d) = new_distance {
             e.distance = d;

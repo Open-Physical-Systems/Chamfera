@@ -178,6 +178,8 @@ fn hostile_params_never_panic() {
         json!({"sketch": 1, "profiles": [{"x": 10, "y": 10}], "axis": 1, "angle": [0]}),
         json!({"feature": 2, "face": "top", "x": 0, "y": 0, "z": 0}),
         json!({"feature": 99, "face": "nowhere", "x": 1e300, "y": 0, "z": f64::NAN}),
+        json!({"sketch": 1, "profiles": [{"x": 10, "y": 10}], "distance": 5, "operation": "cut"}),
+        json!({"sketch": 1, "profiles": [{"x": 10, "y": 10}], "distance": 5, "operation": "smash"}),
     ];
     for c in registry() {
         for p in &hostile {
@@ -1041,4 +1043,32 @@ fn a_sketch_used_by_a_feature_is_hidden_until_it_is_edited() {
     assert!(!s.scene.overlays.is_empty(), "editing shows it");
     s.execute("sketch.finish", &json!({})).unwrap();
     assert!(s.scene.overlays.is_empty());
+}
+
+#[test]
+fn join_and_cut_need_a_body_to_act_on_and_are_reported_until_booleans_exist() {
+    // A cut far away from every body: nothing to cut, refused, nothing changes.
+    let mut s = Session::new();
+    extruded_plate(&mut s, json!(10));
+    s.execute("sketch.create", &json!({"plane": "xy"})).unwrap();
+    s.execute(
+        "sketch.rectangle",
+        &json!({"x1": 500, "y1": 500, "x2": 510, "y2": 510}),
+    )
+    .unwrap();
+    s.execute("sketch.finish", &json!({})).unwrap();
+    let before = s.doc.clone();
+    let far = s.execute(
+        "solid.extrude",
+        &json!({"sketch": 3, "profiles": [{"x": 505, "y": 505}], "distance": 5, "operation": "cut"}),
+    );
+    assert!(far.unwrap_err().to_string().contains("nothing to cut"));
+    assert_eq!(s.doc, before);
+    // An unknown operation is a parameter error.
+    assert!(s
+        .execute(
+            "solid.extrude",
+            &json!({"sketch": 3, "profiles": [{"x": 505, "y": 505}], "distance": 5, "operation": "smash"}),
+        )
+        .is_err());
 }

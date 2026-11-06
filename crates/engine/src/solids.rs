@@ -6,7 +6,7 @@
 //! timeline) and the rest of the timeline still builds, as CAD users expect.
 
 use crate::Session;
-use chamfera_doc::{Extrude, ExtrudeDirection, FeatureKind, Revolve};
+use chamfera_doc::{Extrude, ExtrudeDirection, FeatureKind, Operation, Revolve};
 use chamfera_geom::{Point2, Point3};
 use chamfera_kernel::{Body, Line2, Profile, ProfileEdge, TessOptions, tessellate};
 use chamfera_sketch::{Curve, ProfileLoop, Region, Sketch};
@@ -128,6 +128,114 @@ fn feature_profiles(
         .collect()
 }
 
+/// Boolean operations on kernel bodies. The engine calls these only; kernel rung K7
+/// provides them.
+mod booleans {
+    use chamfera_kernel::Body;
+
+    const NOT_YET: &str = "Join, Cut and Intersect need the kernel's booleans (rung K7), \
+                           which are being built; use New Body for now";
+
+    pub fn union(_a: &Body, _b: &Body) -> Result<Body, String> {
+        Err(NOT_YET.into())
+    }
+
+    /// `None` when nothing is left.
+    pub fn subtract(_a: &Body, _b: &Body) -> Result<Option<Body>, String> {
+        Err(NOT_YET.into())
+    }
+
+    /// `None` when they don't overlap.
+    pub fn intersect(_a: &Body, _b: &Body) -> Result<Option<Body>, String> {
+        Err(NOT_YET.into())
+    }
+}
+
+/// True when two bodies' bounding boxes overlap (or touch).
+fn boxes_overlap(a: &Body, b: &Body) -> bool {
+    match (a.bounding_box(), b.bounding_box()) {
+        (Some(x), Some(y)) => {
+            let t = chamfera_geom::LINEAR_TOLERANCE;
+            x.min.x <= y.max.x + t
+                && y.min.x <= x.max.x + t
+                && x.min.y <= y.max.y + t
+                && y.min.y <= x.max.y + t
+                && x.min.z <= y.max.z + t
+                && y.min.z <= x.max.z + t
+        }
+        _ => false,
+    }
+}
+
+/// Applies a feature's new shapes (`tools`) to the bodies built so far: Join merges each
+/// tool with every body it overlaps, Cut removes it from them, Intersect keeps only the
+/// overlap. The targets are the bodies whose bounds meet the tool, like Fusion users
+/// expect, so nothing has to be referenced by name.
+fn apply_operation(
+    made: &mut Vec<(u32, String, Body)>,
+    tools: &[Body],
+    operation: Operation,
+) -> Result<(), String> {
+    let verb = match operation {
+        Operation::NewBody => return Ok(()),
+        Operation::Join => "join",
+        Operation::Cut => "cut",
+        Operation::Intersect => "intersect",
+    };
+    for tool in tools {
+        let targets: Vec<usize> = made
+            .iter()
+            .enumerate()
+            .filter(|(_, m)| boxes_overlap(&m.2, tool))
+            .map(|(i, _)| i)
+            .collect();
+        if targets.is_empty() {
+            return Err(format!(
+                "nothing to {verb}: the new shape does not reach any body"
+            ));
+        }
+        match operation {
+            Operation::Join => {
+                // Everything the tool touches becomes one body, named after the first.
+                let mut acc = tool.clone();
+                for &i in targets.iter().rev() {
+                    let Some(target) = made.get(i) else { continue };
+                    acc = booleans::union(&target.2, &acc)?;
+                }
+                let first = targets[0];
+                for &i in targets.iter().skip(1).rev() {
+                    made.remove(i);
+                }
+                if let Some(m) = made.get_mut(first) {
+                    m.2 = acc;
+                }
+            }
+            Operation::Cut | Operation::Intersect => {
+                for &i in targets.iter().rev() {
+                    let Some(target) = made.get(i) else { continue };
+                    let result = if operation == Operation::Cut {
+                        booleans::subtract(&target.2, tool)?
+                    } else {
+                        booleans::intersect(&target.2, tool)?
+                    };
+                    match result {
+                        Some(b) => {
+                            if let Some(m) = made.get_mut(i) {
+                                m.2 = b;
+                            }
+                        }
+                        None => {
+                            made.remove(i);
+                        }
+                    }
+                }
+            }
+            Operation::NewBody => {}
+        }
+    }
+    Ok(())
+}
+
 /// The bodies one extrude makes: one per profile.
 fn build_extrude(doc: &chamfera_doc::Document, e: &Extrude) -> Result<Vec<Body>, String> {
     let f = doc.sketch(e.sketch).map_err(|x| x.to_string())?;
@@ -195,8 +303,9 @@ impl Session {
                 FeatureKind::Extrude(e) => build_extrude(&self.doc, e),
                 FeatureKind::Revolve(r) => build_revolve(&self.doc, r),
             };
+            let operation = feature.kind.operation();
             match result {
-                Ok(bodies) => {
+                Ok(bodies) if operation == Operation::NewBody => {
                     let n = bodies.len();
                     for (k, body) in bodies.into_iter().enumerate() {
                         let name = if n == 1 {
@@ -205,6 +314,16 @@ impl Session {
                             format!("{} ({})", feature.name, k + 1)
                         };
                         made.push((feature.id, name, body));
+                    }
+                }
+                Ok(tools) => {
+                    // Work on a copy so a failure leaves the bodies built so far intact.
+                    let mut next = made.clone();
+                    match apply_operation(&mut next, &tools, operation) {
+                        Ok(()) => made = next,
+                        Err(e) => {
+                            built.errors.insert(feature.id, e);
+                        }
                     }
                 }
                 Err(e) => {
