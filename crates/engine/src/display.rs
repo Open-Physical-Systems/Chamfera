@@ -3,7 +3,7 @@
 
 use crate::{CmdResult, CommandError, Session, params};
 use chamfera_geom::{Frame, MAX_COORDINATE};
-use chamfera_render::display::{PRESETS, preset_by_id};
+use chamfera_render::display::preset_by_id;
 use chamfera_render::{Rgba, Section, VisualStyle};
 use serde_json::{Value, json};
 
@@ -13,9 +13,15 @@ fn bad(msg: impl Into<String>) -> CommandError {
 
 /// The scene's form of a stored appearance.
 pub fn scene_appearance(a: &chamfera_doc::Appearance) -> chamfera_render::Appearance {
+    let d = chamfera_render::Appearance::default();
+    let num = |v: Option<f64>, default: f32| v.map_or(default, |v| v as f32);
     chamfera_render::Appearance {
         colour: a.colour.map(|[r, g, b]| Rgba(r, g, b, 255)),
         opacity: a.opacity as f32,
+        metallic: num(a.metallic, d.metallic),
+        roughness: num(a.roughness, d.roughness),
+        transmission: num(a.transmission, d.transmission),
+        ior: num(a.ior, d.ior),
     }
 }
 
@@ -135,15 +141,50 @@ fn parse_colour(text: &str) -> Option<[u8; 3]> {
 }
 
 pub(crate) fn appearance(s: &mut Session, p: &Value) -> CmdResult {
-    let body = params::req_id(p, "body")?;
+    // A body by id, or by name (ids change when the model rebuilds; names stay).
+    let body = match p.get("body") {
+        Some(Value::String(name)) => s
+            .scene
+            .bodies
+            .iter()
+            .find(|b| &b.name == name)
+            .map(|b| b.id)
+            .ok_or_else(|| {
+                bad(format!(
+                    "no body named {:?}",
+                    name.chars().take(64).collect::<String>()
+                ))
+            })?,
+        _ => params::req_id(p, "body")?,
+    };
     if s.scene.body(body).is_none() {
         return Err(bad(format!("no body {body}")));
     }
     let preset = params::opt_str(p, "preset")?;
     let colour = params::opt_str(p, "colour")?;
     let opacity = params::opt_f64(p, "opacity")?;
-    if preset.is_none() && colour.is_none() && opacity.is_none() {
-        return Err(bad("give `preset`, `colour` or `opacity`"));
+    let mut numbers = Vec::new();
+    for (name, lo, hi) in [
+        ("metallic", 0.0, 1.0),
+        ("roughness", 0.0, 1.0),
+        ("transmission", 0.0, 1.0),
+        (
+            "ior",
+            chamfera_doc::appearance::MIN_IOR,
+            chamfera_doc::appearance::MAX_IOR,
+        ),
+    ] {
+        if let Some(v) = params::opt_f64(p, name)? {
+            if !(lo..=hi).contains(&v) {
+                return Err(bad(format!("`{name}` must be {lo} to {hi}")));
+            }
+            numbers.push((name, v));
+        }
+    }
+    if preset.is_none() && colour.is_none() && opacity.is_none() && numbers.is_empty() {
+        return Err(bad(
+            "give `preset`, `colour`, `opacity`, `metallic`, `roughness`, `transmission` or `ior`",
+        ));
     }
     let feature = s
         .solids()
@@ -155,10 +196,18 @@ pub(crate) fn appearance(s: &mut Session, p: &Value) -> CmdResult {
         None => s
             .scene
             .body(body)
-            .map(|b| chamfera_doc::Appearance {
-                colour: b.appearance.colour.map(|c| [c.0, c.1, c.2]),
-                opacity: f64::from(b.appearance.opacity()),
-                preset: None,
+            .map(|b| {
+                let x = b.appearance;
+                let round = |v: f32| (f64::from(v) * 1000.0).round() / 1000.0;
+                chamfera_doc::Appearance {
+                    colour: x.colour.map(|c| [c.0, c.1, c.2]),
+                    opacity: f64::from(x.opacity()),
+                    preset: None,
+                    metallic: Some(round(x.metallic)),
+                    roughness: Some(round(x.roughness)),
+                    transmission: Some(round(x.transmission)),
+                    ior: Some(round(x.ior)),
+                }
             })
             .unwrap_or_default(),
     };
@@ -167,15 +216,24 @@ pub(crate) fn appearance(s: &mut Session, p: &Value) -> CmdResult {
             a = chamfera_doc::Appearance::default();
         } else {
             let found = preset_by_id(name).ok_or_else(|| {
-                let all: Vec<&str> = PRESETS.iter().map(|x| x.id).collect();
+                let all: Vec<&str> = chamfera_render::material::LIBRARY
+                    .iter()
+                    .map(|x| x.id)
+                    .collect();
                 bad(format!(
                     "unknown preset {name:?}: use default, {}",
                     all.join(", ")
                 ))
             })?;
-            a.colour = found.appearance.colour.map(|c| [c.0, c.1, c.2]);
+            let x = found.appearance;
             // Rounded so the f32 preset reads back as the number it was written as.
-            a.opacity = (f64::from(found.appearance.opacity) * 1000.0).round() / 1000.0;
+            let round = |v: f32| (f64::from(v) * 1000.0).round() / 1000.0;
+            a.colour = x.colour.map(|c| [c.0, c.1, c.2]);
+            a.opacity = round(x.opacity);
+            a.metallic = Some(round(x.metallic));
+            a.roughness = Some(round(x.roughness));
+            a.transmission = Some(round(x.transmission));
+            a.ior = Some(round(x.ior));
             a.preset = Some(found.id.to_owned());
         }
     }
@@ -202,6 +260,18 @@ pub(crate) fn appearance(s: &mut Session, p: &Value) -> CmdResult {
             a.preset = None;
         }
     }
+    for (name, v) in &numbers {
+        let v = Some(*v);
+        match *name {
+            "metallic" => a.metallic = v,
+            "roughness" => a.roughness = v,
+            "transmission" => a.transmission = v,
+            _ => a.ior = v,
+        }
+    }
+    if !numbers.is_empty() && preset.is_none() {
+        a.preset = None;
+    }
     let shown = scene_appearance(&a);
     match feature {
         Some(f) => {
@@ -224,6 +294,10 @@ pub(crate) fn appearance(s: &mut Session, p: &Value) -> CmdResult {
         "colour": a.colour.map(|[r, g, b]| format!("#{r:02x}{g:02x}{b:02x}")),
         "opacity": a.opacity,
         "preset": a.preset,
+        "metallic": shown.metallic,
+        "roughness": shown.roughness,
+        "transmission": shown.transmission,
+        "ior": shown.ior,
     }))
 }
 

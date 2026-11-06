@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+  <!-- Chamfera interface icon: material library (a shaded ball with its highlight). Original artwork, MIT OR Apache-2.0. -->
+  <circle cx="12" cy="12" r="8.5" stroke="#2B313B"/>
+  <path stroke="#2B313B" d="M3.5 12.5c2.5 2.6 14.5 2.6 17 0"/>
+  <ellipse cx="8.75" cy="8" rx="1.9" ry="1.3" transform="rotate(-35 8.75 8)" stroke="#E8770E" fill="#E8770E"/>
+</svg>

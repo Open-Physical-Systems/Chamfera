@@ -366,6 +366,15 @@ fn hostile_params_never_panic() {
         json!({"faces": [long, ""], "thickness": "3 mm", "sides": "symmetric", "operation": "smash"}),
         json!({"faces": ["2:side 0"], "thickness": -1e-300, "operation": "join", "feature": 2, "tools": []}),
         json!({"bodies": vec!["x"; 1001], "faces": vec!["y"; 1001], "tools": vec!["z"; 1001], "target": ""}),
+        // Renders and materials.
+        json!({"width": 4097, "height": 1, "samples": 1, "path": "/nonexistent/dir/x.png"}),
+        json!({"width": 2, "height": 2, "samples": 1e9, "time_limit": -1, "preset": long}),
+        json!({"width": 2.5, "height": f64::NAN, "samples": "many", "time_limit": f64::NAN}),
+        json!({"width": 2, "height": 2, "samples": 1, "time_limit": 1e300, "path": "/nonexistent/dir/x.png"}),
+        json!({"width": 2, "height": 2, "samples": 1, "path": "/dev/null", "preset": "dark"}),
+        json!({"body": 1, "metallic": 2, "roughness": f64::NAN, "transmission": -1, "ior": 0}),
+        json!({"body": 1, "metallic": "1", "roughness": [0], "transmission": null, "ior": 1e300}),
+        json!({"body": 1, "metallic": 1, "roughness": 0, "transmission": 1, "ior": 3, "preset": "chrome"}),
     ];
     for c in registry() {
         for p in &hostile {
@@ -4762,9 +4771,9 @@ fn a_solid_shows_its_exact_edges_and_keeps_its_appearance_through_save_and_open(
         .unwrap();
     assert_eq!(r["feature"], 2);
     assert_eq!(r["saved"], true);
-    // The glass preset: (170, 210, 230) at 30% opacity, stored for feature 2.
+    // The glass preset: (214, 236, 240) at 30% opacity, stored for feature 2.
     let a = only_body(&s).appearance;
-    assert_eq!(a.colour, Some(chamfera_render::Rgba(170, 210, 230, 255)));
+    assert_eq!(a.colour, Some(chamfera_render::Rgba(214, 236, 240, 255)));
     assert!((a.opacity - 0.3).abs() < 1e-6);
     assert!(s.can_undo());
     // A colour on its own keeps the opacity.
@@ -4796,7 +4805,7 @@ fn a_solid_shows_its_exact_edges_and_keeps_its_appearance_through_save_and_open(
     s.execute("edit.undo", &json!({})).unwrap();
     assert_eq!(
         only_body(&s).appearance.colour,
-        Some(chamfera_render::Rgba(170, 210, 230, 255))
+        Some(chamfera_render::Rgba(214, 236, 240, 255))
     );
     let body = only_body(&s).id;
     s.execute(

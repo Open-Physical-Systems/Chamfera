@@ -11,12 +11,16 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         id: "body.appearance",
         label: "Appearance",
-        params: "body: integer (required) - the body id\n\
-                 preset: string (optional) - a named appearance: steel, aluminium, brass, \
-                 copper, paint_red, paint_blue, paint_yellow, paint_black, glass (30% \
-                 opaque), rubber; or default for the theme's colour\n\
+        params: "body: integer or string (required) - the body id, or its name (Extrude1)\n\
+                 preset: string (optional) - a material of the library (render.materials \
+                 lists them: steel, aluminium, brass, copper, chrome, gold, glass, rubber, \
+                 plastic_white, wood_oak, paint_red, ...); or default for the theme's colour\n\
                  colour: string (optional) - #rrggbb, or default for the theme's colour\n\
                  opacity: number (optional) - 0.05 to 1 (1 is opaque)\n\
+                 metallic: number (optional) - 0 (plastic, paint) to 1 (metal)\n\
+                 roughness: number (optional) - 0 (mirror) to 1 (matte)\n\
+                 transmission: number (optional) - 0 (opaque) to 1 (glass)\n\
+                 ior: number (optional) - index of refraction, 1 to 3 (glass 1.5)\n\
                  Give at least one. A solid's appearance is saved with the design (for \
                  every body of its feature); a mesh body's lasts for the session.",
         mutates: true,

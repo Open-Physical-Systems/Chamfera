@@ -31,6 +31,8 @@ pub const PATH_COMMANDS: &[(&str, Access)] = &[
     ("design.save", Access::Write),
     ("param.export_csv", Access::Write),
     ("param.import_csv", Access::Read),
+    ("render.image", Access::Write),
+    ("render.save", Access::Write),
     ("sheet.export_flat", Access::Write),
     ("drawing.export", Access::Write),
     ("sketch.export_dxf", Access::Write),

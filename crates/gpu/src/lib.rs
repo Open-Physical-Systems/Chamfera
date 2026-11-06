@@ -6,9 +6,12 @@
 
 use chamfera_geom::{Point3, TriMesh};
 use chamfera_render::display::{EdgePass, FacePass, draw_order};
-use chamfera_render::{Camera, MAX_OVERLAY_ITEMS, Projection, Scene, SceneBody, Theme, mat_mul};
+use chamfera_render::{
+    Camera, MAX_OVERLAY_ITEMS, Projection, Scene, SceneBody, Theme, VisualStyle, mat_mul,
+};
 use std::collections::HashMap;
 
+mod realistic;
 #[cfg(not(target_arch = "wasm32"))]
 mod snapshot;
 #[cfg(not(target_arch = "wasm32"))]
@@ -18,8 +21,8 @@ pub use wgpu;
 
 /// The colour format of the rendered view (sRGB, so the GPU converts from linear light).
 pub const COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
-const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
-const SAMPLES: u32 = 4;
+pub(crate) const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
+pub(crate) const SAMPLES: u32 = 4;
 /// Edges are drawn where faces meet at more than this angle (radians, 30 degrees).
 pub const EDGE_ANGLE: f64 = std::f64::consts::PI / 6.0;
 /// Largest view size (pixels per side).
@@ -64,13 +67,21 @@ struct Globals {
     section_cap: [f32; 4],
     section_hatch: [f32; 4],
     edge_hidden: [f32; 4],
+    realistic: realistic::RealisticGlobals,
 }
+
+/// Bytes of a body's uniform: its colour and its material (metallic, roughness,
+/// transmission, index of refraction).
+pub(crate) const BODY_UNIFORM: u64 = 32;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct MeshVertex {
     position: [f32; 3],
+    /// The face's normal (flat shading in the plain styles).
     normal: [f32; 3],
+    /// The smooth shading normal (the realistic style).
+    smooth: [f32; 3],
 }
 
 #[repr(C)]
@@ -211,6 +222,8 @@ pub struct ViewRenderer {
     overlay_points_depth: wgpu::RenderPipeline,
     /// Translucent tool previews (`Scene::previews`).
     preview: wgpu::RenderPipeline,
+    /// The realistic style's pipelines and shadow map.
+    realistic: realistic::Realistic,
     targets: Option<Targets>,
     bodies: HashMap<u32, GpuBody>,
     /// Made on first use, only on backends without texture view formats.
@@ -225,7 +238,9 @@ impl ViewRenderer {
     pub fn new(device: &wgpu::Device) -> ViewRenderer {
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("chamfera viewport"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                concat!(include_str!("shaders.wgsl"), include_str!("realistic.wgsl")).into(),
+            ),
         });
         let uniform_entry = |vis| wgpu::BindGroupLayoutEntry {
             binding: 0,
@@ -534,6 +549,13 @@ impl ViewRenderer {
             blend: Some(wgpu::BlendState::ALPHA_BLENDING),
             write: all,
         });
+        let realistic = realistic::Realistic::new(
+            device,
+            &module,
+            &globals_layout,
+            &body_layout,
+            std::mem::size_of::<MeshVertex>() as u64,
+        );
         ViewRenderer {
             globals,
             globals_bind,
@@ -552,6 +574,7 @@ impl ViewRenderer {
             overlay_lines_depth,
             overlay_points_depth,
             preview,
+            realistic,
             targets: None,
             bodies: HashMap::new(),
             raw_blit: None,
@@ -666,7 +689,7 @@ impl ViewRenderer {
             };
             let uniform = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("body colour"),
-                size: 16,
+                size: BODY_UNIFORM,
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });
@@ -760,6 +783,11 @@ impl ViewRenderer {
             section_cap: frame.theme.section_cap.linear(),
             section_hatch: frame.theme.section_hatch.linear(),
             edge_hidden: frame.theme.edge_hidden.linear(),
+            realistic: if frame.scene.display.style == VisualStyle::Realistic {
+                realistic::globals(frame.scene, cam, aspect)
+            } else {
+                realistic::RealisticGlobals::default()
+            },
         };
         queue.write_buffer(&self.globals, 0, bytemuck::bytes_of(&globals));
         for b in &frame.scene.bodies {
@@ -779,7 +807,9 @@ impl ViewRenderer {
                 };
                 let mut c = c.linear();
                 c[3] = b.appearance.opacity();
-                queue.write_buffer(&g.uniform, 0, bytemuck::cast_slice(&c));
+                let m = b.appearance.material(chamfera_render::Rgba(0, 0, 0, 255));
+                let data = [c, [m.metallic, m.roughness, m.transmission, m.ior]];
+                queue.write_buffer(&g.uniform, 0, bytemuck::cast_slice(&data));
             }
         }
         let grid = grid_vertices(cam, frame.theme, frame.scene.grid_spacing);
@@ -827,9 +857,10 @@ impl ViewRenderer {
                 contents: bytemuck::cast_slice(&preview_tris),
                 usage: wgpu::BufferUsages::VERTEX,
             });
+            let data = [frame.theme.preview_body.linear(), [0.0, 0.5, 0.0, 1.5]];
             let colour = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("preview colour"),
-                contents: bytemuck::cast_slice(&frame.theme.preview_body.linear()),
+                contents: bytemuck::cast_slice(&data),
                 usage: wgpu::BufferUsages::UNIFORM,
             });
             let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -860,9 +891,10 @@ impl ViewRenderer {
                     contents: bytemuck::cast_slice(&tris),
                     usage: wgpu::BufferUsages::VERTEX,
                 });
+                let data = [sm.style.color(frame.theme).linear(), [0.0, 0.5, 0.0, 1.5]];
                 let colour = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("stock colour"),
-                    contents: bytemuck::cast_slice(&sm.style.color(frame.theme).linear()),
+                    contents: bytemuck::cast_slice(&data),
                     usage: wgpu::BufferUsages::UNIFORM,
                 });
                 let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -880,6 +912,43 @@ impl ViewRenderer {
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("viewport"),
         });
+        let realistic = frame.scene.display.style == VisualStyle::Realistic;
+        let is_glass = |id: &u32| {
+            frame.scene.body(*id).is_some_and(|b| {
+                b.appearance
+                    .material(chamfera_render::Rgba(0, 0, 0, 255))
+                    .is_glass()
+            })
+        };
+        if realistic {
+            // The key light's shadow map: depth of the opaque bodies seen from the light.
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("shadow map"),
+                color_attachments: &[],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.realistic.shadow_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&self.realistic.shadow);
+            pass.set_bind_group(0, &self.globals_bind, &[]);
+            for b in frame.scene.bodies.iter().filter(|b| b.visible) {
+                if is_glass(&b.id) {
+                    continue;
+                }
+                if let Some(g) = self.bodies.get(&b.id) {
+                    pass.set_vertex_buffer(0, g.triangles.slice(..));
+                    pass.draw(0..g.triangle_vertices, 0..1);
+                }
+            }
+        }
         if let Some(t) = &self.targets {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("viewport"),
@@ -905,11 +974,25 @@ impl ViewRenderer {
                 multiview_mask: None,
             });
             pass.set_bind_group(0, &self.globals_bind, &[]);
-            pass.set_pipeline(&self.background);
+            if realistic {
+                pass.set_bind_group(1, &self.realistic.no_body, &[]);
+                pass.set_bind_group(2, &self.realistic.shadow_bind, &[]);
+            }
+            pass.set_pipeline(if realistic {
+                &self.realistic.sky
+            } else {
+                &self.background
+            });
             pass.draw(0..3, 0..1);
 
             let plan = frame.scene.display.style.plan();
-            let (opaque, transparent) = draw_order(frame.scene, cam);
+            let (mut opaque, mut transparent) = draw_order(frame.scene, cam);
+            if realistic {
+                // Glass blends over what is behind it, like a see-through body.
+                let glass: Vec<u32> = opaque.iter().copied().filter(|id| is_glass(id)).collect();
+                opaque.retain(|id| !is_glass(id));
+                transparent.splice(0..0, glass);
+            }
             let gpu = |ids: &[u32]| -> Vec<&GpuBody> {
                 ids.iter().filter_map(|id| self.bodies.get(id)).collect()
             };
@@ -930,6 +1013,15 @@ impl ViewRenderer {
                     pass.set_pipeline(&self.mesh_depth_only);
                     draw_faces(&mut pass, &opaque);
                     draw_faces(&mut pass, &transparent);
+                }
+                FacePass::Realistic => {
+                    pass.set_bind_group(2, &self.realistic.shadow_bind, &[]);
+                    // Every environment preset has a floor.
+                    pass.set_pipeline(&self.realistic.floor);
+                    pass.set_bind_group(1, &self.realistic.no_body, &[]);
+                    pass.draw(0..6, 0..1);
+                    pass.set_pipeline(&self.realistic.mesh);
+                    draw_faces(&mut pass, &opaque);
                 }
                 FacePass::None => {}
             }
@@ -958,7 +1050,12 @@ impl ViewRenderer {
                 pass.set_pipeline(&self.mesh_transparent);
                 draw_faces(&mut pass, &transparent);
             }
-            if !grid.is_empty() {
+            if plan.faces == FacePass::Realistic && !transparent.is_empty() {
+                pass.set_pipeline(&self.realistic.glass);
+                draw_faces(&mut pass, &transparent);
+            }
+            // The realistic style has a floor instead of the grid.
+            if !grid.is_empty() && !realistic {
                 pass.set_pipeline(&self.grid);
                 pass.set_vertex_buffer(0, grid_buf.slice(..));
                 pass.draw(0..grid.len() as u32, 0..1);
@@ -1098,15 +1195,18 @@ fn fill_vertices(scene: &Scene, theme: &Theme, on_top: bool) -> Vec<LineVertex> 
 /// Flat-shaded triangles: each corner carries its face's normal.
 fn mesh_vertices(mesh: &TriMesh) -> Vec<MeshVertex> {
     let mut out = Vec::with_capacity(mesh.triangles.len() * 3);
+    let smooth = chamfera_render::normals::corner_normals(mesh, EDGE_ANGLE);
     for i in 0..mesh.triangles.len() {
         let (Some(corners), Some(n)) = (mesh.triangle(i), mesh.triangle_normal(i)) else {
             continue;
         };
         let normal = [n.x as f32, n.y as f32, n.z as f32];
-        for p in corners {
+        let corner_normals = smooth.get(i).copied().unwrap_or([n; 3]);
+        for (p, s) in corners.into_iter().zip(corner_normals) {
             out.push(MeshVertex {
                 position: f3(p),
                 normal,
+                smooth: [s.x as f32, s.y as f32, s.z as f32],
             });
         }
     }

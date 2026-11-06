@@ -18,12 +18,38 @@ struct Globals {
     section_cap: vec4<f32>,
     section_hatch: vec4<f32>,
     edge_hidden: vec4<f32>,
+    // The realistic style (zero otherwise). Camera right and up, w: tan of the half field
+    // of view across and up (perspective).
+    cam_right: vec4<f32>,
+    cam_up: vec4<f32>,
+    // Sky radiance up, at the horizon and down; zenith.w is the exposure.
+    sky_zenith: vec4<f32>,
+    sky_horizon: vec4<f32>,
+    sky_nadir: vec4<f32>,
+    // rgb the floor's albedo, w 1 with a floor.
+    floor_albedo: vec4<f32>,
+    // x, y the scene's centre, z the floor's height, w the scene's radius.
+    floor_geom: vec4<f32>,
+    // Three lights: direction (towards the light; w the sine of its angular radius) and
+    // irradiance facing it (w 1 when the light is there).
+    light0_dir: vec4<f32>,
+    light0_e: vec4<f32>,
+    light1_dir: vec4<f32>,
+    light1_e: vec4<f32>,
+    light2_dir: vec4<f32>,
+    light2_e: vec4<f32>,
+    // World to the key light's shadow map (clip space).
+    shadow_view_proj: mat4x4<f32>,
+    // x: shadow map size in texels; y: depth bias; z: 1 with a shadow map.
+    shadow: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> g: Globals;
 
 struct Body {
     color: vec4<f32>,
+    // metallic, roughness, transmission, index of refraction.
+    material: vec4<f32>,
 };
 
 @group(1) @binding(0) var<uniform> body: Body;
