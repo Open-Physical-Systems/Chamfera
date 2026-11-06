@@ -711,3 +711,41 @@ fn motion_keys_survive_save_and_open() {
     t.execute("joint.delete", &json!({"joint": j})).unwrap();
     assert!(t.doc.motion.keys.is_empty());
 }
+
+/// A planar joint between a 60 x 60 x 4 plate's top (centre (30, 30, 4)) and the bottom
+/// of an r 5 puck made at (100, 100) centres the puck on the plate: its axis lands on
+/// x = y = 30 (QA user guide pass: the puck's face centre was averaged from its one
+/// seam vertex, putting it at (25, 30)).
+#[test]
+fn a_planar_joint_centres_a_round_puck_on_the_plate() {
+    let mut s = Session::new();
+    let fa = plate(&mut s, 0.0, 0.0, 60.0, 60.0, 4.0);
+    let sk = s.execute("sketch.create", &json!({"plane": "xy"})).unwrap();
+    s.execute("sketch.circle", &json!({"cx": 100, "cy": 100, "radius": 5}))
+        .unwrap();
+    s.execute("sketch.finish", &json!({})).unwrap();
+    let fb = s
+        .execute(
+            "solid.extrude",
+            &json!({"sketch": sk["sketch"], "distance": 3, "profiles": [{"x": 100, "y": 100}]}),
+        )
+        .unwrap()["feature"]
+        .as_u64()
+        .unwrap();
+    let a = new_component(&mut s, "Plate", fa);
+    let b = new_component(&mut s, "Puck", fb);
+    s.execute("component.ground", &json!({"component": a}))
+        .unwrap();
+    s.execute(
+        "joint.create",
+        &json!({"type": "planar", "a": {"face": format!("{fa}:top")},
+                "b": {"face": format!("{fb}:bottom")}, "flip": true}),
+    )
+    .unwrap();
+    // The puck's box is x and y 25..35 around the axis, z 4..7 on the top.
+    assert!(
+        close(bounds(&mut s, b), [25.0, 25.0, 4.0, 35.0, 35.0, 7.0]),
+        "{:?}",
+        bounds(&mut s, b)
+    );
+}

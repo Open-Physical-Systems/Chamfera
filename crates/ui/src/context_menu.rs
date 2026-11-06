@@ -838,12 +838,19 @@ impl ChamferaApp {
             return;
         };
         let mut rows = Vec::new();
+        let mut surface = false;
         let (volume, area) = match self.solid_of(body) {
             Some(s) => {
                 if let Ok(f) = self.session.doc.feature(s.feature) {
                     rows.push(("Feature".into(), f.name.clone()));
                 }
-                rows.push(("Kind".into(), "Solid (exact)".into()));
+                surface = s.body.is_open();
+                let kind = if surface {
+                    "Surface (exact)"
+                } else {
+                    "Solid (exact)"
+                };
+                rows.push(("Kind".into(), kind.into()));
                 (s.body.volume().ok(), s.body.area().ok())
             }
             None => {
@@ -856,7 +863,13 @@ impl ChamferaApp {
             Some(v) => show(v),
             None => "could not be measured".into(),
         };
-        rows.push(("Volume".into(), text(volume, &|v| u.volume(v))));
+        // An open surface encloses nothing: it has no volume to measure.
+        let volume_text = if surface {
+            "none (an open surface)".into()
+        } else {
+            text(volume, &|v| u.volume(v))
+        };
+        rows.push(("Volume".into(), volume_text));
         rows.push(("Area".into(), text(area, &|v| u.area(v))));
         if let Some(bb) = b.mesh.bounds() {
             let d = bb.max - bb.min;
@@ -1246,6 +1259,32 @@ mod tests {
         let texts: Vec<&str> = menu.shown.iter().map(|(s, _)| s.as_str()).collect();
         assert!(texts.contains(&label("sketch.create_on_face")), "{texts:?}");
         assert!(texts.contains(&label("feature.delete")), "{texts:?}");
+    }
+
+    /// Properties of a surface body say so, and give it no volume (QA user guide pass:
+    /// "Solid (exact)" and "could not be measured"). The 50 x 30 rectangle's sides
+    /// extruded 10 as a surface: area 2 (50 + 30) 10 = 1600.
+    #[test]
+    fn properties_of_a_surface_say_surface_and_no_volume() {
+        let mut app = ChamferaApp::headless();
+        app.run("sketch.create", json!({ "plane": "xy" }));
+        app.run(
+            "sketch.rectangle",
+            json!({ "x1": 0, "y1": 0, "x2": 50, "y2": 30 }),
+        );
+        app.run("sketch.finish", json!({}));
+        app.run(
+            "surface.extrude",
+            json!({ "sketch": 1, "profiles": [{ "x": 25, "y": 15 }], "distance": 10 }),
+        )
+        .unwrap();
+        let body = app.session.scene.bodies[0].id;
+        app.open_properties(body);
+        let rows = app.ctx_menu.properties.as_ref().unwrap().rows.clone();
+        let get = |k: &str| rows.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
+        assert_eq!(get("Kind").as_deref(), Some("Surface (exact)"));
+        assert_eq!(get("Volume").as_deref(), Some("none (an open surface)"));
+        assert_eq!(get("Area").as_deref(), Some("1600.00 mm²"));
     }
 
     /// The face menu's Press Pull and Measure items run their tools on the face under

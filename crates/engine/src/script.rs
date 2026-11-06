@@ -68,6 +68,18 @@ fn substitute(v: &Value, vars: &BTreeMap<String, Value>) -> Result<Value, String
 
 /// Runs the steps in order, stopping at the first failure. Returns each reply.
 pub fn run_steps(session: &mut Session, steps: &[Value]) -> Result<Vec<Value>, ScriptError> {
+    let mut replies = Vec::with_capacity(steps.len().min(MAX_STEPS));
+    run_steps_each(session, steps, |_, reply| replies.push(reply.clone()))?;
+    Ok(replies)
+}
+
+/// [`run_steps`], handing each step's reply (with its 1-based number) to `each` as soon
+/// as the step has run, so the replies before a failing step are not lost.
+pub fn run_steps_each(
+    session: &mut Session,
+    steps: &[Value],
+    mut each: impl FnMut(usize, &Value),
+) -> Result<(), ScriptError> {
     let fail = |step: usize, command: &str, message: String| ScriptError {
         step,
         command: command.to_owned(),
@@ -81,7 +93,6 @@ pub fn run_steps(session: &mut Session, steps: &[Value]) -> Result<Vec<Value>, S
         ));
     }
     let mut vars: BTreeMap<String, Value> = BTreeMap::new();
-    let mut replies = Vec::with_capacity(steps.len());
     for (i, step) in steps.iter().enumerate() {
         let n = i + 1;
         let id = step
@@ -100,14 +111,35 @@ pub fn run_steps(session: &mut Session, steps: &[Value]) -> Result<Vec<Value>, S
                 .ok_or_else(|| fail(n, id, "`as` must be a name like `rect` or `axis2`".into()))?;
             vars.insert(name.to_owned(), reply.clone());
         }
-        replies.push(reply);
+        each(n, &reply);
     }
-    Ok(replies)
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The replies of the steps before a failing one still reach the caller (QA user
+    /// guide pass: `chamfera-cli run` printed nothing when a step failed).
+    #[test]
+    fn replies_before_a_failing_step_are_handed_over() {
+        let steps: Vec<Value> = serde_json::from_str(
+            r#"[
+              { "command": "sketch.create", "params": { "plane": "xy" } },
+              { "command": "no.such.command" }
+            ]"#,
+        )
+        .unwrap();
+        let mut seen = Vec::new();
+        let e = run_steps_each(&mut Session::new(), &steps, |n, r| {
+            seen.push((n, r.clone()))
+        });
+        assert_eq!(e.map_err(|e| e.step), Err(2));
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].0, 1);
+        assert!(seen[0].1["sketch"].is_u64(), "{:?}", seen[0].1);
+    }
 
     #[test]
     fn named_replies_feed_later_steps() {

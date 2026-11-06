@@ -749,7 +749,18 @@ impl Sketch {
                     area,
                 }
             })
+            // A face whose holes fill it (curves that cross without being split) has
+            // nothing left to extrude.
+            .filter(|r| r.area >= MIN_AREA)
             .collect()
+    }
+
+    /// True when non-construction curves cross where neither has an endpoint, so the
+    /// profiles are not what the drawing shows until Split All Crossings
+    /// (`ToolOp::Split { curve: None }`) cuts them there.
+    pub fn has_unsplit_crossings(&self) -> bool {
+        self.preview_tool(&crate::tools::ToolOp::Split { curve: None })
+            .is_some_and(|(_, r)| !r.created_curves.is_empty() || !r.changed_curves.is_empty())
     }
 }
 
@@ -767,6 +778,34 @@ mod tests {
         (0..ids.len())
             .map(|i| s.add_line(ids[i], ids[(i + 1) % ids.len()]).unwrap())
             .collect()
+    }
+
+    /// Two 40 x 40 squares overlapping by 20 x 20, drawn without splitting where they
+    /// cross: no region of area 0 with a hole (QA user guide pass), and the sketch says
+    /// it needs splitting. After the split the three faces are 1200, 400 and 1200
+    /// (40 x 40 = 1600 each, less the shared 20 x 20 = 400).
+    #[test]
+    fn crossing_squares_give_no_empty_region_and_ask_for_a_split() {
+        let mut s = Sketch::new();
+        polygon(
+            &mut s,
+            &[(0.0, 0.0), (40.0, 0.0), (40.0, 40.0), (0.0, 40.0)],
+        );
+        polygon(
+            &mut s,
+            &[(20.0, 20.0), (60.0, 20.0), (60.0, 60.0), (20.0, 60.0)],
+        );
+        assert!(s.profiles().iter().all(|r| r.area >= MIN_AREA));
+        assert!(s.has_unsplit_crossings());
+        s.apply_tool(&crate::tools::ToolOp::Split { curve: None })
+            .unwrap();
+        assert!(!s.has_unsplit_crossings());
+        let mut areas: Vec<f64> = s.profiles().iter().map(|r| r.area).collect();
+        areas.sort_by(f64::total_cmp);
+        assert_eq!(areas.len(), 3, "{areas:?}");
+        for (a, want) in areas.iter().zip([400.0, 1200.0, 1200.0]) {
+            assert!((a - want).abs() < 1e-6, "{areas:?}");
+        }
     }
 
     #[test]

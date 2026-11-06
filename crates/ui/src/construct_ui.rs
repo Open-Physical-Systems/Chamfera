@@ -753,6 +753,7 @@ impl ChamferaApp {
             return;
         }
         for (id, name, icon, plane, suppressed, error) in items {
+            let visible = self.session.construct_visible(id);
             let r = crate::browser::tree_row(
                 ui,
                 self.look(),
@@ -768,11 +769,24 @@ impl ChamferaApp {
                     } else {
                         None
                     },
-                    dimmed: suppressed,
+                    dimmed: suppressed || !visible,
                     error,
+                    eye: Some(visible),
                     ..crate::browser::Row::default()
                 },
             );
+            if let Some(eye) = r.eye {
+                let tip = if visible { "Hide" } else { "Show" };
+                if eye
+                    .on_hover_text(format!("{tip}\n{}", label("construct.visibility")))
+                    .clicked()
+                {
+                    self.run(
+                        "construct.visibility",
+                        json!({ "feature": id, "visible": !visible }),
+                    );
+                }
+            }
             let can_sketch = plane && !sketching && !suppressed && !error;
             let row = r.row.on_hover_text(if can_sketch {
                 "Double-click to sketch on this plane"

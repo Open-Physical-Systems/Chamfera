@@ -136,10 +136,16 @@ fn load_script(path: &str) -> Result<Vec<Value>, String> {
 /// Runs each step in order and prints one JSON reply per line. Stops at the first failure.
 fn run_script(path: &str, session: &mut Session) -> Result<(), Stop> {
     let steps = load_script(path)?;
-    let replies = chamfera_engine::script::run_steps(session, &steps).map_err(|e| e.to_string())?;
-    for (i, (step, reply)) in steps.iter().zip(&replies).enumerate() {
-        out(json!({ "step": i + 1, "command": step.get("command"), "reply": reply }))?;
-    }
+    // Each reply is printed as its step finishes, so the steps before a failure show.
+    let mut printed: Result<(), Stop> = Ok(());
+    let ran = chamfera_engine::script::run_steps_each(session, &steps, |n, reply| {
+        if printed.is_ok() {
+            let command = steps.get(n - 1).and_then(|s| s.get("command"));
+            printed = out(json!({ "step": n, "command": command, "reply": reply }));
+        }
+    });
+    printed?;
+    ran.map_err(|e| e.to_string())?;
     Ok(())
 }
 

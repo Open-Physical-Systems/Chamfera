@@ -1042,6 +1042,9 @@ impl ChamferaApp {
             FeatureKind::Surface(chamfera_doc::SurfaceFeature::Extrude(e)) => {
                 (e.distance.clone(), None)
             }
+            FeatureKind::Surface(chamfera_doc::SurfaceFeature::Revolve(r)) => {
+                (r.angle.clone(), None)
+            }
             FeatureKind::Surface(sf) => (crate::surface_ui::details(sf).1, None),
             FeatureKind::Extrude(e) => (e.distance.clone(), Some(ExtrudeForm::from_extrude(e))),
             FeatureKind::Revolve(r) => (r.angle.clone(), None),
@@ -1074,6 +1077,41 @@ impl ChamferaApp {
         });
     }
 
+    /// OK in the Edit Feature dialog: runs `feature.edit` with the value under the key
+    /// the feature takes (thickness, distance, angle, size, or the extrude's options).
+    pub(crate) fn apply_feature_edit(&mut self) {
+        let Some(edit) = self.timeline.editing.as_ref() else {
+            return;
+        };
+        let Ok(feature) = self.session.doc.feature(edit.feature) else {
+            return;
+        };
+        let name = feature.name.clone();
+        let key = match &feature.kind {
+            FeatureKind::Shell(_) | FeatureKind::Thicken(_) => Some("thickness"),
+            FeatureKind::OffsetFace(_)
+            | FeatureKind::MoveFace(_)
+            | FeatureKind::Surface(chamfera_doc::SurfaceFeature::Extrude(_)) => Some("distance"),
+            FeatureKind::Revolve(_)
+            | FeatureKind::Surface(chamfera_doc::SurfaceFeature::Revolve(_)) => Some("angle"),
+            FeatureKind::Blend(_) => Some("size"),
+            _ => None,
+        };
+        let mut params = json!({ "feature": edit.feature, "suppressed": edit.suppressed });
+        if let Some(k) = key {
+            params[k] = json!(edit.distance.trim());
+        } else if let Some(form) = &edit.extrude
+            && let (Some(p), serde_json::Value::Object(options)) =
+                (params.as_object_mut(), form.params())
+        {
+            p.extend(options);
+        }
+        if self.run("feature.edit", params).is_some() {
+            self.timeline.editing = None;
+            self.message = Some((format!("{name} updated"), false));
+        }
+    }
+
     /// The Edit Feature dialog, opened from the timeline.
     pub(crate) fn feature_dialog(&mut self, ctx: &egui::Context) {
         let Some(edit) = self.timeline.editing.as_ref() else {
@@ -1098,7 +1136,13 @@ impl ChamferaApp {
                 | FeatureKind::MoveFace(_)
                 | FeatureKind::Surface(chamfera_doc::SurfaceFeature::Extrude(_))
         );
-        let blend = shell || face_edit || matches!(feature.kind, FeatureKind::Blend(_));
+        // Revolves (solid and surface) edit their angle.
+        let angle = matches!(
+            feature.kind,
+            FeatureKind::Revolve(_)
+                | FeatureKind::Surface(chamfera_doc::SurfaceFeature::Revolve(_))
+        );
+        let blend = shell || face_edit || angle || matches!(feature.kind, FeatureKind::Blend(_));
         let revolve = !extrude && !blend;
         let value_label = match &feature.kind {
             FeatureKind::Revolve(_) => "Angle",
@@ -1107,6 +1151,7 @@ impl ChamferaApp {
             FeatureKind::Shell(_) | FeatureKind::Thicken(_) => "Thickness",
             FeatureKind::OffsetFace(_) | FeatureKind::MoveFace(_) => "Distance",
             FeatureKind::Surface(chamfera_doc::SurfaceFeature::Extrude(_)) => "Distance",
+            FeatureKind::Surface(chamfera_doc::SurfaceFeature::Revolve(_)) => "Angle",
             FeatureKind::Surface(_) => "Definition",
             FeatureKind::DeleteFace(_) => "Faces",
             FeatureKind::Combine(_)
@@ -1133,7 +1178,7 @@ impl ChamferaApp {
             FeatureKind::Loft(_) => Icon::Loft,
             ref k if k.is_body_tool() => crate::body_tools_ui::details(k).0,
             FeatureKind::Surface(ref sf) => crate::surface_ui::details(sf).0,
-            _ if revolve => Icon::Revolve,
+            _ if revolve || angle => Icon::Revolve,
             _ => Icon::Extrude,
         };
         let title = format!("{}: {name}", label("feature.edit"));
@@ -1204,23 +1249,7 @@ impl ChamferaApp {
             cancel = true;
         }
         if ok {
-            let mut params = json!({ "feature": edit.feature, "suppressed": edit.suppressed });
-            if shell {
-                params["thickness"] = json!(edit.distance.trim());
-            } else if face_edit {
-                params["distance"] = json!(edit.distance.trim());
-            } else if blend {
-                params["size"] = json!(edit.distance.trim());
-            } else if let Some(form) = &edit.extrude
-                && let (Some(p), serde_json::Value::Object(options)) =
-                    (params.as_object_mut(), form.params())
-            {
-                p.extend(options);
-            }
-            if self.run("feature.edit", params).is_some() {
-                self.timeline.editing = None;
-                self.message = Some((format!("{name} updated"), false));
-            }
+            self.apply_feature_edit();
         } else if cancel {
             self.timeline.editing = None;
         }
@@ -1240,6 +1269,50 @@ fn connector(ui: &mut egui::Ui, colour: egui::Color32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Edit Feature changes a surface revolve's angle (QA user guide pass: only a
+    /// surface extrude's distance could be edited). The line x = 10, y 0..20 turned
+    /// about the y axis: area 2 pi r h (angle / 360) = 400 pi at 360, 100 pi at 90.
+    #[test]
+    fn edit_feature_changes_a_surface_revolves_angle() {
+        let mut app = ChamferaApp::headless();
+        app.run("sketch.create", json!({ "plane": "xy" }));
+        let axis = app
+            .run(
+                "sketch.line",
+                json!({ "x1": 0, "y1": -5, "x2": 0, "y2": 25 }),
+            )
+            .unwrap()["curve"]
+            .clone();
+        let line = app
+            .run(
+                "sketch.line",
+                json!({ "x1": 10, "y1": 0, "x2": 10, "y2": 20 }),
+            )
+            .unwrap()["curve"]
+            .clone();
+        app.run("sketch.finish", json!({}));
+        let id = app
+            .run(
+                "surface.revolve",
+                json!({ "sketch": 1, "curves": [line], "axis": axis }),
+            )
+            .unwrap()["feature"]
+            .as_u64()
+            .unwrap() as u32;
+        app.edit_feature(id);
+        let edit = app
+            .timeline
+            .editing
+            .as_mut()
+            .expect("no Edit Feature dialog");
+        assert_eq!(edit.distance, "360 deg");
+        edit.distance = "90 deg".into();
+        app.apply_feature_edit();
+        assert!(app.timeline.editing.is_none(), "{:?}", app.message);
+        let area = app.session.solids()[0].body.area().unwrap();
+        assert!((area - 100.0 * std::f64::consts::PI).abs() < 1e-6, "{area}");
+    }
 
     /// A plate (sketch 1, extrude 2) with a boss on its top face (sketch 3, extrude 4).
     fn plate_with_boss() -> ChamferaApp {

@@ -128,7 +128,8 @@ fn summary(s: &Session, id: u32) -> Value {
                 "visible": b.visible,
                 "triangles": b.mesh.triangles.len(),
                 "area": b.mesh.area(),
-                "volume": b.mesh.signed_volume(),
+                // A surface (an open shell) encloses nothing.
+                "volume": (!b.surface).then(|| b.mesh.signed_volume()),
                 "bounds": bounds,
                 "appearance": b.appearance,
             })

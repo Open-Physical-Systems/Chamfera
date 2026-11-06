@@ -70,6 +70,10 @@ pub struct InterferencePanel {
 }
 
 /// The Explode panel.
+/// The Explode slider's factors: assembled to the most `view.explode` takes.
+pub const EXPLODE_RANGE: std::ops::RangeInclusive<f64> =
+    1.0..=chamfera_engine::motion::MAX_EXPLODE_FACTOR;
+
 pub struct ExplodePanel {
     pub factor: f64,
     /// The manual offset for the chosen component, mm.
@@ -91,6 +95,8 @@ pub struct MotionUi {
     pub study: Option<StudyPanel>,
     pub interference: Option<InterferencePanel>,
     pub explode: Option<ExplodePanel>,
+    /// The factor the Explode panel had when it closed, to open with again.
+    pub last_explode: Option<f64>,
 }
 
 /// A joint value as typed into the panels, from the stored value.
@@ -185,11 +191,15 @@ impl ChamferaApp {
 
     /// Explode: shows the assembly exploded by the panel's factor, or collapses it.
     pub(crate) fn toggle_explode(&mut self) {
-        if self.motion.explode.take().is_some() {
+        if let Some(old) = self.motion.explode.take() {
+            self.motion.last_explode = Some(old.factor);
             self.run("view.explode_clear", json!({}));
             return;
         }
-        let panel = ExplodePanel::default();
+        let mut panel = ExplodePanel::default();
+        if let Some(f) = self.motion.last_explode {
+            panel.factor = f;
+        }
         self.run("view.explode", json!({ "factor": panel.factor }));
         self.motion.explode = Some(panel);
     }
@@ -762,7 +772,11 @@ impl ChamferaApp {
                     .show(ui, |ui| {
                         widgets::field_label(ui, look, "Factor");
                         if ui
-                            .add(egui::Slider::new(&mut panel.factor, 1.0..=5.0).max_decimals(2))
+                            .add(
+                                egui::Slider::new(&mut panel.factor, EXPLODE_RANGE)
+                                    .logarithmic(true)
+                                    .max_decimals(2),
+                            )
                             .changed()
                         {
                             factor = Some(panel.factor);
@@ -812,5 +826,28 @@ impl ChamferaApp {
             self.motion.explode = None;
             self.run("view.explode_clear", json!({}));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The Explode slider reaches the factor 20 that `view.explode` takes, and the
+    /// panel opens again on the factor it closed with (QA user guide pass: the slider
+    /// stopped at 5 and reopening reset it to 2).
+    #[test]
+    fn the_explode_panel_reaches_20_and_remembers_its_factor() {
+        assert_eq!(*EXPLODE_RANGE.end(), 20.0);
+        let mut app = ChamferaApp::headless();
+        app.toggle_explode();
+        assert_eq!(app.motion.explode.as_ref().map(|p| p.factor), Some(2.0));
+        if let Some(p) = app.motion.explode.as_mut() {
+            p.factor = 12.0;
+        }
+        app.toggle_explode();
+        assert!(app.motion.explode.is_none());
+        app.toggle_explode();
+        assert_eq!(app.motion.explode.as_ref().map(|p| p.factor), Some(12.0));
     }
 }

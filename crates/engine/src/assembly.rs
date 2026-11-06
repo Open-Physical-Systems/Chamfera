@@ -158,12 +158,29 @@ pub fn solve(asm: &Assembly, frame: &dyn Fn(&JointOrigin) -> Result<Frame, Strin
 /// mean of the outer boundary's corners.
 fn face_centre(body: &Body, face: FaceId) -> Option<Point3> {
     let outer = body.face_outer_loop(face).ok()?;
+    // A boundary made only of circles and arcs about one centre (a disc's rim, split
+    // at a seam or not) is centred there: its one or two seam vertices are not.
+    let mut centre: Option<Point3> = None;
+    let mut round = true;
     for h in body.loop_half_edges(outer).ok()? {
-        if let Some(e) = body.half_edge_edge(h).ok()?
-            && let Some((Curve::Circle(c), _, _)) = body.edge_curve(e).ok()?
-        {
-            return Some(c.center());
+        let c = body
+            .half_edge_edge(h)
+            .ok()
+            .flatten()
+            .and_then(|e| body.edge_curve(e).ok().flatten())
+            .and_then(|(curve, _, _)| match curve {
+                Curve::Circle(c) => Some(c.center()),
+                Curve::Arc(a) => Some(a.circle().center()),
+                _ => None,
+            });
+        match (c, centre) {
+            (Some(c), None) => centre = Some(c),
+            (Some(c), Some(k)) if c.distance(k) <= chamfera_geom::LINEAR_TOLERANCE => {}
+            _ => round = false,
         }
+    }
+    if round && let Some(c) = centre {
+        return Some(c);
     }
     let points: Vec<Point3> = body
         .loop_vertices(outer)

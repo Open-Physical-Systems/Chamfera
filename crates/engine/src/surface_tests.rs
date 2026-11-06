@@ -118,15 +118,31 @@ fn a_revolved_open_line_is_a_cylinder_of_area_two_pi_r_h() {
         .unwrap(),
         "feature",
     );
-    s.execute(
-        "surface.trim",
-        &json!({"body": "SurfaceRevolve1", "plane": plane, "keep": "below"}),
-    )
-    .unwrap();
+    let r = s
+        .execute(
+            "surface.trim",
+            &json!({"body": "SurfaceRevolve1", "plane": plane, "keep": "below"}),
+        )
+        .unwrap();
     assert!(close(
         solid(&s, "SurfaceRevolve1").area().unwrap(),
         200.0 * PI
     ));
+    // The reply names the trimmed surface with its area and no volume (QA user guide
+    // pass, surfaces 1), and body.list gives a surface no volume either (surfaces 2).
+    let trimmed = &r["solids"][0];
+    assert_eq!(trimmed["name"], "SurfaceRevolve1", "{r}");
+    assert!(close(trimmed["area"].as_f64().unwrap(), 200.0 * PI));
+    assert!(trimmed["volume"].is_null() && trimmed["surface"] == true);
+    let list = s.execute("body.list", &json!({})).unwrap();
+    let row = list["bodies"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|b| b["name"] == "SurfaceRevolve1")
+        .cloned()
+        .unwrap();
+    assert!(row["volume"].is_null(), "{row}");
 }
 
 #[test]

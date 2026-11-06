@@ -313,6 +313,56 @@ fn dimension_line(items: &mut Vec<Item>, a: Point2, b: Point2, s: String) {
     label(items, mid + up * TEXT_GAP, u.y.atan2(u.x), Align::Centre, s);
 }
 
+/// The offset that moves dimension `d` of `view` by `delta` (sheet mm) as a drag does:
+/// a linear dimension's line follows the drag across it (crossing the measured points
+/// flips it to the other side), a diameter's or radius's leader and an angle's arc grow
+/// or shrink along their direction. `None` when the dimension has nothing to measure.
+pub fn moved_offset(d: &SheetDimension, view: &PlacedView, delta: Vec2) -> Option<f64> {
+    let pts: Vec<Point2> = d.points.iter().map(|p| view.to_sheet(*p)).collect();
+    let off = d.offset;
+    // A linear line at `line` across points spanning `lo..hi`, moved by `by`.
+    let across = |lo: f64, hi: f64, line: f64, by: f64| {
+        let to = line + by;
+        if to >= hi {
+            to - hi
+        } else if to <= lo {
+            to - lo
+        } else {
+            0.0
+        }
+    };
+    match (d.kind, pts.as_slice()) {
+        (DimensionKind::Horizontal, &[a, b]) => {
+            let (lo, hi) = (a.y.min(b.y), a.y.max(b.y));
+            let line = if off >= 0.0 { hi + off } else { lo + off };
+            Some(across(lo, hi, line, delta.y))
+        }
+        (DimensionKind::Vertical, &[a, b]) => {
+            let (lo, hi) = (a.x.min(b.x), a.x.max(b.x));
+            let line = if off >= 0.0 { hi + off } else { lo + off };
+            Some(across(lo, hi, line, delta.x))
+        }
+        (DimensionKind::Aligned, &[a, b]) => {
+            let n = (b - a).normalized()?.perp();
+            Some(off + delta.dot(n))
+        }
+        (DimensionKind::Diameter | DimensionKind::Radius, &[c, p]) => {
+            let u = (p - c).normalized()?;
+            Some((off.abs().max(ARROW_LENGTH) + delta.dot(u)).max(ARROW_LENGTH))
+        }
+        (DimensionKind::Angular, &[v, a, b]) => {
+            let mid = ((a - v).normalized()? + (b - v).normalized()?).normalized()?;
+            let r = if off.abs() > ARROW_LENGTH {
+                off.abs()
+            } else {
+                15.0
+            };
+            Some((r + delta.dot(mid)).max(2.0 * ARROW_LENGTH))
+        }
+        _ => None,
+    }
+}
+
 /// Draws one dimension of a placed view.
 pub(crate) fn draw(d: &SheetDimension, view: &PlacedView, items: &mut Vec<Item>) {
     let Some(value) = measure(d.kind, &d.points) else {

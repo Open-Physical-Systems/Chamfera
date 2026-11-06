@@ -110,6 +110,9 @@ pub struct Options {
     /// Show a selection box with these viewport corners (x1, y1, x2, y2) as if it were
     /// being dragged, for screenshots of the window and crossing styles.
     pub select_box: Option<[f32; 4]>,
+    /// In the DRAWING workspace, select what is at sheet point (x1, y1) and show it
+    /// being dragged to (x2, y2), for screenshots of moving drawing items.
+    pub drawing_drag: Option<[f32; 4]>,
     /// Open the search palette at start with this query typed.
     pub search: Option<String>,
     /// Open the viewport's right-click menu at this viewport point once it has drawn.
@@ -485,6 +488,12 @@ impl ChamferaApp {
             }
         }
         app.box_preview = options.select_box;
+        if let Some([x1, y1, x2, y2]) = options.drawing_drag {
+            app.drawing_drag_preview(
+                chamfera_geom::Point2::new(f64::from(x1), f64::from(y1)),
+                chamfera_geom::Point2::new(f64::from(x2), f64::from(y2)),
+            );
+        }
         if let Some(q) = &options.search {
             app.run_action(shortcuts::Action::Search);
             app.search.query = q.chars().take(120).collect();

@@ -160,13 +160,14 @@ pub fn demo_replies() -> Vec<ScriptedReply> {
     }
     vec![
         sketch,
+        // The sketch is finished before it is extruded, as a person would do it.
         ScriptedReply::new("tool_use")
+            .tool("toolu_d6", "sketch_finish", json!({}))
             .tool(
                 "toolu_d4",
                 "solid_extrude",
                 json!({ "sketch": 1, "profiles": [{ "x": 30, "y": 20 }], "distance": "thickness" }),
-            )
-            .tool("toolu_d6", "sketch_finish", json!({})),
+            ),
         ScriptedReply::new("tool_use")
             .text("Checking the result.")
             .tool("toolu_d5", "design_summary", json!({})),

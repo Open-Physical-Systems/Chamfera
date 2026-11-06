@@ -497,3 +497,52 @@ fn a_construction_that_cannot_build_any_more_reports_why() {
     assert!(s.constructs().is_empty());
     assert!(s.scene.fills.is_empty());
 }
+
+/// A construction plane can be hidden in the viewport without changing what is built on
+/// it (QA user guide pass: only suppressing hid one). The XY plane offset 10 draws its
+/// outline as 4 lines; hidden it draws none, and a sketch on it still builds.
+#[test]
+fn hiding_a_construction_plane_removes_its_outline_and_keeps_it_built() {
+    let mut s = Session::new();
+    let plane = run(
+        &mut s,
+        "construct.plane_offset",
+        json!({ "base": "xy", "distance": 10 }),
+    )["feature"]
+        .as_u64()
+        .unwrap();
+    let construct_lines = |s: &Session| -> usize {
+        s.scene
+            .overlays
+            .iter()
+            .filter(|o| o.style == chamfera_render::OverlayStyle::Construct)
+            .map(|o| o.lines.len())
+            .sum()
+    };
+    assert_eq!(construct_lines(&s), 4);
+    let r = run(
+        &mut s,
+        "construct.visibility",
+        json!({ "feature": plane, "visible": false }),
+    );
+    assert_eq!(r["visible"], false);
+    assert_eq!(construct_lines(&s), 0);
+    assert!(!s.construct_visible(plane as u32));
+    // Still built: a sketch on it works and the design did not change.
+    run(&mut s, "sketch.create", json!({ "plane": plane }));
+    run(&mut s, "sketch.finish", json!({}));
+    run(
+        &mut s,
+        "construct.visibility",
+        json!({ "feature": plane, "visible": true }),
+    );
+    assert_eq!(construct_lines(&s), 4);
+    // Only construction features.
+    assert!(
+        s.execute(
+            "construct.visibility",
+            &json!({ "feature": 99, "visible": false })
+        )
+        .is_err()
+    );
+}

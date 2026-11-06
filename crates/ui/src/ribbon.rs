@@ -1210,7 +1210,7 @@ pub const TOOLS: &[RibbonTool] = &[
         Action::Tool("cam.post"),
         Icon::CamPost,
         "Post G-code",
-        "Write the setup's toolpaths as G-code",
+        "Write the setup's toolpaths as LinuxCNC G-code (GRBL: File > Post G-code (GRBL))",
     )
     .primary()
     .short("Post"),
@@ -2461,6 +2461,7 @@ mod tests {
             "component.rename",
             "component.tint",
             "construct.pick",
+            "construct.visibility",  // the Browser's eye
             "drawing.add_dimension", // the dimension tools
             "drawing.add_view",      // the view tools
             "drawing.delete",
@@ -2468,6 +2469,8 @@ mod tests {
             "drawing.export",     // the export tools
             "drawing.export_bytes",
             "drawing.list",
+            "drawing.move", // a drag on the sheet canvas
+            "drawing.pick", // a click on the sheet canvas
             "inspect.measure_at",
             "joint.delete",
             "joint.origin_at",

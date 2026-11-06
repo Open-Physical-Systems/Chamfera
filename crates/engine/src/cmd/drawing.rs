@@ -193,6 +193,19 @@ pub static COMMANDS: &[CommandSpec] = &[
         run: list,
     },
     CommandSpec {
+        id: "drawing.move",
+        label: "Move on Drawing",
+        params: "view: id (optional) - move this view (views projected from it follow; a \
+                 projected view moves only along its projection)\n\
+                 dimension: id (optional) - move this dimension's line, leader or arc (its \
+                 offset changes; what it measures stays)\n\
+                 annotation: id (optional) - move this note, symbol, frame, balloon, leader \
+                 text or parts list (what it points at stays)\n\
+                 dx, dy: number (required) - sheet mm",
+        mutates: true,
+        run: move_item,
+    },
+    CommandSpec {
         id: "drawing.new_sheet",
         label: "New Sheet",
         params: "paper: string (optional) - a4, a3 (default), a2, ansi_a or ansi_b\n\
@@ -204,6 +217,17 @@ pub static COMMANDS: &[CommandSpec] = &[
                  defaults to today",
         mutates: true,
         run: new_sheet,
+    },
+    CommandSpec {
+        id: "drawing.pick",
+        label: "Pick on Drawing",
+        params: "x, y: number (required) - sheet mm from the lower-left corner\n\
+                 tolerance: number (optional) - how near a dimension or annotation must be, \
+                 0 to 50 mm, default 2\n\
+                 sheet: id (optional) - default the last sheet\n\
+                 Replies with `kind` (view, dimension, annotation or null) and `id`",
+        mutates: false,
+        run: pick,
     },
 ];
 
@@ -586,6 +610,123 @@ fn add_dimension(s: &mut Session, p: &Value) -> CmdResult {
     }))
 }
 
+/// `v`, with -0 (an empty sum) as 0.
+fn positive_zero(v: f64) -> f64 {
+    if v == 0.0 { 0.0 } else { v }
+}
+
+/// The sheet that holds dimension `id`.
+fn sheet_of_dimension(s: &Session, id: u32) -> Result<u32, CommandError> {
+    s.doc
+        .drawing
+        .sheets
+        .iter()
+        .find(|x| x.dimensions.iter().any(|d| d.id == id))
+        .map(|x| x.id)
+        .ok_or_else(|| bad(format!("no dimension {id}")))
+}
+
+/// A point moved by `(dx, dy)`, refused when it would leave the sheet's range.
+fn shifted(p: Point2, dx: f64, dy: f64) -> Result<Point2, CommandError> {
+    let q = Point2::new(p.x + dx, p.y + dy);
+    if dd::is_valid_sheet_coordinate(q.x) && dd::is_valid_sheet_coordinate(q.y) {
+        Ok(q)
+    } else {
+        Err(bad(format!(
+            "that moves it beyond ±{} mm",
+            dd::MAX_SHEET_COORDINATE
+        )))
+    }
+}
+
+fn move_item(s: &mut Session, p: &Value) -> CmdResult {
+    let (dx, dy) = (coordinate(p, "dx")?, coordinate(p, "dy")?);
+    if let Some(d) = opt_id(p, "dimension")? {
+        let sheet = sheet_of_dimension(s, d)?;
+        let g = render(s, sheet)?;
+        let sh = s.doc.drawing.sheet(sheet)?;
+        let dim = sh
+            .dimensions
+            .iter()
+            .find(|x| x.id == d)
+            .ok_or_else(|| bad(format!("no dimension {d}")))?;
+        let view = g
+            .view(dim.view)
+            .ok_or_else(|| bad(format!("dimension {d} has no view on its sheet")))?;
+        let offset = chamfera_drawing::moved_offset(dim, view, chamfera_geom::Vec2::new(dx, dy))
+            .filter(|o| dd::is_valid_sheet_coordinate(*o))
+            .ok_or_else(|| bad(format!("dimension {d} cannot be moved there")))?;
+        let sh = s.doc.drawing.sheet_mut(sheet)?;
+        if let Some(x) = sh.dimensions.iter_mut().find(|x| x.id == d) {
+            x.offset = offset;
+        }
+        return Ok(json!({ "moved": "dimension", "id": d, "offset": offset }));
+    }
+    if let Some(a) = opt_id(p, "annotation")? {
+        for sh in &mut s.doc.drawing.sheets {
+            if let Some(pl) = sh.parts_list.as_mut().filter(|x| x.id == a) {
+                let q = shifted(Point2::new(pl.x, pl.y), dx, dy)?;
+                (pl.x, pl.y) = (q.x, q.y);
+                return Ok(json!({ "moved": "annotation", "id": a, "x": q.x, "y": q.y }));
+            }
+            let Some(ann) = sh.annotations.iter_mut().find(|x| x.id == a) else {
+                continue;
+            };
+            use chamfera_doc::drawing::AnnotationKind as K;
+            // The point that places it: a note's, symbol's, frame's or balloon's
+            // anchor, a leader's text end. What it points at on a view stays.
+            let at = match &mut ann.kind {
+                K::Note { at, .. }
+                | K::SurfaceFinish { at, .. }
+                | K::Gdt { at, .. }
+                | K::Balloon { at, .. } => at,
+                K::Leader { points, .. } => points
+                    .last_mut()
+                    .ok_or_else(|| bad(format!("leader {a} has no points")))?,
+                K::CentreLine { .. } => {
+                    return Err(bad(
+                        "a centre line joins its circles' centres and follows the model; \
+                         it cannot be moved",
+                    ));
+                }
+            };
+            let q = shifted(*at, dx, dy)?;
+            *at = q;
+            return Ok(json!({ "moved": "annotation", "id": a, "x": q.x, "y": q.y }));
+        }
+        return Err(bad(format!("no annotation or parts list {a}")));
+    }
+    let v = params::req_id(p, "view")?;
+    let sheet = sheet_of_view(s, v)?;
+    let sh = s.doc.drawing.sheet_mut(sheet)?;
+    let view = sh
+        .views
+        .iter_mut()
+        .find(|x| x.id == v)
+        .ok_or_else(|| bad(format!("no view {v}")))?;
+    let q = shifted(Point2::new(view.x, view.y), dx, dy)?;
+    (view.x, view.y) = (q.x, q.y);
+    Ok(json!({ "moved": "view", "id": v, "x": q.x, "y": q.y }))
+}
+
+fn pick(s: &mut Session, p: &Value) -> CmdResult {
+    let at = Point2::new(coordinate(p, "x")?, coordinate(p, "y")?);
+    let tolerance = match params::opt_f64(p, "tolerance")? {
+        None => 2.0,
+        Some(t) if t.is_finite() && (0.0..=50.0).contains(&t) => t,
+        Some(_) => return Err(bad("`tolerance` must be 0 to 50 mm")),
+    };
+    let sheet = sheet_id(s, p)?;
+    let g = render(s, sheet)?;
+    Ok(match g.pick(at, tolerance) {
+        Some(o) => {
+            let (kind, id) = o.key();
+            json!({ "kind": kind, "id": id, "sheet": sheet })
+        }
+        None => json!({ "kind": null, "sheet": sheet }),
+    })
+}
+
 fn delete(s: &mut Session, p: &Value) -> CmdResult {
     if let Some(d) = opt_id(p, "dimension")? {
         for sh in &mut s.doc.drawing.sheets {
@@ -693,7 +834,7 @@ fn list(s: &mut Session, p: &Value) -> CmdResult {
                     "section": v.section,
                     "detail": v.detail,
                     "hatched_area": placed.map(|pv| pv.geometry.regions.iter()
-                        .map(|r| chamfera_drawing::section::region_area(r)).sum::<f64>()),
+                        .map(|r| chamfera_drawing::section::region_area(r)).sum::<f64>()).map(positive_zero),
                     "x": placed.map_or(v.x, |pv| pv.centre.x),
                     "y": placed.map_or(v.y, |pv| pv.centre.y),
                     "scale": placed.map(|pv| pv.scale),

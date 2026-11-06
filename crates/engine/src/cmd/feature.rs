@@ -259,6 +259,13 @@ pub(super) fn seeds(p: &Value) -> Result<Vec<Point2>, CommandError> {
 
 /// The reply for a feature: its solids' exact volumes from the kernel, and any error.
 pub(super) fn feature_reply(s: &Session, id: u32) -> Value {
+    // A trim keeps its surface's name and faces, so it names that surface itself.
+    let trimmed = match s.doc.feature(id).map(|f| &f.kind) {
+        Ok(chamfera_doc::FeatureKind::Surface(chamfera_doc::SurfaceFeature::Trim(t))) => {
+            Some(t.body.as_str())
+        }
+        _ => None,
+    };
     let solids: Vec<Value> = s
         .solids()
         .iter()
@@ -266,6 +273,7 @@ pub(super) fn feature_reply(s: &Session, id: u32) -> Value {
             x.feature == id
                 || crate::solids::body_has_feature(&x.body, id)
                 || s.edited_solids(id).contains(&x.name)
+                || trimmed == Some(x.name.as_str())
         })
         .map(|x| {
             json!({

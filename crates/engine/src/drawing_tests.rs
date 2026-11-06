@@ -132,6 +132,130 @@ fn a_dimension_of_a_50_wide_box_reads_60_after_the_box_is_edited_to_60() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Views, dimensions and annotations can be picked, moved and deleted (QA user guide
+/// pass, drawings 9). The front view of the 50 x 30 x 10 box at (150, 150) spans
+/// x 125..175 and y 145..155; a horizontal dimension of its bottom edge with offset -10
+/// has its line at y = 145 - 10 = 135.
+#[test]
+fn drawing_items_are_picked_moved_and_deleted_through_commands() {
+    let mut s = Session::new();
+    parametric_box(&mut s);
+    let front = run(
+        &mut s,
+        "drawing.add_view",
+        json!({"view": "front", "x": 150, "y": 150}),
+    )["view"]
+        .as_u64()
+        .unwrap();
+    // The top view 80 above, projected from the front view.
+    let top = run(
+        &mut s,
+        "drawing.add_view",
+        json!({"view": "top", "x": 150, "y": 230}),
+    )["view"]
+        .as_u64()
+        .unwrap();
+    let d = run(
+        &mut s,
+        "drawing.add_dimension",
+        json!({"view": front, "kind": "horizontal", "x1": 125.3, "y1": 145.2, "x2": 174.8, "y2": 145.1, "offset": -10}),
+    )["dimension"]
+        .as_u64()
+        .unwrap();
+    let note = run(
+        &mut s,
+        "drawing.add_note",
+        json!({"x": 300, "y": 100, "text": "NOTE"}),
+    )["annotation"]
+        .as_u64()
+        .unwrap();
+    let pick = |s: &mut Session, x: f64, y: f64| run(s, "drawing.pick", json!({"x": x, "y": y}));
+    // The dimension line at y = 135 (x 140 is between its arrows).
+    let r = pick(&mut s, 140.0, 135.3);
+    assert_eq!(
+        (r["kind"].as_str(), r["id"].as_u64()),
+        (Some("dimension"), Some(d))
+    );
+    // The note's text starts at (300, 100) and is 3.5 tall: (302, 101) is inside it.
+    let r = pick(&mut s, 302.0, 101.0);
+    assert_eq!(
+        (r["kind"].as_str(), r["id"].as_u64()),
+        (Some("annotation"), Some(note))
+    );
+    // Inside the front view's box, away from the dimension: the view.
+    let r = pick(&mut s, 160.0, 150.0);
+    assert_eq!(
+        (r["kind"].as_str(), r["id"].as_u64()),
+        (Some("view"), Some(front))
+    );
+    assert!(pick(&mut s, 60.0, 260.0)["kind"].is_null());
+    // Dragging the dimension 5 further down: its line at y = 130, offset -15.
+    let r = run(
+        &mut s,
+        "drawing.move",
+        json!({"dimension": d, "dx": 0, "dy": -5}),
+    );
+    assert!((r["offset"].as_f64().unwrap() + 15.0).abs() < 1e-9, "{r}");
+    // Dragged up across the edge (to y = 150, 5 above the measured points at y = 145):
+    // the line flips above them, offset +5.
+    let r = run(
+        &mut s,
+        "drawing.move",
+        json!({"dimension": d, "dx": 0, "dy": 20}),
+    );
+    assert!((r["offset"].as_f64().unwrap() - 5.0).abs() < 1e-9, "{r}");
+    // The note 10 right; the front view 20 right takes the projected top view along.
+    run(
+        &mut s,
+        "drawing.move",
+        json!({"annotation": note, "dx": 10, "dy": 0}),
+    );
+    run(
+        &mut s,
+        "drawing.move",
+        json!({"view": front, "dx": 20, "dy": 0}),
+    );
+    let l = run(&mut s, "drawing.list", json!({}));
+    let views = l["sheets"][0]["views"].as_array().unwrap();
+    let at = |id: u64| {
+        let v = views.iter().find(|v| v["id"].as_u64() == Some(id)).unwrap();
+        (v["x"].as_f64().unwrap(), v["y"].as_f64().unwrap())
+    };
+    assert_eq!(at(front), (170.0, 150.0));
+    // A view without a section hatches nothing: 0, not -0 (QA guide pass, drawings 12).
+    let hatched = views[0]["hatched_area"].as_f64().unwrap();
+    assert!(hatched == 0.0 && hatched.is_sign_positive(), "{hatched}");
+    assert_eq!(at(top), (170.0, 230.0));
+    let sh = &s.doc.drawing.sheets[0];
+    assert!(matches!(
+        sh.annotations[0].kind,
+        chamfera_doc::drawing::AnnotationKind::Note { at, .. } if (at.x - 310.0).abs() < 1e-9
+    ));
+    // One undo puts the view back; moves of nothing are refused and change nothing.
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(s.doc.drawing.sheets[0].views[0].x, 150.0);
+    let before = s.doc.clone();
+    assert!(
+        s.execute("drawing.move", &json!({"view": 99, "dx": 1, "dy": 0}))
+            .is_err()
+    );
+    assert!(
+        s.execute(
+            "drawing.move",
+            &json!({"view": front, "dx": f64::NAN, "dy": 0})
+        )
+        .is_err()
+    );
+    assert!(
+        s.execute("drawing.move", &json!({"view": front, "dx": 1e9, "dy": 0}))
+            .is_err()
+    );
+    assert_eq!(s.doc, before);
+    // Delete by what the pick named.
+    run(&mut s, "drawing.delete", json!({"dimension": d}));
+    assert!(pick(&mut s, 140.0, 150.3)["kind"] != "dimension");
+}
+
 #[test]
 fn a_dimension_whose_edge_is_gone_is_dangling_and_kept() {
     let mut s = Session::new();
@@ -460,6 +584,8 @@ fn drawing_v2_commands_refuse_hostile_input_and_change_nothing() {
         "drawing.add_parts_list",
         "drawing.add_balloons",
         "drawing.delete",
+        "drawing.move",
+        "drawing.pick",
     ];
     for p in &cases {
         for id in ids {

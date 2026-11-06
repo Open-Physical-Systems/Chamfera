@@ -1065,6 +1065,8 @@ fn get(s: &mut Session, p: &Value) -> CmdResult {
         "dof": dof.as_ref().map(|d| d.dof),
         "status": dof.as_ref().map(|d| format!("{:?}", d.status)),
         "profiles": regions,
+        // Curves that cross unsplit give profiles that are not what the drawing shows.
+        "needs_split": f.sketch.has_unsplit_crossings(),
         "expressions": f.expressions,
         "selection": s.sketch_selection,
     }))

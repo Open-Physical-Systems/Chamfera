@@ -674,6 +674,11 @@ impl Session {
         })
     }
 
+    /// Whether construction feature `id` is shown in the viewport.
+    pub fn construct_visible(&self, id: u32) -> bool {
+        !self.view_state.hidden_constructs.contains(&id)
+    }
+
     /// The construction geometry as overlays (outlines, axes, points) and fills (planes),
     /// for the viewport. Display only.
     pub(crate) fn construct_overlays(&self) -> (Vec<Overlay>, Vec<Fill>) {
@@ -681,7 +686,10 @@ impl Session {
         let mut lines = Vec::new();
         let mut points = Vec::new();
         let mut triangles = Vec::new();
-        for c in self.built.constructs.values() {
+        for (id, c) in &self.built.constructs {
+            if self.view_state.hidden_constructs.contains(id) {
+                continue;
+            }
             match c {
                 Constructed::Plane { frame, extent } => {
                     let [a, b, cc, d] = plane_rectangle(frame, *extent, model);

@@ -74,8 +74,9 @@ fn bad(m: impl Into<String>) -> CommandError {
 
 /// The total volume of the built solids (mm³), and how many there are.
 fn solids_volume(s: &Session) -> (f64, usize) {
-    let v = s.solids().iter().filter_map(|x| x.body.volume().ok()).sum();
-    (v, s.solids().len())
+    let v: f64 = s.solids().iter().filter_map(|x| x.body.volume().ok()).sum();
+    // An empty sum is -0; it reads 0.
+    (if v == 0.0 { 0.0 } else { v }, s.solids().len())
 }
 
 /// The design table: each configuration's overrides, plus the columns.

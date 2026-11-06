@@ -433,8 +433,11 @@ fn a_configuration_suppresses_features() {
         "config.suppress",
         json!({"config": "Blank", "feature": 2, "suppressed": true}),
     );
-    run(&mut s, "config.activate", json!({"config": "Blank"}));
+    let r = run(&mut s, "config.activate", json!({"config": "Blank"}));
     assert!(s.solids().is_empty(), "the only feature is suppressed");
+    // Nothing built: volume 0, not -0 (QA user guide pass, manufacture 8).
+    let v = r["volume"].as_f64().unwrap();
+    assert!(v == 0.0 && v.is_sign_positive(), "{v}");
     assert!(
         !s.doc.feature(2).unwrap().suppressed,
         "the feature's own state is kept"

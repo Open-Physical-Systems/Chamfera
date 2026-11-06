@@ -221,6 +221,45 @@ fn projected_views_follow_third_and_first_angle() {
     assert!(!projects_from(ViewDirection::Front, ViewDirection::Iso));
 }
 
+/// QA (user guide pass): first angle mirrors a projected view's distance to the other
+/// side of its base, which pushed views placed for third angle off the sheet. Now a
+/// projected view is moved toward its base just enough to stay inside the border.
+/// Front at (100, 100); top asked at (150, 200), 100 above: first angle puts it 100
+/// below, at y = 0, but the top view of the 50 x 30 box is 30 tall, so it stops at
+/// MARGIN + 15 = 25. Right asked at (220, 30), 120 right: first angle gives x = -20;
+/// the right view is 30 wide, so it stops at MARGIN_LEFT + 15 = 35. Both keep their
+/// alignment with the front view (x = 100 and y = 100).
+#[test]
+fn first_angle_keeps_projected_views_on_the_sheet() {
+    let b = block();
+    let views = vec![
+        view(2, ViewDirection::Front, 100.0, 100.0, None),
+        view(3, ViewDirection::Top, 150.0, 200.0, Some(2)),
+        view(4, ViewDirection::Right, 220.0, 30.0, Some(2)),
+    ];
+    let mut s = sheet_with(views, vec![]);
+    s.projection = ProjectionAngle::First;
+    let out = render_sheet(&s, &[("Body1", &b)]).unwrap();
+    let top = out.view(3).unwrap().centre;
+    let right = out.view(4).unwrap().centre;
+    assert!(
+        (top.x - 100.0).abs() < EPS && (top.y - 25.0).abs() < EPS,
+        "{top:?}"
+    );
+    assert!(
+        (right.x - 35.0).abs() < EPS && (right.y - 100.0).abs() < EPS,
+        "{right:?}"
+    );
+    for id in [2, 3, 4] {
+        let (lo, hi) = out.view(id).unwrap().bounds().unwrap();
+        assert!(
+            lo.x >= MARGIN_LEFT - EPS && lo.y >= MARGIN - EPS,
+            "view {id}: {lo:?}"
+        );
+        assert!(hi.x <= out.width - MARGIN + EPS && hi.y <= out.height - MARGIN + EPS);
+    }
+}
+
 #[test]
 fn a_linear_dimension_across_the_box_measures_50() {
     let b = block();
