@@ -194,6 +194,10 @@ fn hostile_params_never_panic() {
         json!({"sketch": 1, "profiles": [{"x": 10, "y": 10}], "distance": 5, "operation": "smash"}),
         json!({"feature": 2, "count": 1e9, "direction": {"x": 0, "y": 0, "z": 0}, "spacing": 0}),
         json!({"feature": 2, "count": "3", "origin": {"x": f64::NAN, "y": 0}, "axis": "z", "angle": 9999}),
+        json!({"constraints": [{"kind": "horizontal", "line": 1}, {"kind": "fix", "point": 1, "at": {"x": 1e300, "y": 0}}]}),
+        json!({"constraints": [{"kind": "teleport"}], "constraint": {"kind": "horizontal", "line": 1}}),
+        json!({"constraints": "horizontal"}),
+        json!({"constraints": vec![nested.clone(); 65]}),
     ];
     for c in registry() {
         for p in &hostile {
@@ -390,6 +394,43 @@ fn a_sketched_rectangle_solves_and_reports_no_freedom_and_its_area() {
         .unwrap();
     assert!((far["x"].as_f64().unwrap() - 50.0).abs() < 1e-6);
     assert!((far["y"].as_f64().unwrap() - 30.0).abs() < 1e-6);
+}
+
+#[test]
+fn constraints_in_one_call_skip_the_implied_and_the_conflicting_ones() {
+    let mut s = Session::new();
+    s.execute("sketch.create", &json!({"plane": "xy"})).unwrap();
+    let r = s
+        .execute("sketch.line", &json!({"x1": 0, "y1": 0, "x2": 10, "y2": 0}))
+        .unwrap();
+    let line = r["curve"].clone();
+    let start = r["start"].clone();
+    let before = s.execute("sketch.get", &json!({})).unwrap()["dof"].clone();
+    // Horizontal (adds), horizontal again (implied), vertical (conflicts: a 10 mm line
+    // cannot be both), and a length of 10 (adds).
+    let r = s
+        .execute(
+            "sketch.constrain",
+            &json!({"constraints": [
+                {"kind": "horizontal", "line": line},
+                {"kind": "horizontal", "line": line},
+                {"kind": "vertical", "line": line},
+                {"kind": "length", "line": line, "value": 10},
+                {"kind": "fix", "point": start, "at": {"x": 0, "y": 0}},
+            ]}),
+        )
+        .unwrap();
+    assert_eq!(r["constraints"].as_array().unwrap().len(), 3, "{r}");
+    assert_eq!(r["skipped"], 2);
+    // Four unknowns less horizontal, length and the two fix equations: none left.
+    assert_eq!(before, 4);
+    let g = s.execute("sketch.get", &json!({})).unwrap();
+    assert_eq!(g["dof"], 0);
+    assert_eq!(g["status"], "FullyConstrained");
+    // One undo step takes all three away.
+    s.execute("edit.undo", &json!({})).unwrap();
+    let g = s.execute("sketch.get", &json!({})).unwrap();
+    assert_eq!(g["constraints"].as_array().unwrap().len(), 0);
 }
 
 #[test]

@@ -3,6 +3,7 @@
 //! ```text
 //! chamfera [part.stl ...] [--sample] [--theme light|dark] [--script steps.json]
 //!          [--parameters] [--extrude] [--size WxH] [--zoom F] [--screenshot shot.png]
+//!          [--sketch-input "tool line; click 0,0; hover 30,12; type 25"]
 //! ```
 
 // Release builds on Windows open no console window; chamfera-cli stays a console app.
@@ -11,7 +12,8 @@
 use std::process::ExitCode;
 
 const USAGE: &str = "usage: chamfera [part.stl ...] [--sample] [--theme light|dark] \
-[--script steps.json] [--parameters] [--extrude] [--size WxH] [--zoom F] [--screenshot shot.png]";
+[--script steps.json] [--parameters] [--extrude] [--size WxH] [--zoom F] [--screenshot shot.png] \
+[--sketch-input \"tool line; click X,Y; hover X,Y; shift; type 25; tab\"]";
 
 fn main() -> ExitCode {
     let mut options = chamfera_ui::Options::default();
@@ -37,6 +39,10 @@ fn main() -> ExitCode {
             "--script" => match args.next().map(|p| read_script(&p)) {
                 Some(Ok(steps)) => options.script = steps,
                 Some(Err(e)) => return fail(&e),
+                None => return fail(USAGE),
+            },
+            "--sketch-input" => match args.next() {
+                Some(steps) => options.sketch_input = Some(steps),
                 None => return fail(USAGE),
             },
             "--screenshot" => match args.next() {

@@ -20,6 +20,7 @@ The UI (`crates/ui/src/lib.rs`) is egui on wgpu, for the desktop and the browser
 ## Sketch mode
 - `crates/ui/src/sketch_ui.rs`: the sketch toolbar, drawing tools, previews, dimension labels and inline value editing, all through `sketch.*` commands.
 - Tool clicks go through `sketch_click(x, y, w, h, shift)`, which tests call with pixels (see its tests) instead of a mouse.
+- Precise input: clicks snap through `Sketch::snap` (`crates/sketch/src/snap.rs`, pure geometry) and the snap's constraints are added with one `sketch.constrain {"constraints": [...]}`; Shift locks a segment horizontal or vertical (Shift+Alt: 15 degree steps); typed numbers fill the heads-up fields (Tab is taken in `raw_input_hook` so it moves between fields, not the focus). Tests that drive real pointer and key events are in `crates/ui/src/sketch_input_tests.rs`.
 - Only use glyphs the bundled fonts have (Ø yes; ⌀, ✏, ✔ no): check a screenshot.
 
 ## Seeing your change

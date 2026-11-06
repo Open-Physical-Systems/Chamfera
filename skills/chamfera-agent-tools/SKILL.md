@@ -10,6 +10,7 @@ description: "Use when running Chamfera to see a change working: the desktop app
 - `cargo run -p chamfera -- --sample --screenshot /path/shot.png` opens the window, waits for it to draw, saves a screenshot of the whole window and quits. Then read the PNG and look at it.
 - `--script steps.json` runs commands at start (same format as `chamfera-cli run`), so a screenshot can show a state reached by commands, for example a sketch being edited (`examples/sketch-plate.json`).
 - More start-up options for screenshots: `--size WxH` (window size), `--zoom F` (UI scale, e.g. 2 for a HiDPI check), `--extrude` (opens the Extrude tool with the profile under the viewport centre picked).
+- `--sketch-input "tool line; click 0,0; hover 30,12; shift; type 25; tab"` drives the drawing tools in the active sketch after start (points in sketch mm), so a screenshot can show a snap marker, the Shift lock or the typed-value fields (`examples/sketch-snaps.json`).
 - Scripts can name a step's reply with `"as": "axis"` and use it later as `"$axis.curve"` (`crates/engine/src/script.rs`), in the CLI and in `--script`.
 - It needs a display (Wayland or X11). Without one, use the snapshot below.
 
