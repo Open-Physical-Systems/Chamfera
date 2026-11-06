@@ -17,6 +17,11 @@ use std::sync::{Arc, Mutex};
 mod browser;
 mod chrome;
 mod file_ui;
+
+/// `--screenshot` gives up after this long without a drawn frame.
+const SHOT_TIMEOUT_SECS: f64 = 30.0;
+/// Set when `--screenshot` gave up, so the app exits with an error.
+static SHOT_FAILED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 mod icons;
 mod params_ui;
 mod sketch_ui;
@@ -96,6 +101,9 @@ pub struct ChamferaApp {
     fit_pending: bool,
     message: Option<(String, bool)>,
     screenshot: Option<(std::path::PathBuf, Shot)>,
+    /// When `--screenshot` started (egui seconds), to give up instead of hanging: a
+    /// covered window on Wayland may never be asked to draw.
+    shot_started: Option<f64>,
     shot_image: Arc<Mutex<Option<Arc<egui::ColorImage>>>>,
     sketch: sketch_ui::SketchUi,
     params: params_ui::ParamsUi,
@@ -164,6 +172,7 @@ impl ChamferaApp {
             message: None,
             screenshot: options.screenshot.clone().map(|p| (p, Shot::Waiting(6))),
             shot_image: Arc::new(Mutex::new(None)),
+            shot_started: None,
             sketch: sketch_ui::SketchUi::default(),
             params: params_ui::ParamsUi::default(),
             solid: solid_ui::SolidUi::default(),
@@ -473,6 +482,19 @@ impl ChamferaApp {
         let Some((path, state)) = &mut self.screenshot else {
             return;
         };
+        let now = ctx.input(|i| i.time);
+        let started = *self.shot_started.get_or_insert(now);
+        if !matches!(state, Shot::Done) && now - started >= SHOT_TIMEOUT_SECS {
+            eprintln!(
+                "screenshot failed: no frame was drawn within {SHOT_TIMEOUT_SECS} s \
+                 (is the window hidden or covered?)"
+            );
+            *state = Shot::Done;
+            self.file.allow_close = true;
+            SHOT_FAILED.store(true, std::sync::atomic::Ordering::SeqCst);
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            return;
+        }
         match state {
             Shot::Waiting(0) => {
                 let slot = self.shot_image.clone();
@@ -530,6 +552,17 @@ fn save_png(_: &std::path::Path, _: &egui::ColorImage) -> Result<(), String> {
 }
 
 impl eframe::App for ChamferaApp {
+    /// Runs every frame, even when the window is covered or minimised (then eframe skips
+    /// `ui`). `--screenshot` lives here and asks for painting while hidden, so a covered
+    /// window still draws, captures and quits instead of waiting forever.
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if self.screenshot.is_some() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaintWhileHidden);
+            ctx.request_repaint();
+        }
+        self.screenshot_step(ctx);
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         if let Some(z) = self.zoom.take()
@@ -584,7 +617,6 @@ impl eframe::App for ChamferaApp {
         self.file_shortcuts(&ctx);
         self.update_title(&ctx);
         self.handle_close_request(&ctx);
-        self.screenshot_step(&ctx);
     }
 }
 
@@ -604,5 +636,9 @@ pub fn run_native(options: Options) -> Result<(), String> {
         native,
         Box::new(move |cc| Ok(Box::new(ChamferaApp::new(cc, options)))),
     )
-    .map_err(|e| e.to_string())
+    .map_err(|e| e.to_string())?;
+    if SHOT_FAILED.load(std::sync::atomic::Ordering::SeqCst) {
+        return Err("the screenshot could not be taken".into());
+    }
+    Ok(())
 }

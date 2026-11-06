@@ -26,6 +26,42 @@ pub enum ExtrudeDirection {
     Symmetric,
 }
 
+/// What a feature's new shape does to the bodies it overlaps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum Operation {
+    /// A separate body.
+    #[default]
+    NewBody,
+    /// Merged with the bodies it overlaps.
+    Join,
+    /// Removed from the bodies it overlaps.
+    Cut,
+    /// Only the overlap is kept.
+    Intersect,
+}
+
+impl Operation {
+    pub fn parse(s: &str) -> Option<Operation> {
+        Some(match s {
+            "new_body" => Operation::NewBody,
+            "join" => Operation::Join,
+            "cut" => Operation::Cut,
+            "intersect" => Operation::Intersect,
+            _ => return None,
+        })
+    }
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Operation::NewBody => "new_body",
+            Operation::Join => "join",
+            Operation::Cut => "cut",
+            Operation::Intersect => "intersect",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Extrude {
     pub sketch: u32,
@@ -35,6 +71,8 @@ pub struct Extrude {
     pub distance: String,
     #[serde(default)]
     pub direction: ExtrudeDirection,
+    #[serde(default)]
+    pub operation: Operation,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -45,6 +83,8 @@ pub struct Revolve {
     pub axis: u32,
     /// The angle, an expression such as `360 deg` or `90`.
     pub angle: String,
+    #[serde(default)]
+    pub operation: Operation,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -70,6 +110,13 @@ impl FeatureKind {
         match self {
             FeatureKind::Extrude(e) => e.sketch,
             FeatureKind::Revolve(r) => r.sketch,
+        }
+    }
+
+    pub fn operation(&self) -> Operation {
+        match self {
+            FeatureKind::Extrude(e) => e.operation,
+            FeatureKind::Revolve(r) => r.operation,
         }
     }
 
@@ -284,6 +331,7 @@ mod tests {
             profiles: vec![Point2::new(10.0, 10.0)],
             distance: "t * 2".into(),
             direction: ExtrudeDirection::Normal,
+            operation: Operation::NewBody,
         });
         let id = doc.add_feature(ok).unwrap();
         assert_eq!(doc.feature(id).unwrap().name, "Extrude1");
@@ -297,6 +345,7 @@ mod tests {
                 profiles: vec![Point2::new(seed.0, seed.1)],
                 distance: distance.into(),
                 direction: ExtrudeDirection::Normal,
+                operation: Operation::NewBody,
             });
             assert!(doc.add_feature(bad).is_err(), "{seed:?} {distance}");
         }
@@ -313,6 +362,7 @@ mod tests {
             profiles: vec![Point2::new(10.0, 10.0)],
             distance: "12.5".into(),
             direction: ExtrudeDirection::Symmetric,
+            operation: Operation::Cut,
         }))
         .unwrap();
         let back = Document::from_json(&doc.to_json().unwrap()).unwrap();
