@@ -221,3 +221,68 @@ pub fn boolean(a: &Body, b: &Body, op: BooleanOp) -> KernelResult<Body> {
     }
     sew::sew(kept, reg)
 }
+
+/// The surface body `a` trimmed by the closed solid `tool`: `a`'s faces are split along
+/// their intersection with the tool's (steps 1 to 3 of the pipeline), each piece is
+/// classified against the tool (step 4), the pieces inside (`keep_inside`) or outside are
+/// kept, and they are sewn into open shells (step 6 without the pairing of edges where
+/// more faces meet). Pieces on the tool's boundary go.
+pub(crate) fn trim(a: &Body, tool: &Body, keep_inside: bool) -> KernelResult<Body> {
+    tool.validate().map_err(|e| {
+        KernelError::InvalidInput(format!("the trimming tool is not a closed solid: {e}"))
+    })?;
+    for (body, which) in [(a, "surface"), (tool, "trimming tool")] {
+        if body.faces().is_empty() {
+            return Err(KernelError::InvalidInput(format!("the {which} is empty")));
+        }
+        if body.faces().len() > MAX_BOOLEAN_FACES {
+            return Err(KernelError::InvalidInput(format!(
+                "the {which} has more than {MAX_BOOLEAN_FACES} faces"
+            )));
+        }
+        if body.has_spline_geometry() {
+            return Err(KernelError::Unsupported(format!(
+                "the {which} has spline faces; trimming them needs NURBS surface intersection (K10)"
+            )));
+        }
+    }
+    let mut reg = Registry::default();
+    let mut la = load(a, Operand::A, &mut reg)?;
+    let mut lb = load(tool, Operand::B, &mut reg)?;
+    let mut cuts = intersect_faces(&la, &lb, &mut reg)?;
+    split_edges([&mut la, &mut lb], &mut cuts, &mut reg)?;
+    let mut cuts_of: std::collections::HashMap<usize, Vec<&split::Cut>> =
+        std::collections::HashMap::new();
+    for c in &cuts.cuts {
+        for f in &c.faces {
+            if f.0 == Operand::A {
+                cuts_of.entry(f.1).or_default().push(c);
+            }
+        }
+    }
+    let mut kept = Vec::new();
+    for f in 0..la.faces.len() {
+        let fc = cuts_of.get(&f).map(Vec::as_slice).unwrap_or(&[]);
+        let face = la.face(f)?;
+        for piece in split_face(&la, f, fc, &reg)? {
+            let class = classify(&piece, &la, &lb, &[])?;
+            let keep = match class {
+                sew::Class::In => keep_inside,
+                sew::Class::Out => !keep_inside,
+                sew::Class::OnSame | sew::Class::OnOpposite => false,
+            };
+            if keep {
+                kept.push(OutFace::new(
+                    piece,
+                    face.side.clone(),
+                    face.name.clone(),
+                    false,
+                ));
+            }
+        }
+    }
+    if kept.is_empty() {
+        return Err(KernelError::EmptyResult);
+    }
+    sew::sew_open(kept, reg)
+}

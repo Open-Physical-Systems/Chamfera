@@ -67,6 +67,7 @@ mod tests;
 
 pub use crate::surface::Surface;
 pub(crate) use assemble::{ListEdge, ListFace, ListVertex};
+pub(crate) use open::FaceList;
 pub use build::MAX_PROFILE_VERTICES;
 pub use euler::Mvfs;
 pub use geometry::Curve;
