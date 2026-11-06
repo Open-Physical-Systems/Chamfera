@@ -168,6 +168,10 @@ fn hostile_params_never_panic() {
         json!({"name": "w", "expression": "((((((", "constraint": 13}),
         json!({"name": "w", "expression": 5, "constraint": 13, "value": 3}),
         json!({"name": "q", "expression": "1e308 * 1e308", "constraint": 14}),
+        json!({"name": "w", "new_name": long, "comment": long, "favourite": "yes", "config": long, "from": 5}),
+        json!({"config": "", "parameter": "w", "expression": "if(", "feature": 0, "suppressed": 1}),
+        json!({"dir": "/dev/null", "format": "stl", "config": null, "name": "\u{0}"}),
+        json!({"dir": "/nonexistent/dir/x", "format": [1], "name": "Extrude1.distance", "expression": "Extrude1.distance"}),
         json!({"sketch": 1, "profiles": [{"x": 10, "y": 10}], "distance": "5", "feature": 99}),
         json!({"sketch": 1, "profiles": [{"x": 1e300, "y": 10}], "distance": 0, "direction": "up"}),
         json!({"sketch": 1, "profiles": "all", "distance": [1], "suppressed": "no", "feature": 0}),
@@ -191,6 +195,11 @@ fn hostile_params_never_panic() {
         json!({"curves": [5], "cx": 0, "cy": 0, "count": 3, "angle": -0.5}),
         json!({"curves": [5], "columns": 1001, "rows": 1001, "dx": 1, "dy": 1}),
         json!({"curves": [5], "columns": 2, "rows": -1, "dx": 0, "dy": f64::NAN}),
+        json!({"points": [{"x": 1e300, "y": 0}], "characteristic": 5, "datums": [null], "label": "ÄÄ",
+               "flip": 2, "cx": f64::NAN, "radius": -1, "text": null, "tolerance": "big",
+               "leader_x": [], "annotation": -3, "view": 2, "x1": 0, "y1": 0, "x2": 1e300, "y2": 0}),
+        json!({"points": [{"x": 0, "y": 0}, {"x": 10, "y": 0}], "text": "\u{202e}x", "characteristic": "position",
+               "tolerance": 1e300, "datums": ["A", "A"], "diameter": "yes", "removal": 1, "height": 0}),
         json!({"x1": 0, "y1": 0, "x2": 1, "y2": 1, "x3": 2, "y3": 2, "cx": 0, "cy": 0}),
         json!({"point": 3, "x": 50, "y": 0, "distance2": 0, "curve": null}),
         json!({"sketch": 1, "profiles": [{"x": 10, "y": 10}], "distance": 5, "operation": "cut"}),
@@ -1526,6 +1535,68 @@ fn a_linear_pattern_of_a_cut_drills_a_row_of_holes() {
     assert!(
         s.execute("feature.delete", &json!({"feature": cut_id}))
             .is_err()
+    );
+}
+
+#[test]
+fn feature_edit_changes_a_patterns_count_and_spacing_and_refuses_unknown_keys() {
+    // Plate 50 x 30 x 10; a hole r = 3 at (10, 15) cut through, patterned 2 along +X
+    // 10 apart: 15000 - 2 * 90π. Edited to 4 copies 8 apart (x = 10, 18, 26, 34, all
+    // inside the plate): 15000 - 4 * 90π.
+    let mut s = Session::new();
+    extruded_plate(&mut s, json!(10));
+    s.execute("sketch.create", &json!({"plane": "xy"})).unwrap();
+    s.execute("sketch.circle", &json!({"cx": 10, "cy": 15, "radius": 3}))
+        .unwrap();
+    s.execute("sketch.finish", &json!({})).unwrap();
+    let cut = s
+        .execute(
+            "solid.extrude",
+            &json!({"sketch": 3, "profiles": [{"x": 10, "y": 15}], "distance": 10, "operation": "cut"}),
+        )
+        .unwrap()["feature"]
+        .clone();
+    let pat = s
+        .execute(
+            "solid.pattern_linear",
+            &json!({"feature": cut, "count": 2, "direction": {"x": 1, "y": 0, "z": 0}, "spacing": 10}),
+        )
+        .unwrap()["feature"]
+        .clone();
+    let pi = std::f64::consts::PI;
+    let vol = |s: &Session| s.solids()[0].body.volume().unwrap();
+    assert!((vol(&s) - (15_000.0 - 180.0 * pi)).abs() < 1e-6);
+    let r = s
+        .execute(
+            "feature.edit",
+            &json!({"feature": pat, "count": 4, "spacing": "8 mm"}),
+        )
+        .unwrap();
+    assert_eq!(r["definition"]["count"], "4", "{r}");
+    assert!(
+        (vol(&s) - (15_000.0 - 360.0 * pi)).abs() < 1e-6,
+        "{}",
+        vol(&s)
+    );
+    // An edit that names a key feature.edit does not know changes nothing and is refused,
+    // instead of succeeding silently (which made a following undo remove the pattern).
+    let before = s.doc.clone();
+    let e = s
+        .execute("feature.edit", &json!({"feature": pat, "cuont": 3}))
+        .unwrap_err();
+    assert!(e.to_string().contains("cuont"), "{e}");
+    assert_eq!(s.doc, before);
+    // count and spacing belong to patterns.
+    assert!(
+        s.execute("feature.edit", &json!({"feature": cut, "count": 3}))
+            .is_err()
+    );
+    // Undo goes back to 2 copies.
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(
+        (vol(&s) - (15_000.0 - 180.0 * pi)).abs() < 1e-6,
+        "{}",
+        vol(&s)
     );
 }
 

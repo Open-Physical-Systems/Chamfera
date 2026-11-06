@@ -141,6 +141,10 @@ pub struct Theme {
     pub sheet_dimension: Rgba,
     pub sheet_border: Rgba,
     pub sheet_pick: Rgba,
+    /// Section hatching: narrow lines, quieter than outlines.
+    pub sheet_hatch: Rgba,
+    /// A dimension or annotation whose model reference no longer resolves (warning).
+    pub sheet_dangling: Rgba,
 }
 
 impl Theme {
@@ -237,6 +241,8 @@ impl Theme {
             sheet_dimension: Rgba(28, 92, 190, 255),
             sheet_border: Rgba(20, 24, 30, 255),
             sheet_pick: Rgba(240, 140, 20, 255),
+            sheet_hatch: Rgba(90, 98, 112, 255),
+            sheet_dangling: Rgba(196, 60, 120, 255),
         }
     }
 
@@ -313,6 +319,8 @@ impl Theme {
             sheet_dimension: Rgba(110, 172, 255, 255),
             sheet_border: Rgba(200, 206, 214, 255),
             sheet_pick: Rgba(255, 180, 60, 255),
+            sheet_hatch: Rgba(150, 160, 176, 255),
+            sheet_dangling: Rgba(255, 110, 180, 255),
         }
     }
 
@@ -397,6 +405,8 @@ mod tests {
                 ("sheet_centre", t.sheet_centre),
                 ("sheet_dimension", t.sheet_dimension),
                 ("sheet_border", t.sheet_border),
+                ("sheet_hatch", t.sheet_hatch),
+                ("sheet_dangling", t.sheet_dangling),
             ] {
                 let ratio = contrast(fg, t.sheet_paper);
                 assert!(ratio >= 3.0, "{:?}: {what}: {ratio}", t.mode);

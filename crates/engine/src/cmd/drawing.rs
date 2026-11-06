@@ -1,7 +1,9 @@
 //! `drawing.*`: 2D drawing sheets with views of the solids and dimensions.
 //!
 //! Sheets live in the design (`Document::drawing`); their lines are worked out from the
-//! solids whenever a sheet is drawn ([`render`]), so views follow the model.
+//! solids whenever a sheet is drawn ([`render`]), so views follow the model, and so do
+//! dimensions, which keep model references. Sections, details, annotations, the parts
+//! list and balloons are in `drawing/annot.rs`.
 
 use super::CommandSpec;
 use crate::{CmdResult, CommandError, Session, params};
@@ -9,11 +11,43 @@ use chamfera_doc::drawing::{
     self as dd, DimensionKind, Orientation, Paper, ProjectionAngle, Sheet, SheetDimension,
     SheetView, TitleBlock, ViewDirection,
 };
-use chamfera_drawing::{Format, SheetGeometry};
+use chamfera_drawing::{Format, PartRow, SheetGeometry};
 use chamfera_geom::Point2;
 use serde_json::{Value, json};
 
+mod annot;
+
 pub static COMMANDS: &[CommandSpec] = &[
+    CommandSpec {
+        id: "drawing.add_balloons",
+        label: "Balloons",
+        params: "view: id (required) - put a balloon on every component this view shows, \
+                 numbered as in the parts list; replaces the view's earlier balloons\n\
+                 sheet: id (optional) - default the view's sheet",
+        mutates: true,
+        run: annot::add_balloons,
+    },
+    CommandSpec {
+        id: "drawing.add_centre_line",
+        label: "Centre Line",
+        params: "view: id (required) - the view\n\
+                 x1, y1, x2, y2: number (required) - sheet mm near two circles or arcs of \
+                 the view; the line joins their centres and follows the model",
+        mutates: true,
+        run: annot::add_centre_line,
+    },
+    CommandSpec {
+        id: "drawing.add_detail",
+        label: "Detail View",
+        params: "view: id (required) - the view to enlarge part of (not a detail itself)\n\
+                 cx, cy: number (required) - the detail circle's centre, sheet mm on that view\n\
+                 radius: number (required) - the circle's radius, sheet mm on that view\n\
+                 x, y: number (required) - where the detail's centre goes on the sheet\n\
+                 scale: number (optional) - the detail's scale; default twice the view's\n\
+                 label: string (optional) - one to three capital letters; default the next free",
+        mutates: true,
+        run: annot::add_detail,
+    },
     CommandSpec {
         id: "drawing.add_dimension",
         label: "Add Dimension",
@@ -25,9 +59,81 @@ pub static COMMANDS: &[CommandSpec] = &[
                  x2, y2: number (required for linear and angular) - the second vertex or edge\n\
                  offset: number (optional) - sheet mm from the measured points to the dimension \
                  line (negative: the other side), the leader length, or the arc radius; default 10\n\
-                 sheet: id (optional) - default the view's sheet",
+                 sheet: id (optional) - default the view's sheet\n\
+                 The dimension keeps what it measures on the model (vertices and edges by \
+                 their persistent names) and follows edits; when that is gone it is shown \
+                 dangling at its old place",
         mutates: true,
         run: add_dimension,
+    },
+    CommandSpec {
+        id: "drawing.add_gdt",
+        label: "Feature Control Frame",
+        params: "characteristic: string (required) - straightness, flatness, circularity, \
+                 parallelism, perpendicularity or position\n\
+                 tolerance: number (required) - mm, 0 to 1000\n\
+                 x, y: number (required) - the frame's lower-left corner, sheet mm\n\
+                 diameter: bool (optional) - a cylindrical zone: Ø before the value\n\
+                 datums: [string] (optional) - up to three datum letters, primary first; \
+                 none for form tolerances, at least one for parallelism and perpendicularity\n\
+                 leader_x, leader_y: number (optional) - a leader from the frame to this point\n\
+                 sheet: id (optional) - default the last sheet",
+        mutates: true,
+        run: annot::add_gdt,
+    },
+    CommandSpec {
+        id: "drawing.add_leader",
+        label: "Leader",
+        params: "points: [{x, y}] (required) - 2 to 16 sheet points: the arrow's tip first, the \
+                 text at the last\n\
+                 text: string (required) - 1 to 256 characters\n\
+                 sheet: id (optional) - default the last sheet",
+        mutates: true,
+        run: annot::add_leader,
+    },
+    CommandSpec {
+        id: "drawing.add_note",
+        label: "Note",
+        params: "x, y: number (required) - the start of the text's baseline, sheet mm\n\
+                 text: string (required) - 1 to 256 characters\n\
+                 height: number (optional) - text height in mm, 1 to 50; default 3.5\n\
+                 sheet: id (optional) - default the last sheet",
+        mutates: true,
+        run: annot::add_note,
+    },
+    CommandSpec {
+        id: "drawing.add_parts_list",
+        label: "Parts List",
+        params: "x, y: number (optional) - the table's lower-right corner, sheet mm; default \
+                 on top of the title block\n\
+                 sheet: id (optional) - default the last sheet\n\
+                 Rows: item, name, quantity and material of each component; replaces the \
+                 sheet's earlier parts list",
+        mutates: true,
+        run: annot::add_parts_list,
+    },
+    CommandSpec {
+        id: "drawing.add_section",
+        label: "Section View",
+        params: "view: id (required) - the plain orthographic view to cut\n\
+                 x1, y1, x2, y2: number (required) - the cutting line, sheet mm on that view\n\
+                 x, y: number (required) - where the section's centre goes on the sheet\n\
+                 flip: bool (optional) - look the other way across the line (default: the \
+                 arrows point to the right of the line from point 1 to point 2)\n\
+                 scale: number (optional) - default the view's\n\
+                 label: string (optional) - one to three capital letters; default the next free",
+        mutates: true,
+        run: annot::add_section,
+    },
+    CommandSpec {
+        id: "drawing.add_surface_finish",
+        label: "Surface Texture",
+        params: "x, y: number (required) - the symbol's point on the surface, sheet mm\n\
+                 text: string (optional) - the requirement, for example \"Ra 1.6\"\n\
+                 removal: bool (optional) - material removal required (default true)\n\
+                 sheet: id (optional) - default the last sheet",
+        mutates: true,
+        run: annot::add_surface_finish,
     },
     CommandSpec {
         id: "drawing.add_view",
@@ -44,9 +150,11 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         id: "drawing.delete",
         label: "Delete from Drawing",
-        params: "sheet: id (required without view or dimension) - delete this sheet\n\
-                 view: id (optional) - delete this view, its dimensions and views projected from it\n\
-                 dimension: id (optional) - delete this dimension",
+        params: "sheet: id (required without view, dimension or annotation) - delete this sheet\n\
+                 view: id (optional) - delete this view, its dimensions and annotations, and the \
+                 views projected, sectioned or detailed from it\n\
+                 dimension: id (optional) - delete this dimension\n\
+                 annotation: id (optional) - delete this annotation or parts list",
         mutates: true,
         run: delete,
     },
@@ -269,6 +377,8 @@ fn make_sheet(s: &mut Session, p: &Value) -> Result<u32, CommandError> {
         },
         views: Vec::new(),
         dimensions: Vec::new(),
+        annotations: Vec::new(),
+        parts_list: None,
     };
     apply_settings(&mut sheet, p)?;
     sheet.id = s.doc.drawing.next_id()?;
@@ -350,6 +460,8 @@ fn add_view(s: &mut Session, p: &Value) -> CmdResult {
         y,
         scale: if parent.is_some() { None } else { scale },
         parent,
+        section: None,
+        detail: None,
     });
     Ok(json!({ "sheet": sheet, "view": id, "parent": parent }))
 }
@@ -368,13 +480,47 @@ fn sheet_of_view(s: &Session, view: u32) -> Result<u32, CommandError> {
 /// Lays out sheet `id` with the current solids.
 pub fn render(s: &Session, id: u32) -> Result<SheetGeometry, CommandError> {
     let sheet = s.doc.drawing.sheet(id)?;
-    let bodies: Vec<(&str, &chamfera_kernel::Body)> = s
-        .solids()
+    chamfera_drawing::render_with_parts(sheet, &bodies(s), &parts(s))
+        .map_err(|e| CommandError::Unavailable(e.to_string()))
+}
+
+/// The solids by name, as the drawing crate takes them.
+fn bodies(s: &Session) -> Vec<(&str, &chamfera_kernel::Body)> {
+    s.solids()
         .iter()
         .map(|x| (x.name.as_str(), &x.body))
-        .collect();
-    chamfera_drawing::render_sheet(sheet, &bodies)
-        .map_err(|e| CommandError::Unavailable(e.to_string()))
+        .collect()
+}
+
+/// The parts list of the design: one row per component that is not a linked copy, its
+/// quantity counting the copies, its material the named appearance of its first feature
+/// that has one.
+pub fn parts(s: &Session) -> Vec<PartRow> {
+    let a = &s.doc.assembly;
+    a.components
+        .iter()
+        .filter(|c| c.occurrence_of.is_none())
+        .map(|c| {
+            let mut members = vec![c.id];
+            members.extend(
+                a.components
+                    .iter()
+                    .filter(|o| o.occurrence_of == Some(c.id))
+                    .map(|o| o.id),
+            );
+            let material = c
+                .features
+                .iter()
+                .find_map(|f| s.doc.appearances.get(f).and_then(|x| x.preset.clone()))
+                .unwrap_or_default();
+            PartRow {
+                quantity: u32::try_from(members.len()).unwrap_or(u32::MAX),
+                components: members,
+                name: c.name.clone(),
+                material,
+            }
+        })
+        .collect()
 }
 
 fn add_dimension(s: &mut Session, p: &Value) -> CmdResult {
@@ -407,6 +553,14 @@ fn add_dimension(s: &mut Session, p: &Value) -> CmdResult {
     }
     let plan = chamfera_drawing::plan_dimension(placed, kind, &picks)
         .map_err(|e| CommandError::Unavailable(e.to_string()))?;
+    let refs = chamfera_drawing::dimension_refs(
+        s.doc.drawing.sheet(sheet)?,
+        &bodies(s),
+        view,
+        kind,
+        &plan.points,
+    );
+    let associative = !refs.is_empty();
     let id = s.doc.drawing.next_id()?;
     let sh = s.doc.drawing.sheet_mut(sheet)?;
     if sh.dimensions.len() >= dd::MAX_DIMENSIONS {
@@ -421,12 +575,14 @@ fn add_dimension(s: &mut Session, p: &Value) -> CmdResult {
         kind,
         points: plan.points.clone(),
         offset,
+        refs,
     });
     Ok(json!({
         "sheet": sheet,
         "dimension": id,
         "value": plan.value,
         "text": chamfera_drawing::format_value(kind, plan.value),
+        "associative": associative,
     }))
 }
 
@@ -440,17 +596,36 @@ fn delete(s: &mut Session, p: &Value) -> CmdResult {
         }
         return Err(bad(format!("no dimension {d}")));
     }
+    if let Some(a) = opt_id(p, "annotation")? {
+        for sh in &mut s.doc.drawing.sheets {
+            if let Some(i) = sh.annotations.iter().position(|x| x.id == a) {
+                sh.annotations.remove(i);
+                return Ok(json!({ "deleted": a }));
+            }
+            if sh.parts_list.as_ref().is_some_and(|x| x.id == a) {
+                sh.parts_list = None;
+                return Ok(json!({ "deleted": a }));
+            }
+        }
+        return Err(bad(format!("no annotation or parts list {a}")));
+    }
     if let Some(v) = opt_id(p, "view")? {
         let sheet = sheet_of_view(s, v)?;
         let sh = s.doc.drawing.sheet_mut(sheet)?;
-        let gone: Vec<u32> = sh
-            .views
-            .iter()
-            .filter(|x| x.id == v || x.parent == Some(v))
-            .map(|x| x.id)
-            .collect();
+        // The view, and every view made from it: projected, sectioned, detailed (two
+        // steps at most, see `Drawing::check`).
+        let mut gone: Vec<u32> = vec![v];
+        for _ in 0..3 {
+            for x in &sh.views {
+                if !gone.contains(&x.id) && x.source().is_some_and(|f| gone.contains(&f)) {
+                    gone.push(x.id);
+                }
+            }
+        }
         sh.views.retain(|x| !gone.contains(&x.id));
         sh.dimensions.retain(|d| !gone.contains(&d.view));
+        sh.annotations
+            .retain(|a| a.kind.view().is_none_or(|w| !gone.contains(&w)));
         return Ok(json!({ "deleted": gone }));
     }
     let id = params::req_id(p, "sheet")?;
@@ -515,6 +690,10 @@ fn list(s: &mut Session, p: &Value) -> CmdResult {
                     "view": v.direction.id(),
                     "body": v.body,
                     "parent": v.parent,
+                    "section": v.section,
+                    "detail": v.detail,
+                    "hatched_area": placed.map(|pv| pv.geometry.regions.iter()
+                        .map(|r| chamfera_drawing::section::region_area(r)).sum::<f64>()),
                     "x": placed.map_or(v.x, |pv| pv.centre.x),
                     "y": placed.map_or(v.y, |pv| pv.centre.y),
                     "scale": placed.map(|pv| pv.scale),
@@ -529,16 +708,53 @@ fn list(s: &mut Session, p: &Value) -> CmdResult {
             .dimensions
             .iter()
             .map(|d| {
-                let value = chamfera_drawing::measure(d.kind, &d.points);
+                let state = geometry
+                    .as_ref()
+                    .and_then(|g| g.dimensions.iter().find(|x| x.id == d.id));
+                let value = state
+                    .and_then(|x| x.value)
+                    .or_else(|| chamfera_drawing::measure(d.kind, &d.points));
                 json!({
                     "id": d.id,
                     "view": d.view,
                     "kind": d.kind.id(),
                     "value": value,
                     "text": value.map(|v| chamfera_drawing::format_value(d.kind, v)),
+                    "associative": !d.refs.is_empty(),
+                    "dangling": state.and_then(|x| x.dangling.clone()),
                 })
             })
             .collect();
+        let annotations: Vec<Value> = sheet
+            .annotations
+            .iter()
+            .map(|a| {
+                let dangling = geometry.as_ref().and_then(|g| {
+                    g.dangling_annotations
+                        .iter()
+                        .find(|x| x.0 == a.id)
+                        .map(|x| x.1.clone())
+                });
+                json!({ "id": a.id, "annotation": a.kind, "dangling": dangling })
+            })
+            .collect();
+        let parts: Vec<Value> = match (&sheet.parts_list, geometry.as_ref()) {
+            (Some(_), Some(g)) => g
+                .parts
+                .iter()
+                .enumerate()
+                .map(|(i, r)| {
+                    json!({
+                        "item": i + 1,
+                        "name": r.name,
+                        "quantity": r.quantity,
+                        "material": r.material,
+                        "components": r.components,
+                    })
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
         sheets.push(json!({
             "id": sheet.id,
             "name": sheet.name,
@@ -551,6 +767,10 @@ fn list(s: &mut Session, p: &Value) -> CmdResult {
             "title": sheet.title,
             "views": views,
             "dimensions": dims,
+            "annotations": annotations,
+            "parts_list": sheet.parts_list.as_ref().map(|pl| json!({
+                "id": pl.id, "x": pl.x, "y": pl.y, "rows": parts,
+            })),
         }));
     }
     Ok(json!({ "sheets": sheets }))

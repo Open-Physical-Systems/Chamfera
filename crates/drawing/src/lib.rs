@@ -8,29 +8,44 @@
 //!   with first- or third-angle projection, and dimensions in ISO style (`sheet.rs`,
 //!   `dims.rs`). The result is plain 2D [`Item`]s in sheet millimetres, which the UI
 //!   paints and the writers export.
+//! - Version 2: dimensions that follow the model through K8 references (`refs.rs`),
+//!   silhouettes of cones, spheres and tori, section views with hatching (`section.rs`),
+//!   detail views, notes, leaders, surface texture symbols, feature control frames,
+//!   centre lines, balloons and the parts list (`annot.rs`).
 //! - [`svg::write`], [`dxf::write`] and [`pdf::write`]: SVG 1.1, DXF R12 (AC1009) ASCII
 //!   and a minimal hand-written PDF 1.4, from public specifications only.
 //!
 //! Pure: no files, no clocks, no window crates, so it builds for the browser.
 
+pub mod annot;
 mod dims;
 pub mod dxf;
 mod hlr;
 pub mod pdf;
+pub mod refs;
+pub mod section;
 mod sheet;
 pub mod svg;
 mod text;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_v2;
 
+pub use annot::PartRow;
 pub use chamfera_doc::drawing::{
     DimensionKind, Drawing, Orientation, Paper, ProjectionAngle, Sheet, SheetDimension, SheetView,
     TitleBlock, ViewDirection,
 };
 pub use dims::{DimensionPlan, format_value, measure, plan_dimension};
-pub use hlr::{Basis, Curve2, ViewCurve, ViewGeometry, project};
-pub use sheet::{PlacedView, SheetGeometry, projects_from, render_sheet, scale_text};
+pub use hlr::{Basis, Curve2, ViewCurve, ViewGeometry, project, project_basis};
+pub use sheet::{
+    DimensionState, PlacedView, SheetGeometry, Shown, centre_line_refs, dimension_refs,
+    projects_from, render_sheet, render_with_parts, scale_text, shown,
+};
+pub use sheet::{MARGIN, TITLE_HEIGHT};
+pub use text::width as text_width;
 
 use chamfera_geom::Point2;
 use thiserror::Error;
@@ -58,20 +73,27 @@ pub enum Layer {
     Visible,
     /// Hidden edges: dashed narrow lines.
     Hidden,
-    /// Centre marks and centre lines: long-dash dot narrow lines.
+    /// Centre marks, centre lines and cutting-plane lines: long-dash dot narrow lines.
     Center,
-    /// Dimensions: continuous narrow lines, arrows and text.
+    /// Section hatching: continuous narrow lines (ISO 128-50).
+    Hatch,
+    /// Dimensions and annotations: continuous narrow lines, arrows and text.
     Dim,
-    /// The border, the title block and its text.
+    /// A dimension whose model reference no longer resolves: drawn where it was, in the
+    /// warning colour, so that it is fixed rather than lost.
+    Dangling,
+    /// The border, the title block, the parts list and their text.
     Border,
 }
 
 impl Layer {
-    pub const ALL: [Layer; 5] = [
+    pub const ALL: [Layer; 7] = [
         Layer::Visible,
         Layer::Hidden,
         Layer::Center,
+        Layer::Hatch,
         Layer::Dim,
+        Layer::Dangling,
         Layer::Border,
     ];
 
@@ -81,7 +103,9 @@ impl Layer {
             Layer::Visible => "VISIBLE",
             Layer::Hidden => "HIDDEN",
             Layer::Center => "CENTER",
+            Layer::Hatch => "HATCH",
             Layer::Dim => "DIM",
+            Layer::Dangling => "DANGLING",
             Layer::Border => "BORDER",
         }
     }
@@ -90,7 +114,7 @@ impl Layer {
     pub fn width(self) -> f64 {
         match self {
             Layer::Visible | Layer::Border => 0.5,
-            Layer::Hidden | Layer::Center | Layer::Dim => 0.25,
+            Layer::Hidden | Layer::Center | Layer::Hatch | Layer::Dim | Layer::Dangling => 0.25,
         }
     }
 

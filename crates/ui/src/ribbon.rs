@@ -146,6 +146,8 @@ pub const GROUPS: &[Group] = &[
     group(Tab::Drawing, "SHEET"),
     group(Tab::Drawing, "VIEWS"),
     group(Tab::Drawing, "DIMENSIONS"),
+    group(Tab::Drawing, "ANNOTATE"),
+    group(Tab::Drawing, "TABLES"),
     group(Tab::Drawing, "EXPORT"),
     group(Tab::Manufacture, "SETUP"),
     group(Tab::Manufacture, "2D"),
@@ -430,6 +432,14 @@ pub const TOOLS: &[RibbonTool] = &[
         Icon::Parameters,
         "Parameters",
         "Named values and formulas that dimensions and features follow",
+    ),
+    tool(
+        P,
+        "MODIFY",
+        Action::Tool("config.list"),
+        Icon::Parameters,
+        "Configurations",
+        "Variants of the design from a table of parameter values",
     )
     .sep(),
     // SOLID > SURFACE
@@ -645,6 +655,15 @@ pub const TOOLS: &[RibbonTool] = &[
     )
     .primary()
     .short("Insert Mesh"),
+    tool(
+        P,
+        "INSERT",
+        Action::Tool("body.import_step"),
+        Icon::ImportMesh,
+        "Insert STEP…",
+        "Add the solids of a STEP file (AP203, AP214, AP242) as exact bodies",
+    )
+    .short("Insert STEP"),
     tool(
         P,
         "INSERT",
@@ -920,6 +939,26 @@ pub const TOOLS: &[RibbonTool] = &[
         "Isometric",
         Icon::ViewIso,
     ),
+    tool(
+        D,
+        "VIEWS",
+        Action::Tool("drawing.add_section"),
+        Icon::SplitBody,
+        "Section View",
+        "Draw a cutting line across a view, then place the section: cut faces hatched, labelled A-A",
+    )
+    .primary()
+    .short("Section")
+    .sep(),
+    tool(
+        D,
+        "VIEWS",
+        Action::Tool("drawing.add_detail"),
+        Icon::Fit,
+        "Detail View",
+        "Circle part of a view, then place it enlarged (2:1 unless set)",
+    )
+    .short("Detail"),
     // DRAWING > DIMENSIONS
     dimension(
         "drawing.dim.horizontal",
@@ -966,6 +1005,70 @@ pub const TOOLS: &[RibbonTool] = &[
         Icon::ConstraintPerpendicular,
         "Click two straight edges",
     ),
+    // DRAWING > ANNOTATE
+    tool(
+        D,
+        "ANNOTATE",
+        Action::Tool("drawing.add_note"),
+        Icon::Edit,
+        "Note",
+        "Type the text, then click where it goes",
+    )
+    .primary(),
+    tool(
+        D,
+        "ANNOTATE",
+        Action::Tool("drawing.add_leader"),
+        Icon::Project,
+        "Leader",
+        "Click the arrow's tip, then where its text goes",
+    )
+    .primary(),
+    tool(
+        D,
+        "ANNOTATE",
+        Action::Tool("drawing.add_gdt"),
+        Icon::Measure,
+        "Feature Control Frame",
+        "Flatness, perpendicularity, position and more, with datums: click the feature, then the frame's place",
+    )
+    .primary()
+    .short("GD&T"),
+    tool(
+        D,
+        "ANNOTATE",
+        Action::Tool("drawing.add_surface_finish"),
+        Icon::OffsetFace,
+        "Surface Texture",
+        "Click the surface: the texture symbol with its requirement (Ra 1.6)",
+    ),
+    tool(
+        D,
+        "ANNOTATE",
+        Action::Tool("drawing.add_centre_line"),
+        Icon::ConstructAxis,
+        "Centre Line",
+        "Click two circles of a view: a centre line through both centres",
+    ),
+    // DRAWING > TABLES
+    tool(
+        D,
+        "TABLES",
+        Action::Tool("drawing.add_parts_list"),
+        Icon::Component,
+        "Parts List",
+        "A table of the design's components above the title block: item, name, quantity, material",
+    )
+    .primary(),
+    tool(
+        D,
+        "TABLES",
+        Action::Tool("drawing.add_balloons"),
+        Icon::Origin,
+        "Balloons",
+        "Click a view: a numbered balloon on each component, as in the parts list",
+    )
+    .primary(),
     // DRAWING > EXPORT
     export("drawing.export.pdf", "Export Sheet as PDF…", "PDF").primary(),
     export("drawing.export.svg", "Export Sheet as SVG…", "SVG").primary(),
@@ -1231,6 +1334,14 @@ fn draw_tool(id: &str) -> Option<crate::drawing_ui::DrawTool> {
         "drawing.dim.diameter" => DrawTool::Dimension(DimensionKind::Diameter),
         "drawing.dim.radius" => DrawTool::Dimension(DimensionKind::Radius),
         "drawing.dim.angle" => DrawTool::Dimension(DimensionKind::Angular),
+        "drawing.add_section" => DrawTool::Section,
+        "drawing.add_detail" => DrawTool::Detail,
+        "drawing.add_note" => DrawTool::Note,
+        "drawing.add_leader" => DrawTool::Leader,
+        "drawing.add_surface_finish" => DrawTool::SurfaceFinish,
+        "drawing.add_gdt" => DrawTool::Gdt,
+        "drawing.add_centre_line" => DrawTool::CentreLine,
+        "drawing.add_balloons" => DrawTool::Balloons,
         _ => return None,
     })
 }
@@ -1496,6 +1607,7 @@ impl ChamferaApp {
                 "sheet.base" => self.sheet_metal.base.is_some(),
                 "sheet.flange" => self.sheet_metal.flange.is_some(),
                 "sheet.rules" => self.sheet_metal.rules.is_some(),
+                "config.list" => self.configs.open,
                 _ => {
                     if let Some(k) = body_tool_kind(id) {
                         s.body_tool.as_ref().is_some_and(|t| t.kind == k)
@@ -1562,6 +1674,7 @@ impl ChamferaApp {
                     format!("{name}: group bodies into components first")
                 }
                 "view.explode" => return None,
+                "config.list" => return None,
                 "solid.remove" if has_solids && self.session.scene.selected_bodies().is_empty() => {
                     format!("{name}: select the bodies to remove first")
                 }
@@ -1619,7 +1732,31 @@ impl ChamferaApp {
                 _ if id.starts_with("drawing.view.") && !has_solids => {
                     format!("{name}: build a solid first")
                 }
-                _ if (id.starts_with("drawing.dim.") || id.starts_with("drawing.export."))
+                "drawing.add_parts_list" | "drawing.add_balloons"
+                    if self.session.doc.assembly.components.is_empty() =>
+                {
+                    format!("{name}: make components first")
+                }
+                "drawing.add_parts_list" if self.drawing_sheet().is_none() => {
+                    format!("{name}: add a sheet first")
+                }
+                "drawing.add_note"
+                | "drawing.add_leader"
+                | "drawing.add_gdt"
+                | "drawing.add_surface_finish"
+                    if self.drawing_sheet().is_none() =>
+                {
+                    format!("{name}: add a sheet first")
+                }
+                _ if (id.starts_with("drawing.dim.")
+                    || id.starts_with("drawing.export.")
+                    || matches!(
+                        id,
+                        "drawing.add_section"
+                            | "drawing.add_detail"
+                            | "drawing.add_centre_line"
+                            | "drawing.add_balloons"
+                    ))
                     && !self.drawing_has_views() =>
                 {
                     format!("{name}: place a view on the sheet first")
@@ -1683,12 +1820,14 @@ impl ChamferaApp {
             "inspect.interference" => self.toggle_interference(),
             "view.explode" => self.toggle_explode(),
             "sketch.import_dxf" => self.dxf_dialog(),
+            "body.import_step" => self.step_dialog(),
             "sketch.export_dxf" => self.export("DXF drawing", &["dxf"], "sketch.export_dxf"),
             "sketch.split_all" => {
                 self.run_sketch("sketch.split", json!({}));
             }
             "drawing.new_sheet" => self.drawing_new_sheet(),
             "drawing.projection" => self.drawing_toggle_projection(),
+            "drawing.add_parts_list" => self.drawing_parts_list(),
             "cam.setup" => self.cam_setup(),
             "cam.tool_add" => self.open_cam_tool_dialog(),
             "cam.generate" => self.generate_toolpaths(),
@@ -1703,6 +1842,7 @@ impl ChamferaApp {
             #[cfg(not(target_arch = "wasm32"))]
             "sheet.export_flat" => self.export("DXF flat pattern", &["dxf"], "sheet.export_flat"),
             "sheet.rules" => self.open_rules(),
+            "config.list" => self.configs.open = !self.configs.open,
             _ => {
                 if let Some(k) = body_tool_kind(id) {
                     self.open_body_tool(k);
@@ -1733,6 +1873,7 @@ impl ChamferaApp {
                 if id.starts_with("inspect.")
                     || id.starts_with("drawing.view.")
                     || id.starts_with("drawing.dim.")
+                    || draw_tool(id).is_some()
                     || matches!(
                         id,
                         "joint.create"
@@ -2155,9 +2296,8 @@ mod tests {
         // listing, the Browser or the timeline. A newly landed tool command must get a
         // row in `TOOLS` (or a line here saying where it is used).
         const ELSEWHERE: &[&str] = &[
-            "body.appearance",  // View > Appearance, the display bar
-            "body.import_step", // not in the interface yet
-            "body.import_3mf",  // Insert Mesh takes STL, OBJ and 3MF
+            "body.appearance", // View > Appearance, the display bar
+            "body.import_3mf", // Insert Mesh takes STL, OBJ and 3MF
             "body.import_3mf_bytes",
             "body.import_obj",
             "body.import_obj_bytes",

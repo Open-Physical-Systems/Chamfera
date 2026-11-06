@@ -1,0 +1,13 @@
+[
+  { "command": "sheet.rule", "params": { "name": "Steel 2 mm", "thickness": 2, "bend_radius": 2, "k_factor": 0.44, "relief": "rectangular", "relief_width": 2, "relief_depth": 2 } },
+  { "command": "sketch.create", "params": { "plane": "xy" }, "as": "s" },
+  { "command": "sketch.rectangle", "params": { "x1": 0, "y1": 0, "x2": 100, "y2": 60 } },
+  { "command": "sketch.finish" },
+  { "command": "sheet.base", "params": { "sketch": "$s.sketch", "profile": { "x": 50, "y": 30 }, "rule": "Steel 2 mm" }, "as": "base" },
+  { "command": "sheet.flange", "params": { "edge": "2:top 1", "height": 25 }, "as": "right" },
+  { "command": "sheet.flange", "params": { "edge": "2:top 3", "height": 25 }, "as": "left" },
+  { "command": "sheet.flange", "params": { "edge": "2:top 0", "height": 15, "offset_start": 10, "offset_end": 10 }, "as": "front" },
+  { "command": "sheet.flat_pattern", "as": "flat" },
+  { "command": "sheet.export_flat", "params": { "path": "target/qa/03-bracket-flat.dxf" } },
+  { "command": "view.home", "params": { "width": 1600, "height": 950 } }
+]

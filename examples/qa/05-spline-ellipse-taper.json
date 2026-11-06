@@ -1,0 +1,12 @@
+[
+  { "command": "sketch.create", "params": { "plane": "xy" }, "as": "s" },
+  { "command": "sketch.ellipse", "params": { "cx": 30, "cy": -30, "x": 45, "y": -30, "minor": 8 }, "as": "el" },
+  { "command": "sketch.spline", "params": { "points": [ { "x": 15, "y": 25 }, { "x": 30, "y": 20 }, { "x": 45, "y": 26 }, { "x": 48, "y": 40 }, { "x": 30, "y": 46 }, { "x": 14, "y": 38 } ], "closed": true }, "as": "sp" },
+  { "command": "sketch.polygon", "params": { "cx": 30, "cy": 0, "x": 40, "y": 0, "sides": 6 }, "as": "hex" },
+  { "command": "sketch.get", "as": "sg" },
+  { "command": "sketch.finish" },
+  { "command": "solid.extrude", "params": { "sketch": "$s.sketch", "profiles": [{ "x": 30, "y": 0 }], "distance": 10, "taper": 5 }, "as": "hb" },
+  { "command": "solid.extrude", "params": { "sketch": "$s.sketch", "profiles": [{ "x": 30, "y": 33 }], "distance": 12 }, "as": "sb" },
+  { "command": "solid.mirror", "params": { "bodies": ["$hb.name", "$sb.name"], "plane": "yz" }, "as": "m" },
+  { "command": "view.home", "params": { "width": 1600, "height": 950 } }
+]

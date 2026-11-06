@@ -27,6 +27,8 @@ pub const PATH_COMMANDS: &[(&str, Access)] = &[
     ("body.import_step", Access::Read),
     ("body.import_stl", Access::Read),
     ("cam.post", Access::Write),
+    // Its `dir` is resolved like a written path: the folder or its parent must be inside.
+    ("config.export_all", Access::Write),
     ("design.open", Access::Read),
     ("design.export_3mf", Access::Write),
     ("design.export_glb", Access::Write),
@@ -35,6 +37,8 @@ pub const PATH_COMMANDS: &[(&str, Access)] = &[
     ("design.export_step", Access::Write),
     ("design.export_stl", Access::Write),
     ("design.save", Access::Write),
+    ("param.export_csv", Access::Write),
+    ("param.import_csv", Access::Read),
     ("sheet.export_flat", Access::Write),
     ("drawing.export", Access::Write),
     ("sketch.export_dxf", Access::Write),
@@ -184,18 +188,20 @@ impl PathGuard {
             }
             return Ok(params.clone());
         };
-        // A missing or non-string path is left for the command to reject.
-        let Some(raw) = params.get("path").and_then(Value::as_str) else {
-            return Ok(params.clone());
-        };
-        let resolved = self.resolve(raw, access)?;
-        let text = resolved
-            .to_str()
-            .ok_or_else(|| format!("refused: `{raw}` resolves to a path that is not UTF-8"))?
-            .to_owned();
+        // A missing or non-string path (or folder) is left for the command to reject.
         let mut out = params.clone();
-        if let Some(obj) = out.as_object_mut() {
-            obj.insert("path".into(), Value::String(text));
+        for key in ["path", "dir"] {
+            let Some(raw) = params.get(key).and_then(Value::as_str) else {
+                continue;
+            };
+            let resolved = self.resolve(raw, access)?;
+            let text = resolved
+                .to_str()
+                .ok_or_else(|| format!("refused: `{raw}` resolves to a path that is not UTF-8"))?
+                .to_owned();
+            if let Some(obj) = out.as_object_mut() {
+                obj.insert(key.into(), Value::String(text));
+            }
         }
         Ok(out)
     }
@@ -207,7 +213,7 @@ pub(crate) fn takes_path(params_doc: &str) -> bool {
         let name = l.split(':').next().unwrap_or_default();
         name.split(',').any(|n| {
             let n = n.trim();
-            n == "path" || n.ends_with("_path") || n == "file" || n == "folder"
+            n == "path" || n.ends_with("_path") || n == "file" || n == "folder" || n == "dir"
         })
     })
 }

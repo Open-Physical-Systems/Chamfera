@@ -249,14 +249,14 @@ Close runners-up: selection filters and box selection (UI and NAV), splines (nee
 | Feature | Description | Status | Pri | Size | Layer |
 |---|---|---|---|---|---|
 | Drawing sheets | Sheets of chosen size with a title block template we design ourselves | done (A4/A3/A2, ANSI A/B, our own title block) | P1 | L | new `drawing` crate, ui |
-| Base and projected views | Orthographic views from the model, with hidden lines | done (cylinder silhouettes; cone, sphere and torus silhouettes missing) | P1 | L | kernel (exact projection), drawing |
-| Section, detail, auxiliary and break views | Further view kinds | missing | P2 | L | drawing, kernel |
-| Views update with the model | Associative views | done (views; dimensions keep their picked points) | P1 | M | doc, drawing |
+| Base and projected views | Orthographic views from the model, with hidden lines | done (exact silhouettes of cylinders, cones and spheres; tori sampled densely) | P1 | L | kernel (exact projection), drawing |
+| Section, detail, auxiliary and break views | Further view kinds | partial (section views with cutting-plane lines and A-A labels, detail views clipped and enlarged; auxiliary and break views missing) | P2 | L | drawing, kernel |
+| Views update with the model | Associative views | done (views, and dimensions through K8 references; a lost reference shows dangling) | P1 | M | doc, drawing |
 | Dimensions on drawings | Linear, aligned, angular, radial, diameter, ordinate, baseline, chain | partial (linear, aligned, angular, radius, diameter) | P1 | L | drawing |
 | Centre marks and centre lines | Automatic marks on holes and axes | done | P1 | S | drawing |
-| Annotations | Notes, leaders, balloons, surface texture, weld and datum symbols, GD&T frames | missing | P2 | L | drawing |
-| Tables | Parts list, hole table, revision table | missing | P2 | M | drawing |
-| Hatching | Fill closed regions with a pattern (solid, lines at an angle, cross-hatch), associative to the boundary | missing | P1 | M | drawing, geom |
+| Annotations | Notes, leaders, balloons, surface texture, weld and datum symbols, GD&T frames | partial (notes, leaders, balloons, surface texture, feature control frames with datums, centre lines; weld and datum feature symbols missing) | P2 | L | drawing |
+| Tables | Parts list, hole table, revision table | partial (parts list from components; hole and revision tables missing) | P2 | M | drawing |
+| Hatching | Fill closed regions with a pattern (solid, lines at an angle, cross-hatch), associative to the boundary | partial (section faces hatched at 45°/135° per part; free regions missing) | P1 | M | drawing, geom |
 | Layers | Named layers with colour, line type, line weight, on/off, lock, freeze | missing | P1 | M | drawing (and sketch later) |
 | Line types and line weights | Dashed, centre, phantom lines; plotted widths | missing | P1 | S | drawing |
 | Blocks | Reusable named groups of 2D geometry, inserted many times, editable once | missing | P2 | L | drawing |
@@ -331,11 +331,11 @@ Close runners-up: selection filters and box selection (UI and NAV), splines (nee
 |---|---|---|---|---|---|
 | User parameters with expressions and units | Named values, formulas between them, mm/in/deg | done | P0 | M | doc |
 | Parameters window | Create, edit, remove | done | P0 | S | ui |
-| Model parameters listed | Every dimension and feature value, renamable, shown alongside user parameters | missing | P0 | S | doc, ui |
-| Parameter comments and favourites | Notes and a short list in the browser | missing | P2 | S | doc, ui |
-| Functions in expressions | sin, cos, sqrt, min, max, round and so on | missing | P1 | S | doc |
-| Design configurations | Rows of parameter values that make variants of one design | missing | P2 | L | doc |
-| Import/export parameters | CSV of parameters | missing | P2 | S | io |
+| Model parameters listed | Every dimension and feature value, renamable, shown alongside user parameters | done (`Extrude1.distance`, `Sketch1.d13`; usable in expressions) | P0 | S | doc, ui |
+| Parameter comments and favourites | Notes and a short list in the browser | done (in the parameter table; favourites pinned at the top) | P2 | S | doc, ui |
+| Functions in expressions | sin, cos, sqrt, min, max, round and so on | done (plus `if` with comparisons, `e`, `pi`) | P1 | S | doc |
+| Design configurations | Rows of parameter values that make variants of one design | done (parameter overrides and suppression; `config.export_all`) | P2 | L | doc |
+| Import/export parameters | CSV of parameters | done | P2 | S | io |
 
 ## 14. Rendering
 

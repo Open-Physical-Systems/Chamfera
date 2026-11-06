@@ -43,6 +43,8 @@ pub static COMMANDS: &[CommandSpec] = &[
                  bodies: list of strings (optional) - new bodies of a split body or remove\n\
                  plane, sketch, line (optional) - a split's new plane or sketch line\n\
                  sides: string (optional) - a thicken's one_side, symmetric or both_sides\n\
+                 count: string or number (optional) - a pattern's new count\n\
+                 spacing: string or number (optional) - a rectangular pattern's new spacing\n\
                  suppressed: boolean (optional)",
         mutates: true,
         run: edit,
@@ -280,7 +282,7 @@ pub(super) fn feature_reply(s: &Session, id: u32) -> Value {
         "feature": id,
         "name": f.map(|f| f.name.clone()),
         "definition": f.map(|f| &f.kind),
-        "suppressed": f.map(|f| f.suppressed),
+        "suppressed": f.map(|f| s.doc.is_suppressed(f)),
         "solids": solids,
         "error": s.feature_errors().get(&id),
         "display_error": s.display_errors().get(&id),
@@ -786,6 +788,7 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
     if matches!(s.doc.feature(id)?.kind, FeatureKind::Surface(_)) {
         return super::surface::edit(s, id, p);
     }
+    refuse_unknown_edit_keys(p)?;
     let new_distance = distance(p)?;
     let new_direction = direction(p)?;
     let new_operation = operation(p)?;
@@ -936,6 +939,22 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
         }
         _ => {}
     }
+    let new_count = expression(p, "count", "")?;
+    let new_spacing = expression(p, "spacing", "mm")?;
+    if new_count.is_some() || new_spacing.is_some() {
+        let FeatureKind::Pattern(pat) = &mut kind else {
+            return Err(bad("count and spacing belong to patterns"));
+        };
+        if let Some(c) = new_count {
+            pat.count = c;
+        }
+        if let Some(sp) = new_spacing {
+            let chamfera_doc::PatternLayout::Linear { spacing, .. } = &mut pat.layout else {
+                return Err(bad("spacing belongs to rectangular (linear) patterns"));
+            };
+            *spacing = sp;
+        }
+    }
     if p.get("path_curves").is_some_and(|v| !v.is_null()) {
         let FeatureKind::Sweep(w) = &mut kind else {
             return Err(bad("path_curves belong to sweeps"));
@@ -952,13 +971,70 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
     let f = s.doc.feature_mut(id)?;
     f.kind = kind;
     if let Some(v) = suppressed {
-        f.suppressed = v;
+        s.doc.set_suppressed(id, v)?;
     }
     s.rebuild();
     if let Some(e) = s.feature_errors().get(&id) {
         return Err(CommandError::Unavailable(e.clone()));
     }
     Ok(feature_reply(s, id))
+}
+
+/// Every key `feature.edit` reads (outside face edits and surfaces, which have their own). A key not
+/// in it is refused: a misspelt or unsupported key used to succeed without changing
+/// anything and without an undo step, so the next undo removed an earlier change.
+const EDIT_KEYS: &[&str] = &[
+    "feature",
+    "distance",
+    "angle",
+    "direction",
+    "extent",
+    "distance2",
+    "to",
+    "start_offset",
+    "taper",
+    "operation",
+    "size",
+    "path_curves",
+    "sections",
+    "plane",
+    "dx",
+    "dy",
+    "dz",
+    "axis",
+    "origin",
+    "from",
+    "copy",
+    "thickness",
+    "faces",
+    "reversed",
+    "target",
+    "tools",
+    "keep_tools",
+    "bodies",
+    "sketch",
+    "line",
+    "sides",
+    "suppressed",
+    "count",
+    "spacing",
+];
+
+fn refuse_unknown_edit_keys(p: &Value) -> Result<(), CommandError> {
+    let Some(obj) = p.as_object() else {
+        return Ok(());
+    };
+    for k in obj.keys() {
+        let known = EDIT_KEYS.contains(&k.as_str())
+            || super::hole::EDIT_KEYS.contains(&k.as_str())
+            || super::sheet::EDIT_KEYS.contains(&k.as_str());
+        if !known {
+            return Err(bad(format!(
+                "feature.edit has no parameter `{k}` (see `app.commands` for the list)"
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn delete(s: &mut Session, p: &Value) -> CmdResult {

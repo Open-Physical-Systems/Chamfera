@@ -13,6 +13,8 @@ mod cam_tests;
 pub mod cmd;
 pub mod construct;
 pub mod display;
+#[cfg(test)]
+mod drawing_tests;
 pub mod face_edit;
 pub mod hole;
 mod imported;
@@ -21,6 +23,8 @@ pub mod naming;
 #[cfg(test)]
 mod naming_tests;
 mod params;
+#[cfg(test)]
+mod params_tests;
 pub mod pick_filter;
 pub mod projection;
 pub mod script;
@@ -204,6 +208,8 @@ impl Session {
 
 #[cfg(test)]
 mod body_tools_tests;
+#[cfg(test)]
+mod qa_tests;
 #[cfg(test)]
 mod surface_tests;
 #[cfg(test)]
