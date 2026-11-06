@@ -86,6 +86,10 @@ pub struct Theme {
     pub toolpath_feed: Rgba,
     /// Rapid moves, drawn dashed.
     pub toolpath_rapid: Rgba,
+    /// The simulated stock (`cam.simulate`).
+    pub stock: Rgba,
+    /// Simulated stock cut below the part: a gouge.
+    pub gouge: Rgba,
     // assemblies
     /// Where bodies overlap (`inspect.interference`): the outline, drawn over everything.
     pub interference: Rgba,
@@ -194,6 +198,8 @@ impl Theme {
             select_crossing_fill: Rgba(30, 135, 70, 36),
             toolpath_feed: Rgba(96, 72, 204, 255),
             toolpath_rapid: Rgba(200, 50, 60, 220),
+            stock: Rgba(196, 170, 120, 255),
+            gouge: Rgba(222, 32, 48, 255),
             interference: Rgba(214, 30, 60, 255),
             interference_fill: Rgba(230, 40, 70, 120),
             explode_trail: Rgba(52, 58, 72, 255),
@@ -268,6 +274,8 @@ impl Theme {
             select_crossing_fill: Rgba(88, 196, 124, 40),
             toolpath_feed: Rgba(170, 150, 255, 255),
             toolpath_rapid: Rgba(255, 110, 110, 220),
+            stock: Rgba(178, 152, 104, 255),
+            gouge: Rgba(255, 64, 80, 255),
             interference: Rgba(255, 80, 110, 255),
             interference_fill: Rgba(255, 70, 100, 120),
             explode_trail: Rgba(200, 206, 218, 255),

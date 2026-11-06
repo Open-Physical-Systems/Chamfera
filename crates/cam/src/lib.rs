@@ -1,4 +1,4 @@
-//! Layer 3: CAM, milestone M10 step one: 2.5D milling with G-code output.
+//! Layer 3: CAM, milestone M10: 2.5D and 3-axis milling, stock simulation and G-code.
 //!
 //! Our own, clean-room, from textbooks, papers and public specifications only: Held, "On
 //! the Computational Geometry of Pocket Machining" (1991) for offsets and pocketing;
@@ -9,16 +9,23 @@
 //! - [`path2`]: exact lines and arcs in XY; [`offset`]: offsets by trimming and joining;
 //! - [`model`]: boundaries, pocket regions and holes read from the B-rep;
 //! - [`ops`]: facing, contour, pocket and drilling; [`toolpath`]: moves and cycle time;
+//! - [`drop`]: the exact drop-cutter for flat, ball and bull-nose tools; [`ops3d`]:
+//!   parallel and waterline finishing and adaptive roughing; [`sim`]: stock simulation
+//!   on a dexel heightfield; [`grid`]: contours and distance transforms on grids;
 //! - [`post`]: G-code for LinuxCNC and GRBL;
 //! - [`generate`] and [`setup_geometry`]: the document's CAM section to toolpaths.
 //!
 //! Model decisions use the exact geometry; nothing here meshes.
 
+pub mod drop;
+pub mod grid;
 pub mod model;
 pub mod offset;
 pub mod ops;
+pub mod ops3d;
 pub mod path2;
 pub mod post;
+pub mod sim;
 pub mod toolpath;
 
 pub use ops::{Cutter, Hole, Region};
@@ -258,6 +265,79 @@ pub fn generate(
                 g.clearance_z,
             )
         }
+        OpKind::Parallel {
+            stepover,
+            scallop,
+            angle,
+            tolerance,
+            stock_to_leave,
+        } => {
+            let shape = ops3d::tool_shape(tool)?;
+            let dm = drop::DropModel::new(bodies)?;
+            let cl = ops3d::Cl::new(&dm, shape, *stock_to_leave, g.model_min.z)?;
+            let step = match scallop {
+                Some(h) => {
+                    if tool.kind != chamfera_doc::cam::ToolKind::BallEndMill {
+                        return Err(CamError::Refused(
+                            "a scallop height needs a ball end mill".into(),
+                        ));
+                    }
+                    ops3d::scallop_stepover(shape.radius, *h)?
+                }
+                None => stepover * tool.diameter,
+            };
+            ops3d::parallel(
+                &cl,
+                &cutter,
+                stock_area(&g),
+                step,
+                *angle,
+                *tolerance,
+                g.clearance_z,
+            )
+        }
+        OpKind::Waterline {
+            stepdown,
+            tolerance,
+            stock_to_leave,
+        } => {
+            let shape = ops3d::tool_shape(tool)?;
+            let dm = drop::DropModel::new(bodies)?;
+            let cl = ops3d::Cl::new(&dm, shape, *stock_to_leave, g.model_min.z)?;
+            ops3d::waterline(
+                &cl,
+                &cutter,
+                stock_area(&g),
+                g.model_max.z.min(top),
+                g.model_min.z,
+                *stepdown,
+                *tolerance,
+                g.clearance_z,
+            )
+        }
+        OpKind::Adaptive {
+            stepdown,
+            max_engagement,
+            stock_to_leave,
+        } => {
+            let shape = ops3d::tool_shape(tool)?;
+            let dm = drop::DropModel::new(bodies)?;
+            let cl = ops3d::Cl::new(&dm, shape, *stock_to_leave, g.stock_min.z)?;
+            ops3d::adaptive(
+                &cl,
+                &cutter,
+                ops3d::AdaptiveParams {
+                    stock_min: Point2::new(g.stock_min.x, g.stock_min.y),
+                    stock_max: Point2::new(g.stock_max.x, g.stock_max.y),
+                    stock_top: top,
+                    bottom: g.model_min.z.max(g.stock_min.z),
+                    stepdown: *stepdown,
+                    max_engagement: *max_engagement,
+                    clearance: g.clearance_z,
+                },
+            )
+            .map(|r| r.toolpath)
+        }
         OpKind::Drill {
             faces,
             peck,
@@ -274,6 +354,14 @@ pub fn generate(
                 g.clearance_z,
             )
         }
+    }
+}
+
+/// The stock's XY box, which the tool's centre covers in the 3D operations.
+fn stock_area(g: &SetupGeometry) -> ops3d::Area {
+    ops3d::Area {
+        min: Point2::new(g.stock_min.x, g.stock_min.y),
+        max: Point2::new(g.stock_max.x, g.stock_max.y),
     }
 }
 
@@ -308,3 +396,5 @@ pub fn drill_holes(bodies: &[Body], faces: &[String]) -> Result<Vec<Hole>, CamEr
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests3d;

@@ -33,11 +33,11 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         id: "cam.op_add",
         label: "Add Machining Operation",
-        params: "kind: string (required) - facing, contour, pocket or drill\n\
+        params: "kind: string (required) - facing, contour, pocket, drill, parallel, waterline or adaptive\n\
                  tool: integer (required) - a tool from cam.tool_add\n\
                  setup: integer (optional) - default the last setup (one is made if none)\n\
                  name: string (optional)\n\
-                 stepover: number (optional) - percent of the tool diameter (facing 50, pocket 40)\n\
+                 stepover: number (optional) - percent of the tool diameter (facing 50, pocket 40, parallel 10)\n\
                  stepdown: length (optional) - most depth per pass (facing 1, else 2)\n\
                  face: string (contour, pocket) - a face name such as \"2:bottom\"\n\
                  edges: list of strings (contour) - a closed chain of edge names, instead of face\n\
@@ -51,7 +51,12 @@ pub static COMMANDS: &[CommandSpec] = &[
                  faces: list of strings (drill) - hole faces; default every vertical hole\n\
                  peck: length (drill) - peck depth (G83); default none (G81)\n\
                  retract: length (drill) - retract plane above the stock (default 2)\n\
-                 breakthrough: length (drill) - past the hole bottom (default 0)",
+                 breakthrough: length (drill) - past the hole bottom (default 0)\n\
+                 scallop: length (parallel) - cusp height for a ball end mill, instead of stepover\n\
+                 angle: angle (parallel) - pass direction from +X, degrees (default 0)\n\
+                 tolerance: length (parallel, waterline) - largest height error between samples (default 0.01)\n\
+                 stock_to_leave: length (parallel, waterline, adaptive) - material left on the part (default 0; adaptive 0.3)\n\
+                 max_engagement: angle (adaptive) - largest tool engagement, degrees (default 60)",
         mutates: true,
         run: op_add,
     },
@@ -81,6 +86,21 @@ pub static COMMANDS: &[CommandSpec] = &[
                  setup: integer (optional) - default the first setup",
         mutates: false,
         run: post,
+    },
+    CommandSpec {
+        id: "cam.simulate",
+        label: "Simulate",
+        params: "setup: integer (optional) - default the first setup\n\
+                 ops: list of integers (optional) - these operations, in order; default the setup's\n\
+                 resolution: integer (optional) - stock columns along its longer side, 1 to 1024 (default 128)\n\
+                 time: number (optional) - how far through the cycle time, 0 to 1 (default 1)\n\
+                 tolerance: length (optional) - a cut this far below the part is a gouge (default 0.02)\n\
+                 clear: boolean (optional) - true ends the simulation\n\
+                 Cuts a dexel stock along the toolpaths, shows it (gouges in their own colour) and \
+                 replies with removed_volume, rest_volume (left above the part), gouges \
+                 {cells, volume, max_depth} and the cell size",
+        mutates: false,
+        run: simulate,
     },
     CommandSpec {
         id: "cam.setup",
@@ -474,6 +494,44 @@ fn apply(s: &Session, p: &Value, op: &mut OpKind, tool_d: f64) -> Result<(), Com
             *retract = length(s, p, "retract")?.unwrap_or(*retract);
             *breakthrough = length(s, p, "breakthrough")?.unwrap_or(*breakthrough);
         }
+        OpKind::Parallel {
+            stepover,
+            scallop,
+            angle: a,
+            tolerance,
+            stock_to_leave,
+        } => {
+            *stepover = so.unwrap_or(*stepover);
+            match obj(p)?.get("scallop") {
+                None => {}
+                Some(Value::Null) => *scallop = None,
+                Some(_) => *scallop = length(s, p, "scallop")?,
+            }
+            if so.is_some() && obj(p)?.get("scallop").is_none() {
+                *scallop = None;
+            }
+            *a = angle(s, p, "angle")?.unwrap_or(*a);
+            *tolerance = length(s, p, "tolerance")?.unwrap_or(*tolerance);
+            *stock_to_leave = length(s, p, "stock_to_leave")?.unwrap_or(*stock_to_leave);
+        }
+        OpKind::Waterline {
+            stepdown,
+            tolerance,
+            stock_to_leave,
+        } => {
+            *stepdown = sd.unwrap_or(*stepdown);
+            *tolerance = length(s, p, "tolerance")?.unwrap_or(*tolerance);
+            *stock_to_leave = length(s, p, "stock_to_leave")?.unwrap_or(*stock_to_leave);
+        }
+        OpKind::Adaptive {
+            stepdown,
+            max_engagement,
+            stock_to_leave,
+        } => {
+            *stepdown = sd.unwrap_or(*stepdown);
+            *max_engagement = angle(s, p, "max_engagement")?.unwrap_or(*max_engagement);
+            *stock_to_leave = length(s, p, "stock_to_leave")?.unwrap_or(*stock_to_leave);
+        }
     }
     Ok(())
 }
@@ -507,7 +565,28 @@ fn default_op(kind: &str, tool_d: f64) -> Result<OpKind, CommandError> {
             retract: 2.0,
             breakthrough: 0.0,
         },
-        _ => return Err(bad("`kind` is facing, contour, pocket or drill")),
+        "parallel" => OpKind::Parallel {
+            stepover: 0.1,
+            scallop: None,
+            angle: 0.0,
+            tolerance: 0.01,
+            stock_to_leave: 0.0,
+        },
+        "waterline" => OpKind::Waterline {
+            stepdown: 1.0,
+            tolerance: 0.01,
+            stock_to_leave: 0.0,
+        },
+        "adaptive" => OpKind::Adaptive {
+            stepdown: 2.0,
+            max_engagement: 60f64.to_radians(),
+            stock_to_leave: 0.3,
+        },
+        _ => {
+            return Err(bad(
+                "`kind` is facing, contour, pocket, drill, parallel, waterline or adaptive",
+            ));
+        }
     })
 }
 
@@ -704,6 +783,71 @@ fn list(s: &mut Session, p: &Value) -> CmdResult {
     Ok(
         json!({"setups": setups, "tools": tools, "operations": ops, "visible": s.toolpaths_visible()}),
     )
+}
+
+fn simulate(s: &mut Session, p: &Value) -> CmdResult {
+    if opt_bool(p, "clear")? == Some(true) {
+        s.clear_simulation();
+        return Ok(json!({"cleared": true}));
+    }
+    let ops = match obj(p)?.get("ops") {
+        None | Some(Value::Null) => None,
+        Some(Value::Array(a)) => {
+            if a.len() > chamfera_doc::cam::MAX_CAM_ITEMS {
+                return Err(bad("`ops` holds too many operations"));
+            }
+            Some(
+                a.iter()
+                    .map(|v| {
+                        v.as_u64()
+                            .and_then(|x| u32::try_from(x).ok())
+                            .ok_or_else(|| bad("`ops` must be a list of operation ids"))
+                    })
+                    .collect::<Result<Vec<u32>, _>>()?,
+            )
+        }
+        Some(_) => return Err(bad("`ops` must be a list of operation ids")),
+    };
+    let resolution = match obj(p)?.get("resolution") {
+        None | Some(Value::Null) => 128,
+        _ => {
+            let r = params::req_id(p, "resolution")?;
+            let max = chamfera_cam::sim::MAX_SIM_RESOLUTION;
+            if r == 0 || r as usize > max {
+                return Err(bad(format!(
+                    "`resolution` must be from 1 to {max} columns per side"
+                )));
+            }
+            r as usize
+        }
+    };
+    let time = params::opt_f64(p, "time")?.unwrap_or(1.0);
+    if !(0.0..=1.0).contains(&time) {
+        return Err(bad("`time` must be from 0 to 1"));
+    }
+    let tolerance = length(s, p, "tolerance")?.unwrap_or(0.02);
+    if !(0.0..=10.0).contains(&tolerance) {
+        return Err(bad("`tolerance` must be from 0 to 10 mm"));
+    }
+    let req = crate::cam::SimRequest {
+        setup: opt_id(p, "setup")?,
+        ops,
+        resolution,
+        tolerance,
+        time,
+    };
+    let st = s.simulate(&req).map_err(CommandError::Unavailable)?;
+    let r = st.report;
+    Ok(json!({
+        "setup": st.setup,
+        "ops": st.ops,
+        "resolution": st.resolution,
+        "cell": st.cell,
+        "time": st.time,
+        "removed_volume": r.removed_volume,
+        "rest_volume": r.rest_volume,
+        "gouges": {"cells": r.gouge_cells, "volume": r.gouge_volume, "max_depth": r.max_gouge},
+    }))
 }
 
 fn show(s: &mut Session, p: &Value) -> CmdResult {

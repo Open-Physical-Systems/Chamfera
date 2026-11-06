@@ -226,6 +226,14 @@ fn hostile_cam_params_never_panic() {
         json!({"kind": "drill", "diameter": "0 mm", "feed": f64::NAN, "plunge_feed": -1}),
         json!({"dialect": "fanuc", "setup": 99, "path": "/nonexistent/dir/x.nc"}),
         json!({"visible": "yes", "operation": 4294967296u64}),
+        json!({"kind": "parallel", "tool": 3, "scallop": 1e9, "angle": "(((", "tolerance": 0}),
+        json!({"kind": "parallel", "tool": 2, "stepover": 1e-9, "tolerance": 1e-300, "stock_to_leave": -1}),
+        json!({"kind": "waterline", "tool": 3, "tolerance": 1e9, "stepdown": 1e-9}),
+        json!({"kind": "adaptive", "tool": 3, "max_engagement": 0, "stock_to_leave": 1e300}),
+        json!({"kind": "adaptive", "tool": 4, "max_engagement": "1e9 deg", "stepdown": -2}),
+        json!({"resolution": 1e9, "time": 2, "ops": [99], "tolerance": -1}),
+        json!({"resolution": 0, "time": f64::NAN, "ops": "all", "clear": "yes"}),
+        json!({"resolution": 8, "time": 0.5, "ops": [4294967296u64, -1], "setup": 99}),
         json!(null),
         json!([1, 2]),
     ];
@@ -247,4 +255,167 @@ fn hostile_cam_params_never_panic() {
             }
         }
     }
+}
+
+// ---- 3D operations and the stock simulation ----
+
+/// A 50 x 30 x 10 block with a 30 x 14 pocket 4 deep in the middle of its top (x 10..40,
+/// y 8..22, floor at z = 6), the stock exactly the block, a 6 mm flat end mill.
+fn pocket_block() -> (Session, serde_json::Value) {
+    let steps = json!([
+        {"command": "sketch.create", "params": {"plane": "xy"}, "as": "base"},
+        {"command": "sketch.rectangle", "params": {"x1": 0, "y1": 0, "x2": 50, "y2": 30}},
+        {"command": "sketch.finish"},
+        {"command": "solid.extrude", "params": {"sketch": "$base.sketch", "profiles": [{"x": 25, "y": 15}], "distance": 10}, "as": "block"},
+        {"command": "sketch.create_on_face", "params": {"feature": "$block.feature", "face": "top"}, "as": "pocket"},
+        {"command": "sketch.rectangle", "params": {"x1": 10, "y1": 8, "x2": 40, "y2": 22}},
+        {"command": "sketch.finish"},
+        {"command": "solid.extrude", "params": {"sketch": "$pocket.sketch", "profiles": [{"x": 25, "y": 15}], "distance": 4, "direction": "reversed", "operation": "cut"}},
+        {"command": "cam.setup", "params": {"stock": {"kind": "fixed", "x": 50, "y": 30, "z": 10}}},
+        {"command": "cam.tool_add", "params": {"kind": "flat_end_mill", "diameter": 6}, "as": "mill"}
+    ]);
+    let mut s = Session::new();
+    script::run_steps(&mut s, steps.as_array().unwrap()).unwrap();
+    let tool = s.doc.cam.tools[0].id;
+    (s, json!(tool))
+}
+
+#[test]
+fn simulating_a_pocket_removes_the_pocket_to_within_the_dexel_tolerance() {
+    // The pocket op clears the 30 x 14 floor 4 deep except where a 6 mm tool cannot
+    // reach: each of the four sharp corners keeps r² (1 - π/4) with r = 3. Removed:
+    // V = 4 (420 - 36 (1 - π/4)).
+    //
+    // Dexel tolerance: each column is cut exactly at its centre, so a column is wrong
+    // only where the cut region's boundary passes through it: within half a cell's
+    // diagonal h/√2 of the boundary, a band of area at most 2 (h/√2) L (L its length,
+    // here at most the pocket's perimeter 88) plus the four corners' π h²/2. Times the
+    // depth: |error| <= 4 (√2 h L + 2π h²).
+    let (mut s, tool) = pocket_block();
+    let r = s
+        .execute(
+            "cam.op_add",
+            &json!({"kind": "pocket", "tool": tool, "face": "4:top", "stepdown": 2}),
+        )
+        .unwrap();
+    assert!(r.get("error").is_none(), "{r}");
+    let sim = s
+        .execute("cam.simulate", &json!({"resolution": 500}))
+        .unwrap();
+    let h = sim["cell"].as_f64().unwrap();
+    assert!((h - 0.1).abs() < 1e-12, "{sim}");
+    let want = 4.0 * (420.0 - 36.0 * (1.0 - std::f64::consts::FRAC_PI_4));
+    let tol = 4.0 * (2f64.sqrt() * h * 88.0 + 2.0 * std::f64::consts::PI * h * h);
+    let got = sim["removed_volume"].as_f64().unwrap();
+    assert!((got - want).abs() <= tol, "{got} vs {want} ± {tol}");
+    assert_eq!(sim["gouges"]["cells"], 0, "{sim}");
+    // The rest is the corners: 4 · 36 (1 - π/4) · ... within the same tolerance of the
+    // corner material, 4 mm deep: 4 · 4 · 9 (1 - π/4).
+    let rest = sim["rest_volume"].as_f64().unwrap();
+    let corners = 4.0 * 36.0 * (1.0 - std::f64::consts::FRAC_PI_4);
+    assert!((rest - corners).abs() <= tol, "{rest} vs {corners}");
+    // The stock shows in the viewport, in place of the bodies.
+    assert!(!s.scene.stock.is_empty());
+    // Halfway through the cycle time less is gone; at 0 nothing.
+    let half = s
+        .execute("cam.simulate", &json!({"resolution": 500, "time": 0.5}))
+        .unwrap();
+    let v = half["removed_volume"].as_f64().unwrap();
+    assert!(v > 0.0 && v < got, "{half}");
+    let none = s
+        .execute("cam.simulate", &json!({"resolution": 500, "time": 0}))
+        .unwrap();
+    assert!(none["removed_volume"].as_f64().unwrap().abs() < 1e-9);
+    s.execute("cam.simulate", &json!({"clear": true})).unwrap();
+    assert!(s.scene.stock.is_empty());
+}
+
+#[test]
+fn a_contour_cut_below_the_pocket_floor_shows_as_a_gouge() {
+    // The pocket's inside contour cut 1 mm below its floor (bottom_offset 1) cuts into the
+    // part along the walls: gouges, the deepest 1 mm.
+    let (mut s, tool) = pocket_block();
+    s.execute(
+        "cam.op_add",
+        &json!({"kind": "contour", "tool": tool, "face": "4:top", "side": "inside",
+                "bottom_offset": 1, "stepdown": 5}),
+    )
+    .unwrap();
+    let sim = s
+        .execute(
+            "cam.simulate",
+            &json!({"resolution": 250, "tolerance": 0.02}),
+        )
+        .unwrap();
+    assert!(sim["gouges"]["cells"].as_u64().unwrap() > 0, "{sim}");
+    assert!(
+        (sim["gouges"]["max_depth"].as_f64().unwrap() - 1.0).abs() < 1e-9,
+        "{sim}"
+    );
+    assert!(
+        s.scene
+            .stock
+            .iter()
+            .any(|m| m.style == chamfera_render::StockStyle::Gouge)
+    );
+}
+
+#[test]
+fn three_d_operations_are_added_generated_and_their_resolutions_capped() {
+    // A ball end mill: parallel finishing at a 0.01 mm scallop over the pocket block
+    // (stepover 2 sqrt(2·3·0.01 - 0.0001) = 0.4895 mm), a waterline and an adaptive with
+    // the flat mill. Each generates without an error and simulates without a gouge.
+    let (mut s, flat) = pocket_block();
+    let ball = s
+        .execute(
+            "cam.tool_add",
+            &json!({"kind": "ball_end_mill", "diameter": 6}),
+        )
+        .unwrap()["tool"]
+        .clone();
+    let a = s
+        .execute(
+            "cam.op_add",
+            &json!({"kind": "adaptive", "tool": flat, "stepdown": 2, "stock_to_leave": 0}),
+        )
+        .unwrap();
+    assert!(a.get("error").is_none(), "{a}");
+    let p = s
+        .execute(
+            "cam.op_add",
+            &json!({"kind": "parallel", "tool": ball, "scallop": 0.01, "angle": 90}),
+        )
+        .unwrap();
+    assert!(p.get("error").is_none(), "{p}");
+    let w = s
+        .execute(
+            "cam.op_add",
+            &json!({"kind": "waterline", "tool": ball, "stepdown": 1}),
+        )
+        .unwrap();
+    assert!(w.get("error").is_none(), "{w}");
+    // A scallop needs a ball.
+    let bad = s
+        .execute(
+            "cam.op_add",
+            &json!({"kind": "parallel", "tool": flat, "scallop": 0.01}),
+        )
+        .unwrap();
+    assert!(bad["error"].as_str().unwrap().contains("ball"), "{bad}");
+    let id = bad["operation"].clone();
+    s.execute("cam.op_delete", &json!({"operation": id}))
+        .unwrap();
+    let sim = s
+        .execute("cam.simulate", &json!({"resolution": 200}))
+        .unwrap();
+    assert_eq!(sim["gouges"]["cells"], 0, "{sim}");
+    assert!(
+        s.execute("cam.simulate", &json!({"resolution": 1025}))
+            .is_err()
+    );
+    // The design file keeps the 3D operations.
+    let text = s.doc.to_json().unwrap();
+    assert!(text.contains("\"parallel\"") && text.contains("\"adaptive\""));
+    let back = chamfera_doc::Document::from_json(&text).unwrap();
+    assert_eq!(back.cam, s.doc.cam);
 }

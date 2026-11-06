@@ -246,6 +246,36 @@ pub enum OpKind {
         /// How far below each hole's bottom to drill.
         breakthrough: f64,
     },
+    /// 3D finishing in raster passes over the stock, the tool dropped onto the model.
+    Parallel {
+        /// Distance between passes as a fraction of the tool diameter (0 to 1].
+        stepover: f64,
+        /// A cusp height for a ball mill instead: the stepover is `2 sqrt(2 R h - h²)`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scallop: Option<f64>,
+        /// Direction of the passes from +X (radians).
+        angle: f64,
+        /// Largest height error between the samples along a pass (mm).
+        tolerance: f64,
+        /// Material left on the part (mm).
+        #[serde(default)]
+        stock_to_leave: f64,
+    },
+    /// 3D finishing in contours at Z levels, where the tool touches the part.
+    Waterline {
+        stepdown: f64,
+        tolerance: f64,
+        #[serde(default)]
+        stock_to_leave: f64,
+    },
+    /// Roughing of the stock minus the part in levels, the tool's engagement bounded.
+    Adaptive {
+        stepdown: f64,
+        /// Largest engagement angle (radians).
+        max_engagement: f64,
+        #[serde(default)]
+        stock_to_leave: f64,
+    },
 }
 
 impl OpKind {
@@ -255,6 +285,9 @@ impl OpKind {
             OpKind::Contour { .. } => "contour",
             OpKind::Pocket { .. } => "pocket",
             OpKind::Drill { .. } => "drill",
+            OpKind::Parallel { .. } => "parallel",
+            OpKind::Waterline { .. } => "waterline",
+            OpKind::Adaptive { .. } => "adaptive",
         }
     }
 }
@@ -489,6 +522,49 @@ fn check_op(op: &OpKind) -> Result<(), DocError> {
             }
             check_len("the retract height", *retract, 0.0, MAX_TOOL_SIZE)?;
             check_range("the breakthrough", *breakthrough, 0.0, MAX_TOOL_SIZE)?;
+        }
+        OpKind::Parallel {
+            stepover,
+            scallop,
+            angle,
+            tolerance,
+            stock_to_leave,
+        } => {
+            check_len("the stepover", *stepover, 0.0, 1.0)?;
+            if let Some(h) = scallop {
+                check_len("the scallop height", *h, 0.0, MAX_TOOL_SIZE)?;
+            }
+            check_range(
+                "the angle",
+                *angle,
+                -std::f64::consts::TAU,
+                std::f64::consts::TAU,
+            )?;
+            check_range("the tolerance", *tolerance, 1e-4, 10.0)?;
+            check_range("the stock to leave", *stock_to_leave, 0.0, MAX_TOOL_SIZE)?;
+        }
+        OpKind::Waterline {
+            stepdown,
+            tolerance,
+            stock_to_leave,
+        } => {
+            check_len("the stepdown", *stepdown, 0.0, MAX_TOOL_SIZE)?;
+            check_range("the tolerance", *tolerance, 1e-4, 10.0)?;
+            check_range("the stock to leave", *stock_to_leave, 0.0, MAX_TOOL_SIZE)?;
+        }
+        OpKind::Adaptive {
+            stepdown,
+            max_engagement,
+            stock_to_leave,
+        } => {
+            check_len("the stepdown", *stepdown, 0.0, MAX_TOOL_SIZE)?;
+            check_range(
+                "the engagement limit",
+                *max_engagement,
+                0.05,
+                std::f64::consts::PI,
+            )?;
+            check_range("the stock to leave", *stock_to_leave, 0.0, MAX_TOOL_SIZE)?;
         }
     }
     Ok(())

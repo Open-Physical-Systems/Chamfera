@@ -104,7 +104,10 @@ use thiserror::Error;
 ///   files open unchanged: they hold none.
 /// - 29: motion studies: keyframes of joint values over time (`motion.keys`: joint,
 ///   time in seconds, value). Older files open with no keys.
-pub const FORMAT_VERSION: u32 = 29;
+/// - 30: 3D machining operations in the CAM section: `parallel` (raster finishing),
+///   `waterline` (Z-level finishing) and `adaptive` (bounded-engagement roughing). Older
+///   files open unchanged: they hold none.
+pub const FORMAT_VERSION: u32 = 30;
 /// The tag every design file starts with, so other JSON is not mistaken for a design.
 pub const FORMAT_TAG: &str = "chamfera";
 /// Longest parameter name.
