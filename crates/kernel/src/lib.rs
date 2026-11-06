@@ -30,7 +30,12 @@
 //! Rung K7 is here: booleans on solids ([`union`], [`subtract`], [`intersect`]) by face
 //! intersection, splitting, classification and sewing, with coplanar and touching cases,
 //! multi-lump results and result faces named after the operand faces they came from.
+//!
+//! Rung K11 (first part) is here: edge blends, constant-radius [`fillet`] and
+//! equal-distance [`chamfer`] on straight edges between planes (cylinders, sphere-octant
+//! corners) and on plane/cylinder rims (tori, cones).
 
+mod blend;
 mod boolean;
 mod check;
 mod curve3;
@@ -43,6 +48,7 @@ mod sweep;
 mod tessellate;
 mod topology;
 
+pub use blend::{MAX_BLEND_EDGES, chamfer, fillet};
 pub use boolean::{
     BooleanOp, MAX_BOOLEAN_ENTITIES, MAX_BOOLEAN_FACES, boolean, intersect, subtract, union,
 };
