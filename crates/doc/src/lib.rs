@@ -1,6 +1,9 @@
 //! Layer 2: the design document: parameters and sketches now, the feature timeline from M4.
 
 pub mod expr;
+pub mod feature;
+
+pub use feature::{Extrude, ExtrudeDirection, Feature, FeatureKind, Revolve};
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -11,7 +14,8 @@ use thiserror::Error;
 /// - 1: parameters.
 /// - 2: sketches (each on a plane). Version 1 files open with no sketches.
 /// - 3: parameter expressions, and sketch dimensions driven by expressions.
-pub const FORMAT_VERSION: u32 = 3;
+/// - 4: the feature timeline (extrude, revolve).
+pub const FORMAT_VERSION: u32 = 4;
 /// The tag every design file starts with, so other JSON is not mistaken for a design.
 pub const FORMAT_TAG: &str = "chamfera";
 /// Longest parameter name.
@@ -52,6 +56,10 @@ pub enum DocError {
     InUse { name: String, users: Vec<String> },
     #[error("sketch {sketch} cannot take the new dimensions: {reason}")]
     Solve { sketch: u32, reason: String },
+    #[error("no feature {0}")]
+    NoSuchFeature(u32),
+    #[error("{reason}")]
+    BadFeature { reason: String },
 }
 
 /// What a parameter measures. Values are stored in internal units: mm and radians.
@@ -117,6 +125,9 @@ pub struct Document {
     pub parameters: BTreeMap<String, Parameter>,
     #[serde(default)]
     pub sketches: Vec<SketchFeature>,
+    /// The timeline, in build order.
+    #[serde(default)]
+    pub features: Vec<Feature>,
     /// The last feature id handed out; ids are never reused.
     #[serde(default)]
     pub last_feature_id: u32,
@@ -129,6 +140,7 @@ impl Default for Document {
             version: FORMAT_VERSION,
             parameters: BTreeMap::new(),
             sketches: Vec::new(),
+            features: Vec::new(),
             last_feature_id: 0,
         }
     }
@@ -235,6 +247,7 @@ impl Document {
                 }
             }
         }
+        users.extend(self.feature_parameter_users(name));
         users
     }
 
@@ -483,6 +496,24 @@ impl Document {
         }
         checked.sketches = doc.sketches;
         checked.last_feature_id = doc.last_feature_id;
+        if doc.features.len() > feature::MAX_FEATURES {
+            return Err(DocError::BadFeature {
+                reason: "too many features".into(),
+            });
+        }
+        for f in &doc.features {
+            if !seen.insert(f.id) || f.id == 0 || f.id > checked.last_feature_id {
+                return Err(DocError::BadFeature {
+                    reason: format!("feature {} has a duplicate or out-of-range id", f.id),
+                });
+            }
+            if f.name.chars().count() > 256 {
+                return Err(DocError::BadFeature {
+                    reason: format!("feature {} has a name longer than 256", f.id),
+                });
+            }
+        }
+        checked.features = doc.features;
         // Values in the file must agree with their expressions.
         checked.evaluate()?;
         Ok(checked)

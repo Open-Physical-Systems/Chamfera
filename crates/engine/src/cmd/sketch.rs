@@ -247,6 +247,13 @@ fn finish(s: &mut Session, p: &Value) -> CmdResult {
 
 fn delete(s: &mut Session, p: &Value) -> CmdResult {
     let id = params::req_id(p, "sketch")?;
+    let users = s.doc.sketch_users(id);
+    if !users.is_empty() {
+        return Err(CommandError::Unavailable(format!(
+            "{} uses this sketch; delete or change it first",
+            users.join(", ")
+        )));
+    }
     s.doc.remove_sketch(id)?;
     if s.active_sketch == Some(id) {
         s.active_sketch = None;
