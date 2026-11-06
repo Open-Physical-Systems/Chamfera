@@ -17,12 +17,18 @@
 //! Rung K3 is here: analytic surfaces ([`Surface`]: plane, [`Cylinder`], [`Cone`],
 //! [`Sphere`], [`Torus`]) with evaluation, normals, projection and closest points; faces on
 //! them are validated, classified ([`Body::classify_point_on_face`]) and measured.
+//!
+//! Rung K4 is here: a planar [`Profile`] of lines and arcs with holes is swept into a valid
+//! solid by [`extrude`], [`extrude_symmetric`] and [`revolve`], every face, edge and vertex
+//! named from the profile element and role that made it.
 
 mod check;
 mod curve3;
 mod intersect;
 mod planar;
+mod profile;
 mod surface;
+mod sweep;
 mod topology;
 
 pub use curve3::{
@@ -34,7 +40,9 @@ pub use intersect::{
     line_arc, line_circle, line_line, line_segment, segment_arc, segment_circle, segment_segment,
 };
 pub use planar::{Arc2, Circle2, Line2, Segment2};
+pub use profile::{PROFILE_JOIN_TOLERANCE, Profile, ProfileEdge, polygon_edges};
 pub use surface::{Cone, Cylinder, Sphere, Surface, SurfaceParameters, SurfacePoint, Torus};
+pub use sweep::{extrude, extrude_symmetric, revolve};
 pub use topology::{
     Body, Curve, CurveId, EdgeCurve, EdgeId, FaceId, HalfEdgeId, LoopId, MAX_NAME_LENGTH,
     MAX_PROFILE_VERTICES, MAX_TOPOLOGY_ENTITIES, Mvfs, PointId, PointOnFace,
