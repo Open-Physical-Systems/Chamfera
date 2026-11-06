@@ -1,0 +1,18 @@
+[package]
+name = "chamfera-doc"
+description = "Parameters, the feature timeline and the design document (layer 2)"
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+
+[dependencies]
+chamfera-geom.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,20 @@
+[package]
+name = "chamfera-cli"
+description = "Headless Chamfera: list and run commands, scripts"
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+
+[dependencies]
+chamfera-engine.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "chamfera-cli"
+path = "src/main.rs"

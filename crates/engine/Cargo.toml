@@ -1,0 +1,21 @@
+[package]
+name = "chamfera-engine"
+description = "The session and the command registry: everything is a command (layer 4)"
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+
+[dependencies]
+chamfera-doc.workspace = true
+chamfera-io.workspace = true
+chamfera-kernel.workspace = true
+chamfera-sketch.workspace = true
+chamfera-geom.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

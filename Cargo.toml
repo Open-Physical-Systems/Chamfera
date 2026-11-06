@@ -1,0 +1,41 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "apps/*", "xtask"]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+rust-version = "1.90"
+authors = ["Chamfera contributors"]
+
+[workspace.dependencies]
+# internal (layer order: see docs/architecture.md)
+chamfera-geom = { path = "crates/geom" }
+chamfera-sketch = { path = "crates/sketch" }
+chamfera-kernel = { path = "crates/kernel" }
+chamfera-render = { path = "crates/render" }
+chamfera-doc = { path = "crates/doc" }
+chamfera-io = { path = "crates/io" }
+chamfera-engine = { path = "crates/engine" }
+
+# external: permissive licences only (deny.toml)
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+toml = "0.9"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+dbg_macro = "deny"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

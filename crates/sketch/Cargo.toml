@@ -1,0 +1,15 @@
+[package]
+name = "chamfera-sketch"
+description = "2D sketch entities and the constraint solver (layer 1)"
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+
+[dependencies]
+chamfera-geom.workspace = true
+
+[lints]
+workspace = true

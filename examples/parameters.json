@@ -1,0 +1,8 @@
+[
+  { "command": "param.set", "params": { "name": "width", "value": 50 } },
+  { "command": "param.set", "params": { "name": "height", "value": 30 } },
+  { "command": "param.set", "params": { "name": "draft", "value": 0.0349, "unit": "angle" } },
+  { "command": "param.set", "params": { "name": "width", "value": 60 } },
+  { "command": "edit.undo" },
+  { "command": "param.list" }
+]

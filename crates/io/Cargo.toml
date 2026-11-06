@@ -1,0 +1,19 @@
+[package]
+name = "chamfera-io"
+description = "Design files, import and export (layer 3)"
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+
+[dependencies]
+chamfera-doc.workspace = true
+chamfera-kernel.workspace = true
+chamfera-geom.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true
