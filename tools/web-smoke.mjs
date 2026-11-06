@@ -250,7 +250,8 @@ async function main() {
     const portFile = join(profile, "DevToolsActivePort");
     const devPort = await waitFor(
       () => existsSync(portFile) && readFileSync(portFile, "utf8").split("\n")[0],
-      15000,
+      // A fresh profile on a busy CI runner can take well over 15 s before the port opens.
+      60000,
       "Chrome to start",
     );
     const targets = await waitFor(async () => {
