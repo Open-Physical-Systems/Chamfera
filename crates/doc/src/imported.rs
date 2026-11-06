@@ -53,7 +53,7 @@ impl<'de> Deserialize<'de> for SharedMesh {
     }
 }
 
-/// A mesh body imported from an STL, OBJ or 3MF file (format 31).
+/// A mesh body imported from an STL, OBJ or 3MF file (format 32).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ImportedMesh {

@@ -213,7 +213,11 @@ mod tests {
         let (lo, hi) = s.domain();
         assert!(s.point_at(lo).distance(e.point_at(1.0)) < 1e-12);
         assert!(s.point_at(hi).distance(e.point_at(1.0 + 2.0 * PI / 3.0)) < 1e-12);
-        assert!(s.point_at(0.5 * (lo + hi)).distance(e.point_at(1.0 + PI / 3.0)) < 1e-12);
+        assert!(
+            s.point_at(0.5 * (lo + hi))
+                .distance(e.point_at(1.0 + PI / 3.0))
+                < 1e-12
+        );
     }
 
     #[test]

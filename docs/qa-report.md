@@ -98,9 +98,10 @@ ready; fixed ones say so and name their tests.
    `07-enclosure-drawing.json`, then `param.set width 100 mm`: the views redraw at 100 mm
    but the width dimension still says 80 (`qa_drawing_dimensions_follow_the_model`).
    Dimensions store the picked points in view coordinates, not what they were attached to,
-   so after any model change they show a stale number without a warning. Needs
-   dimensions attached to projected vertices and edges (with the K8 naming); until then a
-   dimension whose points no longer lie on the view's geometry should at least be marked.
+   so after any model change they show a stale number without a warning. **Fixed in
+   drawings version 2** (design format 30): dimensions keep K8 references to the vertices
+   and edges they measure and follow the model; one whose reference is gone is drawn
+   dangling in the warning colour. The test now runs.
 3. **Ellipses cannot become solids.** `solid.extrude` (with or without taper) of an
    ellipse profile: "ellipses in a profile cannot be swept into solids yet". The Ellipse
    tool draws profiles that the solid tools then refuse; either the kernel takes ellipse
@@ -153,7 +154,7 @@ ready; fixed ones say so and name their tests.
    3MF read back is still there after undoing everything and gone after save and reopen,
    with no warning. At least the save should say mesh bodies are not saved.
    **Status: fixed** (`fix/qa-bugs`). Imported meshes are a document item (`meshes`,
-   format 31: id, name and triangles, re-validated on open, shared between undo steps
+   format 32: id, name and triangles, re-validated on open, shared between undo steps
    so undo does not copy them). Importing, renaming and removing one is one undo step,
    and save and open keep them; a mesh keeps its scene body through rebuilds. The sample
    part stays session-only. Test: `an_imported_mesh_is_saved_undone_and_named_apart`.

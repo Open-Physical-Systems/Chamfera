@@ -9,12 +9,12 @@ use chamfera_kernel::{Body, Profile, ProfileEdge, extrude};
 const EPS: f64 = 1e-6;
 
 /// 50 x 30 x 10 box from the origin: x 0..50, y 0..30, z 0..10.
-fn block() -> Body {
+pub(crate) fn block() -> Body {
     Body::cuboid(Point3::new(0.0, 0.0, 0.0), Vec3::new(50.0, 30.0, 10.0)).unwrap()
 }
 
 /// The same box with a through hole of diameter 6 at (25, 15), along Z.
-fn plate_with_hole() -> Body {
+pub(crate) fn plate_with_hole() -> Body {
     let outer = chamfera_kernel::polygon_edges(&[
         Point2::new(0.0, 0.0),
         Point2::new(50.0, 0.0),
@@ -26,11 +26,11 @@ fn plate_with_hole() -> Body {
 }
 
 /// A cylinder r = 5, h = 10 on the XY plane at the origin.
-fn cylinder() -> Body {
+pub(crate) fn cylinder() -> Body {
     extrude(&Frame::XY, &Profile::circle(Point2::ORIGIN, 5.0), 10.0).unwrap()
 }
 
-fn lines(g: &ViewGeometry, hidden: bool) -> Vec<(Point2, Point2)> {
+pub(crate) fn lines(g: &ViewGeometry, hidden: bool) -> Vec<(Point2, Point2)> {
     g.curves
         .iter()
         .filter(|c| c.hidden == hidden)
@@ -41,7 +41,7 @@ fn lines(g: &ViewGeometry, hidden: bool) -> Vec<(Point2, Point2)> {
         .collect()
 }
 
-fn sheet_with(views: Vec<SheetView>, dims: Vec<SheetDimension>) -> Sheet {
+pub(crate) fn sheet_with(views: Vec<SheetView>, dims: Vec<SheetDimension>) -> Sheet {
     Sheet {
         id: 1,
         name: "Sheet 1".into(),
@@ -56,10 +56,12 @@ fn sheet_with(views: Vec<SheetView>, dims: Vec<SheetDimension>) -> Sheet {
         },
         views,
         dimensions: dims,
+        annotations: Vec::new(),
+        parts_list: None,
     }
 }
 
-fn view(id: u32, d: ViewDirection, x: f64, y: f64, parent: Option<u32>) -> SheetView {
+pub(crate) fn view(id: u32, d: ViewDirection, x: f64, y: f64, parent: Option<u32>) -> SheetView {
     SheetView {
         id,
         body: None,
@@ -68,6 +70,8 @@ fn view(id: u32, d: ViewDirection, x: f64, y: f64, parent: Option<u32>) -> Sheet
         y,
         scale: None,
         parent,
+        section: None,
+        detail: None,
     }
 }
 
@@ -250,6 +254,7 @@ fn a_linear_dimension_across_the_box_measures_50() {
         kind: plan.kind,
         points: plan.points,
         offset: -10.0,
+        refs: Vec::new(),
     };
     let s = sheet_with(s.views.clone(), vec![d]);
     let out = render_sheet(&s, &[("Body1", &b)]).unwrap();
@@ -302,7 +307,7 @@ fn diameter_radius_and_angle_dimensions_measure_the_model() {
 }
 
 /// A tiny DXF reader for tests: the ENTITIES section as (type, layer) pairs.
-fn dxf_entities(text: &str) -> Vec<(String, String)> {
+pub(crate) fn dxf_entities(text: &str) -> Vec<(String, String)> {
     let lines: Vec<&str> = text.lines().collect();
     let mut pairs = Vec::new();
     for p in lines.chunks(2) {
@@ -332,7 +337,7 @@ fn dxf_entities(text: &str) -> Vec<(String, String)> {
 }
 
 /// A tiny SVG reader for tests: how many elements named `tag` each layer group holds.
-fn svg_count(text: &str, layer: &str, tag: &str) -> usize {
+pub(crate) fn svg_count(text: &str, layer: &str, tag: &str) -> usize {
     let open = format!("<g id=\"{layer}\"");
     let start = text.find(&open).expect("layer group");
     let end = start + text[start..].find("</g>").expect("group end");
@@ -415,6 +420,7 @@ fn the_pdf_has_a_valid_header_xref_and_object_offsets() {
         kind: DimensionKind::Diameter,
         points: vec![Point2::new(25.0, 15.0), Point2::new(28.0, 15.0)],
         offset: 8.0,
+        refs: Vec::new(),
     };
     let s = sheet_with(
         vec![view(2, ViewDirection::Top, 150.0, 150.0, None)],
@@ -480,6 +486,7 @@ fn hostile_input_never_panics() {
                 kind: DimensionKind::Angular,
                 points: vec![Point2::new(x, x)],
                 offset: x,
+                refs: Vec::new(),
             },
             SheetDimension {
                 id: 5,
@@ -487,6 +494,7 @@ fn hostile_input_never_panics() {
                 kind: DimensionKind::Aligned,
                 points: vec![Point2::new(x, 0.0), Point2::new(x, 0.0)],
                 offset: x,
+                refs: Vec::new(),
             },
             SheetDimension {
                 id: 6,
@@ -494,6 +502,7 @@ fn hostile_input_never_panics() {
                 kind: DimensionKind::Diameter,
                 points: vec![],
                 offset: x,
+                refs: Vec::new(),
             },
         ];
         let mut s = sheet_with(vec![v, c], dims);

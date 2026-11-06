@@ -316,7 +316,7 @@ pub fn flat_dxf(f: &FlatPattern) -> String {
         width: f.max.x - f.min.x,
         height: f.max.y - f.min.y,
         items,
-        views: Vec::new(),
+        ..Default::default()
     })
 }
 

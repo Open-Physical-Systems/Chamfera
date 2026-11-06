@@ -518,7 +518,7 @@ fn dxf_text(s: &Session, p: &Value) -> Result<(String, usize), CommandError> {
                 shape,
             })
             .collect(),
-        views: Vec::new(),
+        ..Default::default()
     };
     Ok((chamfera_drawing::dxf::write(&sheet), n))
 }

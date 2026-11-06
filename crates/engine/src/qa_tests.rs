@@ -317,7 +317,6 @@ fn qa_enclosure_drawing_dimensions_and_exports() {
 }
 
 #[test]
-#[ignore = "open: drawing dimensions keep their first value when the model changes (docs/qa-report.md)"]
 fn qa_drawing_dimensions_follow_the_model() {
     let out = out_dir("drawing-follow");
     let mut s = Session::new();

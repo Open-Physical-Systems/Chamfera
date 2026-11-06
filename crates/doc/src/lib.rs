@@ -114,9 +114,15 @@ use thiserror::Error;
 ///   design table (`configurations`: named overrides of user parameters and of feature
 ///   suppression, and the active one). Model parameter names (`Extrude1.distance`) may
 ///   appear in expressions. Older files open with none of these.
-/// - 31: imported mesh bodies (`meshes`: id, name and triangles of each STL, OBJ or 3MF
+/// - 31: drawings version 2: dimensions store what they measure on the model (`refs`:
+///   vertices and edges by their K8 names, with signatures) and follow it; section views
+///   (`section`) and detail views (`detail`); sheet annotations (`annotations`: notes,
+///   leaders, surface texture symbols, feature control frames, centre lines, balloons)
+///   and a parts list (`parts_list`). Older files open unchanged: their dimensions keep
+///   their points, as before.
+/// - 32: imported mesh bodies (`meshes`: id, name and triangles of each STL, OBJ or 3MF
 ///   body), saved and undone like the rest of the design. Older files open with none.
-pub const FORMAT_VERSION: u32 = 31;
+pub const FORMAT_VERSION: u32 = 32;
 /// The tag every design file starts with, so other JSON is not mistaken for a design.
 pub const FORMAT_TAG: &str = "chamfera";
 /// Longest parameter name.
@@ -292,7 +298,7 @@ pub struct Document {
     /// Solid bodies imported from other CAD files (STEP), kept as exact B-rep bodies.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub imported: Vec<ImportedBody>,
-    /// Mesh bodies imported from STL, OBJ or 3MF files (format 31).
+    /// Mesh bodies imported from STL, OBJ or 3MF files (format 32).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub meshes: Vec<ImportedMesh>,
     /// Build order, rollback marker and groups of the sketches and features.
