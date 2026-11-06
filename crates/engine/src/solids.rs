@@ -650,9 +650,7 @@ impl Session {
             .filter_map(|s| s.scene_id)
             .collect();
         self.scene.bodies.retain(|b| !old.contains(&b.id));
-        if self.scene.selection.is_some_and(|h| old.contains(&h.body)) {
-            self.scene.selection = None;
-        }
+        self.scene.deselect(|b| old.contains(&b));
         let options = TessOptions::default();
         for (feature, name, body) in made {
             // A solid that cannot be shown is still built: its measures and export work.

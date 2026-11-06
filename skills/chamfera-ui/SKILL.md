@@ -17,6 +17,7 @@ The UI (`crates/ui/src/lib.rs`) is egui on wgpu, for the desktop and the browser
 - Keyboard shortcuts live in one table, `SHORTCUTS` in `crates/ui/src/shortcuts.rs`: tooltips (`shortcuts::tip`), the search palette and Help > Keyboard Shortcuts read it, and `no_two_shortcuts_share_a_key` checks it. Shortcuts never fire while a text box has the keyboard.
 - The search palette (`crates/ui/src/search.rs`, Ctrl+Space then F) lists every UI action and every registry command; a new tool gets an `Action` there so the palette and its key run it as its button does.
 - Default navigation: left-click selects, middle-drag pans, Shift+middle or right-drag orbits, the wheel zooms toward the cursor, F fits, H goes home, Esc clears the selection.
+- Selection is a set of bodies (`Scene::selected`; `Scene::is_selected` for drawing). Shift or Ctrl+click toggles, Ctrl+Shift+click removes, a plain click on empty space clears (`select.pick` `mode`). A left drag draws a box (`crates/ui/src/sketch_select.rs`, `select.box`): to the right a window (solid outline, `select_window` tokens, fully inside), to the left a crossing (dashed, `select_crossing` tokens, touched). In a sketch the Select tool boxes points and curves when the drag starts on empty space.
 - Desktop-only features (file dialogs, screenshots to disk) are behind `#[cfg(not(target_arch = "wasm32"))]`; `cargo xtask wasm` builds the browser app to check.
 
 ## Sketch mode

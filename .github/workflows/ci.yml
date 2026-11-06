@@ -32,6 +32,8 @@ jobs:
           CHAMFERA_REQUIRE_GPU: "1"
 
   web:
+    # Pull requests run only the Linux ci job; this runs on pushes (dev, main, tags).
+    if: github.event_name != 'pull_request'
     # The browser app: built with trunk, then started in headless Chrome (WebGL 2 on
     # SwiftShader), where every file path is exercised. On pushes to dev the build is kept
     # for the GitHub Pages deployment below.
@@ -95,6 +97,8 @@ jobs:
         uses: actions/deploy-pages@v4
 
   appimage:
+    # Pull requests run only the Linux ci job; this runs on pushes (dev, main, tags).
+    if: github.event_name != 'pull_request'
     needs: ci
     runs-on: ubuntu-22.04
     steps:
@@ -118,6 +122,8 @@ jobs:
           if-no-files-found: error
 
   windows:
+    # Pull requests run only the Linux ci job; this runs on pushes (dev, main, tags).
+    if: github.event_name != 'pull_request'
     needs: ci
     runs-on: windows-latest
     steps:
@@ -172,6 +178,8 @@ jobs:
           if-no-files-found: error
 
   macos:
+    # Pull requests run only the Linux ci job; this runs on pushes (dev, main, tags).
+    if: github.event_name != 'pull_request'
     needs: ci
     runs-on: macos-latest
     steps:
