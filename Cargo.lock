@@ -298,6 +298,7 @@ name = "chamfera-doc"
 version = "0.0.1"
 dependencies = [
  "chamfera-geom",
+ "chamfera-kernel",
  "chamfera-sketch",
  "serde",
  "serde_json",

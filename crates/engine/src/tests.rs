@@ -1516,3 +1516,70 @@ fn centre_rectangle_arc_and_chamfer_commands_draw_exact_shapes() {
     let largest = a.iter().cloned().fold(0.0, f64::max);
     assert!((largest - 58.0).abs() < 1e-6, "{a:?}");
 }
+
+#[test]
+fn body_import_step_adds_exact_solids_that_undo_save_and_open_keep() {
+    use chamfera_geom::{Point3, Vec3};
+    let dir = std::env::temp_dir().join(format!("chamfera-step-in-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let step = dir.join("block.step");
+    let block = chamfera_kernel::Body::cuboid(Point3::ORIGIN, Vec3::new(50.0, 30.0, 10.0)).unwrap();
+    chamfera_io::step::write_file(&step, &[("block", &block)], &Default::default()).unwrap();
+    let mut s = Session::new();
+    let r = s
+        .execute(
+            "body.import_step",
+            &json!({ "path": step.to_str().unwrap() }),
+        )
+        .unwrap();
+    // 50 * 30 * 10 = 15000 mm^3; area 2 (1500 + 500 + 300) = 4600 mm^2.
+    let solid = &r["solids"][0];
+    assert_eq!(solid["name"], "block");
+    assert!((solid["volume"].as_f64().unwrap() - 15_000.0).abs() < 1e-9);
+    assert!((solid["area"].as_f64().unwrap() - 4_600.0).abs() < 1e-9);
+    assert_eq!(r["skipped"], json!([]));
+    assert_eq!(s.solids().len(), 1);
+    assert_eq!(s.doc.imported.len(), 1);
+    let scene_id = solid["body"].as_u64().unwrap() as u32;
+    let shown = s.scene.body(scene_id).unwrap();
+    assert!((shown.mesh.signed_volume() - 15_000.0).abs() < 1e-6);
+    // Faces are named like built faces: `id:role`.
+    let id = solid["id"].as_u64().unwrap() as u32;
+    let b = &s.solids()[0].body;
+    for f in b.faces() {
+        let name = b.face_name(f).unwrap().unwrap();
+        assert!(name.starts_with(&format!("{id}:")), "{name}");
+    }
+    // Save and open keep it; undo removes it.
+    let design = dir.join("d.chamfera");
+    s.execute("design.save", &json!({ "path": design.to_str().unwrap() }))
+        .unwrap();
+    let mut t = Session::new();
+    t.execute("design.open", &json!({ "path": design.to_str().unwrap() }))
+        .unwrap();
+    assert_eq!(t.solids().len(), 1);
+    assert!((t.solids()[0].body.volume().unwrap() - 15_000.0).abs() < 1e-9);
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(s.solids().is_empty() && s.doc.imported.is_empty());
+    assert!(s.scene.body(scene_id).is_none());
+    // A file with nothing importable fails and changes nothing.
+    let bad = dir.join("bad.step");
+    std::fs::write(
+        &bad,
+        "ISO-10303-21;HEADER;ENDSEC;DATA;#1=CARTESIAN_POINT('',(0.,0.,0.));ENDSEC;END-ISO-10303-21;",
+    )
+    .unwrap();
+    assert!(
+        s.execute(
+            "body.import_step",
+            &json!({ "path": bad.to_str().unwrap() })
+        )
+        .is_err()
+    );
+    assert!(s.doc.imported.is_empty());
+    assert!(
+        s.execute("body.import_step", &json!({ "path": "/dev/zero" }))
+            .is_err()
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}

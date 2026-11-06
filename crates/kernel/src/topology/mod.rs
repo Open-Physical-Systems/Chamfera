@@ -41,6 +41,7 @@ mod assemble;
 mod build;
 mod euler;
 mod geometry;
+mod import;
 mod measure;
 mod transform;
 mod uv;

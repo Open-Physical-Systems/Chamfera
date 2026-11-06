@@ -46,16 +46,24 @@
 //!
 //! # Reading
 //! [`read`] parses Part 21 text into entity instances and [`read::summarize`] rebuilds
-//! the B-rep counts and vertex coordinates. It exists to check our own output; full STEP
-//! import (mapping foreign files into kernel bodies) is a later task.
+//! the B-rep counts and vertex coordinates of our own output. [`import`] maps the
+//! advanced B-rep solids of AP203/AP214/AP242 files into kernel bodies ([`read_file`],
+//! [`read_bytes`]; see `import` for the entities read and those refused).
 
 mod format;
+mod import;
 pub mod read;
 mod write;
 
 #[cfg(test)]
+mod import_tests;
+#[cfg(test)]
 mod tests;
 
+pub use import::{
+    FailureKind, SolidFailure, StepImport, import, import_bytes, import_exchange, import_file,
+    read_bytes, read_file,
+};
 pub use read::{
     BrepSummary, Exchange, Instance, Param, Record, SolidSummary, SurfaceSummary, summarize,
 };

@@ -10,12 +10,12 @@ fn cuboid(min: Point3, size: Vec3) -> Body {
     Body::cuboid(min, size).unwrap()
 }
 
-fn box_50_30_10() -> Body {
+pub(super) fn box_50_30_10() -> Body {
     cuboid(Point3::ORIGIN, Vec3::new(50.0, 30.0, 10.0))
 }
 
 /// An 80 x 40 x 5 plate with two 10 x 10 square holes.
-fn plate_with_two_holes() -> Body {
+pub(super) fn plate_with_two_holes() -> Body {
     let outer = [
         Point2::new(0.0, 0.0),
         Point2::new(80.0, 0.0),
@@ -488,7 +488,7 @@ fn hostile_step_text_gives_errors_not_panics() {
         "ISO-10303-21;HEADER;ENDSEC;DATA;#1=();ENDSEC;END-ISO-10303-21;".into(),
         "ISO-10303-21;HEADER;ENDSEC;DATA;#1=A(.T);ENDSEC;END-ISO-10303-21;".into(),
         "ISO-10303-21;HEADER;ENDSEC;DATA;/* never closed".into(),
-        "ISO-10303-21;HEADER;ENDSEC;DATA;#1=A('é');ENDSEC;END-ISO-10303-21;".into(),
+        "ISO-10303-21;HEADER;ENDSEC;DATA;#1=A('a\u{7}b');ENDSEC;END-ISO-10303-21;".into(),
         "ISO-10303-21;HEADER;ENDSEC;DATA;ENDSEC;END-ISO-10303-21; trailing".into(),
         deep,
     ];
@@ -550,7 +550,7 @@ fn an_external_validator_accepts_the_file_when_installed() {
 
 // --- Curved faces (K3 surfaces from K4 sweeps) ------------------------------------------
 
-mod curved {
+pub(super) mod curved {
     use super::*;
     use chamfera_geom::Vec2;
     use chamfera_kernel::{
@@ -583,7 +583,7 @@ mod curved {
     }
 
     /// Every kind of K4 solid, with a name.
-    fn solids() -> Vec<(&'static str, Body)> {
+    pub(crate) fn solids() -> Vec<(&'static str, Body)> {
         let xy = Frame::XY;
         let rect = polygon_edges(&[
             Point2::new(0.0, 0.0),
