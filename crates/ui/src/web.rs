@@ -51,6 +51,10 @@ pub struct WebFiles {
     ctx: Option<egui::Context>,
     /// The status last put on the page (`show_status`).
     status: String,
+    /// Clickable things drawn this frame (`target`), by their text, and what the page
+    /// last showed of them.
+    targets: Vec<(String, egui::Rect)>,
+    shown_targets: String,
 }
 
 impl WebFiles {
@@ -283,6 +287,32 @@ impl WebFiles {
             let _ = body.dataset().set("bodies", &bodies.to_string());
         }
         self.status = status;
+    }
+
+    /// Records a clickable thing (a menu or menu item) drawn this frame, by its text.
+    pub fn target(&mut self, text: &str, rect: egui::Rect) {
+        self.targets.push((text.to_owned(), rect));
+    }
+
+    /// Puts the targets of this frame on `<body>` as `data-targets`, a JSON object of
+    /// text to the centre in CSS pixels, so browser tests click menu items by their text
+    /// instead of by coordinates. Call once at the end of each frame.
+    pub fn show_targets(&mut self, zoom: f32) {
+        let targets: serde_json::Map<String, serde_json::Value> = self
+            .targets
+            .drain(..)
+            .map(|(text, rect)| {
+                let c = rect.center();
+                (text, serde_json::json!([c.x * zoom, c.y * zoom]))
+            })
+            .collect();
+        let json = serde_json::Value::Object(targets).to_string();
+        if json != self.shown_targets {
+            if let Some(body) = document().and_then(|d| d.body()) {
+                let _ = body.dataset().set("targets", &json);
+            }
+            self.shown_targets = json;
+        }
     }
 }
 

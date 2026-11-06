@@ -26,6 +26,8 @@
 //
 // Steps drive the page like a user, with trusted input events:
 //   {"click": [x, y]}                        left click at CSS pixels (also "button")
+//   {"clickText": "Export STEP…"}            click a menu or menu item by its text, once
+//                                            the app shows it (<body data-targets>)
 //   {"key": "o", "modifiers": ["ctrl"]}      a key press (modifiers: ctrl, shift, alt, meta)
 //   {"choose": ["path", ...]}                answer the next file picker with these files
 //   {"wait": 500}                            milliseconds
@@ -361,8 +363,19 @@ async function main() {
       for (const [i, step] of steps.entries()) {
         const label = `step ${i + 1} ${JSON.stringify(step)}`;
         console.log(label);
-        if (step.click) {
-          const [x, y] = step.click;
+        if (step.click || step.clickText) {
+          // By text: the app lists the menus and menu items it drew on <body data-targets>
+          // (text -> centre); wait until the one asked for is on screen.
+          const [x, y] = step.click
+            ? step.click
+            : await waitFor(
+                () =>
+                  cdp
+                    .eval(`(JSON.parse(document.body.dataset.targets || "{}"))[${JSON.stringify(step.clickText)}] || null`)
+                    .catch(() => null),
+                step.timeout || 10000,
+                `"${step.clickText}" on screen`,
+              );
           const button = step.button || "left";
           await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
           await sleep(100);
@@ -418,7 +431,7 @@ async function main() {
           throw new Error(`unknown ${label}`);
         }
         // A picker the page opened is answered with the files from the last "choose".
-        if (o.pendingFiles && (step.click || step.key)) {
+        if (o.pendingFiles && (step.click || step.clickText || step.key)) {
           const end = Date.now() + 3000;
           while (!chooser && Date.now() < end) await sleep(100);
         }

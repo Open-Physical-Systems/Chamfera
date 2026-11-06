@@ -30,8 +30,11 @@ pub struct FileUi {
 impl ChamferaApp {
     pub(crate) fn file_menu(&mut self, ui: &mut egui::Ui) {
         let look = self.look();
-        let item = |ui: &mut egui::Ui, icon: Icon, text: &str, keys: &str| {
+        // Where each item is, for tests in the browser (`crate::web`).
+        let mut drawn: Vec<(String, egui::Rect)> = Vec::new();
+        let mut item = |ui: &mut egui::Ui, icon: Icon, text: &str, keys: &str| {
             let r = widgets::menu_item(ui, look, icon, text, true);
+            drawn.push((text.to_owned(), r.rect));
             if !keys.is_empty() {
                 ui.painter().text(
                     egui::pos2(r.rect.max.x - 8.0, r.rect.center().y),
@@ -76,6 +79,12 @@ impl ChamferaApp {
             ui.separator();
             item(ui, Icon::Close, "Quit", "")
         };
+        #[cfg(target_arch = "wasm32")]
+        for (text, rect) in &drawn {
+            self.web.target(text, *rect);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        drop(drawn);
         if new {
             ui.close();
             self.ask_or(Pending::New);
@@ -257,6 +266,7 @@ impl ChamferaApp {
         let message = self.message.as_ref().map_or("", |(m, _)| m.as_str());
         self.web
             .show_status(message, self.session.scene.bodies.len());
+        self.web.show_targets(ctx.zoom_factor());
     }
 
     /// Saves to the current file, or asks where (always, with `choose`).
