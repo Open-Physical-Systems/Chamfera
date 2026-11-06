@@ -13,7 +13,7 @@ Chamfera's B-rep kernel is written from scratch. Each rung is finished, with tes
 | K6 | Surface-surface intersection: plane/plane, plane/cylinder, plane/cone, plane/sphere, cylinder/cylinder (coaxial and orthogonal first) | Analytic intersection curves | |
 | K7 | Booleans (union, subtract, intersect) on planar and analytic solids: face splitting, classification, sewing | Oracle parts; tangent, coincident and touching cases | |
 | K8 | Persistent naming of every created face, edge and vertex | Names survive a parameter change in the oracle parts | |
-| K9 | STEP AP214/AP242 export of B-rep (then import) | Round-trip of oracle parts | |
+| K9 | STEP AP214/AP242 export of B-rep (then import) | Round-trip of oracle parts | Export done for planar bodies: AP214 (`AUTOMOTIVE_DESIGN`) Part 21 with product structure, mm/radian units, `ADVANCED_BREP_SHAPE_REPRESENTATION` of `MANIFOLD_SOLID_BREP`s (`PLANE`; `LINE`, `CIRCLE`, `ELLIPSE` edges), shortest round-trip reals, escaped strings; a minimal Part 21 reader checks our output (counts, references, closed-shell edge use, bit-exact vertices), in `crates/io/src/step`. K3 surfaces wait in `write::surface`. Import pending |
 | K10 | NURBS curves and surfaces (The NURBS Book), and their intersections | Analytic and convergence tests | |
 | K11 | Edge blends: constant-radius fillet and chamfer between planar and analytic faces, then rolling-ball blends in general | Fillet volumes against closed forms | |
 | K12 | Shell, draft, sweep along a path, loft | Oracle parts | |
