@@ -64,7 +64,7 @@ impl ChamferaApp {
     }
 
     /// The lines of the named edges, as drawn on the solids.
-    fn edge_lines<'a>(
+    pub(crate) fn edge_lines<'a>(
         &self,
         names: impl Iterator<Item = &'a String> + Clone,
     ) -> Vec<[chamfera_geom::Point3; 2]> {

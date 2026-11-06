@@ -360,6 +360,8 @@ pub enum OverlayStyle {
     Construction,
     Preview,
     Highlight,
+    /// What the pointer is over, before a click (`theme.hover_highlight`).
+    Hover,
 }
 
 impl OverlayStyle {
@@ -370,6 +372,7 @@ impl OverlayStyle {
             OverlayStyle::Construction => theme.sketch_construction,
             OverlayStyle::Preview => theme.sketch_preview,
             OverlayStyle::Highlight => theme.highlight,
+            OverlayStyle::Hover => theme.hover_highlight,
         }
     }
 }

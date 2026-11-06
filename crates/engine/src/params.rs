@@ -103,3 +103,28 @@ pub fn pixel(params: &Value) -> Result<(f64, f64, f64, f64), CommandError> {
     }
     Ok((x, y, w, h))
 }
+
+/// Longest display name of a sketch, feature or body, in characters.
+pub const MAX_DISPLAY_NAME: usize = 80;
+
+/// A required display name (of a sketch, feature or body): trimmed, not empty, at most
+/// [`MAX_DISPLAY_NAME`] characters, no control characters.
+pub fn req_display_name(params: &Value, key: &str) -> Result<String, CommandError> {
+    let name = req_str(params, key)?.trim();
+    if name.is_empty() {
+        return Err(CommandError::BadParams(format!(
+            "`{key}` must not be empty"
+        )));
+    }
+    if name.chars().count() > MAX_DISPLAY_NAME {
+        return Err(CommandError::BadParams(format!(
+            "`{key}` must be at most {MAX_DISPLAY_NAME} characters"
+        )));
+    }
+    if name.chars().any(char::is_control) {
+        return Err(CommandError::BadParams(format!(
+            "`{key}` must not contain control characters"
+        )));
+    }
+    Ok(name.to_owned())
+}

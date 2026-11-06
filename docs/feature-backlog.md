@@ -306,8 +306,8 @@ Close runners-up: selection filters and box selection (UI and NAV), splines (nee
 | Command search | A search box (on a key) that finds any command by name and runs it | missing | P0 | S | ui |
 | Keyboard shortcuts | Single keys for line, rectangle, circle, extrude, fillet, measure, dimension, trim, offset, and so on; editable | missing | P0 | S | ui (now only file, undo, fit, home) |
 | Radial context menu | Right-click menu laid out around the cursor with the common commands | missing | P1 | M | ui |
-| Context menu in the viewport | Right-click on a body, face or sketch for its commands | missing | P0 | S | ui |
-| Selection filters | Limit picks to bodies, faces, edges, vertices, sketches, components | missing | P0 | S | engine, ui |
+| Context menu in the viewport | Right-click on a body, face or sketch for its commands | done (body, face, edge, empty space, sketch) | P0 | S | ui |
+| Selection filters | Limit picks to bodies, faces, edges, vertices, sketches, components | partial (bodies, faces, edges; sketch points, curves, construction; no solid vertices or components yet) | P0 | S | engine, ui |
 | Box selection | Window and crossing selection by dragging | missing | P0 | M | engine, gpu, ui |
 | Select through / select other | Cycle through overlapping items under the cursor | missing | P1 | S | engine, ui |
 | Pre-selection highlight | Highlight what a click would pick | missing | P0 | S | gpu, ui |

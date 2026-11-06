@@ -324,7 +324,7 @@ impl SketchUi {
 }
 
 /// The geometric constraints: command kind, name, icon and what it does.
-const CONSTRAINTS: [(&str, &str, Icon, &str); 10] = [
+pub(crate) const CONSTRAINTS: [(&str, &str, Icon, &str); 10] = [
     (
         "horizontal",
         "Horizontal",
@@ -880,7 +880,8 @@ impl ChamferaApp {
         if tool == Tool::Select {
             self.run_sketch(
                 "sketch.select",
-                json!({ "x": x, "y": y, "width": w, "height": h, "add": shift }),
+                json!({ "x": x, "y": y, "width": w, "height": h, "add": shift,
+                        "filter": self.filter_param() }),
             );
             return;
         }

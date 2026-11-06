@@ -268,6 +268,24 @@ impl ChamferaApp {
                 ui.close();
                 action = Some("edit");
             }
+            let rename = if item.sketch {
+                label("sketch.rename")
+            } else {
+                label("feature.rename")
+            };
+            if widgets::menu_item(ui, look, Icon::Edit, rename, true).clicked() {
+                ui.close();
+                action = Some("rename");
+            }
+            if item.sketch {
+                ui.separator();
+                if widgets::menu_item(ui, look, Icon::Delete, label("sketch.delete"), !item.active)
+                    .clicked()
+                {
+                    ui.close();
+                    action = Some("delete sketch");
+                }
+            }
             if !item.sketch {
                 let text = if item.suppressed {
                     "Unsuppress"
@@ -303,6 +321,17 @@ impl ChamferaApp {
             Some("delete") => {
                 self.run("feature.delete", json!({ "feature": item.id }));
             }
+            Some("delete sketch") => {
+                self.menu_act(crate::context_menu::Act::DeleteSketch(item.id));
+            }
+            Some("rename") => {
+                let target = if item.sketch {
+                    crate::context_menu::RenameTarget::Sketch(item.id)
+                } else {
+                    crate::context_menu::RenameTarget::Feature(item.id)
+                };
+                self.menu_act(crate::context_menu::Act::Rename(target));
+            }
             _ => {}
         }
     }
@@ -314,7 +343,12 @@ impl ChamferaApp {
             }
             return;
         }
-        let Ok(f) = self.session.doc.feature(item.id) else {
+        self.edit_feature(item.id);
+    }
+
+    /// Opens the Edit Feature dialog for a feature.
+    pub(crate) fn edit_feature(&mut self, id: u32) {
+        let Ok(f) = self.session.doc.feature(id) else {
             return;
         };
         let (distance, direction) = match &f.kind {
@@ -325,7 +359,7 @@ impl ChamferaApp {
             FeatureKind::Shell(sh) => (sh.thickness.clone(), ExtrudeDirection::Normal),
         };
         self.timeline.editing = Some(FeatureEdit {
-            feature: item.id,
+            feature: id,
             distance,
             direction,
             suppressed: f.suppressed,

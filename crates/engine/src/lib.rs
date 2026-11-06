@@ -8,6 +8,7 @@ pub mod box_select;
 pub mod cmd;
 mod imported;
 mod params;
+pub mod pick_filter;
 pub mod script;
 pub mod sketching;
 pub mod solids;
@@ -52,6 +53,8 @@ pub struct Session {
     pub active_sketch: Option<u32>,
     /// Selected points and curves of the active sketch.
     pub sketch_selection: Vec<sketching::SketchItem>,
+    /// Selected edges of solids, by name (`select.pick` with a `filter` that has edges).
+    pub selected_edges: Vec<String>,
     /// Solids built from the timeline (worked out again after every change).
     built: solids::Built,
     /// The file the design was last opened from or saved to.

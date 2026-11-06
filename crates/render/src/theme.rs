@@ -52,6 +52,8 @@ pub struct Theme {
     pub sketch_preview: Rgba,
     /// What the pointer is over, or what is picked.
     pub highlight: Rgba,
+    /// The face or edge under the pointer in the viewport, before a click picks it.
+    pub hover_highlight: Rgba,
     /// Window box selection (dragged left to right: what is fully inside): solid outline.
     pub select_window: Rgba,
     pub select_window_fill: Rgba,
@@ -111,6 +113,7 @@ impl Theme {
             sketch_construction: Rgba(214, 120, 30, 255),
             sketch_preview: Rgba(30, 100, 220, 140),
             highlight: Rgba(240, 160, 20, 255),
+            hover_highlight: Rgba(0, 150, 180, 255),
             select_window: Rgba(30, 112, 214, 255),
             select_window_fill: Rgba(30, 112, 214, 36),
             select_crossing: Rgba(30, 135, 70, 255),
@@ -154,6 +157,7 @@ impl Theme {
             sketch_construction: Rgba(240, 150, 60, 255),
             sketch_preview: Rgba(96, 170, 255, 140),
             highlight: Rgba(255, 190, 60, 255),
+            hover_highlight: Rgba(90, 215, 235, 255),
             select_window: Rgba(84, 160, 255, 255),
             select_window_fill: Rgba(84, 160, 255, 40),
             select_crossing: Rgba(88, 196, 124, 255),
