@@ -6,7 +6,8 @@
 //! edges as the edge two named faces share, vertices as the vertex named faces meet at.
 
 use crate::Session;
-use crate::solids::{face_key, split_face_key};
+use crate::naming::Want;
+use crate::solids::split_face_key;
 use chamfera_doc::{
     AxisRef, Construction, Document, EdgeRef, FaceRef, PlaneRef, PointRef, expr::Dim,
 };
@@ -42,50 +43,85 @@ pub enum Constructed {
 /// The bodies built so far in a rebuild: (feature, name, body).
 pub type Made = [(u32, String, Body)];
 
-/// A face by name among the bodies built so far.
-fn find_face<'a>(made: &'a Made, r: &FaceRef) -> Result<(&'a Body, FaceId), String> {
-    let wanted = face_key(r.feature, &r.face);
-    for (_, _, body) in made {
-        for face in body.faces() {
-            if body.face_name(face).ok().flatten() == Some(wanted.as_str()) {
-                return Ok((body, face));
-            }
+/// The bodies built so far with the construction that refers to them: its signatures
+/// pick pieces of split faces (rung K8, [`crate::naming`]).
+pub(crate) struct Refs<'a> {
+    doc: &'a Document,
+    owner: u32,
+    bodies: Vec<&'a Body>,
+}
+
+/// A face by name among the bodies built so far. Pieces of a split face on one surface
+/// all give the same plane or axis, so any of them will do.
+fn find_face<'a>(made: &Refs<'a>, r: &FaceRef) -> Result<(&'a Body, FaceId), String> {
+    match crate::naming::one_face(made.doc, made.owner, &made.bodies, r, Want::Surface) {
+        Ok((_, body, face)) => Ok((body, face)),
+        Err(crate::naming::NameError::Gone { .. }) => Err(format!(
+            "the face {:?} of feature {} is gone (that feature changed or failed)",
+            r.face, r.feature
+        )),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// Every piece of each of `faces`, all in one body: the first body that has a piece of
+/// each.
+fn find_faces<'a>(
+    made: &Refs<'a>,
+    faces: &[FaceRef],
+) -> Result<(&'a Body, Vec<Vec<FaceId>>), String> {
+    let first = faces.first().ok_or("no faces named")?;
+    let mut found = Vec::new();
+    for r in faces {
+        let list = crate::naming::resolve_face(made.doc, made.owner, &made.bodies, r, Want::All)
+            .map_err(|e| match e {
+                crate::naming::NameError::Gone { .. } => format!(
+                    "the face {:?} of feature {} is gone (that feature changed or failed)",
+                    r.face, r.feature
+                ),
+                e => e.to_string(),
+            })?;
+        found.push(list);
+    }
+    let first_bodies: Vec<usize> = found
+        .first()
+        .map(|l| l.iter().map(|f| f.body).collect())
+        .unwrap_or_default();
+    for b in first_bodies {
+        let ids: Vec<Vec<FaceId>> = found
+            .iter()
+            .map(|l| {
+                l.iter()
+                    .filter(|f| f.body == b)
+                    .filter_map(|f| f.face())
+                    .collect()
+            })
+            .collect();
+        if ids.iter().all(|l| !l.is_empty())
+            && let Some(body) = made.bodies.get(b)
+        {
+            return Ok((body, ids));
         }
     }
     Err(format!(
-        "the face {:?} of feature {} is gone (that feature changed or failed)",
-        r.face, r.feature
+        "the faces named are not all on one body ({:?})",
+        first.face
     ))
 }
 
-/// The face ids of `faces`, all in one body.
-fn find_faces<'a>(made: &'a Made, faces: &[FaceRef]) -> Result<(&'a Body, Vec<FaceId>), String> {
-    let first = faces.first().ok_or("no faces named")?;
-    let (body, _) = find_face(made, first)?;
-    let mut ids = Vec::new();
-    for r in faces {
-        let wanted = face_key(r.feature, &r.face);
-        let id = body
-            .faces()
-            .into_iter()
-            .find(|f| body.face_name(*f).ok().flatten() == Some(wanted.as_str()))
-            .ok_or_else(|| format!("the faces named are not all on one body ({:?})", r.face))?;
-        ids.push(id);
-    }
-    Ok((body, ids))
-}
-
 /// The edge two named faces share (the first one, if they share several).
-fn find_edge<'a>(made: &'a Made, e: &EdgeRef) -> Result<(&'a Body, EdgeId), String> {
+fn find_edge<'a>(made: &Refs<'a>, e: &EdgeRef) -> Result<(&'a Body, EdgeId), String> {
     let (body, ids) = find_faces(made, &e.faces)?;
     let (Some(a), Some(b)) = (ids.first(), ids.get(1)) else {
         return Err("an edge is named by two faces".into());
     };
-    let edges = body.face_edges(*a).map_err(|x| x.to_string())?;
-    for edge in edges {
-        let faces = body.edge_faces(edge).map_err(|x| x.to_string())?;
-        if faces.contains(b) && faces.contains(a) && a != b {
-            return Ok((body, edge));
+    for fa in a {
+        let edges = body.face_edges(*fa).map_err(|x| x.to_string())?;
+        for edge in edges {
+            let faces = body.edge_faces(edge).map_err(|x| x.to_string())?;
+            if faces.contains(fa) && b.iter().any(|fb| fb != fa && faces.contains(fb)) {
+                return Ok((body, edge));
+            }
         }
     }
     Err(format!(
@@ -108,8 +144,25 @@ fn face_extent(body: &Body, face: FaceId) -> Option<Aabb> {
     Aabb::from_points(points.into_iter().filter(|p| p.is_valid()))
 }
 
-pub(crate) fn plane_of(
+/// [`plane_of`] for other features (the body tools): the plane item `owner` refers to,
+/// among the bodies built so far.
+pub(crate) fn plane_of_made(
+    doc: &Document,
+    owner: u32,
     made: &Made,
+    built: &BTreeMap<u32, Constructed>,
+    r: &PlaneRef,
+) -> Result<(Frame, Option<Aabb>), String> {
+    let refs = Refs {
+        doc,
+        owner,
+        bodies: crate::naming::bodies(made),
+    };
+    plane_of(&refs, built, r)
+}
+
+fn plane_of(
+    made: &Refs,
     built: &BTreeMap<u32, Constructed>,
     r: &PlaneRef,
 ) -> Result<(Frame, Option<Aabb>), String> {
@@ -133,7 +186,7 @@ pub(crate) fn plane_of(
 /// An axis: a point on it, its unit direction and a span to draw.
 type Axis = (Point3, Vec3, Option<(Point3, Point3)>);
 
-fn axis_of(made: &Made, built: &BTreeMap<u32, Constructed>, r: &AxisRef) -> Result<Axis, String> {
+fn axis_of(made: &Refs, built: &BTreeMap<u32, Constructed>, r: &AxisRef) -> Result<Axis, String> {
     match r {
         AxisRef::Origin { axis } => Ok((Point3::ORIGIN, axis.direction(), None)),
         AxisRef::Edge(e) => edge_axis(made, e),
@@ -150,7 +203,7 @@ fn axis_of(made: &Made, built: &BTreeMap<u32, Constructed>, r: &AxisRef) -> Resu
     }
 }
 
-fn edge_axis(made: &Made, e: &EdgeRef) -> Result<Axis, String> {
+fn edge_axis(made: &Refs, e: &EdgeRef) -> Result<Axis, String> {
     let (body, edge) = find_edge(made, e)?;
     match body.edge_curve(edge).map_err(|x| x.to_string())? {
         Some((Curve::Line(_) | Curve::Segment(_), _, _)) => {}
@@ -170,7 +223,7 @@ fn eval_length(doc: &Document, e: &str) -> Result<f64, String> {
 
 fn point_of(
     doc: &Document,
-    made: &Made,
+    made: &Refs,
     built: &BTreeMap<u32, Constructed>,
     r: &PointRef,
 ) -> Result<Point3, String> {
@@ -183,15 +236,19 @@ fn point_of(
         ),
         PointRef::Vertex { faces } => {
             let (body, ids) = find_faces(made, faces)?;
-            let first = *ids.first().ok_or("no faces named")?;
-            let loops = body.face_loops(first).map_err(|x| x.to_string())?;
+            let first = ids.first().ok_or("no faces named")?;
             let mut found = None;
-            'search: for l in loops {
-                for v in body.loop_vertices(l).map_err(|x| x.to_string())? {
-                    let around = body.vertex_faces(v).map_err(|x| x.to_string())?;
-                    if ids.iter().all(|f| around.contains(f)) {
-                        found = Some(v);
-                        break 'search;
+            'search: for f in first {
+                for l in body.face_loops(*f).map_err(|x| x.to_string())? {
+                    for v in body.loop_vertices(l).map_err(|x| x.to_string())? {
+                        let around = body.vertex_faces(v).map_err(|x| x.to_string())?;
+                        if ids
+                            .iter()
+                            .all(|pieces| pieces.iter().any(|p| around.contains(p)))
+                        {
+                            found = Some(v);
+                            break 'search;
+                        }
                     }
                 }
             }
@@ -228,13 +285,19 @@ fn turn(v: Vec3, k: Vec3, angle: f64) -> Vec3 {
     v * c + k.cross(v) * s
 }
 
-/// Builds one construction from the design and the bodies built before it.
+/// Builds construction `owner` from the design and the bodies built before it.
 pub fn build(
     doc: &Document,
+    owner: u32,
     c: &Construction,
     made: &Made,
     built: &BTreeMap<u32, Constructed>,
 ) -> Result<Constructed, String> {
+    let made = &Refs {
+        doc,
+        owner,
+        bodies: crate::naming::bodies(made),
+    };
     let range = || "the result leaves the working range".to_owned();
     Ok(match c {
         Construction::PlaneOffset { base, distance } => {
@@ -495,9 +558,10 @@ pub struct Picked {
     pub vertex: Option<(Vec<FaceRef>, Point3)>,
 }
 
-fn face_ref_of(body: &Body, face: FaceId) -> Option<FaceRef> {
-    let name = body.face_name(face).ok().flatten()?;
-    let (feature, role) = split_face_key(name)?;
+/// A face as a reference: its unique name (`top#2` for a piece of a split `top`).
+fn face_ref_of(s: &Session, solid: usize, face: FaceId) -> Option<FaceRef> {
+    let name = s.reference_name(solid, chamfera_kernel::Entity::Face(face))?;
+    let (feature, role) = split_face_key(&name)?;
     Some(FaceRef {
         feature,
         face: role.to_owned(),
@@ -524,14 +588,15 @@ impl Session {
         let bounds = self.scene.bounds();
         let ray = self.camera.ray_through(x, y, w, h, bounds.as_ref())?;
         let hit = self.scene.pick(&ray)?;
-        let solid = self
+        let (si, solid) = self
             .built
             .solids
             .iter()
-            .find(|s| s.scene_id == Some(hit.body))?;
+            .enumerate()
+            .find(|(_, s)| s.scene_id == Some(hit.body))?;
         let face = *solid.faces.get(hit.triangle)?;
         let body = &solid.body;
-        let face_ref = face_ref_of(body, face)?;
+        let face_ref = face_ref_of(self, si, face)?;
         let surface = match body.face_surface(face).ok().flatten() {
             Some((Surface::Plane(_), _)) => "plane",
             Some((Surface::Cylinder(_), _)) => "cylinder",
@@ -554,7 +619,7 @@ impl Session {
             let Some(other) = faces.iter().find(|f| **f != face) else {
                 continue;
             };
-            let Some(other_ref) = face_ref_of(body, *other) else {
+            let Some(other_ref) = face_ref_of(self, si, *other) else {
                 continue;
             };
             let Ok(d) = curve.distance_on(t0, t1, p) else {
@@ -592,7 +657,7 @@ impl Session {
                     .vertex_faces(v)
                     .ok()?
                     .into_iter()
-                    .filter_map(|f| face_ref_of(body, f))
+                    .filter_map(|f| face_ref_of(self, si, f))
                     .collect();
                 names.dedup();
                 if (2..=chamfera_doc::construct::MAX_VERTEX_FACES).contains(&names.len()) {

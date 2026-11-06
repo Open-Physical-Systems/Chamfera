@@ -12,6 +12,7 @@ pub mod feature;
 pub mod imported;
 pub mod joint;
 pub mod motion;
+pub mod naming;
 pub mod sheet;
 pub mod timeline;
 pub mod units;
@@ -89,9 +90,13 @@ use thiserror::Error;
 /// - 26: body tools: combine, split body, split face, thicken and remove bodies
 ///   (`combine`, `split_body`, `split_face`, `thicken`, `remove`). Older files open
 ///   unchanged: they hold none.
-/// - 27: motion studies: keyframes of joint values over time (`motion.keys`: joint,
+/// - 27: reference signatures (`references`: per sketch or feature, per reference name,
+///   the shape, normal or axis, a point and the neighbouring faces of what it was made
+///   on), so split pieces (`2:top#2`) and renamed faces resolve (rung K8). Older files
+///   open unchanged and resolve by name alone, as before.
+/// - 29: motion studies: keyframes of joint values over time (`motion.keys`: joint,
 ///   time in seconds, value). Older files open with no keys.
-pub const FORMAT_VERSION: u32 = 27;
+pub const FORMAT_VERSION: u32 = 29;
 /// The tag every design file starts with, so other JSON is not mistaken for a design.
 pub const FORMAT_TAG: &str = "chamfera";
 /// Longest parameter name.
@@ -282,9 +287,13 @@ pub struct Document {
     /// Sheet metal rules, by name (format 25).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sheet_rules: Vec<SheetRule>,
-    /// The motion study's keyframes (format 27).
+    /// The motion study's keyframes (format 29).
     #[serde(default, skip_serializing_if = "Motion::is_empty")]
     pub motion: Motion,
+    /// What each reference was made on (format 27): by the sketch or feature that holds
+    /// it, then by the reference name (`2:top`, `2:top 0#2`). See [`naming`].
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub references: BTreeMap<u32, BTreeMap<String, naming::Signature>>,
 }
 
 impl Default for Document {
@@ -298,6 +307,7 @@ impl Default for Document {
             last_feature_id: 0,
             imported: Vec::new(),
             sheet_rules: Vec::new(),
+            references: BTreeMap::new(),
             timeline: Timeline::default(),
             assembly: Assembly::default(),
             drawing: Drawing::default(),
@@ -596,6 +606,7 @@ impl Document {
             .position(|s| s.id == id)
             .ok_or(DocError::NoSuchSketch(id))?;
         let s = self.sketches.remove(i);
+        self.references.remove(&id);
         self.timeline_remove();
         Ok(s)
     }
@@ -722,6 +733,8 @@ impl Document {
         checked.appearances = doc.appearances;
         doc.cam.validate()?;
         checked.cam = doc.cam;
+        naming::check(&doc.references, &seen)?;
+        checked.references = doc.references;
         // Values in the file must agree with their expressions.
         checked.evaluate()?;
         Ok(checked)

@@ -6,7 +6,7 @@
 use crate::icons::Icon;
 use crate::widgets::{self, Look};
 use crate::{ChamferaApp, color, label};
-use chamfera_engine::solids::edge_ref;
+use chamfera_engine::naming::{Kind, Want};
 use chamfera_geom::Point3;
 use chamfera_render::{Overlay, OverlayStyle, mat_mul, transform_point};
 use egui::{Pos2, Rect, Vec2};
@@ -318,12 +318,20 @@ impl ChamferaApp {
         }
         for pick in &tool.picks {
             if let Some(name) = pick["edge"].as_str() {
-                for s in self.session.solids() {
+                // The picked name through the engine's resolver (`2:top 0#2` is one piece).
+                let found: Vec<(usize, _)> = self
+                    .session
+                    .resolve_reference(None, Kind::Edge, name, Want::All)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter_map(|f| Some((f.body, f.edge()?)))
+                    .collect();
+                for (si, s) in self.session.solids().iter().enumerate() {
                     if pick["solid"].as_str() != Some(s.name.as_str()) {
                         continue;
                     }
                     for (e, line) in &s.edges {
-                        if edge_ref(&s.body, *e).as_deref() == Some(name) {
+                        if found.contains(&(si, *e)) {
                             lines.extend(line.windows(2).filter_map(|p| match p {
                                 [a, b] => Some([*a, *b]),
                                 _ => None,

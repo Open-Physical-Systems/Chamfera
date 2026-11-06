@@ -10,7 +10,8 @@
 //! into A's by `Fb⁻¹`, then `M`, then `Fa`; so `world(B) = world(A) ∘ Fa ∘ M ∘ Fb⁻¹`.
 
 use crate::Session;
-use crate::solids::{Built, edge_ref, face_plane};
+use crate::naming::{Kind, Want};
+use crate::solids::{Built, face_plane};
 use chamfera_doc::component::ROOT;
 use chamfera_doc::{Assembly, EdgeEnd, Joint, JointKind, JointOrigin, OriginAt};
 use chamfera_geom::{Frame, Point3, Transform, Vec3};
@@ -226,28 +227,28 @@ pub fn origin_frame<'a>(
         OriginAt::Point { point, axis } => {
             Frame::from_normal(*point, *axis).ok_or_else(|| "the axis has no length".to_owned())
         }
+        // Through the resolver (rung K8): a joint needs one face or edge, so a name shared
+        // by split pieces must say which (`2:top#2`).
         OriginAt::Face { face } => {
-            for body in bodies {
-                for f in body.faces() {
-                    if body.face_name(f).ok().flatten() == Some(face.as_str()) {
-                        return face_frame(body, f);
-                    }
-                }
+            let list: Vec<&Body> = bodies.collect();
+            let f = crate::naming::resolve_one(&list, Kind::Face, face, None, Want::One)
+                .map_err(|e| e.to_string())?;
+            match (list.get(f.body), f.face()) {
+                (Some(body), Some(id)) => face_frame(body, id),
+                _ => Err(format!("the face {face:?} is no longer there")),
             }
-            Err(format!("the face {face:?} is no longer there"))
         }
         OriginAt::Edge { edge } | OriginAt::Vertex { edge, .. } => {
-            for body in bodies {
-                for e in body.edges() {
-                    if edge_ref(body, e).as_deref() == Some(edge.as_str()) {
-                        return match at {
-                            OriginAt::Vertex { end, .. } => vertex_frame(body, e, *end),
-                            _ => edge_frame(body, e),
-                        };
-                    }
-                }
+            let list: Vec<&Body> = bodies.collect();
+            let f = crate::naming::resolve_one(&list, Kind::Edge, edge, None, Want::One)
+                .map_err(|e| e.to_string())?;
+            match (list.get(f.body), f.edge()) {
+                (Some(body), Some(e)) => match at {
+                    OriginAt::Vertex { end, .. } => vertex_frame(body, e, *end),
+                    _ => edge_frame(body, e),
+                },
+                _ => Err(format!("the edge {edge:?} is no longer there")),
             }
-            Err(format!("the edge {edge:?} is no longer there"))
         }
     }
 }
@@ -327,9 +328,12 @@ impl Session {
         let bounds = self.scene.bounds();
         let ray = self.camera.ray_through(x, y, w, h, bounds.as_ref())?;
         let hit = self.scene.pick(&ray)?;
-        let solid = solids.iter().find(|s| s.scene_id == Some(hit.body))?;
+        let (si, solid) = solids
+            .iter()
+            .enumerate()
+            .find(|(_, s)| s.scene_id == Some(hit.body))?;
         let face = *solid.faces.get(hit.triangle)?;
-        let name = solid.body.face_name(face).ok().flatten()?.to_owned();
+        let name = self.reference_name(si, chamfera_kernel::Entity::Face(face))?;
         let frame = face_frame(&solid.body, face).ok()?;
         Some((
             JointOrigin {

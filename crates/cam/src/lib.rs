@@ -26,6 +26,7 @@ pub use post::{Dialect, Wcs};
 pub use toolpath::{Move, Stats, Toolpath};
 
 use chamfera_doc::cam::{Cam, CamOperation, OpKind, Setup, Stock, WcsOrigin};
+use chamfera_doc::naming::{self, Found, Kind, NameError, Want};
 use chamfera_geom::{Point2, Point3};
 use chamfera_kernel::{Body, EdgeId, FaceId};
 use thiserror::Error;
@@ -72,30 +73,32 @@ fn model_box(bodies: &[Body]) -> Result<(Point3, Point3), CamError> {
         .ok_or_else(|| CamError::Refused("there is no model to machine".into()))
 }
 
-fn find_face(bodies: &[Body], name: &str) -> Result<(usize, FaceId), CamError> {
-    for (i, b) in bodies.iter().enumerate() {
-        for f in b.faces() {
-            if b.face_name(f).ok().flatten() == Some(name) {
-                return Ok((i, f));
-            }
+/// What `name` resolves to, through the design's persistent naming (rung K8,
+/// `chamfera_doc::naming`): a piece of a split face by `#k`, a clear error when a single
+/// face or edge is needed and the name split.
+fn resolved(bodies: &[Body], kind: Kind, name: &str, want: Want) -> Result<Vec<Found>, CamError> {
+    let list: Vec<&Body> = bodies.iter().collect();
+    naming::resolve(&list, kind, name, None, want).map_err(|e| match e {
+        NameError::Gone { kind, .. } => {
+            CamError::Refused(format!("the {kind} {name:?} is no longer in the model"))
         }
-    }
-    Err(CamError::Refused(format!(
-        "the face {name:?} is no longer in the model"
-    )))
+        e => CamError::Refused(e.to_string()),
+    })
 }
 
-fn find_edge(bodies: &[Body], name: &str, namer: EdgeNamer) -> Result<(usize, EdgeId), CamError> {
-    for (i, b) in bodies.iter().enumerate() {
-        for e in b.edges() {
-            if namer(b, e).as_deref() == Some(name) {
-                return Ok((i, e));
-            }
-        }
-    }
-    Err(CamError::Refused(format!(
-        "the edge {name:?} is no longer in the model"
-    )))
+fn find_face(bodies: &[Body], name: &str) -> Result<(usize, FaceId), CamError> {
+    resolved(bodies, Kind::Face, name, Want::One)?
+        .first()
+        .and_then(|f| Some((f.body, f.face()?)))
+        .ok_or_else(|| CamError::Refused(format!("the face {name:?} is no longer in the model")))
+}
+
+/// `_namer` is kept for callers; edge names follow `chamfera_doc::naming::edge_ref`.
+fn find_edge(bodies: &[Body], name: &str, _namer: EdgeNamer) -> Result<(usize, EdgeId), CamError> {
+    resolved(bodies, Kind::Edge, name, Want::One)?
+        .first()
+        .and_then(|f| Some((f.body, f.edge()?)))
+        .ok_or_else(|| CamError::Refused(format!("the edge {name:?} is no longer in the model")))
 }
 
 /// The stock, work coordinates and clearance of `setup` for the model `bodies`.
@@ -282,21 +285,22 @@ pub fn drill_holes(bodies: &[Body], faces: &[String]) -> Result<Vec<Hole>, CamEr
             holes.extend(model::find_holes(b, None)?.into_iter().map(|h| h.0));
         }
     } else {
+        // Every piece of each named face (a hole wall split by a later cut is still one
+        // hole to drill).
+        let mut found = Vec::new();
+        for n in faces {
+            found.extend(resolved(bodies, Kind::Face, n, Want::All)?);
+        }
         for (i, b) in bodies.iter().enumerate() {
-            let mine: Vec<FaceId> = faces
+            let mut mine: Vec<FaceId> = found
                 .iter()
-                .filter_map(|n| find_face(bodies, n).ok())
-                .filter(|(bi, _)| *bi == i)
-                .map(|(_, f)| f)
+                .filter(|f| f.body == i)
+                .filter_map(Found::face)
                 .collect();
+            mine.dedup();
             if !mine.is_empty() {
                 holes.extend(model::find_holes(b, Some(&mine))?.into_iter().map(|h| h.0));
             }
-        }
-        if let Some(missing) = faces.iter().find(|n| find_face(bodies, n).is_err()) {
-            return Err(CamError::Refused(format!(
-                "the face {missing:?} is no longer in the model"
-            )));
         }
     }
     Ok(holes)

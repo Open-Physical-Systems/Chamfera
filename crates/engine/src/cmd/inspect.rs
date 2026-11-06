@@ -17,7 +17,8 @@
 //! `inspect.measure_at` gives for them.
 
 use super::CommandSpec;
-use crate::solids::{EDGE_PICK_PIXELS, Solid, edge_ref};
+use crate::naming::{Kind, NameError, Want};
+use crate::solids::{EDGE_PICK_PIXELS, Solid};
 use crate::{CmdResult, CommandError, Session, params};
 use chamfera_geom::{LINEAR_TOLERANCE, Point3};
 use chamfera_kernel::{Body, Curve, Entity, Surface};
@@ -144,24 +145,33 @@ fn resolve(s: &Session, r: &Value, key: &str) -> Result<Target, CommandError> {
         .get(si)
         .ok_or_else(|| bad("that solid is gone"))?
         .body;
+    // Names go through the resolver (rung K8), over every solid so that piece numbers
+    // (`2:top#2`) mean what the pick and the listings show; `#3` is a face index.
+    let named_in = |kind: Kind, name: &str| -> Result<Option<Entity>, CommandError> {
+        match s.resolve_reference(None, kind, name, Want::One) {
+            Ok(found) => Ok(found.first().filter(|f| f.body == si).map(|f| f.entity)),
+            Err(e @ NameError::Split { .. }) => Err(bad(e.to_string())),
+            Err(_) => Ok(None),
+        }
+    };
     let entity = if let Some(f) = obj.get("face") {
         let name = named(f, &format!("{key}.face"))?;
-        let face = body
-            .faces()
-            .into_iter()
-            .find(|x| body.face_name(*x).ok().flatten() == Some(name.as_str()))
-            .or_else(|| by_index(&name, body.faces(), |x| x.index()))
-            .ok_or_else(|| bad(format!("the solid has no face {name:?}")))?;
-        Entity::Face(face)
+        match named_in(Kind::Face, &name)? {
+            Some(e) => e,
+            None => Entity::Face(
+                by_index(&name, body.faces(), |x| x.index())
+                    .ok_or_else(|| bad(format!("the solid has no face {name:?}")))?,
+            ),
+        }
     } else if let Some(e) = obj.get("edge") {
         let name = named(e, &format!("{key}.edge"))?;
-        let edge = body
-            .edges()
-            .into_iter()
-            .find(|x| edge_ref(body, *x).as_deref() == Some(name.as_str()))
-            .or_else(|| by_index(&name, body.edges(), |x| x.index()))
-            .ok_or_else(|| bad(format!("the solid has no edge {name:?}")))?;
-        Entity::Edge(edge)
+        match named_in(Kind::Edge, &name)? {
+            Some(e) => e,
+            None => Entity::Edge(
+                by_index(&name, body.edges(), |x| x.index())
+                    .ok_or_else(|| bad(format!("the solid has no edge {name:?}")))?,
+            ),
+        }
     } else if let Some(v) = obj.get("vertex") {
         let vertex = if v.is_array() {
             let p = point_of(v, &format!("{key}.vertex"))?;
@@ -171,10 +181,10 @@ fn resolve(s: &Session, r: &Value, key: &str) -> Result<Target, CommandError> {
             })
         } else {
             let name = named(v, &format!("{key}.vertex"))?;
-            body.vertices()
-                .into_iter()
-                .find(|x| body.vertex_name(*x).ok().flatten() == Some(name.as_str()))
-                .or_else(|| by_index(&name, body.vertices(), |x| x.index()))
+            match named_in(Kind::Vertex, &name)? {
+                Some(Entity::Vertex(x)) => Some(x),
+                _ => by_index(&name, body.vertices(), |x| x.index()),
+            }
         }
         .ok_or_else(|| bad(format!("the solid has no vertex {v}")))?;
         Entity::Vertex(vertex)
@@ -369,17 +379,15 @@ impl Session {
         }
         let ray = self.camera.ray_through(x, y, w, h, bounds.as_ref())?;
         let hit = self.scene.pick(&ray)?;
-        let solid = self
+        let (si, solid) = self
             .solids()
             .iter()
-            .find(|s| s.scene_id == Some(hit.body))?;
+            .enumerate()
+            .find(|(_, s)| s.scene_id == Some(hit.body))?;
         let face = *solid.faces.get(hit.triangle)?;
-        let name = solid
-            .body
-            .face_name(face)
-            .ok()
-            .flatten()
-            .map_or_else(|| format!("#{}", face.index()), str::to_owned);
+        let name = self
+            .reference_name(si, Entity::Face(face))
+            .unwrap_or_else(|| format!("#{}", face.index()));
         Some(json!({ "solid": solid.name, "face": name }))
     }
 }

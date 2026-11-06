@@ -144,23 +144,18 @@ fn offset(p: &Value) -> Result<Option<[f64; 2]>, CommandError> {
 }
 
 /// The component whose solid has the named face or edge.
+/// The name goes through the resolver (rung K8): all pieces of a split name count.
 fn component_with(s: &Session, at: &OriginAt) -> Option<u32> {
-    s.solids().iter().find_map(|x| {
-        let has = match at {
-            OriginAt::Face { face } => x
-                .body
-                .faces()
-                .into_iter()
-                .any(|f| x.body.face_name(f).ok().flatten() == Some(face.as_str())),
-            OriginAt::Edge { edge } | OriginAt::Vertex { edge, .. } => x
-                .body
-                .edges()
-                .into_iter()
-                .any(|e| crate::solids::edge_ref(&x.body, e).as_deref() == Some(edge.as_str())),
-            OriginAt::Point { .. } => false,
-        };
-        has.then_some(x.component)
-    })
+    use crate::naming::{Kind, Want};
+    let found = match at {
+        OriginAt::Face { face } => s.resolve_reference(None, Kind::Face, face, Want::All),
+        OriginAt::Edge { edge } | OriginAt::Vertex { edge, .. } => {
+            s.resolve_reference(None, Kind::Edge, edge, Want::All)
+        }
+        OriginAt::Point { .. } => return None,
+    };
+    let f = found.ok()?.into_iter().next()?;
+    s.solids().get(f.body).map(|x| x.component)
 }
 
 /// Reads a joint origin parameter (`a` or `b`).

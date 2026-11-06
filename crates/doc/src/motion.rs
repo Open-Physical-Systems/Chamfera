@@ -1,4 +1,4 @@
-//! Motion studies (format 27): keyframes that drive joints over time.
+//! Motion studies (format 29): keyframes that drive joints over time.
 //!
 //! A key says "joint `joint` has `value` at time `time`" (seconds). Between two keys of a
 //! joint the value is interpolated linearly; before the first key it holds the first
