@@ -759,7 +759,7 @@ fn compare_view(
 
 /// A PNG thumbnail as an egui image (small images only).
 #[cfg(not(target_arch = "wasm32"))]
-fn decode_png(bytes: &[u8]) -> Option<egui::ColorImage> {
+pub(crate) fn decode_png(bytes: &[u8]) -> Option<egui::ColorImage> {
     let mut decoder = png::Decoder::new(std::io::Cursor::new(bytes));
     decoder.set_transformations(png::Transformations::normalize_to_color8());
     let mut reader = decoder.read_info().ok()?;

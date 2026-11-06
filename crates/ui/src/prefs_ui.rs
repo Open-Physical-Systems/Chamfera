@@ -246,6 +246,12 @@ fn general_page(ui: &mut egui::Ui, look: Look, p: &mut Preferences) {
         }
     });
     ui.add_space(S2);
+    widgets::caption(ui, look, "START");
+    ui.horizontal(|ui| {
+        row_label(ui, look, "Welcome screen");
+        ui.checkbox(&mut p.show_welcome, "Show at start");
+    });
+    ui.add_space(S2);
     widgets::caption(ui, look, "NEW DESIGNS");
     ui.horizontal(|ui| {
         row_label(ui, look, "Default units");

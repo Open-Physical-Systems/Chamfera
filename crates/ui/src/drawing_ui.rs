@@ -53,7 +53,7 @@ pub(crate) struct DrawingUi {
     /// The last layout, and the design and sheet it was made for.
     cache: Option<(Document, u32, SheetGeometry)>,
     /// The canvas on screen, for turning clicks into sheet points.
-    rect: Option<Rect>,
+    pub(crate) rect: Option<Rect>,
     /// The fields of the annotation tools (`drawing_tools_ui.rs`).
     pub options: crate::drawing_tools_ui::DrawOptions,
 }
