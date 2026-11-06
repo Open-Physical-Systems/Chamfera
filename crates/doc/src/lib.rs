@@ -2,10 +2,12 @@
 
 pub mod expr;
 pub mod feature;
+pub mod imported;
 
 pub use feature::{
     Extrude, ExtrudeDirection, Feature, FeatureKind, Operation, Pattern, PatternLayout, Revolve,
 };
+pub use imported::ImportedBody;
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -20,7 +22,8 @@ use thiserror::Error;
 /// - 5: sketches attached to a face of a feature's solid.
 /// - 6: feature operations (new body, join, cut, intersect).
 /// - 7: linear and circular patterns of features.
-pub const FORMAT_VERSION: u32 = 7;
+/// - 8: imported solid bodies.
+pub const FORMAT_VERSION: u32 = 8;
 /// The tag every design file starts with, so other JSON is not mistaken for a design.
 pub const FORMAT_TAG: &str = "chamfera";
 /// Longest parameter name.
@@ -148,6 +151,9 @@ pub struct Document {
     /// The last feature id handed out; ids are never reused.
     #[serde(default)]
     pub last_feature_id: u32,
+    /// Solid bodies imported from other CAD files (STEP), kept as exact B-rep bodies.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub imported: Vec<ImportedBody>,
 }
 
 impl Default for Document {
@@ -159,6 +165,7 @@ impl Default for Document {
             sketches: Vec::new(),
             features: Vec::new(),
             last_feature_id: 0,
+            imported: Vec::new(),
         }
     }
 }
@@ -532,6 +539,8 @@ impl Document {
             }
         }
         checked.features = doc.features;
+        imported::check(&doc.imported, &mut seen, checked.last_feature_id)?;
+        checked.imported = doc.imported;
         // Values in the file must agree with their expressions.
         checked.evaluate()?;
         Ok(checked)

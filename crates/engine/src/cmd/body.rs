@@ -7,6 +7,13 @@ use serde_json::{Value, json};
 
 pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec {
+        id: "body.import_step",
+        label: "Insert STEP Solids",
+        params: "path: string (required) - a .step/.stp file (AP203, AP214, AP242); its B-rep solids become exact bodies, solids it cannot import yet are listed in `skipped`",
+        mutates: true,
+        run: import_step,
+    },
+    CommandSpec {
         id: "body.import_stl",
         label: "Insert Mesh (STL)",
         params: "path: string (required) - an .stl file, binary or ASCII, in mm",
@@ -102,6 +109,55 @@ fn import_stl_bytes(s: &mut Session, p: &Value) -> CmdResult {
         .unwrap_or("Mesh");
     let name: String = name.chars().filter(|c| !c.is_control()).take(64).collect();
     add(s, &name, mesh)
+}
+
+/// Imports the complete solids of a STEP file into the design (imported bodies are
+/// saved with it and can be undone), shows them, and reports their exact measures and
+/// the solids left out. Fails, changing nothing, when no solid can be imported.
+fn import_step(s: &mut Session, p: &Value) -> CmdResult {
+    let path = params::req_str(p, "path")?;
+    let report = chamfera_io::step::import_file(std::path::Path::new(path))?;
+    let skipped: Vec<Value> = report
+        .failed
+        .iter()
+        .map(|f| {
+            json!({
+                "entity": f.entity,
+                "name": f.name,
+                "kind": match f.kind {
+                    chamfera_io::step::FailureKind::Unsupported => "unsupported",
+                    chamfera_io::step::FailureKind::Invalid => "invalid",
+                },
+                "reasons": f.reasons,
+            })
+        })
+        .collect();
+    if report.solids.is_empty() {
+        let why: Vec<String> = report.failed.iter().map(ToString::to_string).collect();
+        return Err(CommandError::Unavailable(format!(
+            "no solid of {path} can be imported: {}",
+            why.join(" | ")
+        )));
+    }
+    let mut ids = Vec::new();
+    for (name, body) in report.solids {
+        ids.push(s.doc.add_imported(&name, body)?);
+    }
+    s.rebuild();
+    let solids: Vec<Value> = ids
+        .iter()
+        .filter_map(|id| s.solids().iter().find(|x| x.feature == *id))
+        .map(|x| {
+            json!({
+                "id": x.feature,
+                "name": x.name,
+                "body": x.scene_id,
+                "volume": x.body.volume().ok(),
+                "area": x.body.area().ok(),
+            })
+        })
+        .collect();
+    Ok(json!({ "path": path, "solids": solids, "skipped": skipped }))
 }
 
 /// The sample: an L-bracket, 80 x 50 x 8 mm base, 40 mm upright, a 20 mm boss.
