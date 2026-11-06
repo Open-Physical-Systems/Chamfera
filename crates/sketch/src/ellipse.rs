@@ -10,8 +10,8 @@
 
 use crate::entity::{Curve, CurveId};
 use crate::sketch::Sketch;
-use chamfera_geom::{LINEAR_TOLERANCE, Point2, Vec2};
-use std::f64::consts::TAU;
+use chamfera_geom::{BSplineCurve2, LINEAR_TOLERANCE, NurbsError, Point2, Vec2};
+use std::f64::consts::{FRAC_PI_2, TAU};
 
 /// An ellipse, or a counter-clockwise arc of one (`sweep` = 2π for the whole ellipse).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -86,6 +86,35 @@ impl EllipseArc {
         self.sweep >= TAU - 1e-12
     }
 
+    /// The arc as an exact rational quadratic B-spline (The NURBS Book, §7.3 and §7.5):
+    /// the arc of the unit circle from `t0` through `sweep` in `k = ceil(sweep / (π/2))`
+    /// equal pieces of `Δ = sweep / k`, each with end points `(cos θ, sin θ)`, the middle
+    /// point `(cos θ_m, sin θ_m) / cos(Δ/2)` where the end tangents meet and weights
+    /// `1, cos(Δ/2), 1`, mapped by the affine map `(x, y) -> c + a x u + b y v`. A
+    /// rational curve's control points map with the curve, so the result is the ellipse
+    /// exactly. Its parameter runs from 0 to `k`.
+    pub fn to_nurbs(&self) -> Result<BSplineCurve2, NurbsError> {
+        let pieces = (self.sweep / FRAC_PI_2 - 1e-9).ceil().clamp(1.0, 4.0) as usize;
+        let delta = self.sweep / pieces as f64;
+        let w = (0.5 * delta).cos();
+        let map = |x: f64, y: f64| {
+            self.centre + self.axis * (self.a * x) + self.minor_axis() * (self.b * y)
+        };
+        let mut points = vec![self.point_at(self.t0)];
+        let mut weights = vec![1.0];
+        let mut knots = vec![0.0; 3];
+        for k in 0..pieces {
+            let mid = self.t0 + delta * (k as f64 + 0.5);
+            points.push(map(mid.cos() / w, mid.sin() / w));
+            points.push(self.point_at(self.t0 + delta * (k + 1) as f64));
+            weights.extend([w, 1.0]);
+            let knot = (k + 1) as f64;
+            let times = if k + 1 == pieces { 3 } else { 2 };
+            knots.extend(std::iter::repeat_n(knot, times));
+        }
+        BSplineCurve2::new(2, knots, points, Some(weights))
+    }
+
     /// The arc as a polyline with about `per_turn` segments for a full turn (at least 2).
     pub fn polyline(&self, per_turn: usize) -> Vec<Point2> {
         let n = ((per_turn as f64) * self.sweep / TAU).ceil().max(2.0) as usize;
@@ -149,6 +178,42 @@ mod tests {
         assert!(e.point_at(FRAC_PI_2).distance(Point2::new(-4.0, 2.0)) < 1e-12);
         assert!((e.param_of(Point2::new(1.0, -8.0)).abs() - PI).abs() < 1e-12);
         assert!(EllipseArc::full(c, c, Point2::new(3.0, 2.0)).is_none());
+    }
+
+    #[test]
+    fn the_nurbs_of_an_ellipse_lies_on_it_and_encloses_pi_a_b() {
+        // a = 10 along (3, 4) / 5, b = 5, centre (1, 2): every point of the spline
+        // satisfies (u·d / a)² + (v·d / b)² = 1, and the whole ellipse encloses
+        // π a b = 50π (Green's theorem over the closed curve).
+        let c = Point2::new(1.0, 2.0);
+        let m = c + Vec2::new(6.0, 8.0);
+        let n = c + Vec2::new(-4.0, 3.0);
+        let e = EllipseArc::full(c, m, n).unwrap();
+        let s = e.to_nurbs().unwrap();
+        let (lo, hi) = s.domain();
+        for i in 0..=200 {
+            let p = s.point_at(lo + (hi - lo) * i as f64 / 200.0);
+            let d = p - c;
+            let x = e.axis.dot(d) / 10.0;
+            let y = e.minor_axis().dot(d) / 5.0;
+            assert!((x * x + y * y - 1.0).abs() < 1e-12, "{p:?}");
+        }
+        assert!(s.point_at(lo).distance(m) < 1e-12 && s.point_at(hi).distance(m) < 1e-12);
+        let area = s.area_term(lo, hi).unwrap();
+        assert!((area - 50.0 * PI).abs() < 1e-9, "{area}");
+        // A third of a turn (2π/3) from t = 1, in two pieces
+        // of π/3: it starts and ends where the ellipse does, and the joint of its pieces
+        // is the ellipse's point at t = 1 + π/3.
+        let arc = EllipseArc {
+            t0: 1.0,
+            sweep: 2.0 * PI / 3.0,
+            ..e
+        };
+        let s = arc.to_nurbs().unwrap();
+        let (lo, hi) = s.domain();
+        assert!(s.point_at(lo).distance(e.point_at(1.0)) < 1e-12);
+        assert!(s.point_at(hi).distance(e.point_at(1.0 + 2.0 * PI / 3.0)) < 1e-12);
+        assert!(s.point_at(0.5 * (lo + hi)).distance(e.point_at(1.0 + PI / 3.0)) < 1e-12);
     }
 
     #[test]

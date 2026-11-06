@@ -498,6 +498,98 @@ fn an_stl_file_imports_as_a_body() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+#[test]
+fn an_imported_mesh_is_saved_undone_and_named_apart() {
+    // A 10 mm cube (1000 mm³) imported twice: the second is `cube (2)`. Both are part of
+    // the design: undo removes them one at a time, redo brings them back, they survive
+    // save and open, and an unrelated rebuild keeps their scene ids.
+    let dir = std::env::temp_dir().join(format!("chamfera-mesh-doc-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("cube.stl");
+    let cube = chamfera_geom::TriMesh::cuboid(
+        chamfera_geom::Point3::ORIGIN,
+        chamfera_geom::Point3::new(10.0, 10.0, 10.0),
+    );
+    std::fs::write(&path, chamfera_io::stl::write_binary(&cube).unwrap()).unwrap();
+    let mut s = Session::new();
+    let import = |s: &mut Session| {
+        s.execute("body.import_stl", &json!({"path": path.to_str().unwrap()}))
+            .unwrap()
+    };
+    let first = import(&mut s);
+    let second = import(&mut s);
+    assert_eq!(first["name"], "cube");
+    assert_eq!(second["name"], "cube (2)");
+    assert_eq!(s.doc.meshes.len(), 2);
+    let names =
+        |s: &Session| -> Vec<String> { s.scene.bodies.iter().map(|b| b.name.clone()).collect() };
+    assert_eq!(names(&s), ["cube", "cube (2)"]);
+    // An unrelated change rebuilds: the meshes keep their scene bodies.
+    s.execute("param.set", &json!({"name": "w", "expression": "5 mm"}))
+        .unwrap();
+    assert_eq!(s.scene.bodies[0].id, first["body"].as_u64().unwrap() as u32);
+    s.execute("edit.undo", &json!({})).unwrap();
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(names(&s), ["cube"]);
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(s.scene.bodies.is_empty() && s.doc.meshes.is_empty());
+    s.execute("edit.redo", &json!({})).unwrap();
+    s.execute("edit.redo", &json!({})).unwrap();
+    assert_eq!(names(&s), ["cube", "cube (2)"]);
+    // Saved and opened again, with the volume of the mesh.
+    let data = s.execute("design.save_bytes", &json!({})).unwrap()["data"].clone();
+    let mut t = Session::new();
+    t.execute("design.open_bytes", &json!({ "data": data }))
+        .unwrap();
+    assert_eq!(names(&t), ["cube", "cube (2)"]);
+    let listed = t.execute("body.list", &json!({})).unwrap();
+    let v = listed["bodies"][1]["volume"].as_f64().unwrap();
+    assert!((v - 1000.0).abs() < 1e-6, "{v}");
+    // Renaming and removing are part of the design too, and undone.
+    let id = listed["bodies"][1]["body"].clone();
+    t.execute("body.rename", &json!({"body": id, "name": "lid"}))
+        .unwrap();
+    assert_eq!(names(&t), ["cube", "lid"]);
+    t.execute("body.remove", &json!({"body": id})).unwrap();
+    assert_eq!(names(&t), ["cube"]);
+    assert_eq!(t.doc.meshes.len(), 1);
+    t.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(names(&t), ["cube", "lid"]);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn a_step_body_read_back_gets_a_name_of_its_own() {
+    // The 50 x 30 x 10 box exported to STEP and read back: the copy is `Extrude1 (2)`, so
+    // `inspect.mass {body: "Extrude1"}` still means the original (15000 mm³ each).
+    let dir = std::env::temp_dir().join(format!("chamfera-step-name-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("box.step");
+    let mut s = Session::new();
+    extruded_plate(&mut s, json!(10));
+    s.execute(
+        "design.export_step",
+        &json!({"path": path.to_str().unwrap()}),
+    )
+    .unwrap();
+    let r = s
+        .execute("body.import_step", &json!({"path": path.to_str().unwrap()}))
+        .unwrap();
+    assert_eq!(r["solids"][0]["name"], "Extrude1 (2)", "{r}");
+    let names: Vec<&str> = s.solids().iter().map(|x| x.name.as_str()).collect();
+    assert_eq!(names, ["Extrude1", "Extrude1 (2)"]);
+    for body in ["Extrude1", "Extrude1 (2)"] {
+        let m = s
+            .execute("inspect.mass", &json!({"body": body, "density": 1}))
+            .unwrap();
+        assert!(
+            (m["volume"].as_f64().unwrap() - 15_000.0).abs() < 1e-6,
+            "{m}"
+        );
+    }
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 /// Draws a rough rectangle on the XY plane, dimensions it 50 x 30 and fixes a corner.
 fn dimensioned_rectangle(s: &mut Session) -> (Vec<u64>, Vec<u64>) {
     s.execute("sketch.create", &json!({"plane": "xy"})).unwrap();
@@ -3817,7 +3909,9 @@ fn polygon_slot_and_ellipse_commands_draw_shapes_of_their_exact_area() {
 }
 
 #[test]
-fn an_ellipse_profile_is_refused_by_extrude_with_a_reason() {
+fn an_ellipse_extrudes_into_an_elliptic_cylinder() {
+    // a = 10, b = 5, 10 high: π a b h = 500π. Its side is one extrusion surface per
+    // half of the ellipse, its caps two planes.
     let mut s = Session::new();
     s.execute("sketch.create", &json!({"plane": "xy"})).unwrap();
     s.execute(
@@ -3826,14 +3920,105 @@ fn an_ellipse_profile_is_refused_by_extrude_with_a_reason() {
     )
     .unwrap();
     s.execute("sketch.finish", &json!({})).unwrap();
-    let e = s
-        .execute(
-            "solid.extrude",
-            &json!({"sketch": 1, "profiles": [{"x": 0, "y": 0}], "distance": 5}),
-        )
-        .unwrap_err();
-    assert!(e.to_string().contains("ellipse"), "{e}");
-    assert!(s.solids().is_empty());
+    s.execute(
+        "solid.extrude",
+        &json!({"sketch": 1, "profiles": [{"x": 0, "y": 0}], "distance": 10}),
+    )
+    .unwrap();
+    let solids = s.solids();
+    assert_eq!(solids.len(), 1);
+    let b = &solids[0].body;
+    let v = b.volume().unwrap();
+    assert!((v - 500.0 * std::f64::consts::PI).abs() < 1e-6, "{v}");
+    b.validate().unwrap();
+    let kinds: Vec<&str> = b
+        .faces()
+        .into_iter()
+        .map(|f| match b.face_surface(f).unwrap().unwrap().0 {
+            chamfera_kernel::Surface::Plane(_) => "plane",
+            chamfera_kernel::Surface::Extrusion(_) => "extrusion",
+            _ => "other",
+        })
+        .collect();
+    assert_eq!(
+        kinds.iter().filter(|k| **k == "extrusion").count(),
+        2,
+        "{kinds:?}"
+    );
+    assert_eq!(
+        kinds.iter().filter(|k| **k == "plane").count(),
+        2,
+        "{kinds:?}"
+    );
+    // The mass properties agree.
+    let m = s
+        .execute("inspect.mass", &json!({"body": "Extrude1", "density": 1}))
+        .unwrap();
+    let mv = m["volume"].as_f64().unwrap();
+    assert!((mv - 500.0 * std::f64::consts::PI).abs() < 1e-6, "{m}");
+}
+
+#[test]
+fn a_half_ellipse_closed_by_its_axis_extrudes_to_half_the_volume() {
+    // The upper half of a = 10, b = 5 (an elliptical arc from +x to -x) closed by the
+    // major axis: area π a b / 2 = 25π, 4 high: 100π.
+    let mut s = Session::new();
+    s.execute("sketch.create", &json!({"plane": "xy"})).unwrap();
+    s.execute(
+        "sketch.ellipse.arc",
+        &json!({"cx": 0, "cy": 0, "x": 10, "y": 0, "minor": 5,
+                "x1": 1, "y1": 0, "x2": -1, "y2": 0}),
+    )
+    .unwrap();
+    s.execute(
+        "sketch.line",
+        &json!({"x1": -10, "y1": 0, "x2": 10, "y2": 0}),
+    )
+    .unwrap();
+    s.execute("sketch.finish", &json!({})).unwrap();
+    s.execute(
+        "solid.extrude",
+        &json!({"sketch": 1, "profiles": [{"x": 0, "y": 2}], "distance": 4}),
+    )
+    .unwrap();
+    let v = s.solids()[0].body.volume().unwrap();
+    assert!((v - 100.0 * std::f64::consts::PI).abs() < 1e-6, "{v}");
+}
+
+#[test]
+fn a_tapered_ellipse_or_spline_is_refused_saying_why_and_changes_nothing() {
+    // The offset of an ellipse or spline is not a spline, so a tapered side would not be
+    // exact: refused, with the reason and what to do instead.
+    let mut s = Session::new();
+    s.execute("sketch.create", &json!({"plane": "xy"})).unwrap();
+    s.execute(
+        "sketch.ellipse",
+        &json!({"cx": 0, "cy": 0, "x": 10, "y": 0, "minor": 5}),
+    )
+    .unwrap();
+    s.execute(
+        "sketch.spline",
+        &json!({"points": [{"x": 30, "y": 0}, {"x": 40, "y": 5}, {"x": 35, "y": 12},
+                           {"x": 28, "y": 6}], "kind": "fit", "closed": true}),
+    )
+    .unwrap();
+    s.execute("sketch.finish", &json!({})).unwrap();
+    let before = s.doc.clone();
+    for seed in [json!({"x": 0, "y": 0}), json!({"x": 34, "y": 5})] {
+        let e = s
+            .execute(
+                "solid.extrude",
+                &json!({"sketch": 1, "profiles": [seed], "distance": 10, "taper": 5}),
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(
+            e.contains("cannot be tapered") && e.contains("offset"),
+            "{e}"
+        );
+        assert_eq!(s.doc, before);
+        assert!(s.solids().is_empty());
+    }
 }
 
 /// The length dimension of sketch 1 with this value.
@@ -4467,6 +4652,50 @@ fn lofting_squares_and_circles_gives_frusta() {
     assert_eq!(s.undo.len(), undo);
     // The sketches are in use by the lofts.
     assert!(!s.doc.sketch_users(2).is_empty());
+}
+
+#[test]
+fn lofting_rings_gives_a_hollow_frustum() {
+    // Circles R = 10 at z = 0 and 5 at z = 10, each around a coaxial hole r = 2 (the
+    // profile seed between the circles): π h (R0² + R0 R1 + R1²) / 3 - π r² h
+    // = 1750π / 3 - 40π = 1630π / 3.
+    let mut s = Session::new();
+    for (offset, r) in [(0.0, 10.0), (10.0, 5.0)] {
+        s.execute("sketch.create", &json!({"plane": "xy", "offset": offset}))
+            .unwrap();
+        s.execute("sketch.circle", &json!({"cx": 0, "cy": 0, "radius": r}))
+            .unwrap();
+        s.execute("sketch.circle", &json!({"cx": 0, "cy": 0, "radius": 2}))
+            .unwrap();
+        s.execute("sketch.finish", &json!({})).unwrap();
+    }
+    let r = s
+        .execute(
+            "solid.loft",
+            &json!({"sections": [{"sketch": 1, "x": 3, "y": 0}, {"sketch": 2, "x": 3, "y": 0}]}),
+        )
+        .unwrap();
+    let v = r["solids"][0]["volume"].as_f64().unwrap();
+    let exact = 1630.0 * std::f64::consts::PI / 3.0;
+    assert!((v - exact).abs() < 1e-9 * exact, "{v}");
+    // A ring lofted to a plain disc is refused, naming the hole counts.
+    let disc = s
+        .execute("sketch.create", &json!({"plane": "xy", "offset": 20}))
+        .unwrap()["sketch"]
+        .as_u64()
+        .unwrap();
+    s.execute("sketch.circle", &json!({"cx": 0, "cy": 0, "radius": 4}))
+        .unwrap();
+    s.execute("sketch.finish", &json!({})).unwrap();
+    let before = s.doc.clone();
+    let e = s
+        .execute(
+            "solid.loft",
+            &json!({"sections": [{"sketch": 2, "x": 3, "y": 0}, {"sketch": disc, "x": 0, "y": 0}]}),
+        )
+        .unwrap_err();
+    assert!(e.to_string().contains("same number of holes"), "{e}");
+    assert_eq!(s.doc, before);
 }
 
 #[test]

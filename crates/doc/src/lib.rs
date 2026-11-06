@@ -36,7 +36,7 @@ pub use feature::{
     FeatureKind, Hole, HoleKind, HoleSizes, Loft, LoftSection, Mirror, MirrorPlane, Move,
     MoveTransform, Operation, Pattern, PatternLayout, Revolve, Shell, Sweep,
 };
-pub use imported::ImportedBody;
+pub use imported::{ImportedBody, ImportedMesh, SharedMesh};
 pub use joint::{EdgeEnd, Joint, JointKind, JointOrigin, OriginAt};
 pub use model_params::{ModelMeta, ModelParameter};
 pub use motion::{Motion, MotionKey};
@@ -114,7 +114,9 @@ use thiserror::Error;
 ///   design table (`configurations`: named overrides of user parameters and of feature
 ///   suppression, and the active one). Model parameter names (`Extrude1.distance`) may
 ///   appear in expressions. Older files open with none of these.
-pub const FORMAT_VERSION: u32 = 30;
+/// - 31: imported mesh bodies (`meshes`: id, name and triangles of each STL, OBJ or 3MF
+///   body), saved and undone like the rest of the design. Older files open with none.
+pub const FORMAT_VERSION: u32 = 31;
 /// The tag every design file starts with, so other JSON is not mistaken for a design.
 pub const FORMAT_TAG: &str = "chamfera";
 /// Longest parameter name.
@@ -290,6 +292,9 @@ pub struct Document {
     /// Solid bodies imported from other CAD files (STEP), kept as exact B-rep bodies.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub imported: Vec<ImportedBody>,
+    /// Mesh bodies imported from STL, OBJ or 3MF files (format 31).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub meshes: Vec<ImportedMesh>,
     /// Build order, rollback marker and groups of the sketches and features.
     #[serde(default)]
     pub timeline: Timeline,
@@ -337,6 +342,7 @@ impl Default for Document {
             features: Vec::new(),
             last_feature_id: 0,
             imported: Vec::new(),
+            meshes: Vec::new(),
             sheet_rules: Vec::new(),
             references: BTreeMap::new(),
             timeline: Timeline::default(),
@@ -700,6 +706,8 @@ impl Document {
         checked.features = doc.features;
         imported::check(&doc.imported, &mut seen, checked.last_feature_id)?;
         checked.imported = doc.imported;
+        imported::check_meshes(&doc.meshes, &mut seen, checked.last_feature_id)?;
+        checked.meshes = doc.meshes;
         Document::check_sheet_rules(&doc.sheet_rules)?;
         checked.sheet_rules = doc.sheet_rules;
         doc.units.validate().map_err(DocError::Format)?;

@@ -11,7 +11,7 @@ use chamfera_doc::{
 };
 use chamfera_geom::{Point2, Point3};
 use chamfera_kernel::{Body, EdgeId, Line2, Profile, ProfileEdge, TessOptions, tessellate};
-use chamfera_sketch::{Curve, ProfileLoop, Region, Sketch};
+use chamfera_sketch::{Curve, EllipseArc, ProfileLoop, Region, Sketch};
 use std::collections::BTreeMap;
 
 /// A solid built by a feature.
@@ -297,8 +297,35 @@ pub struct Built {
     pub exploded: BTreeMap<u32, crate::motion::Exploded>,
 }
 
+/// An ellipse or elliptical arc of a sketch as exact profile edges: its rational
+/// B-spline (so swept sides are extrusion surfaces, elliptic cylinders), a whole ellipse
+/// as two halves as the kernel wants every loop edge to have two ends.
+pub(crate) fn ellipse_edges(sketch: &Sketch, curve: &Curve) -> Result<Vec<ProfileEdge>, String> {
+    let e = sketch
+        .ellipse_arc_of(curve)
+        .ok_or_else(|| "an ellipse of the profile has no size".to_owned())?;
+    let halves = if e.is_full() {
+        let half = std::f64::consts::PI;
+        vec![
+            EllipseArc { sweep: half, ..e },
+            EllipseArc {
+                t0: e.t0 + half,
+                sweep: half,
+                ..e
+            },
+        ]
+    } else {
+        vec![e]
+    };
+    halves
+        .iter()
+        .map(|h| h.to_nurbs().map(ProfileEdge::Spline))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("an ellipse of the profile: {e}"))
+}
+
 /// A sketch loop as exact kernel profile edges: lines stay lines, arcs and circles stay
-/// arcs and circles, in the loop's direction.
+/// arcs and circles, ellipses become their exact rational splines, in the loop's direction.
 fn loop_edges(sketch: &Sketch, l: &ProfileLoop) -> Result<Vec<ProfileEdge>, String> {
     let gone = || "a curve of the profile is gone".to_owned();
     l.segments
@@ -348,7 +375,14 @@ fn loop_edges(sketch: &Sketch, l: &ProfileLoop) -> Result<Vec<ProfileEdge>, Stri
                     return Ok(pieces);
                 }
                 Curve::Ellipse { .. } | Curve::EllipticalArc { .. } => {
-                    return Err("ellipses in a profile cannot be swept into solids yet".into());
+                    let mut pieces = ellipse_edges(sketch, curve)?;
+                    if seg.reversed {
+                        pieces.reverse();
+                        for p in &mut pieces {
+                            *p = p.reversed();
+                        }
+                    }
+                    return Ok(pieces);
                 }
             };
             Ok(vec![if seg.reversed { edge.reversed() } else { edge }])
@@ -1484,6 +1518,7 @@ impl Session {
             });
         }
         self.show_imported(&mut built);
+        self.sync_meshes();
         for x in &built.solids {
             if let Some(id) = x.scene_id
                 && reselect.contains(&x.feature)

@@ -107,10 +107,35 @@ ready; fixed ones say so and name their tests.
    edges (kernel ellipses exist) or the extrude dialog should say so before the user picks
    the profile. Part 5 keeps the ellipse in its sketch (area checked) and extrudes a
    hexagon instead.
+   **Status: fixed** (`fix/qa-bugs`). Ellipses and elliptical arcs reach the kernel as
+   their exact rational quadratic B-splines (`EllipseArc::to_nurbs`: quarter-turn
+   pieces of the unit circle with weights `cos(Δ/2)`, mapped affinely), so their sides are
+   extrusion surfaces, which here are elliptic cylinders; a whole ellipse is two halves.
+   Surface sweeps take them the same way. Booleans still refuse spline faces, so an
+   ellipse extrude makes a new body (join and cut are refused as for splines). Tests:
+   `an_ellipse_extrudes_into_an_elliptic_cylinder` (a = 10, b = 5, 10 high: 500π),
+   `a_half_ellipse_closed_by_its_axis_extrudes_to_half_the_volume` (100π),
+   `the_nurbs_of_an_ellipse_lies_on_it_and_encloses_pi_a_b`.
 4. **Spline profiles cannot be tapered.** `taper` on a spline profile: "a taper on the
    outer loop: spline edges cannot be tapered yet". Part 5 extrudes its spline straight.
+   **Status: refused on purpose, with the reason** (`fix/qa-bugs`). A tapered side is the
+   curve's offset swept at the draft angle, and the offset of a B-spline or an ellipse is
+   not a (rational) B-spline in general, so no exact surface the kernel has can hold it;
+   scaling the curve instead would be exact (a general cone) but is not a taper (the
+   draft angle would vary along the edge). The refusal now says this and what to do
+   (extrude straight, or use lines and arcs), for splines and ellipses alike
+   (`crates/kernel/src/sweep/taper.rs`). Test:
+   `a_tapered_ellipse_or_spline_is_refused_saying_why_and_changes_nothing`.
 5. **Loft profiles cannot have holes.** "lofting a profile with holes": a hollow
    transition takes two lofts (outer join, inner cut), as part 2 does.
+   **Status: fixed** (`fix/qa-bugs`). Sections with the same number of holes loft into a
+   hollow solid: each hole is matched to the nearest hole of the previous section, its
+   edges matched as the outer loop's are, and its bands face into the hole (names
+   `band i hole j side k`); the interpolated cross-sections are checked as whole
+   profiles, holes included. Different hole counts are refused by name. Tests:
+   `a_frustum_with_a_coaxial_cylindrical_hole` (1630π/3),
+   `square_tubes_with_two_holes_match_their_holes_by_position`,
+   `lofting_rings_gives_a_hollow_frustum`.
 6. **Deleting a feature leaves the features that name its edges broken, while other
    dependencies are refused** (naming, for the K8 work). `feature.delete 2` on part 1
    deletes the box although Fillet1 and Shell1 name its edges and faces: both then fail
@@ -127,10 +152,19 @@ ready; fixed ones say so and name their tests.
    `import_obj` add bodies that undo does not remove and save does not keep: in part 8 the
    3MF read back is still there after undoing everything and gone after save and reopen,
    with no warning. At least the save should say mesh bodies are not saved.
+   **Status: fixed** (`fix/qa-bugs`). Imported meshes are a document item (`meshes`,
+   format 31: id, name and triangles, re-validated on open, shared between undo steps
+   so undo does not copy them). Importing, renaming and removing one is one undo step,
+   and save and open keep them; a mesh keeps its scene body through rebuilds. The sample
+   part stays session-only. Test: `an_imported_mesh_is_saved_undone_and_named_apart`.
 8. **Imported STEP bodies keep their names, which can clash.** Part 8's STEP read back is
    called `Extrude1`, like the body it was exported from; name-based references
    (`solid.combine {target: "Extrude1"}`, `inspect.mass {body: "Extrude1"}`) are then
    ambiguous. Imported bodies should get a unique name (`Extrude1 (STEP)`).
+   **Status: fixed** (`fix/qa-bugs`). A STEP solid or mesh whose name a body of the design
+   already has gets the first free number: `Extrude1 (2)`, `cube (2)`. Tests:
+   `a_step_body_read_back_gets_a_name_of_its_own`,
+   `an_imported_mesh_is_saved_undone_and_named_apart`.
 9. **There is no glTF import**, so a GLB export cannot be read back; 3MF and STEP can.
 10. **`chamfera-cli` panics on a closed pipe**: `chamfera-cli exec app.commands | head`
     ends with "failed printing to stdout: Broken pipe" from `println!`. Harmless, but it is
