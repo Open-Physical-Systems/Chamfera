@@ -92,6 +92,7 @@ impl ChamferaApp {
                     Icon::Extrude,
                     format!("Pattern × {} of feature {}", p.count, p.source),
                 ),
+                FeatureKind::Construct(c) => (crate::construct_ui::feature_icon(c), c.describe()),
             };
             Item {
                 id: f.id,
@@ -296,6 +297,7 @@ impl ChamferaApp {
             FeatureKind::Extrude(e) => (e.distance.clone(), e.direction),
             FeatureKind::Revolve(r) => (r.angle.clone(), ExtrudeDirection::Normal),
             FeatureKind::Pattern(p) => (p.count.clone(), ExtrudeDirection::Normal),
+            FeatureKind::Construct(_) => return self.edit_construct(item.id),
         };
         self.timeline.editing = Some(FeatureEdit {
             feature: item.id,

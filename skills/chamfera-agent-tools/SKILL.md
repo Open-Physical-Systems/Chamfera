@@ -30,6 +30,11 @@ It uses the GPU if there is one, else a software Vulkan driver (lavapipe, `mesa-
 - Points, curves and constraints share one id counter per sketch: read ids from each reply instead of guessing them.
 - Sketch tools: `sketch.trim {"curve", "x", "y"}`, `sketch.extend {"curve", "x", "y"}`, `sketch.split {}` (every crossing; do this before extruding overlapping shapes), `sketch.fillet {"point", "radius"}`, `sketch.chamfer {"point", "distance"}`, `sketch.offset {"curves": [id], "distance", "corners": "sharp"|"round"}`, `sketch.mirror {"axis", "curves"}`, `sketch.pattern.rectangular`, `sketch.pattern.circular`, `sketch.rectangle.centre`, `sketch.arc.three_point`, `sketch.arc.tangent`. Each replies with `created_curves`, `changed_curves`, `removed_curves` and the points and constraints, so a script can name the reply (`"as": "r"`) and use `"$r.created_curves.0"`.
 
+## Construction geometry
+- `construct.plane_offset {"base": "xy" | {"feature", "face"} | plane id, "distance"}`, `construct.plane_angle`, `construct.plane_midplane`, `construct.plane_three_points`, `construct.plane_tangent`, `construct.axis_cylinder`, `construct.axis_edge`, `construct.axis_two_points`, `construct.axis_two_planes`, `construct.point_vertex`, `construct.point_centre`, `construct.point_coordinates`; each replies with its `geometry` (origin, normal, direction or point) to check against hand values.
+- `construct.pick {x, y, width, height}` names the face, nearest edge and vertex under a pixel in the form these commands take.
+- `sketch.create {"plane": <plane id>}` sketches on a construction plane and follows it; `solid.revolve` and `solid.pattern_circular` take `axis_feature` (`examples/construction-planes.json`).
+
 ## Commands and scripts
 - `chamfera-cli commands` lists every command; `chamfera-cli exec <id> '<json>'` runs one.
 - `chamfera-cli run script.json` runs a list of `{"command", "params"}` steps and prints one reply per line (`examples/parameters.json`).

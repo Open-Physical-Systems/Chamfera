@@ -66,6 +66,8 @@ impl ChamferaApp {
         let revolving = self.solid.extrude.as_ref().is_some_and(|t| t.revolve);
         let mut plane: Option<(&str, &str)> = None;
         let mut on_face = false;
+        let construct_planes = self.construct_planes();
+        let mut on_construct: Option<u32> = None;
         let mut open_tool: Option<bool> = None;
         let mut sketch_button: Option<egui::Response> = None;
         let (_, menu) = widgets::ribbon_group(ui, look, "CREATE", true, |ui| {
@@ -129,6 +131,7 @@ impl ChamferaApp {
                         plane = Some((p, view));
                     }
                 }
+                on_construct = crate::construct_ui::plane_menu(ui, look, &construct_planes);
                 ui.separator();
                 if widgets::menu_item(ui, look, Icon::Body, "A flat face…", has_solids).clicked()
                 {
@@ -186,6 +189,9 @@ impl ChamferaApp {
         if let Some((p, view)) = plane {
             self.create_sketch(p, view);
         }
+        if let Some(id) = on_construct {
+            self.sketch_on_construct(id);
+        }
         if on_face {
             self.solid.pick_face = true;
             self.message = Some(("Click a flat face of a solid to sketch on".into(), false));
@@ -231,6 +237,9 @@ impl ChamferaApp {
         if parameters {
             self.params.open = !self.params.open;
         }
+        let look = self.look();
+        widgets::ribbon_divider(ui, look);
+        self.construct_group(ui);
         let look = self.look();
         widgets::ribbon_divider(ui, look);
         let mut import = false;

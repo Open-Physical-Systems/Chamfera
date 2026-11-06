@@ -194,6 +194,10 @@ fn hostile_params_never_panic() {
         json!({"sketch": 1, "profiles": [{"x": 10, "y": 10}], "distance": 5, "operation": "smash"}),
         json!({"feature": 2, "count": 1e9, "direction": {"x": 0, "y": 0, "z": 0}, "spacing": 0}),
         json!({"feature": 2, "count": "3", "origin": {"x": f64::NAN, "y": 0}, "axis": "z", "angle": 9999}),
+        json!({"base": "xy", "distance": "1e7", "axis": "w", "angle": f64::NAN, "planes": ["xy", 0], "points": ["origin"]}),
+        json!({"base": {"feature": 2, "face": ""}, "face": {"feature": 1, "face": long}, "edge": {"faces": [1, 2]}, "faces": [], "point": {"vertex": "x"}}),
+        json!({"base": 99, "axis": {"faces": [{"feature": 2, "face": "top"}, {"feature": 2, "face": "top"}]}, "angle": "360 deg", "planes": [1, 1], "points": [{"x": 1e300, "y": 0, "z": 0}, 3, {"centre": []}], "x": "a", "y": [], "z": null, "plane": 1}),
+        json!({"base": "yz", "distance": -5, "axis": 1, "axis_feature": 1, "planes": ["xz", "yz"], "points": [{"vertex": [{"feature": 2, "face": "top"}]}, "origin"], "x": 0, "y": 0, "z": "1e300", "plane": 4294967296u64}),
     ];
     for c in registry() {
         for p in &hostile {
