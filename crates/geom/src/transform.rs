@@ -93,6 +93,34 @@ impl Transform {
         )
     }
 
+    /// The reflection (mirror) in the plane through `point` with normal `normal`:
+    /// `p -> p - 2 ((p - point) . n) n` for the unit normal `n`, so `M = I - 2 n n^T` and
+    /// `t = 2 (point . n) n`. `None` for a zero or non-finite normal or a non-finite point.
+    pub fn reflection(point: Point3, normal: Vec3) -> Option<Transform> {
+        let n = normal.normalized()?;
+        let d = (point - Point3::ORIGIN).dot(n);
+        let m = [
+            [1.0 - 2.0 * n.x * n.x, -2.0 * n.x * n.y, -2.0 * n.x * n.z],
+            [-2.0 * n.y * n.x, 1.0 - 2.0 * n.y * n.y, -2.0 * n.y * n.z],
+            [-2.0 * n.z * n.x, -2.0 * n.z * n.y, 1.0 - 2.0 * n.z * n.z],
+        ];
+        Transform::from_parts(m, n * (2.0 * d))
+    }
+
+    /// True when the matrix is orthogonal with `det M < 0`: a reflection, possibly combined
+    /// with a rotation (an improper rigid motion). Such a map keeps lengths and angles but
+    /// turns right-handed frames into left-handed ones.
+    pub fn is_improper_rigid(&self) -> bool {
+        // -M is a proper rotation exactly when M is an improper one (3 x 3: det(-M) = -det M).
+        let mut neg = *self;
+        for row in &mut neg.m {
+            for v in row.iter_mut() {
+                *v = -*v;
+            }
+        }
+        neg.is_rigid()
+    }
+
     /// The matrix, row-major.
     pub fn matrix(&self) -> [[f64; 3]; 3] {
         self.m
@@ -241,6 +269,29 @@ mod tests {
             r.apply_point(Point3::new(0.0, 0.0, 1.0)),
             Point3::new(1.0, 0.0, 0.0)
         ));
+    }
+
+    #[test]
+    fn a_reflection_mirrors_points_and_reverses_handedness() {
+        // Mirror in the plane x = 5: (8, 1, 2) -> (2, 1, 2); points on the plane stay.
+        let r =
+            Transform::reflection(Point3::new(5.0, 7.0, -3.0), Vec3::new(2.0, 0.0, 0.0)).unwrap();
+        assert!(
+            r.apply_point(Point3::new(8.0, 1.0, 2.0))
+                .distance(Point3::new(2.0, 1.0, 2.0))
+                < 1e-12
+        );
+        assert!(
+            r.apply_point(Point3::new(5.0, -4.0, 9.0))
+                .distance(Point3::new(5.0, -4.0, 9.0))
+                < 1e-12
+        );
+        assert!((r.determinant() + 1.0).abs() < 1e-12);
+        assert!(r.is_improper_rigid() && !r.is_rigid());
+        assert!(!Transform::IDENTITY.is_improper_rigid());
+        assert!(!Transform::scale(-2.0).unwrap().is_improper_rigid());
+        assert!(Transform::reflection(Point3::ORIGIN, Vec3::ZERO).is_none());
+        assert!(Transform::reflection(Point3::new(f64::NAN, 0.0, 0.0), Vec3::X).is_none());
     }
 
     #[test]

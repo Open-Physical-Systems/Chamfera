@@ -7,9 +7,11 @@
 pub mod box_select;
 pub mod cmd;
 pub mod construct;
+pub mod hole;
 mod imported;
 mod params;
 pub mod pick_filter;
+pub mod projection;
 pub mod script;
 pub mod sketching;
 pub mod solids;

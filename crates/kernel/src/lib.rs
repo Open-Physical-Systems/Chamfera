@@ -82,7 +82,7 @@ pub use ssi::{
     intersect_curve_surface, intersect_curve_surface_on, intersect_surfaces,
 };
 pub use surface::{Cone, Cylinder, Sphere, Surface, SurfaceParameters, SurfacePoint, Torus};
-pub use sweep::{extrude, extrude_symmetric, revolve};
+pub use sweep::{MAX_TAPER, extrude, extrude_symmetric, extrude_tapered, revolve};
 pub use tessellate::{BodyMesh, TessOptions, tessellate};
 pub use topology::{
     Body, Curve, CurveId, EdgeCurve, EdgeId, FaceId, HalfEdgeId, LoopId, MAX_NAME_LENGTH,

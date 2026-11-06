@@ -1,0 +1,18 @@
+[
+  { "command": "param.set", "params": { "name": "thickness", "expression": "10 mm" } },
+  { "command": "param.set", "params": { "name": "bolt", "expression": "6.6 mm" } },
+  { "command": "sketch.create", "params": { "plane": "xy" }, "as": "base" },
+  { "command": "sketch.rectangle", "params": { "x1": 0, "y1": 0, "x2": 80, "y2": 50 } },
+  { "command": "sketch.finish" },
+  { "command": "solid.extrude", "params": { "sketch": "$base.sketch", "profiles": [{ "x": 5, "y": 5 }], "distance": "thickness" }, "as": "plate" },
+  { "command": "sketch.create_on_face", "params": { "feature": "$plate.feature", "face": "top" }, "as": "corners" },
+  { "command": "sketch.point", "params": { "x": 10, "y": 10 } },
+  { "command": "sketch.point", "params": { "x": 70, "y": 10 } },
+  { "command": "sketch.point", "params": { "x": 70, "y": 40 } },
+  { "command": "sketch.point", "params": { "x": 10, "y": 40 } },
+  { "command": "sketch.finish" },
+  { "command": "solid.hole", "params": { "face": "2:top", "sketch": "$corners.sketch", "kind": "counterbore", "diameter": "bolt", "through_all": true, "cb_diameter": "bolt * 1.7", "cb_depth": "thickness * 0.4" } },
+  { "command": "solid.hole", "params": { "face": "2:top", "points": [{ "x": 40, "y": 25 }], "kind": "countersink", "diameter": 6, "through_all": true, "cs_diameter": 12, "cs_angle": 90 } },
+  { "command": "solid.hole", "params": { "face": "2:top", "points": [{ "x": 25, "y": 25 }, { "x": 55, "y": 25 }], "diameter": 5, "depth": 6 } },
+  { "command": "view.home", "params": { "width": 1100, "height": 760 } }
+]

@@ -6,7 +6,8 @@
 //! - **Points** own their coordinates (mm).
 //! - **Curves** refer to points: a line has a start and an end; a circle a centre and its
 //!   own radius; an arc a centre, a start and an end, swept counter-clockwise from start to
-//!   end. Any curve can be construction geometry, which constrains but never bounds a
+//!   end; an ellipse a centre and the ends of its two semi-axes; an elliptical arc those and
+//!   a start and an end. Any curve can be construction geometry, which constrains but never bounds a
 //!   profile.
 //! - **Constraints** ([`Constraint`]) relate entities: coincident, point on line, point on
 //!   circle or arc, horizontal, vertical, parallel, perpendicular, tangent, equal, fix,
@@ -40,7 +41,9 @@
 //! [`Sketch::apply_tool`] runs a [`ToolOp`]: trim, extend, split at crossings, fillet,
 //! chamfer, offset, mirror, rectangular and circular patterns, centre rectangle,
 //! three-point and tangent arcs (`tools.rs`, with planar intersections in
-//! `intersect.rs`). A failed tool changes nothing.
+//! `intersect.rs`), and the shapes polygon, slot, ellipse and elliptical arc
+//! (`shapes.rs`). A failed tool changes nothing. Curves fixed in place
+//! ([`Sketch::add_fixed_curve`]) carry model geometry projected into a sketch.
 //!
 //! # Snaps
 //! [`Sketch::snap`] finds where a drawing click near existing geometry should land
@@ -54,11 +57,13 @@
 //! them.
 
 mod constraint;
+mod ellipse;
 mod entity;
 mod equations;
 mod intersect;
 mod linalg;
 mod profile;
+mod shapes;
 mod sketch;
 mod snap;
 mod solver;
@@ -70,8 +75,10 @@ mod tools_tests;
 
 pub use chamfera_geom as geom;
 pub use constraint::Constraint;
+pub use ellipse::EllipseArc;
 pub use entity::{ConstraintId, Curve, CurveId, PointId};
 pub use profile::{LoopSegment, ProfileLoop, Region};
+pub use shapes::{FixedCurve, MAX_POLYGON_SIDES, MIN_POLYGON_SIDES};
 pub use sketch::{MAX_CONSTRAINTS, MAX_CURVES, MAX_POINTS, Sketch, SketchError};
 pub use snap::{
     MAX_SNAP_CURVES, Snap, SnapKind, SnapQuery, exact_direction, lock_angle, lock_straight,
