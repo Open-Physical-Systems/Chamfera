@@ -61,15 +61,9 @@ fn run(args: &[String]) -> Result<(), String> {
 
 /// Runs each step in order and prints one JSON reply per line. Stops at the first failure.
 fn run_script(path: &str) -> Result<(), String> {
-    let size = std::fs::metadata(path)
-        .map_err(|e| format!("{path}: {e}"))?
-        .len();
-    if size > MAX_SCRIPT_BYTES {
-        return Err(format!(
-            "{path}: script is larger than {MAX_SCRIPT_BYTES} bytes"
-        ));
-    }
-    let text = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
+    let bytes = chamfera_engine::read_limited(std::path::Path::new(path), MAX_SCRIPT_BYTES)
+        .map_err(|e| e.to_string())?;
+    let text = String::from_utf8(bytes).map_err(|_| format!("{path}: not UTF-8 text"))?;
     let script: Value = serde_json::from_str(&text).map_err(|e| format!("{path}: {e}"))?;
     let steps = script
         .as_array()

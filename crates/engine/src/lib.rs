@@ -8,9 +8,11 @@ pub mod cmd;
 mod params;
 
 use chamfera_doc::{DocError, Document};
+use chamfera_render::{Camera, Scene};
 use serde_json::Value;
 use thiserror::Error;
 
+pub use chamfera_io::read_limited;
 pub use cmd::{CommandSpec, registry};
 
 /// How many undo steps a session keeps.
@@ -32,10 +34,15 @@ pub enum CommandError {
 
 pub type CmdResult = Result<Value, CommandError>;
 
-/// One open design and its history.
+/// One open design, its history, and what the viewport shows.
 #[derive(Debug, Default)]
 pub struct Session {
     pub doc: Document,
+    /// Bodies on screen. In M1 these are mesh bodies (imported STL, samples). They are not
+    /// saved in the design yet and are not part of undo.
+    pub scene: Scene,
+    /// The view. Not part of the design or of undo.
+    pub camera: Camera,
     undo: Vec<Document>,
     redo: Vec<Document>,
 }
@@ -108,6 +115,7 @@ impl Session {
     /// Replaces the design and forgets its history (open, new).
     pub(crate) fn replace_document(&mut self, doc: Document) {
         self.doc = doc;
+        self.scene = Scene::default();
         self.undo.clear();
         self.redo.clear();
     }

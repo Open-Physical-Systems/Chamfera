@@ -5,6 +5,10 @@
 //! - the world is right-handed and Z is up;
 //! - geometry is exact (f64); meshes are only for display and export.
 
+mod mesh;
+
+pub use mesh::{Aabb, MAX_TRIANGLES, MeshError, Ray, TriMesh, same_length};
+
 use serde::{Deserialize, Serialize};
 use std::ops::{Add, Mul, Neg, Sub};
 

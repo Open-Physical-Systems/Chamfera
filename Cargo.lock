@@ -28,6 +28,7 @@ dependencies = [
  "chamfera-geom",
  "chamfera-io",
  "chamfera-kernel",
+ "chamfera-render",
  "chamfera-sketch",
  "serde_json",
  "thiserror",
@@ -64,6 +65,7 @@ name = "chamfera-render"
 version = "0.0.1"
 dependencies = [
  "chamfera-geom",
+ "serde",
 ]
 
 [[package]]
