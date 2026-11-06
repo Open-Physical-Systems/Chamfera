@@ -45,6 +45,12 @@ pub struct Theme {
     /// The shape a tool would make (the extrude preview), drawn translucent over the
     /// model: its alpha is how much of the model shows through.
     pub preview_body: Rgba,
+    /// Edges behind faces in the "hidden edges" visual style (drawn dashed and faint).
+    pub edge_hidden: Rgba,
+    /// The cut faces of a section view.
+    pub section_cap: Rgba,
+    /// The hatch stripes over `section_cap`.
+    pub section_hatch: Rgba,
     // sketches
     /// Sketch geometry that can still move (under-constrained).
     pub sketch: Rgba,
@@ -72,6 +78,11 @@ pub struct Theme {
     /// Crossing box selection (dragged right to left: what it touches): dashed outline.
     pub select_crossing: Rgba,
     pub select_crossing_fill: Rgba,
+    // toolpaths (Manufacture)
+    /// Cutting moves (feeds), drawn solid.
+    pub toolpath_feed: Rgba,
+    /// Rapid moves, drawn dashed.
+    pub toolpath_rapid: Rgba,
     // interface surfaces (see docs/design/ui.md)
     /// The app bar, ribbon, timeline and status bar.
     pub chrome: Rgba,
@@ -104,9 +115,37 @@ pub struct Theme {
     // the view cube
     pub cube_face: Rgba,
     pub cube_edge: Rgba,
+    // assemblies
+    /// Component tints, mixed lightly into the body colour (`body_colour`).
+    pub component_tints: [Rgba; 6],
+    /// The drawing workspace: the area around the sheet, the paper, and its lines.
+    pub sheet_backdrop: Rgba,
+    pub sheet_paper: Rgba,
+    pub sheet_line: Rgba,
+    pub sheet_hidden: Rgba,
+    pub sheet_centre: Rgba,
+    pub sheet_dimension: Rgba,
+    pub sheet_border: Rgba,
+    pub sheet_pick: Rgba,
 }
 
 impl Theme {
+    /// The colour of a body: the plain body colour, or with a component tint mixed in
+    /// (a quarter of the tint, so shading and edges still read as one material).
+    pub fn body_colour(&self, tint: Option<u8>) -> Rgba {
+        let Some(i) = tint else {
+            return self.body;
+        };
+        let t = self.component_tints[usize::from(i) % self.component_tints.len()];
+        let mix = |a: u8, b: u8| ((u16::from(a) * 3 + u16::from(b)) / 4) as u8;
+        Rgba(
+            mix(self.body.0, t.0),
+            mix(self.body.1, t.1),
+            mix(self.body.2, t.2),
+            self.body.3,
+        )
+    }
+
     pub fn light() -> Theme {
         Theme {
             mode: ThemeMode::Light,
@@ -121,6 +160,9 @@ impl Theme {
             body_selected: Rgba(64, 140, 230, 255),
             edge: Rgba(40, 46, 56, 255),
             preview_body: Rgba(30, 112, 214, 110),
+            edge_hidden: Rgba(40, 46, 56, 110),
+            section_cap: Rgba(214, 120, 64, 255),
+            section_hatch: Rgba(120, 58, 24, 255),
             sketch: Rgba(30, 100, 220, 255),
             sketch_constrained: Rgba(20, 24, 30, 255),
             sketch_construction: Rgba(214, 120, 30, 255),
@@ -135,6 +177,8 @@ impl Theme {
             select_window_fill: Rgba(30, 112, 214, 36),
             select_crossing: Rgba(30, 135, 70, 255),
             select_crossing_fill: Rgba(30, 135, 70, 36),
+            toolpath_feed: Rgba(96, 72, 204, 255),
+            toolpath_rapid: Rgba(200, 50, 60, 220),
             chrome: Rgba(252, 252, 253, 255),
             panel: Rgba(246, 247, 249, 255),
             panel_alt: Rgba(236, 239, 243, 255),
@@ -153,6 +197,22 @@ impl Theme {
             error: Rgba(196, 44, 44, 255),
             cube_face: Rgba(236, 240, 245, 240),
             cube_edge: Rgba(128, 137, 150, 255),
+            component_tints: [
+                Rgba(70, 130, 220, 255),
+                Rgba(226, 132, 40, 255),
+                Rgba(60, 170, 110, 255),
+                Rgba(196, 80, 160, 255),
+                Rgba(200, 176, 50, 255),
+                Rgba(60, 170, 190, 255),
+            ],
+            sheet_backdrop: Rgba(214, 219, 226, 255),
+            sheet_paper: Rgba(255, 255, 255, 255),
+            sheet_line: Rgba(20, 24, 30, 255),
+            sheet_hidden: Rgba(70, 78, 92, 255),
+            sheet_centre: Rgba(176, 64, 44, 255),
+            sheet_dimension: Rgba(28, 92, 190, 255),
+            sheet_border: Rgba(20, 24, 30, 255),
+            sheet_pick: Rgba(240, 140, 20, 255),
         }
     }
 
@@ -170,6 +230,9 @@ impl Theme {
             body_selected: Rgba(84, 160, 255, 255),
             edge: Rgba(18, 20, 24, 255),
             preview_body: Rgba(84, 160, 255, 110),
+            edge_hidden: Rgba(200, 206, 216, 90),
+            section_cap: Rgba(200, 110, 60, 255),
+            section_hatch: Rgba(110, 52, 22, 255),
             sketch: Rgba(96, 170, 255, 255),
             sketch_constrained: Rgba(236, 240, 246, 255),
             sketch_construction: Rgba(240, 150, 60, 255),
@@ -184,6 +247,8 @@ impl Theme {
             select_window_fill: Rgba(84, 160, 255, 40),
             select_crossing: Rgba(88, 196, 124, 255),
             select_crossing_fill: Rgba(88, 196, 124, 40),
+            toolpath_feed: Rgba(170, 150, 255, 255),
+            toolpath_rapid: Rgba(255, 110, 110, 220),
             chrome: Rgba(29, 31, 35, 255),
             panel: Rgba(35, 38, 43, 255),
             panel_alt: Rgba(45, 49, 56, 255),
@@ -202,6 +267,22 @@ impl Theme {
             error: Rgba(240, 100, 100, 255),
             cube_face: Rgba(54, 58, 66, 235),
             cube_edge: Rgba(112, 120, 132, 255),
+            component_tints: [
+                Rgba(90, 150, 240, 255),
+                Rgba(240, 150, 60, 255),
+                Rgba(80, 190, 130, 255),
+                Rgba(210, 100, 180, 255),
+                Rgba(220, 196, 70, 255),
+                Rgba(80, 190, 210, 255),
+            ],
+            sheet_backdrop: Rgba(24, 26, 30, 255),
+            sheet_paper: Rgba(38, 42, 48, 255),
+            sheet_line: Rgba(232, 236, 242, 255),
+            sheet_hidden: Rgba(160, 170, 184, 255),
+            sheet_centre: Rgba(240, 130, 100, 255),
+            sheet_dimension: Rgba(110, 172, 255, 255),
+            sheet_border: Rgba(200, 206, 214, 255),
+            sheet_pick: Rgba(255, 180, 60, 255),
         }
     }
 
@@ -274,6 +355,22 @@ mod tests {
             }
             assert_ne!(t.select_window, t.select_crossing);
             assert!(t.select_window_fill.3 < 64 && t.select_crossing_fill.3 < 64);
+        }
+    }
+
+    #[test]
+    fn drawing_lines_stand_out_from_the_paper_in_both_themes() {
+        for t in [Theme::light(), Theme::dark()] {
+            for (what, fg) in [
+                ("sheet_line", t.sheet_line),
+                ("sheet_hidden", t.sheet_hidden),
+                ("sheet_centre", t.sheet_centre),
+                ("sheet_dimension", t.sheet_dimension),
+                ("sheet_border", t.sheet_border),
+            ] {
+                let ratio = contrast(fg, t.sheet_paper);
+                assert!(ratio >= 3.0, "{:?}: {what}: {ratio}", t.mode);
+            }
         }
     }
 

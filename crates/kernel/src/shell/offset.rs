@@ -63,13 +63,15 @@ fn signed_distance(s: &Surface, x: Point3) -> KernelResult<(f64, Vec3)> {
                 radial()? * cs - f.z() * sn,
             ))
         }
-        Surface::Sphere(_) | Surface::Torus(_) => Err(unsupported_surface()),
+        Surface::Sphere(_) | Surface::Torus(_) | Surface::Extrusion(_) => {
+            Err(unsupported_surface())
+        }
     }
 }
 
 fn unsupported_surface() -> KernelError {
     KernelError::Unsupported(
-        "shelling faces on spheres or tori: planes, cylinders and cones only for now".into(),
+        "shelling faces on spheres, tori or extruded splines: planes, cylinders and cones only for now".into(),
     )
 }
 
@@ -109,7 +111,9 @@ fn offset_surface(s: &Surface, delta: f64, name: &str) -> KernelResult<Surface> 
             })?;
             Surface::cone(frame, target, a)
         }
-        Surface::Sphere(_) | Surface::Torus(_) => Err(unsupported_surface()),
+        Surface::Sphere(_) | Surface::Torus(_) | Surface::Extrusion(_) => {
+            Err(unsupported_surface())
+        }
     }
 }
 
@@ -278,6 +282,9 @@ fn move_edge(
         }
         Curve::Ellipse(_) | Curve::EllipticalArc(_) => Err(KernelError::Unsupported(format!(
             "shelling a body with an elliptical edge ({name})"
+        ))),
+        Curve::BSpline(_) => Err(KernelError::Unsupported(format!(
+            "shelling a body with a spline edge ({name})"
         ))),
     }
 }

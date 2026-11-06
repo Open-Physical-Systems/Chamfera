@@ -107,9 +107,9 @@ Each milestone ends with a demo you can see plus automated oracle tests.
 | M5 🟡 | **Core features:** ✅ sketch on a flat face (follows the face on rebuild), ✅ revolve, ✅ exact arcs, ✅ join / cut / intersect (kernel K7), ✅ linear and circular patterns of features (commands; ribbon button next). In progress (agents): fillet and chamfer (K11), sketch trim/extend/offset/fillet/mirror/patterns. ✅ construction planes (offset, angle, midplane, three points, tangent), axes and points as timeline features, sketches on construction planes, revolves and circular patterns about a construction axis (examples/construction-planes.json). Still to do: shell, holes, mirror of features | A reference part set (bracket, enclosure, flange) all match oracle values (flange ✅: examples/patterned-flange.json) |
 | M6 | **Agents:** MCP server, modelling skill, control channel with screenshots | Claude builds a bracket over MCP and verifies it with `measure` |
 | M7 | **Import and polish:** STEP import, measure tool, section view, appearance, preferences, autosave/recovery | Opening a third-party STEP and editing on top of it works |
-| M8 | **Components and assemblies:** components, joints, interference | — |
+| M8 🟡 | **Components and assemblies:** ✅ components (nested, placements, linked copies, active component, tints), ✅ joints (rigid, revolute, slider, cylindrical, planar; limits; solved as an exact tree from grounded components, loops refused; `examples/hinge-assembly.json`). Still to do: joint loops, as-built joints, interference, motion | A hinge opens to a driven angle and its bodies land where the hand calculation says ✅ |
 | M9 | **Drawings** | — |
-| M10 | **CAM (Manufacture workspace)** | see section 6 |
+| M10 🟡 | **CAM (Manufacture workspace):** ✅ step one, 2.5D milling: setups and stock, tool library, facing, 2D contour (lead arcs, left/right), 2D pocket (contour-parallel, islands, helix/ramp entry), drilling (G81/G83), cycle time, G-code for LinuxCNC and GRBL, MANUFACTURE tab with toolpath overlays (`examples/cam-plate.json`). Next: adaptive clearing, tabs, stock simulation, 3D | see section 6 |
 
 Rough time with a solo developer plus agents and our own kernel: M1–M2 in 1–2 months, M3 (kernel K0–K7) in 3–6 months, M4–M6 in another 4–6. Estimates, not promises; booleans, persistent naming and fillets are where schedules slip.
 
@@ -153,7 +153,7 @@ deny.toml                allow: MIT, Apache-2.0, BSD-2/3, ISC, Zlib, BSL-1.0, Un
 ---
 
 ## 6. CAM later (kept from the research, for M10)
-- Its own `cam` crate at L1, depending only on `geom`; toolpaths recomputed from the model.
+- Its own `cam` crate at L3 (`chamfera-cam`, beside `io`), depending on `geom`, `kernel` and `doc`; toolpaths recomputed from the model. Offsets are our own (exact lines and arcs, after Held 1991), not a dependency.
 - Build on `cavalier_contours` (arc-keeping offsets, true G2/G3), `i_overlay` (regions), `gcode`/`g-code` (read-back).
 - Evaluate **raygeo** (MIT) for adaptive clearing.
 - **Forbidden:** OpenCAMLib and FreeCAD CAM/Adaptive (LGPL), pycam, BlenderCAM, CAMotics (GPL).

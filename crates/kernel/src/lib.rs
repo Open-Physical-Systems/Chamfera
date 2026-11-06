@@ -31,6 +31,11 @@
 //! intersection, splitting, classification and sewing, with coplanar and touching cases,
 //! multi-lump results and result faces named after the operand faces they came from.
 //!
+//! Rung K10 (curves) is here: B-spline edges ([`Curve::BSpline`], the curves in
+//! `chamfera_geom::BSplineCurve3`), spline profile edges ([`ProfileEdge::Spline`]) and
+//! surfaces of linear extrusion ([`Extrusion`]) for extruded splines; booleans and blends
+//! refuse spline faces for now.
+//!
 //! Inspect is here: [`Body::mass_properties`] (centre of mass and inertia from the exact
 //! faces, after Mirtich 1996) and [`closest_points`] / [`angle_between`] for measuring.
 //!
@@ -40,7 +45,7 @@
 //!
 //! Sheet metal is here ([`Sheet`]): a base plate, flanges with exact cylindrical bends on
 //! straight edges (with bend reliefs), and the flat pattern by bend allowance, with its
-//! outline as DXF.
+//! outline.
 //!
 //! Rung K12 (first part) is here: [`shell`] hollows a solid of planes, cylinders and
 //! cones into walls of a thickness, with chosen faces open (an inward offset subtracted).
@@ -50,15 +55,20 @@ mod boolean;
 mod check;
 mod curve3;
 mod distance;
+mod extrusion;
 mod intersect;
+mod loft;
 mod mass;
 mod planar;
 mod profile;
 mod sheet;
 mod shell;
+#[cfg(test)]
+mod spline_tests;
 mod ssi;
 mod surface;
 mod sweep;
+mod sweep_path;
 mod tessellate;
 mod topology;
 
@@ -71,16 +81,18 @@ pub use curve3::{
     Line3, Segment3,
 };
 pub use distance::{Closest, Entity, MAX_DISTANCE_PAIRS, angle_between, closest_points};
+pub use extrusion::Extrusion;
 pub use intersect::{
     Contact, IntersectionPoint, Intersections, Overlap, arc_arc, circle_arc, circle_circle,
     line_arc, line_circle, line_line, line_segment, segment_arc, segment_circle, segment_segment,
 };
+pub use loft::{LOFT_PARALLEL_TOLERANCE, MAX_LOFT_SECTIONS, loft};
 pub use mass::{MASS_QUADRATURE_TOLERANCE, MAX_DENSITY, MassProperties};
 pub use planar::{Arc2, Circle2, Line2, Segment2};
 pub use profile::{PROFILE_JOIN_TOLERANCE, Profile, ProfileEdge, polygon_edges};
 pub use sheet::{
     BendPosition, BendReport, FlangeSpec, FlatEdge, MAX_FLANGES, Relief, ReliefKind, Sheet,
-    bend_allowance, check_thickness, flat_dxf, flat_outline, outside_setback, position_trim,
+    bend_allowance, check_thickness, flat_outline, outside_setback, position_trim,
 };
 pub use shell::shell;
 pub use ssi::{
@@ -90,6 +102,7 @@ pub use ssi::{
 };
 pub use surface::{Cone, Cylinder, Sphere, Surface, SurfaceParameters, SurfacePoint, Torus};
 pub use sweep::{MAX_TAPER, extrude, extrude_symmetric, extrude_tapered, revolve};
+pub use sweep_path::{MAX_PATH_SEGMENTS, PATH_TANGENT_TOLERANCE, PathSegment, sweep_path};
 pub use tessellate::{BodyMesh, TessOptions, tessellate};
 pub use topology::{
     Body, Curve, CurveId, EdgeCurve, EdgeId, FaceId, HalfEdgeId, LoopId, MAX_NAME_LENGTH,
@@ -118,3 +131,12 @@ pub enum KernelError {
 }
 
 pub type KernelResult<T> = Result<T, KernelError>;
+
+impl From<chamfera_geom::NurbsError> for KernelError {
+    fn from(e: chamfera_geom::NurbsError) -> Self {
+        match e {
+            chamfera_geom::NurbsError::NoConvergence(m) => KernelError::NoConvergence(m),
+            other => KernelError::InvalidInput(other.to_string()),
+        }
+    }
+}

@@ -105,6 +105,11 @@ pub fn fillet(body: &Body, edges: &[EdgeId], radius: f64) -> KernelResult<Body> 
 }
 
 fn blend(body: &Body, edges: &[EdgeId], size: f64, kind: Kind) -> KernelResult<Body> {
+    if body.has_spline_geometry() {
+        return Err(KernelError::Unsupported(
+            "fillets and chamfers on solids with spline faces".into(),
+        ));
+    }
     let what = match kind {
         Kind::Chamfer => "distance",
         Kind::Fillet => "radius",

@@ -267,6 +267,50 @@ fn build_unfold(
     ))
 }
 
+/// A flat pattern's outline as DXF R12, by the drawing crate's writer: on the VISIBLE
+/// layer, moved so its lower-left corner is at the origin.
+pub fn flat_dxf(f: &FlatPattern) -> String {
+    use chamfera_drawing::{Item, Layer, Shape, SheetGeometry};
+    let at = |p: Point2| Point2::new(p.x - f.min.x, p.y - f.min.y);
+    let items = f
+        .outline
+        .iter()
+        .map(|e| {
+            let shape = match *e {
+                FlatEdge::Line { a, b } => Shape::Line { a: at(a), b: at(b) },
+                FlatEdge::Circle { centre, radius } => Shape::Circle {
+                    centre: at(centre),
+                    radius,
+                },
+                FlatEdge::Arc {
+                    centre,
+                    radius,
+                    start_angle,
+                    end_angle,
+                } => {
+                    let sweep = (end_angle - start_angle).rem_euclid(std::f64::consts::TAU);
+                    Shape::Arc {
+                        centre: at(centre),
+                        radius,
+                        start: start_angle,
+                        end: start_angle + sweep,
+                    }
+                }
+            };
+            Item {
+                layer: Layer::Visible,
+                shape,
+            }
+        })
+        .collect();
+    chamfera_drawing::dxf::write(&SheetGeometry {
+        width: f.max.x - f.min.x,
+        height: f.max.y - f.min.y,
+        items,
+        views: Vec::new(),
+    })
+}
+
 impl crate::Session {
     /// The flat patterns of the last rebuild, by feature id.
     pub fn flat_patterns(&self) -> &BTreeMap<u32, FlatPattern> {

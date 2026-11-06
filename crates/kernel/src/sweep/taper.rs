@@ -93,7 +93,7 @@ fn offset_loop(l: &CheckedLoop, d: f64) -> KernelResult<Vec<ProfileEdge>> {
     let edge = |k: usize| {
         l.edges
             .get(k % n)
-            .map(|e| e.edge)
+            .map(|e| e.edge.clone())
             .ok_or_else(|| KernelError::InvalidResult("the taper lost an edge".into()))
     };
     let mut moved: Vec<Point2> = Vec::with_capacity(n);
@@ -162,6 +162,12 @@ fn offset_loop(l: &CheckedLoop, d: f64) -> KernelResult<Vec<ProfileEdge>> {
                     start_angle,
                     sweep,
                 });
+            }
+            ProfileEdge::Spline(_) => {
+                return Err(KernelError::Unsupported(format!(
+                    "a taper on {}: spline edges cannot be tapered yet",
+                    loop_label(l)
+                )));
             }
         }
     }

@@ -17,7 +17,11 @@ pub struct ParamsUi {
     new_unit: usize,
 }
 
-const UNITS: [(&str, &str); 3] = [("length", "mm"), ("angle", "deg"), ("unitless", "—")];
+const UNITS: [(&str, &str); 3] = [
+    ("length", "Length"),
+    ("angle", "Angle"),
+    ("unitless", "Unitless"),
+];
 
 fn unit_index(u: chamfera_doc::Unit) -> usize {
     match u {
@@ -28,21 +32,22 @@ fn unit_index(u: chamfera_doc::Unit) -> usize {
 }
 
 /// A parameter's value as a user reads it.
-pub(crate) fn show_value(p: &chamfera_doc::Parameter) -> String {
+pub(crate) fn show_value(u: chamfera_doc::DisplayUnits, p: &chamfera_doc::Parameter) -> String {
     let v = match p.unit {
         chamfera_doc::Unit::Angle => p.value.to_degrees(),
-        _ => p.value,
+        chamfera_doc::Unit::Length => p.value / u.length.mm(),
+        chamfera_doc::Unit::Unitless => p.value,
     };
     let text = format!("{v:.4}");
     text.trim_end_matches('0').trim_end_matches('.').to_owned()
 }
 
 /// A plain value as an expression with its unit, for the edit box.
-fn value_expression(p: &chamfera_doc::Parameter) -> String {
+fn value_expression(u: chamfera_doc::DisplayUnits, p: &chamfera_doc::Parameter) -> String {
     match p.unit {
-        chamfera_doc::Unit::Length => format!("{} mm", show_value(p)),
-        chamfera_doc::Unit::Angle => format!("{} deg", show_value(p)),
-        chamfera_doc::Unit::Unitless => show_value(p),
+        chamfera_doc::Unit::Length => format!("{} {}", show_value(u, p), u.length.symbol()),
+        chamfera_doc::Unit::Angle => format!("{} deg", show_value(u, p)),
+        chamfera_doc::Unit::Unitless => show_value(u, p),
     }
 }
 
@@ -52,6 +57,7 @@ impl ChamferaApp {
             return;
         }
         let mut open = true;
+        let units = self.session.doc.units;
         let vr = self.viewport_rect;
         let pos = egui::pos2(vr.min.x + widgets::S5, vr.min.y + widgets::S5);
         let look = Look {
@@ -136,7 +142,7 @@ impl ChamferaApp {
                                     egui::Align::Min,
                                 );
                                 let current =
-                                    p.expression.clone().unwrap_or_else(|| value_expression(p));
+                                    p.expression.clone().unwrap_or_else(|| value_expression(units, p));
                                 let text = params.edits.entry(name.clone()).or_insert(current);
                                 let edit = ui.add_sized(
                                     [230.0, 26.0],
@@ -151,13 +157,15 @@ impl ChamferaApp {
                                 widgets::fixed_text(
                                     ui,
                                     72.0,
-                                    egui::RichText::new(show_value(p)).color(look.c(|t| t.text)),
+                                    egui::RichText::new(show_value(units, p)).color(look.c(|t| t.text)),
                                     egui::Align::Max,
                                 );
                                 ui.label(
-                                    egui::RichText::new(
-                                        UNITS.get(unit_index(p.unit)).map_or("", |u| u.1),
-                                    )
+                                    egui::RichText::new(match p.unit {
+                                        chamfera_doc::Unit::Length => units.length.symbol(),
+                                        chamfera_doc::Unit::Angle => "deg",
+                                        chamfera_doc::Unit::Unitless => "—",
+                                    })
                                     .color(look.c(|t| t.text_muted)),
                                 );
                                 if widgets::icon_button(ui, look, Icon::Delete, 26.0, 16.0, true, false)

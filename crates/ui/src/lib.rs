@@ -14,11 +14,15 @@ use egui::{Color32, PointerButton, Rect, Sense, Vec2};
 use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
 
+mod assembly_ui;
 mod blend_ui;
 mod browser;
+mod cam_ui;
 mod chrome;
 mod construct_ui;
 mod context_menu;
+mod display_ui;
+mod drawing_ui;
 mod file_ui;
 mod hole_ui;
 mod inspect_ui;
@@ -28,7 +32,10 @@ const SHOT_TIMEOUT_SECS: f64 = 30.0;
 /// Set when `--screenshot` gave up, so the app exits with an error.
 static SHOT_FAILED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 mod icons;
+mod navigation;
 mod params_ui;
+mod prefs;
+mod prefs_ui;
 mod search;
 mod sheet_ui;
 mod shell_ui;
@@ -37,6 +44,8 @@ mod sketch_select;
 mod sketch_shapes;
 mod sketch_ui;
 mod solid_ui;
+mod spline_ui;
+mod sweep_ui;
 mod timeline;
 mod transform_ui;
 mod viewcube;
@@ -61,6 +70,8 @@ pub struct Options {
     pub script: Vec<Value>,
     /// Open the Parameters window at start.
     pub parameters: bool,
+    /// Open the DRAWING workspace at start.
+    pub drawing: bool,
     /// Open the Extrude tool at start and pick the profile under the viewport's centre,
     /// as a click there would.
     pub extrude: bool,
@@ -84,6 +95,9 @@ pub struct Options {
     pub search: Option<String>,
     /// Open the viewport's right-click menu at this viewport point once it has drawn.
     pub context_menu: Option<[f32; 2]>,
+    /// Open the Preferences window at start on this page (general, navigation, units,
+    /// grid).
+    pub preferences: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -108,8 +122,12 @@ struct Drawn {
     selected: Vec<u32>,
     overlays: Vec<chamfera_render::Overlay>,
     fills: Vec<chamfera_render::Fill>,
+    /// Visual style and section plane, and each body's appearance.
+    display: chamfera_render::Display,
+    appearances: Vec<chamfera_render::Appearance>,
     theme: ThemeMode,
     size: (u32, u32),
+    grid: Option<u64>,
     /// How many times the tool preview was rebuilt, and how many shapes it shows.
     previews: (u64, usize),
 }
@@ -146,6 +164,8 @@ pub struct ChamferaApp {
     solid: solid_ui::SolidUi,
     /// The SHEET METAL workspace (`sheet_ui`).
     sheet_metal: sheet_ui::SheetUi,
+    assembly: assembly_ui::AssemblyUi,
+    drawing: drawing_ui::DrawingUi,
     construct: construct_ui::ConstructUi,
     file: file_ui::FileUi,
     browser: browser::BrowserUi,
@@ -153,6 +173,10 @@ pub struct ChamferaApp {
     search: search::SearchUi,
     /// Right-click menus, the selection filter and hover pre-highlight.
     ctx_menu: context_menu::ContextMenuUi,
+    /// The Manufacture workspace.
+    cam: cam_ui::CamUi,
+    /// Visual style, section and the Appearance panel.
+    display: display_ui::DisplayUi,
     /// The browser's file picker, downloads and local storage.
     #[cfg(target_arch = "wasm32")]
     web: web::WebFiles,
@@ -167,6 +191,15 @@ pub struct ChamferaApp {
     select_box: Option<sketch_select::BoxDrag>,
     /// `--box`: viewport corners of a box to show as if dragged, until the next drag.
     box_preview: Option<[f32; 4]>,
+    /// The user's preferences (`prefs`), and whether changes are written to their file
+    /// (not in tests).
+    prefs: prefs::Preferences,
+    prefs_store: bool,
+    prefs_ui: prefs_ui::PrefsUi,
+    /// The drag in progress and what the navigation preset made of it.
+    nav_drag: Option<navigation::NavDrag>,
+    /// The design file last added to the recent list.
+    recent_seen: Option<std::path::PathBuf>,
 }
 
 /// A command's label, so menus show the same words as the command list.
@@ -188,7 +221,8 @@ impl ChamferaApp {
             renderer: chamfera_gpu::ViewRenderer::new(&rs.device),
             texture: None,
         });
-        let mut app = ChamferaApp::with_gpu(gpu, &options);
+        let mut app = ChamferaApp::with_gpu(gpu, &options, prefs::load());
+        app.prefs_store = true;
         if app.gpu.is_none() {
             app.message = Some(("No GPU device: the viewport cannot draw.".into(), true));
         }
@@ -200,14 +234,14 @@ impl ChamferaApp {
     /// An app without a window or GPU, for tests.
     #[cfg(test)]
     pub(crate) fn headless() -> ChamferaApp {
-        ChamferaApp::with_gpu(None, &Options::default())
+        ChamferaApp::with_gpu(None, &Options::default(), prefs::Preferences::default())
     }
 
-    fn with_gpu(gpu: Option<ViewGpu>, options: &Options) -> ChamferaApp {
+    fn with_gpu(gpu: Option<ViewGpu>, options: &Options, prefs: prefs::Preferences) -> ChamferaApp {
         let mut app = ChamferaApp {
             session: Session::new(),
             theme_choice: match options.theme {
-                None => ThemeChoice::System,
+                None => prefs.theme,
                 Some(ThemeMode::Light) => ThemeChoice::Light,
                 Some(ThemeMode::Dark) => ThemeChoice::Dark,
             },
@@ -229,12 +263,16 @@ impl ChamferaApp {
             params: params_ui::ParamsUi::default(),
             solid: solid_ui::SolidUi::default(),
             sheet_metal: sheet_ui::SheetUi::default(),
+            assembly: assembly_ui::AssemblyUi::default(),
+            drawing: drawing_ui::DrawingUi::default(),
             construct: construct_ui::ConstructUi::default(),
             file: file_ui::FileUi::default(),
             browser: browser::BrowserUi::default(),
             timeline: timeline::TimelineUi::default(),
             search: search::SearchUi::default(),
             ctx_menu: context_menu::ContextMenuUi::default(),
+            cam: cam_ui::CamUi::default(),
+            display: display_ui::DisplayUi::default(),
             #[cfg(target_arch = "wasm32")]
             web: web::WebFiles::default(),
             ctx_close: false,
@@ -242,7 +280,17 @@ impl ChamferaApp {
             frames: 0,
             select_box: None,
             box_preview: None,
+            prefs,
+            prefs_store: false,
+            prefs_ui: prefs_ui::PrefsUi::default(),
+            nav_drag: None,
+            recent_seen: None,
         };
+        if app.prefs.default_length != chamfera_doc::LengthUnit::Mm {
+            let length = app.prefs.default_length.symbol();
+            app.run("design.new", json!({ "length": length }));
+        }
+        app.sync_grid();
         if options.sample {
             app.run("body.sample", json!({}));
         }
@@ -258,11 +306,14 @@ impl ChamferaApp {
                 Err(e) => app.message = Some((e.to_string(), true)),
             }
         }
+        // A script that generated toolpaths opens in the Manufacture workspace.
+        app.cam.active = app.session.toolpaths_visible() && app.session.active_sketch.is_none();
         if app.session.active_sketch.is_some() {
             app.sketch.tool = Some(sketch_ui::Tool::Select);
             app.refresh_sketch_status();
         }
         app.params.open = options.parameters;
+        app.drawing.active = options.drawing;
         if options.extrude {
             let mut tool = solid_ui::ExtrudeTool::default();
             if let Some(p) = &options.extrude_with {
@@ -274,7 +325,13 @@ impl ChamferaApp {
         if options.hole {
             app.open_hole_on_last();
         }
-        app.zoom = options.zoom;
+        app.zoom = options
+            .zoom
+            .or(Some(app.prefs.ui_scale).filter(|z| (z - 1.0).abs() > f32::EPSILON));
+        if let Some(page) = &options.preferences {
+            app.prefs_ui.open = true;
+            app.prefs_ui.page = prefs_ui::Page::parse(page).unwrap_or_default();
+        }
         if let Some(text) = &options.sketch_input {
             match sketch_ui::parse_demo(text) {
                 Ok(steps) => app.sketch.demo = steps,
@@ -299,6 +356,11 @@ impl ChamferaApp {
                 None
             }
         }
+    }
+
+    /// The design's display units (a copy).
+    fn units(&self) -> chamfera_doc::DisplayUnits {
+        self.session.doc.units
     }
 
     fn viewport_params(&self) -> Value {
@@ -366,16 +428,11 @@ impl ChamferaApp {
     fn navigate(&mut self, ui: &egui::Ui, response: &egui::Response, rect: Rect) {
         let (w, h) = (f64::from(rect.width()), f64::from(rect.height()));
         let local = |p: egui::Pos2| (f64::from(p.x - rect.min.x), f64::from(p.y - rect.min.y));
-        let (shift, scroll, zoom, keys) = ui.input(|i| {
+        let keys = ui.input(|i| {
             (
-                i.modifiers.shift,
-                i.smooth_scroll_delta.y,
-                i.zoom_delta(),
-                (
-                    i.key_pressed(egui::Key::F),
-                    i.key_pressed(egui::Key::H),
-                    i.key_pressed(egui::Key::Escape),
-                ),
+                i.key_pressed(egui::Key::F),
+                i.key_pressed(egui::Key::H),
+                i.key_pressed(egui::Key::Escape),
             )
         });
         let pressed = ui.input(|i| i.pointer.any_down());
@@ -384,36 +441,15 @@ impl ChamferaApp {
             .filter(|_| !pressed)
             .map(|p| (local(p).0, local(p).1, w, h));
         self.hover_update(hover);
-        let delta = response.drag_delta();
-        if delta != Vec2::ZERO {
-            let (dx, dy) = (f64::from(delta.x), f64::from(delta.y));
-            let orbit = response.dragged_by(PointerButton::Secondary)
-                || (response.dragged_by(PointerButton::Middle) && shift);
-            if orbit {
-                self.run(
-                    "view.orbit",
-                    json!({ "yaw": -dx * 0.008, "pitch": dy * 0.008 }),
-                );
-            } else if response.dragged_by(PointerButton::Middle) {
-                self.run("view.pan", json!({ "dx": dx, "dy": dy, "height": h }));
-            }
-        }
-        if response.hovered() {
-            let factor = if (zoom - 1.0).abs() > f32::EPSILON {
-                1.0 / f64::from(zoom)
-            } else if scroll.abs() > 0.0 {
-                (-f64::from(scroll) * 0.0025).exp()
-            } else {
-                1.0
-            };
-            if (factor - 1.0).abs() > 1e-9 {
-                let mut p = json!({ "factor": factor.clamp(0.01, 100.0) });
-                if let Some(pos) = response.hover_pos() {
-                    let (x, y) = local(pos);
-                    p = json!({ "factor": factor.clamp(0.01, 100.0), "x": x, "y": y, "width": w, "height": h });
-                }
-                self.run("view.zoom", p);
-            }
+        let drag = self.navigate_drag(ui, response, rect);
+        self.navigate_zoom(ui, response, rect);
+        if self.cam_picking()
+            && response.clicked()
+            && let Some(pos) = response.interact_pointer_pos()
+        {
+            let (x, y) = local(pos);
+            self.cam_click(x, y, w, h);
+            return;
         }
         if self.picking_extrude_target()
             && response.clicked()
@@ -438,6 +474,17 @@ impl ChamferaApp {
             let (x, y) = local(pos);
             self.face_click(x, y, w, h);
             return;
+        }
+        if self.assembly.joint.is_some() {
+            let at = response.hover_pos().map(local);
+            self.joint_hover(at, w, h);
+            if response.clicked()
+                && let Some(pos) = response.interact_pointer_pos()
+            {
+                let (x, y) = local(pos);
+                self.joint_click(x, y, w, h);
+                return;
+            }
         }
         if self.solid.hole.is_some() {
             let at = response.hover_pos().map(local);
@@ -477,6 +524,14 @@ impl ChamferaApp {
             self.inspect_click(x, y, w, h);
             return;
         }
+        if self.solid.sweep.is_some()
+            && response.clicked()
+            && let Some(pos) = response.interact_pointer_pos()
+        {
+            let (x, y) = local(pos);
+            self.sweep_click(x, y, w, h);
+            return;
+        }
         if self.solid.shell.is_some()
             && response.clicked()
             && let Some(pos) = response.interact_pointer_pos()
@@ -509,8 +564,11 @@ impl ChamferaApp {
             self.context_click(response, rect);
         }
         if self.session.active_sketch.is_none() {
-            // A left drag from anywhere draws a selection box (`sketch_select`).
-            if response.drag_started_by(PointerButton::Primary) && self.select_box.is_none() {
+            // A drag the preset makes a selection (a left drag by default) draws a box.
+            if response.drag_started_by(PointerButton::Primary)
+                && drag == Some(navigation::Drag::Select)
+                && self.select_box.is_none()
+            {
                 self.box_begin(ui, rect, false);
             }
             if self.box_input(ui, response, rect) {
@@ -579,6 +637,8 @@ impl ChamferaApp {
         self.session.scene.overlays.extend(blends);
         let sheet = self.sheet_overlays();
         self.session.scene.overlays.extend(sheet);
+        let joints = self.joint_overlays();
+        self.session.scene.overlays.extend(joints);
         let holes = self.hole_overlays();
         self.session.scene.overlays.extend(holes);
         self.inspect_overlays();
@@ -587,6 +647,9 @@ impl ChamferaApp {
                 style: chamfera_render::OverlayStyle::Highlight,
                 ..picked
             });
+        }
+        if let Some(picked) = self.sweep_overlay() {
+            self.session.scene.overlays.push(picked);
         }
         let picks = self.pick_overlays();
         self.session.scene.overlays.extend(picks);
@@ -608,8 +671,17 @@ impl ChamferaApp {
             selected: self.session.scene.selected.clone(),
             overlays: self.session.scene.overlays.clone(),
             fills: self.session.scene.fills.clone(),
+            display: self.session.scene.display,
+            appearances: self
+                .session
+                .scene
+                .bodies
+                .iter()
+                .map(|b| b.appearance)
+                .collect(),
             theme: self.theme.mode,
             size,
+            grid: self.session.scene.grid_spacing.map(f64::to_bits),
             previews: (self.preview_version, self.session.scene.previews.len()),
         };
         if let (Some(gpu), Some(rs)) = (self.gpu.as_mut(), frame.wgpu_render_state())
@@ -665,6 +737,7 @@ impl ChamferaApp {
         self.view_cube(ui, rect);
         self.viewport_hint(ui, rect);
         self.selection_filter_bar(ui.ctx(), rect);
+        self.display_bar(ui.ctx(), rect);
         if self.frames >= 2
             && let Some([x, y]) = self.ctx_menu.open_at.take()
         {
@@ -807,8 +880,20 @@ impl eframe::App for ChamferaApp {
             .resizable(true)
             .default_size(248.0)
             .size_range(180.0..=420.0)
-            .show(ui, |ui| self.browser(ui));
-        egui::CentralPanel::no_frame().show(ui, |ui| self.viewport(ui, frame));
+            .show(ui, |ui| {
+                if self.cam.active {
+                    self.cam_tree(ui);
+                } else {
+                    self.browser(ui);
+                }
+            });
+        egui::CentralPanel::no_frame().show(ui, |ui| {
+            if self.drawing.active && self.session.active_sketch.is_none() {
+                self.drawing_canvas(ui);
+            } else {
+                self.viewport(ui, frame);
+            }
+        });
         if self.frames < 2 {
             self.frames += 1;
             ctx.request_repaint();
@@ -816,16 +901,27 @@ impl eframe::App for ChamferaApp {
             self.parameters_window(&ctx);
             self.extrude_dialog(&ctx);
             self.blend_dialog(&ctx);
+            self.joint_dialog(&ctx);
             self.hole_dialog(&ctx);
             self.transform_dialog(&ctx);
             self.inspect_dialog(&ctx);
             self.shell_dialog(&ctx);
             self.sheet_dialogs(&ctx);
+            self.sweep_dialog(&ctx);
             self.feature_dialog(&ctx);
+            self.timeline_error_window(&ctx);
             self.construct_dialog(&ctx);
             self.rename_dialog(&ctx);
             self.properties_window(&ctx);
+            self.cam_dialogs(&ctx);
+            self.appearance_window(&ctx);
         }
+        if self.frames >= 2 {
+            self.preferences_window(&ctx);
+        }
+        self.sync_grid();
+        self.track_recent();
+        self.rename_box(&ctx);
         self.unsaved_dialog(&ctx);
         self.shortcuts_window(&ctx);
         self.search_window(&ctx);
@@ -1125,6 +1221,105 @@ mod input_tests {
             none,
         );
         assert!(selected(&app).is_empty());
+    }
+
+    #[test]
+    fn under_the_left_drag_orbit_preset_left_orbits_and_shift_left_draws_a_box() {
+        let ctx = egui::Context::default();
+        let mut t = 0.0;
+        let (mut app, a, _, px) = two_cubes(&ctx, &mut t);
+        app.prefs.navigation.preset = navigation::Preset::LeftOrbit;
+        let left = egui::PointerButton::Primary;
+        let camera = app.session.camera;
+        // Shift+left: a window from (-2, 12) to (35, -2) holds only cube A; Shift adds.
+        drag(
+            &mut app,
+            &ctx,
+            &mut t,
+            (px(-2.0, 12.0), px(35.0, -2.0)),
+            left,
+            egui::Modifiers::SHIFT,
+        );
+        assert_eq!(selected(&app), vec![a]);
+        assert_eq!(app.session.camera, camera, "a box does not move the view");
+        // A plain left drag over the same pixels orbits and selects nothing new.
+        app.run("select.clear", json!({}));
+        drag(
+            &mut app,
+            &ctx,
+            &mut t,
+            (px(-2.0, 12.0), px(35.0, -2.0)),
+            left,
+            egui::Modifiers::NONE,
+        );
+        assert!(
+            (app.session.camera.yaw - camera.yaw).abs() > 1e-3,
+            "no orbit"
+        );
+        assert!(selected(&app).is_empty());
+        assert!(app.select_box.is_none());
+    }
+
+    #[test]
+    fn middle_and_right_drags_follow_the_preset() {
+        let ctx = egui::Context::default();
+        let mut t = 0.0;
+        let (mut app, _, _, px) = two_cubes(&ctx, &mut t);
+        let path = (px(-2.0, 12.0), px(35.0, -2.0));
+        let none = egui::Modifiers::NONE;
+        // Default: middle pans (the target moves, the direction stays).
+        let c = app.session.camera;
+        drag(
+            &mut app,
+            &ctx,
+            &mut t,
+            path,
+            egui::PointerButton::Middle,
+            none,
+        );
+        assert!(
+            (app.session.camera.target - c.target).length() > 1e-6,
+            "no pan"
+        );
+        assert!((app.session.camera.yaw - c.yaw).abs() < 1e-12);
+        // SolidWorks-style: middle orbits, Ctrl+middle pans.
+        app.prefs.navigation.preset = navigation::Preset::SolidWorks;
+        let c = app.session.camera;
+        drag(
+            &mut app,
+            &ctx,
+            &mut t,
+            path,
+            egui::PointerButton::Middle,
+            none,
+        );
+        assert!((app.session.camera.yaw - c.yaw).abs() > 1e-3, "no orbit");
+        let c = app.session.camera;
+        drag(
+            &mut app,
+            &ctx,
+            &mut t,
+            path,
+            egui::PointerButton::Middle,
+            egui::Modifiers::CTRL,
+        );
+        assert!((app.session.camera.yaw - c.yaw).abs() < 1e-12);
+        assert!(
+            (app.session.camera.target - c.target).length() > 1e-6,
+            "no pan"
+        );
+        // Fusion-style: a right drag leaves the view alone.
+        app.prefs.navigation.preset = navigation::Preset::Fusion;
+        let c = app.session.camera;
+        drag(
+            &mut app,
+            &ctx,
+            &mut t,
+            path,
+            egui::PointerButton::Secondary,
+            none,
+        );
+        assert_eq!(app.session.camera, c);
     }
 
     #[test]

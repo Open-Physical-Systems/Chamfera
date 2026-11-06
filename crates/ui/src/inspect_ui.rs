@@ -47,24 +47,31 @@ fn num(v: &Value) -> Option<f64> {
     v.as_f64()
 }
 
-/// A length in mm, three decimals.
-fn mm(v: f64) -> String {
-    format!("{v:.3} mm")
+use chamfera_doc::DisplayUnits;
+
+/// A length in the design's unit and precision.
+fn mm(u: DisplayUnits, v: f64) -> String {
+    u.length(v)
 }
 
 fn point(v: &Value) -> Option<Point3> {
     Some(Point3::new(num(&v[0])?, num(&v[1])?, num(&v[2])?))
 }
 
-fn xyz(v: &Value) -> String {
+fn xyz(u: DisplayUnits, v: &Value) -> String {
     match point(v) {
-        Some(p) => format!("{:.3}, {:.3}, {:.3}", p.x, p.y, p.z),
+        Some(p) => format!(
+            "{}, {}, {}",
+            u.length_number(p.x),
+            u.length_number(p.y),
+            u.length_number(p.z)
+        ),
         None => "-".into(),
     }
 }
 
 /// The rows (label, value) describing one entity from an `inspect.*` reply.
-fn entity_rows(e: &Value) -> Vec<(String, String)> {
+fn entity_rows(u: DisplayUnits, e: &Value) -> Vec<(String, String)> {
     let mut rows = Vec::new();
     let kind = e["kind"].as_str().unwrap_or("?");
     let what = match kind {
@@ -83,32 +90,32 @@ fn entity_rows(e: &Value) -> Vec<(String, String)> {
         .unwrap_or("");
     rows.push((what, name.to_owned()));
     if let Some(l) = num(&e["length"]) {
-        rows.push(("Length".into(), mm(l)));
+        rows.push(("Length".into(), mm(u, l)));
     }
     if let Some(a) = num(&e["area"]) {
-        rows.push(("Area".into(), format!("{a:.3} mm²")));
+        rows.push(("Area".into(), u.area(a)));
     }
     if let Some(r) = num(&e["radius"]) {
-        rows.push(("Radius".into(), mm(r)));
-        rows.push(("Diameter".into(), mm(2.0 * r)));
+        rows.push(("Radius".into(), mm(u, r)));
+        rows.push(("Diameter".into(), mm(u, 2.0 * r)));
     }
     if let Some(v) = num(&e["volume"]) {
-        rows.push(("Volume".into(), format!("{v:.3} mm³")));
+        rows.push(("Volume".into(), u.volume(v)));
     }
     if e["point"].is_array() {
-        rows.push(("Position".into(), xyz(&e["point"])));
+        rows.push(("Position".into(), xyz(u, &e["point"])));
     }
     rows
 }
 
 /// The rows of a Measure result: each entity, then distance and angle between them.
-pub(crate) fn measure_rows(r: &Value) -> Vec<(String, String)> {
+pub(crate) fn measure_rows(u: DisplayUnits, r: &Value) -> Vec<(String, String)> {
     let mut rows = Vec::new();
     let two = r.get("b").is_some_and(|b| !b.is_null());
     for (key, tag) in [("a", "1"), ("b", "2")] {
         if r[key].is_object() {
             // With two entities the first row of each (what it is) says which one.
-            for (i, (k, v)) in entity_rows(&r[key]).into_iter().enumerate() {
+            for (i, (k, v)) in entity_rows(u, &r[key]).into_iter().enumerate() {
                 let k = if two && i == 0 {
                     format!("{tag}. {k}")
                 } else {
@@ -119,23 +126,31 @@ pub(crate) fn measure_rows(r: &Value) -> Vec<(String, String)> {
         }
     }
     if let Some(d) = num(&r["distance"]) {
-        rows.push(("Distance".into(), mm(d)));
+        rows.push(("Distance".into(), mm(u, d)));
         if let (Some(dx), Some(dy), Some(dz)) = (
             num(&r["delta"][0]),
             num(&r["delta"][1]),
             num(&r["delta"][2]),
         ) {
-            rows.push(("ΔX ΔY ΔZ".into(), format!("{dx:.3}, {dy:.3}, {dz:.3}")));
+            rows.push((
+                "ΔX ΔY ΔZ".into(),
+                format!(
+                    "{}, {}, {}",
+                    u.length_number(dx),
+                    u.length_number(dy),
+                    u.length_number(dz)
+                ),
+            ));
         }
     }
     if let Some(a) = num(&r["angle_degrees"]) {
-        rows.push(("Angle".into(), format!("{a:.3}°")));
+        rows.push(("Angle".into(), u.angle(a.to_radians())));
     }
     rows
 }
 
 /// The rows of a Mass Properties result.
-pub(crate) fn mass_rows(r: &Value) -> Vec<(String, String)> {
+pub(crate) fn mass_rows(u: DisplayUnits, r: &Value) -> Vec<(String, String)> {
     let f = |v: &Value| num(v).map_or_else(|| "-".to_owned(), |x| format!("{x:.4e}"));
     let mut rows = vec![
         (
@@ -144,17 +159,17 @@ pub(crate) fn mass_rows(r: &Value) -> Vec<(String, String)> {
         ),
         (
             "Volume".into(),
-            num(&r["volume"]).map_or("-".into(), |v| format!("{v:.3} mm³")),
+            num(&r["volume"]).map_or("-".into(), |v| u.volume(v)),
         ),
         (
             "Area".into(),
-            num(&r["area"]).map_or("-".into(), |v| format!("{v:.3} mm²")),
+            num(&r["area"]).map_or("-".into(), |v| u.area(v)),
         ),
         (
             "Mass".into(),
             num(&r["mass"]).map_or("-".into(), |v| format!("{v:.4}")),
         ),
-        ("Centre of mass".into(), xyz(&r["centre_of_mass"])),
+        ("Centre of mass".into(), xyz(u, &r["centre_of_mass"])),
     ];
     let i = &r["inertia"];
     for (name, a, b) in [
@@ -423,9 +438,10 @@ impl ChamferaApp {
         let Some(pos) = self.inspect_project(rect, mid) else {
             return;
         };
-        let mut text = mm(d);
+        let u = self.session.doc.units;
+        let mut text = mm(u, d);
         if let Some(t) = num(&r["angle_degrees"]) {
-            text = format!("{text}   {t:.2}°");
+            text = format!("{text}   {}", u.angle(t.to_radians()));
         }
         let font = egui::FontId::proportional(12.5);
         let galley = ui
@@ -457,6 +473,7 @@ impl ChamferaApp {
             theme: &self.theme,
             icons: &self.icons,
         };
+        let units = self.session.doc.units;
         let Some(tool) = self.solid.inspect.as_mut() else {
             return;
         };
@@ -467,8 +484,8 @@ impl ChamferaApp {
             InspectMode::Mass => (Icon::Mass, label("inspect.mass")),
         };
         let rows = match (&tool.result, tool.mode) {
-            (Some(r), InspectMode::Measure) => measure_rows(r),
-            (Some(r), InspectMode::Mass) => mass_rows(r),
+            (Some(r), InspectMode::Measure) => measure_rows(units, r),
+            (Some(r), InspectMode::Mass) => mass_rows(units, r),
             (None, _) => Vec::new(),
         };
         egui::Window::new(title)
@@ -613,9 +630,9 @@ mod tests {
         app.inspect_click(x, y, w, h);
         let tool = app.solid.inspect.as_ref().unwrap();
         assert_eq!(tool.picks.len(), 1);
-        let rows = measure_rows(tool.result.as_ref().unwrap());
+        let rows = measure_rows(app.session.doc.units, tool.result.as_ref().unwrap());
         assert!(
-            rows.iter().any(|(k, v)| k == "Area" && v == "1500.000 mm²"),
+            rows.iter().any(|(k, v)| k == "Area" && v == "1500.00 mm²"),
             "{rows:?}"
         );
         let (x, y) = screen(&app, w, h, Point3::new(85.0, 15.0, 10.0));
@@ -623,11 +640,8 @@ mod tests {
         let r = app.solid.inspect.as_ref().unwrap().result.clone().unwrap();
         assert!((r["distance"].as_f64().unwrap() - 10.0).abs() < 1e-9, "{r}");
         assert!(r["angle_degrees"].as_f64().unwrap().abs() < 1e-9);
-        let rows = measure_rows(&r);
-        assert!(
-            rows.iter()
-                .any(|(k, v)| k == "Distance" && v == "10.000 mm")
-        );
+        let rows = measure_rows(app.session.doc.units, &r);
+        assert!(rows.iter().any(|(k, v)| k == "Distance" && v == "10.00 mm"));
         app.inspect_overlays();
         let o = app
             .session
@@ -658,10 +672,10 @@ mod tests {
         let r = app.solid.inspect.as_ref().unwrap().result.clone().unwrap();
         // 50 x 30 x 10: mass 15000 at density 1, centre (25, 15, 5).
         assert!((r["mass"].as_f64().unwrap() - 15_000.0).abs() < 1e-6);
-        let rows = mass_rows(&r);
+        let rows = mass_rows(app.session.doc.units, &r);
         assert!(
             rows.iter()
-                .any(|(k, v)| k == "Centre of mass" && v == "25.000, 15.000, 5.000")
+                .any(|(k, v)| k == "Centre of mass" && v == "25.00, 15.00, 5.00")
         );
         app.solid.inspect.as_mut().unwrap().density = "2.5".into();
         app.refresh_mass();

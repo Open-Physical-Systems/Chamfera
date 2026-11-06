@@ -73,6 +73,10 @@ pub fn curve_polyline(sketch: &Sketch, curve: &Curve) -> Vec<Point2> {
                 })
                 .collect()
         }
+        Curve::Spline { .. } => sketch
+            .spline_of(curve)
+            .map(|c| chamfera_sketch::spline_polyline(&c))
+            .unwrap_or_default(),
         Curve::Ellipse { .. } | Curve::EllipticalArc { .. } => sketch
             .ellipse_arc_of(curve)
             .map(|e| e.polyline(CIRCLE_SEGMENTS))
@@ -94,11 +98,21 @@ impl Session {
             self.sketch_selection.clear();
         }
         let mut overlays = Vec::new();
+        // Sketches after the timeline marker are not shown, like the features there.
+        let built = self.doc.built_items();
         for f in &self.doc.sketches {
             let active = Some(f.id) == self.active_sketch;
-            // A finished sketch that a feature has used is hidden, as CAD users expect:
-            // its curves lie on the solid's edges and seams. Editing it shows it again.
-            if !active && !self.doc.sketch_users(f.id).is_empty() {
+            if !active && !built.contains(&f.id) {
+                continue;
+            }
+            // A finished sketch that a built feature has used is hidden, as CAD users
+            // expect: its curves lie on the solid's edges and seams. Editing it shows it.
+            let used = self
+                .doc
+                .features
+                .iter()
+                .any(|x| x.kind.sketch() == Some(f.id) && built.contains(&x.id));
+            if !active && used {
                 continue;
             }
             let dof = if active {
@@ -166,6 +180,7 @@ impl Session {
         // Construction geometry goes first, so sketches draw over it.
         let (mut construct, fills) = self.construct_overlays();
         construct.append(&mut overlays);
+        construct.extend(self.toolpath_overlays());
         self.scene.overlays = construct;
         self.scene.fills = fills;
     }

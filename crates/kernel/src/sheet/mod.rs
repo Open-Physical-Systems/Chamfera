@@ -45,8 +45,8 @@
 //! a rigid motion, composed with the parent's own unrolling, so flanges on flanges unfold
 //! too. The bend becomes a flat strip `BA` long. The flat pattern is the union of every
 //! piece laid flat (a planar solid of thickness `T`), and its outline is the boundary of
-//! its face on the base's sketch plane ([`flat_outline`]), written as DXF by
-//! [`flat_dxf`].
+//! its face on the base's sketch plane ([`flat_outline`]); the engine writes it as DXF
+//! with the drawing crate's writer.
 //!
 //! # Names
 //! A flange's faces: `bend outer`, `bend inner`, `flange outer`, `flange inner`,
@@ -54,12 +54,10 @@
 //! where a further flange can go, are `end outer` and `end inner`. Relief cuts are
 //! `relief start` and `relief end`. The engine prefixes them with the feature's id.
 
-mod dxf;
 mod flat;
 #[cfg(test)]
 mod tests;
 
-pub use dxf::flat_dxf;
 pub use flat::{FlatEdge, flat_outline};
 
 use crate::topology::{Body, Curve, EdgeId};

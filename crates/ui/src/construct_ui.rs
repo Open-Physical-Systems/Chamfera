@@ -207,11 +207,12 @@ impl ConstructTool {
     }
 
     /// The command's parameters, once every input is filled.
-    pub fn params(&self) -> Option<Value> {
+    /// `unit`: the design's length unit, written after plain numbers.
+    pub fn params(&self, unit: &str) -> Option<Value> {
         let v = |i| self.pick(i);
         Some(match self.kind {
             Kind::PlaneOffset => {
-                json!({ "base": v(0)?, "distance": with_unit(&self.distance, "mm") })
+                json!({ "base": v(0)?, "distance": with_unit(&self.distance, unit) })
             }
             Kind::PlaneAngle => json!({ "axis": v(0)?, "angle": with_unit(&self.angle, "deg") }),
             Kind::PlaneMidplane | Kind::AxisTwoPlanes => json!({ "planes": [v(0)?, v(1)?] }),
@@ -222,9 +223,9 @@ impl ConstructTool {
             Kind::AxisTwoPoints => json!({ "points": [v(0)?, v(1)?] }),
             Kind::PointVertex => json!({ "faces": v(0)? }),
             Kind::PointCoordinates => json!({
-                "x": with_unit(&self.xyz[0], "mm"),
-                "y": with_unit(&self.xyz[1], "mm"),
-                "z": with_unit(&self.xyz[2], "mm"),
+                "x": with_unit(&self.xyz[0], unit),
+                "y": with_unit(&self.xyz[1], unit),
+                "z": with_unit(&self.xyz[2], unit),
             }),
         })
     }
@@ -465,7 +466,7 @@ impl ChamferaApp {
     pub(crate) fn construct_ok(&mut self) -> Option<Value> {
         let tool = self.construct.tool.as_ref()?;
         let id = tool.kind.command();
-        let Some(params) = tool.params() else {
+        let Some(params) = tool.params(self.session.doc.units.length.symbol()) else {
             self.message = Some(("Fill in every input first".into(), true));
             return None;
         };
@@ -627,7 +628,15 @@ impl ChamferaApp {
                         });
                 });
                 widgets::dialog_footer(ui, look, |ui| {
-                    if widgets::primary_button(ui, look, "OK", tool.params().is_some()).clicked() {
+                    if widgets::primary_button(
+                        ui,
+                        look,
+                        "OK",
+                        tool.params(self.session.doc.units.length.symbol())
+                            .is_some(),
+                    )
+                    .clicked()
+                    {
                         ok = true;
                     }
                     if widgets::secondary_button(ui, look, "Cancel").clicked() {
@@ -750,7 +759,9 @@ impl ChamferaApp {
         if ok {
             let mut params = json!({ "feature": edit.feature, "suppressed": edit.suppressed });
             match &edit.value {
-                Some(("Distance", v)) => params["distance"] = json!(with_unit(v, "mm")),
+                Some(("Distance", v)) => {
+                    params["distance"] = json!(with_unit(v, self.session.doc.units.length.symbol()))
+                }
                 Some((_, v)) => params["angle"] = json!(with_unit(v, "deg")),
                 None => {}
             }

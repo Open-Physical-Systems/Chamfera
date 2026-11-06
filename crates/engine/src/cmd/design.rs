@@ -40,7 +40,8 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         id: "design.new",
         label: "New Design",
-        params: "(none)",
+        params: "length: string (optional) - the new design's length unit: mm (default), cm, m, \
+                 in or ft",
         mutates: false,
         run: new,
     },
@@ -74,12 +75,80 @@ pub static COMMANDS: &[CommandSpec] = &[
         mutates: false,
         run: save_bytes,
     },
+    CommandSpec {
+        id: "design.units",
+        label: "Design Units",
+        params: "length: string (optional) - mm, cm, m, in or ft: the unit values are shown in \
+                 and a plain typed number means\nprecision: integer (optional) - decimal places \
+                 for lengths, 0 to 8\nangle_precision: integer (optional) - decimal places for \
+                 angles, 0 to 8\nThe model keeps its size: stored expressions without a unit \
+                 get the old one written in. Replies with the units",
+        mutates: true,
+        run: units,
+    },
 ];
+
+fn length_unit(p: &Value) -> Result<Option<chamfera_doc::LengthUnit>, CommandError> {
+    params::opt_str(p, "length")?
+        .map(|u| {
+            chamfera_doc::LengthUnit::parse(u).ok_or_else(|| {
+                CommandError::BadParams(format!(
+                    "unknown length unit {u:?}: use mm, cm, m, in or ft"
+                ))
+            })
+        })
+        .transpose()
+}
+
+fn decimals(p: &Value, key: &str) -> Result<Option<u8>, CommandError> {
+    match params::opt_f64(p, key)? {
+        None => Ok(None),
+        Some(v)
+            if v.fract() == 0.0
+                && (0.0..=f64::from(chamfera_doc::units::MAX_DECIMALS)).contains(&v) =>
+        {
+            Ok(Some(v as u8))
+        }
+        Some(_) => Err(CommandError::BadParams(format!(
+            "`{key}` must be a whole number from 0 to {}",
+            chamfera_doc::units::MAX_DECIMALS
+        ))),
+    }
+}
+
+fn units_reply(s: &Session) -> Value {
+    let u = s.doc.units;
+    json!({ "length": u.length.symbol(), "precision": u.length_decimals,
+            "angle_precision": u.angle_decimals })
+}
+
+fn units(s: &mut Session, p: &Value) -> CmdResult {
+    let mut u = s.doc.units;
+    if let Some(l) = length_unit(p)? {
+        u.length = l;
+    }
+    if let Some(d) = decimals(p, "precision")? {
+        u.length_decimals = d;
+    }
+    if let Some(d) = decimals(p, "angle_precision")? {
+        u.angle_decimals = d;
+    }
+    s.doc.set_units(u)?;
+    // The sizes are unchanged; evaluating checks every expression still reads.
+    s.doc.evaluate()?;
+    Ok(units_reply(s))
+}
 
 fn new(s: &mut Session, p: &Value) -> CmdResult {
     params::none(p)?;
-    s.replace_document(Document::default());
-    Ok(json!({}))
+    let mut doc = Document::default();
+    if p.is_object()
+        && let Some(l) = length_unit(p)?
+    {
+        doc.units.length = l;
+    }
+    s.replace_document(doc);
+    Ok(units_reply(s))
 }
 
 fn open(s: &mut Session, p: &Value) -> CmdResult {

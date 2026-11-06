@@ -32,6 +32,7 @@ pub enum Tool {
     Arc,
     ThreePointArc,
     TangentArc,
+    Spline,
     Offset,
     Mirror,
     RectangularPattern,
@@ -49,7 +50,7 @@ pub enum Tool {
 }
 
 /// The CREATE tools shown in the ribbon; the group's list has all of `CREATE_ALL`.
-const CREATE_SHOWN: [Tool; 9] = [
+const CREATE_SHOWN: [Tool; 10] = [
     Tool::Line,
     Tool::Rectangle,
     Tool::Circle,
@@ -57,10 +58,11 @@ const CREATE_SHOWN: [Tool; 9] = [
     Tool::Polygon,
     Tool::Slot,
     Tool::Ellipse,
+    Tool::Spline,
     Tool::Offset,
     Tool::Mirror,
 ];
-pub(crate) const CREATE_ALL: [Tool; 15] = [
+pub(crate) const CREATE_ALL: [Tool; 16] = [
     Tool::Line,
     Tool::Rectangle,
     Tool::CentreRectangle,
@@ -72,6 +74,7 @@ pub(crate) const CREATE_ALL: [Tool; 15] = [
     Tool::Slot,
     Tool::Ellipse,
     Tool::Project,
+    Tool::Spline,
     Tool::Offset,
     Tool::Mirror,
     Tool::RectangularPattern,
@@ -97,6 +100,7 @@ impl Tool {
             Tool::Arc => label("sketch.arc"),
             Tool::ThreePointArc => label("sketch.arc.three_point"),
             Tool::TangentArc => label("sketch.arc.tangent"),
+            Tool::Spline => label("sketch.spline"),
             Tool::Offset => label("sketch.offset"),
             Tool::Mirror => label("sketch.mirror"),
             Tool::RectangularPattern => label("sketch.pattern.rectangular"),
@@ -124,6 +128,7 @@ impl Tool {
             Tool::Arc => Icon::Arc,
             Tool::ThreePointArc => Icon::ArcThreePoint,
             Tool::TangentArc => Icon::ArcTangent,
+            Tool::Spline => Icon::Spline,
             Tool::Offset => Icon::Offset,
             Tool::Mirror => Icon::Mirror,
             Tool::RectangularPattern => Icon::PatternRectangular,
@@ -141,6 +146,7 @@ impl Tool {
 
     fn tooltip(self) -> &'static str {
         match self {
+            Tool::Spline => crate::spline_ui::TOOLTIP,
             t @ (Tool::Polygon | Tool::Slot | Tool::Ellipse | Tool::Project) => {
                 crate::sketch_shapes::tooltip(t)
             }
@@ -217,6 +223,7 @@ Click a curve to split it where other curves cross it; Split All splits every cr
 
     fn hint(self, clicks: usize) -> &'static str {
         match (self, clicks) {
+            (Tool::Spline, n) => crate::spline_ui::hint(n),
             (t @ (Tool::Polygon | Tool::Slot | Tool::Ellipse | Tool::Project), n) => {
                 crate::sketch_shapes::hint(t, n)
             }
@@ -291,10 +298,10 @@ Click a curve to split it where other curves cross it; Split All splits every cr
 
 /// A placed click: where it is, the existing point it snapped to, and the snap.
 #[derive(Debug, Clone, Copy)]
-struct Click {
-    at: Point2,
-    point: Option<u32>,
-    snap: Option<Snap>,
+pub(crate) struct Click {
+    pub(crate) at: Point2,
+    pub(crate) point: Option<u32>,
+    pub(crate) snap: Option<Snap>,
 }
 
 /// The direction lock the modifier keys hold while drawing.
@@ -435,7 +442,7 @@ impl Default for ToolOptions {
 #[derive(Default)]
 pub struct SketchUi {
     pub tool: Option<Tool>,
-    clicks: Vec<Click>,
+    pub(crate) clicks: Vec<Click>,
     /// The first point of the current line chain, to close the loop on it.
     chain_start: Option<u32>,
     hover: Option<Point2>,
@@ -904,7 +911,7 @@ impl ChamferaApp {
                 r["kind"].as_str(),
             )
         {
-            self.sketch.editing = Some((id, kind.to_owned(), display_value(kind, v)));
+            self.sketch.editing = Some((id, kind.to_owned(), display_value(self.units(), kind, v)));
         }
     }
 
@@ -983,11 +990,27 @@ impl ChamferaApp {
                 snap: Some(snap),
             },
             None => Click {
-                at: cursor,
+                at: self.grid_snapped(cursor),
                 point: None,
                 snap: None,
             },
         })
+    }
+
+    /// `p` on the nearest grid point when snapping to the grid is on: the grid the
+    /// viewport draws (the fixed spacing, or the automatic one for this zoom).
+    pub(crate) fn grid_snapped(&self, p: Point2) -> Point2 {
+        if !self.prefs.snap_to_grid {
+            return p;
+        }
+        let step = chamfera_gpu::grid_spacing(
+            self.session.camera.distance,
+            self.session.scene.grid_spacing,
+        );
+        if !(step.is_finite() && step > 0.0) {
+            return p;
+        }
+        Point2::new((p.x / step).round() * step, (p.y / step).round() * step)
     }
 
     /// An existing sketch point under the cursor, else the plane point.
@@ -1047,6 +1070,12 @@ impl ChamferaApp {
         } else {
             self.heads_up_keys(ui)
         };
+        if self.sketch.tool() == Tool::Spline
+            && !typing
+            && ui.input(|i| i.key_pressed(egui::Key::Enter))
+        {
+            self.spline_finish(false);
+        }
         if esc && !typing && !esc_used {
             if self.sketch.clicks.is_empty() {
                 self.sketch.tool = Some(Tool::Select);
@@ -1183,9 +1212,9 @@ impl ChamferaApp {
             return None;
         }
         if self.sketch.tool() == Tool::Line && k == 1 {
-            parse_value("angle", text)
+            parse_value(self.units(), "angle", text)
         } else {
-            option_length(text)
+            option_length(self.units(), text)
         }
     }
 
@@ -1370,6 +1399,10 @@ impl ChamferaApp {
         };
         if tool.edits() {
             self.edit_click(tool, (x, y, w, h), click);
+            return;
+        }
+        if tool == Tool::Spline {
+            self.spline_click(click, (x, y, w, h));
             return;
         }
         if tool == Tool::Project {
@@ -1699,6 +1732,7 @@ impl ChamferaApp {
                     polylines.extend(self.op_polylines(&op));
                 }
             }
+            (Tool::Spline, _) => polylines.extend(self.spline_preview(hover)),
             (tool, _) if tool.edits() => polylines.extend(self.edit_preview(tool, hover)),
             (tool, _) if crate::sketch_shapes::is_shape(tool) => {
                 let pts: Vec<Point2> = c.iter().map(|k| k.at).collect();
@@ -1760,7 +1794,11 @@ impl ChamferaApp {
             // The value, and the expression it follows in the accent colour.
             let mut job = egui::text::LayoutJob::default();
             let format = |c| egui::TextFormat::simple(font.clone(), c);
-            job.append(&display_value(&l.kind, l.value), 0.0, format(text_c));
+            job.append(
+                &display_value(self.units(), &l.kind, l.value),
+                0.0,
+                format(text_c),
+            );
             if let Some(e) = &expression {
                 job.append(&format!("= {e}"), 6.0, format(expr_c));
             }
@@ -1782,7 +1820,8 @@ impl ChamferaApp {
             ui.painter()
                 .galley(r.center() - galley.size() * 0.5, galley, text_c);
             if resp.clicked() {
-                let start = expression.unwrap_or_else(|| display_value(&l.kind, l.value));
+                let start =
+                    expression.unwrap_or_else(|| display_value(self.units(), &l.kind, l.value));
                 self.sketch.editing = Some((u64::from(l.constraint), l.kind.clone(), start));
             }
         }
@@ -1818,7 +1857,11 @@ impl ChamferaApp {
                             .id(ui.scope_id().with(("dimension value", id))),
                     );
                     edit.request_focus();
-                    ui.label(if kind == "angle" { "°" } else { "mm" });
+                    ui.label(if kind == "angle" {
+                        "°"
+                    } else {
+                        self.session.doc.units.length.symbol()
+                    });
                     let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
                     let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
                     if esc {
@@ -1826,7 +1869,7 @@ impl ChamferaApp {
                     } else if enter {
                         // A plain number sets the value; anything else (a parameter, a
                         // formula) becomes an expression the dimension follows.
-                        let params = match parse_value(&kind, &text) {
+                        let params = match parse_value(self.units(), &kind, &text) {
                             Some(v) => json!({ "constraint": id, "value": v }),
                             None => json!({ "constraint": id, "expression": text.trim() }),
                         };
@@ -1865,7 +1908,7 @@ fn side_lengths(level: Option<u32>, upright: Option<u32>, dims: TypedDims) -> Ve
 }
 
 /// The label of a direction lock from `a` to `b`: Horizontal, Vertical or the angle.
-fn lock_label(a: Point2, b: Point2) -> String {
+fn lock_label(u: chamfera_doc::DisplayUnits, a: Point2, b: Point2) -> String {
     let d = b - a;
     let tol = chamfera_geom::LINEAR_TOLERANCE;
     if d.y.abs() < tol {
@@ -1873,7 +1916,7 @@ fn lock_label(a: Point2, b: Point2) -> String {
     } else if d.x.abs() < tol {
         "Vertical".into()
     } else {
-        display_value("angle", d.angle())
+        display_value(u, "angle", d.angle())
     }
 }
 
@@ -1894,7 +1937,7 @@ impl ChamferaApp {
                 let Some(a) = self.sketch.lock_anchor() else {
                     return;
                 };
-                (hover, lock_label(a, hover), None)
+                (hover, lock_label(self.units(), a, hover), None)
             }
             _ => return,
         };
@@ -2003,17 +2046,20 @@ impl ChamferaApp {
         let d = hover - a;
         let live = match tool {
             Tool::Line => [
-                display_value("length", d.length()),
-                display_value("angle", d.angle()),
+                display_value(self.units(), "length", d.length()),
+                display_value(self.units(), "angle", d.angle()),
             ],
-            Tool::Circle => [display_value("length", 2.0 * d.length()), String::new()],
+            Tool::Circle => [
+                display_value(self.units(), "length", 2.0 * d.length()),
+                String::new(),
+            ],
             Tool::CentreRectangle => [
-                display_value("length", 2.0 * d.x.abs()),
-                display_value("length", 2.0 * d.y.abs()),
+                display_value(self.units(), "length", 2.0 * d.x.abs()),
+                display_value(self.units(), "length", 2.0 * d.y.abs()),
             ],
             _ => [
-                display_value("length", d.x.abs()),
-                display_value("length", d.y.abs()),
+                display_value(self.units(), "length", d.x.abs()),
+                display_value(self.units(), "length", d.y.abs()),
             ],
         };
         let painter = ui.painter_at(rect);
@@ -2070,42 +2116,42 @@ impl ChamferaApp {
     }
 }
 
-/// A dimension value as the user reads it: mm with two decimals, angles in degrees.
-fn display_value(kind: &str, v: f64) -> String {
-    let text = if kind == "angle" {
-        format!("{:.2}", v.to_degrees())
-    } else {
-        format!("{v:.2}")
-    };
-    let text = text.trim_end_matches('0').trim_end_matches('.').to_owned();
+/// A dimension value as the user reads it, in the design's units: `10.00 in`, `Ø16.00 mm`,
+/// `90.00°`.
+fn display_value(u: chamfera_doc::DisplayUnits, kind: &str, v: f64) -> String {
     match kind {
-        "diameter" => format!("Ø{text}"),
-        "radius" => format!("R{text}"),
-        "angle" => format!("{text}°"),
-        _ => text,
+        "angle" => u.angle(v),
+        "diameter" => format!("Ø{}", u.length(v)),
+        "radius" => format!("R{}", u.length(v)),
+        _ => u.length(v),
     }
 }
 
-/// Parses a typed dimension value (mm, or degrees for angles) to internal units.
-fn parse_value(kind: &str, text: &str) -> Option<f64> {
+/// Parses a typed value to internal units: a length (a plain number is in the design's
+/// unit, `10 mm` or `2 in` say their own) or an angle (a plain number is degrees). A
+/// formula of plain values works too; anything with a name is `None` (an expression).
+fn parse_value(u: chamfera_doc::DisplayUnits, kind: &str, text: &str) -> Option<f64> {
+    use chamfera_doc::expr;
     let cleaned: String = text
         .trim()
         .trim_start_matches(['Ø', 'ø', 'R', 'r'])
-        .trim_end_matches(['°', 'm'])
         .trim()
         .replace(',', ".");
-    let v: f64 = cleaned.parse().ok()?;
-    if !v.is_finite() {
-        return None;
-    }
-    Some(if kind == "angle" { v.to_radians() } else { v })
+    let dim = if kind == "angle" {
+        expr::Dim::ANGLE
+    } else {
+        expr::Dim::LENGTH
+    };
+    expr::evaluate_as_in(&cleaned, dim, u.length.mm(), &expr::NoNames)
+        .ok()
+        .filter(|v| v.is_finite())
 }
 
 // ----- the editing tools: trim, extend, split, fillet, chamfer, offset, mirror, patterns -----
 
-/// A length typed in the tool box, in mm.
-fn option_length(text: &str) -> Option<f64> {
-    parse_value("length", text).filter(|v| *v > 0.0)
+/// A length typed in the tool box, in the design's unit unless it says another.
+fn option_length(u: chamfera_doc::DisplayUnits, text: &str) -> Option<f64> {
+    parse_value(u, "length", text).filter(|v| *v > 0.0)
 }
 
 /// A whole number typed in the tool box.
@@ -2182,7 +2228,7 @@ impl ChamferaApp {
             }
             Tool::Fillet => {
                 let corner = point?;
-                let radius = option_length(&o.radius)?;
+                let radius = option_length(self.units(), &o.radius)?;
                 Some((
                     "sketch.fillet",
                     json!({ "point": corner, "radius": radius }),
@@ -2194,7 +2240,7 @@ impl ChamferaApp {
             }
             Tool::Chamfer => {
                 let corner = point?;
-                let distance = option_length(&o.chamfer)?;
+                let distance = option_length(self.units(), &o.chamfer)?;
                 Some((
                     "sketch.chamfer",
                     json!({ "point": corner, "distance": distance }),
@@ -2207,7 +2253,7 @@ impl ChamferaApp {
             }
             Tool::Offset => {
                 let c = self.sketch.picked_curve?;
-                let distance = option_length(&o.offset)?;
+                let distance = option_length(self.units(), &o.offset)?;
                 let corners = if o.offset_round {
                     OffsetCorners::Round
                 } else {
@@ -2250,7 +2296,7 @@ impl ChamferaApp {
                     return None;
                 }
                 let count = option_count(&o.count)?;
-                let angle = parse_value("angle", &o.angle)?;
+                let angle = parse_value(self.units(), "angle", &o.angle)?;
                 Some((
                     "sketch.pattern.circular",
                     json!({
@@ -2279,8 +2325,8 @@ impl ChamferaApp {
         let o = &self.sketch.options;
         let columns = option_count(&o.columns)?;
         let rows = option_count(&o.rows)?;
-        let dx = parse_value("length", &o.dx)?;
-        let dy = parse_value("length", &o.dy)?;
+        let dx = parse_value(self.units(), "length", &o.dx)?;
+        let dy = parse_value(self.units(), "length", &o.dy)?;
         Some((
             json!({
                 "curves": curves, "points": points, "columns": columns, "rows": rows,
@@ -2411,6 +2457,7 @@ impl ChamferaApp {
                 ui.label(egui::RichText::new(unit).color(look.c(|t| t.text_muted)));
             });
         };
+        let unit = self.session.doc.units.length.symbol();
         let options = &mut self.sketch.options;
         egui::Area::new(ui.scope_id().with("sketch tool box"))
             .fixed_pos(rect.min + Vec2::new(widgets::S5, widgets::S5))
@@ -2431,10 +2478,10 @@ impl ChamferaApp {
                             );
                         });
                         match tool {
-                            Tool::Fillet => field(ui, "Radius", &mut options.radius, "mm"),
-                            Tool::Chamfer => field(ui, "Distance", &mut options.chamfer, "mm"),
+                            Tool::Fillet => field(ui, "Radius", &mut options.radius, unit),
+                            Tool::Chamfer => field(ui, "Distance", &mut options.chamfer, unit),
                             Tool::Offset => {
-                                field(ui, "Distance", &mut options.offset, "mm");
+                                field(ui, "Distance", &mut options.offset, unit);
                                 ui.checkbox(&mut options.offset_round, "Round outside corners");
                             }
                             Tool::Mirror => {
@@ -2455,9 +2502,9 @@ impl ChamferaApp {
                             }
                             Tool::RectangularPattern => {
                                 field(ui, "Columns", &mut options.columns, "");
-                                field(ui, "Spacing X", &mut options.dx, "mm");
+                                field(ui, "Spacing X", &mut options.dx, unit);
                                 field(ui, "Rows", &mut options.rows, "");
-                                field(ui, "Spacing Y", &mut options.dy, "mm");
+                                field(ui, "Spacing Y", &mut options.dy, unit);
                                 ui.horizontal(|ui| {
                                     widgets::caption(ui, look, &format!("{selected} selected"));
                                     ui.with_layout(
@@ -2619,17 +2666,36 @@ mod tests {
 
     #[test]
     fn dimension_values_read_and_parse_both_ways() {
-        assert_eq!(display_value("length", 50.0), "50");
-        assert_eq!(display_value("length", 12.345), "12.35");
-        assert_eq!(display_value("diameter", 16.0), "Ø16");
-        assert_eq!(display_value("radius", 8.5), "R8.5");
-        assert_eq!(display_value("angle", std::f64::consts::FRAC_PI_2), "90°");
-        assert_eq!(parse_value("length", " 42,5 mm"), Some(42.5));
-        assert_eq!(parse_value("diameter", "Ø16"), Some(16.0));
-        let a = parse_value("angle", "45°").unwrap();
-        assert!((a - std::f64::consts::FRAC_PI_4).abs() < 1e-15);
-        assert_eq!(parse_value("length", "abc"), None);
-        assert_eq!(parse_value("length", "inf"), None);
+        let mm = chamfera_doc::DisplayUnits::default();
+        assert_eq!(display_value(mm, "length", 50.0), "50.00 mm");
+        assert_eq!(display_value(mm, "length", 12.345), "12.35 mm");
+        assert_eq!(display_value(mm, "diameter", 16.0), "Ø16.00 mm");
+        assert_eq!(display_value(mm, "radius", 8.5), "R8.50 mm");
+        assert_eq!(
+            display_value(mm, "angle", std::f64::consts::FRAC_PI_2),
+            "90.00°"
+        );
+        assert_eq!(parse_value(mm, "length", " 42,5 mm"), Some(42.5));
+        assert_eq!(parse_value(mm, "diameter", "Ø16"), Some(16.0));
+        let a = parse_value(mm, "angle", "45°").unwrap();
+        assert!((a - std::f64::consts::FRAC_PI_4).abs() < 1e-12);
+        assert_eq!(parse_value(mm, "length", "abc"), None);
+        assert_eq!(parse_value(mm, "length", "inf"), None);
+        // In an inch design a plain 10 is 10 in = 254 mm, shown as 10.00 in; precision 3
+        // shows 12.3456 mm as 12.346.
+        let inch = chamfera_doc::DisplayUnits {
+            length: chamfera_doc::LengthUnit::In,
+            ..mm
+        };
+        let v = parse_value(inch, "length", "10").unwrap();
+        assert!((v - 254.0).abs() < 1e-9);
+        assert_eq!(display_value(inch, "length", v), "10.00 in");
+        assert_eq!(parse_value(inch, "length", "10 mm"), Some(10.0));
+        let fine = chamfera_doc::DisplayUnits {
+            length_decimals: 3,
+            ..mm
+        };
+        assert_eq!(display_value(fine, "length", 12.3456), "12.346 mm");
     }
 
     fn areas(app: &mut ChamferaApp) -> Vec<f64> {

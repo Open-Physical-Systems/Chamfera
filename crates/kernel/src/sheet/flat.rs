@@ -79,9 +79,9 @@ pub fn flat_outline(flat: &Body, frame: &Frame) -> KernelResult<Vec<FlatEdge>> {
             }
             Curve::Circle(c) => c,
             Curve::Arc(a) => *a.circle(),
-            Curve::Ellipse(_) | Curve::EllipticalArc(_) => {
+            Curve::Ellipse(_) | Curve::EllipticalArc(_) | Curve::BSpline(_) => {
                 return Err(KernelError::Unsupported(
-                    "an ellipse in a flat pattern outline".into(),
+                    "an ellipse or spline in a flat pattern outline".into(),
                 ));
             }
         };

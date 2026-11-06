@@ -322,7 +322,7 @@ fn export_flat(s: &mut Session, p: &Value) -> CmdResult {
     let f = s.flat_patterns().get(&id).ok_or_else(|| {
         CommandError::Unavailable(format!("feature {id} is not a built flat pattern"))
     })?;
-    let text = chamfera_kernel::flat_dxf(&f.outline);
+    let text = crate::sheet::flat_dxf(f);
     std::fs::write(path, text.as_bytes()).map_err(chamfera_io::IoError::from)?;
     Ok(json!({ "path": path, "feature": id, "entities": f.outline.len() }))
 }

@@ -19,6 +19,10 @@
 //! clockwise, by reversing a loop (its edge order and each edge) when needed. Every
 //! checked edge remembers its index in the input loop, so names derived from it
 //! (`side 3`) follow the input whatever the orientation.
+//!
+//! A loop may also hold B-spline edges ([`ProfileEdge::Spline`], rung K10), each run over
+//! its whole domain. Their area terms are integrated numerically, and the
+//! self-intersection checks meet them as fine chords (see `spline_chords`).
 
 use crate::check;
 use crate::topology::MAX_PROFILE_VERTICES;
@@ -26,7 +30,7 @@ use crate::{
     Arc2, Circle2, Intersections, KernelError, KernelResult, Segment2, arc_arc, circle_arc,
     circle_circle, segment_arc, segment_circle, segment_segment,
 };
-use chamfera_geom::{ANGULAR_TOLERANCE, LINEAR_TOLERANCE, Point2, Vec2};
+use chamfera_geom::{ANGULAR_TOLERANCE, BSplineCurve2, LINEAR_TOLERANCE, Point2, Vec2};
 use std::f64::consts::{FRAC_PI_2, PI, TAU};
 
 /// How far apart (mm) one edge's end and the next edge's start may be. Half the linear
@@ -35,7 +39,7 @@ use std::f64::consts::{FRAC_PI_2, PI, TAU};
 pub const PROFILE_JOIN_TOLERANCE: f64 = LINEAR_TOLERANCE * 0.5;
 
 /// One edge of a profile loop, in the plane coordinates of the sweep's frame.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ProfileEdge {
     /// The segment from `a` to `b`.
     Line { a: Point2, b: Point2 },
@@ -48,6 +52,9 @@ pub enum ProfileEdge {
         start_angle: f64,
         sweep: f64,
     },
+    /// A B-spline (rung K10) run over its whole domain, from its start to its end; a
+    /// closed spline must be given as two or more edges (e.g. split at its middle).
+    Spline(BSplineCurve2),
 }
 
 impl ProfileEdge {
@@ -89,6 +96,7 @@ impl ProfileEdge {
                 start_angle,
                 ..
             } => at_angle(centre, radius, start_angle),
+            ProfileEdge::Spline(ref c) => c.point_at(c.domain().0),
         }
     }
     pub fn end(&self) -> Point2 {
@@ -100,6 +108,7 @@ impl ProfileEdge {
                 start_angle,
                 sweep,
             } => at_angle(centre, radius, start_angle + sweep),
+            ProfileEdge::Spline(ref c) => c.point_at(c.domain().1),
         }
     }
 
@@ -118,6 +127,7 @@ impl ProfileEdge {
                 start_angle: start_angle + sweep,
                 sweep: -sweep,
             },
+            ProfileEdge::Spline(ref c) => ProfileEdge::Spline(c.reversed()),
         }
     }
 
@@ -137,6 +147,9 @@ impl ProfileEdge {
                 start_angle: -start_angle,
                 sweep: -sweep,
             },
+            // A spline that cannot be mirrored (never for a valid one) keeps its shape;
+            // the profile check then refuses the result as not closed.
+            ProfileEdge::Spline(ref c) => ProfileEdge::Spline(c.mirrored_y().unwrap_or(c.clone())),
         }
     }
 
@@ -155,6 +168,10 @@ impl ProfileEdge {
                 start_angle,
                 sweep,
             } => at_angle(centre, radius, start_angle + sweep * f),
+            ProfileEdge::Spline(ref c) => {
+                let (lo, hi) = c.domain();
+                c.point_at(lo + (hi - lo) * f)
+            }
         }
     }
 
@@ -167,6 +184,10 @@ impl ProfileEdge {
             } => {
                 let (s, c) = (start_angle + sweep * f).sin_cos();
                 Vec2::new(-s, c) * sweep.signum()
+            }
+            ProfileEdge::Spline(ref c) => {
+                let (lo, hi) = c.domain();
+                c.d1(lo + (hi - lo) * f).normalized().unwrap_or(Vec2::X)
             }
         }
     }
@@ -189,6 +210,12 @@ impl ProfileEdge {
                 0.5 * (r * r * sweep + r * centre.x * (a1.sin() - a0.sin())
                     - r * centre.y * (a1.cos() - a0.cos()))
             }
+            // Adaptive Gauss-Legendre quadrature per knot span; a non-finite result
+            // (no convergence) makes the profile check refuse the loop.
+            ProfileEdge::Spline(ref c) => {
+                let (lo, hi) = c.domain();
+                c.area_term(lo, hi).unwrap_or(f64::NAN)
+            }
         }
     }
 
@@ -196,6 +223,14 @@ impl ProfileEdge {
     pub(crate) fn extent_along(&self, o: Point2, n: Vec2) -> (f64, f64) {
         let (s, e) = ((self.start() - o).dot(n), (self.end() - o).dot(n));
         let (mut lo, mut hi) = (s.min(e), s.max(e));
+        if let ProfileEdge::Spline(ref c) = *self {
+            // The control points bound the curve (convex hull property): an outer bound.
+            for p in c.control_points() {
+                let d = (p - o).dot(n);
+                lo = lo.min(d);
+                hi = hi.max(d);
+            }
+        }
         if let ProfileEdge::Arc {
             centre,
             radius,
@@ -220,6 +255,7 @@ impl ProfileEdge {
     /// The K1 curve for the intersection checks.
     fn planar(&self) -> KernelResult<PlanarCurve> {
         Ok(match *self {
+            ProfileEdge::Spline(ref c) => PlanarCurve::Polyline(spline_chords(c)?),
             ProfileEdge::Line { a, b } => PlanarCurve::Segment(Segment2::new(a, b)?),
             ProfileEdge::Arc {
                 centre,
@@ -247,6 +283,7 @@ impl ProfileEdge {
                 Point2::new(centre.x - radius, centre.y - radius),
                 Point2::new(centre.x + radius, centre.y + radius),
             ),
+            ProfileEdge::Spline(ref c) => c.hull_box(),
         }
     }
 
@@ -261,7 +298,27 @@ impl ProfileEdge {
                         "{name} must be longer than {LINEAR_TOLERANCE} mm"
                     )));
                 }
-                Ok(*self)
+                Ok(self.clone())
+            }
+            ProfileEdge::Spline(ref c) => {
+                let (lo, hi) = c.hull_box();
+                if !(lo.is_valid() && hi.is_valid()) {
+                    return Err(KernelError::InvalidInput(format!(
+                        "{name} must lie within the model's working range"
+                    )));
+                }
+                if self.start().distance(self.end()) <= LINEAR_TOLERANCE {
+                    return Err(KernelError::InvalidInput(format!(
+                        "{name} is a closed spline; give it as two or more edges"
+                    )));
+                }
+                let length = c.length()?;
+                if length <= LINEAR_TOLERANCE {
+                    return Err(KernelError::InvalidInput(format!(
+                        "{name} must be longer than {LINEAR_TOLERANCE} mm"
+                    )));
+                }
+                Ok(self.clone())
             }
             ProfileEdge::Arc {
                 centre,
@@ -316,11 +373,120 @@ enum PlanarCurve {
     Segment(Segment2),
     Arc(Arc2),
     Circle(Circle2),
+    /// A spline's chords (see [`spline_chords`]).
+    Polyline(Vec<Segment2>),
+}
+
+/// Chords per knot span of a spline in the profile's self-intersection checks.
+const SPLINE_CHORDS_PER_SPAN: usize = 64;
+/// Chords per full turn of an arc or circle checked against a spline.
+const ARC_CHORDS_PER_TURN: f64 = 256.0;
+
+/// A spline as chords for the intersection checks: [`SPLINE_CHORDS_PER_SPAN`] per knot
+/// span. Two loop edges that cross are found unless they cross within the chords' sagitta
+/// of each other; this is the one place the checks are not exact (K10 has no spline
+/// intersection yet).
+fn spline_chords(c: &BSplineCurve2) -> KernelResult<Vec<Segment2>> {
+    chords(&c.polyline(SPLINE_CHORDS_PER_SPAN))
+}
+
+fn chords(points: &[Point2]) -> KernelResult<Vec<Segment2>> {
+    points
+        .windows(2)
+        .filter(|w| w[0].distance(w[1]) > LINEAR_TOLERANCE)
+        .map(|w| Segment2::new(w[0], w[1]))
+        .collect()
+}
+
+/// A line, arc or circle as chords, to meet a spline's chords.
+fn as_chords(c: &PlanarCurve) -> Vec<Segment2> {
+    match c {
+        PlanarCurve::Segment(s) => vec![*s],
+        PlanarCurve::Polyline(p) => p.clone(),
+        PlanarCurve::Arc(a) => arc_chords(a.center(), a.radius(), a.start_angle(), a.sweep()),
+        PlanarCurve::Circle(c) => arc_chords(c.center(), c.radius(), 0.0, TAU),
+    }
+}
+
+fn arc_chords(centre: Point2, radius: f64, start: f64, sweep: f64) -> Vec<Segment2> {
+    let n = ((sweep.abs() / TAU) * ARC_CHORDS_PER_TURN).ceil().max(2.0) as usize;
+    let points: Vec<Point2> = (0..=n)
+        .map(|i| at_angle(centre, radius, start + sweep * i as f64 / n as f64))
+        .collect();
+    chords(&points).unwrap_or_default()
+}
+
+/// Chords per block when pruning chord pairs by boxes.
+const CHORD_BLOCK: usize = 16;
+
+/// Consecutive runs of [`CHORD_BLOCK`] chords with their boxes.
+fn chord_blocks(c: &[Segment2]) -> Vec<(usize, (Point2, Point2))> {
+    c.chunks(CHORD_BLOCK)
+        .enumerate()
+        .map(|(k, run)| {
+            let mut lo = Point2::new(f64::INFINITY, f64::INFINITY);
+            let mut hi = Point2::new(f64::NEG_INFINITY, f64::NEG_INFINITY);
+            for s in run {
+                for p in [s.start(), s.end()] {
+                    lo = Point2::new(lo.x.min(p.x), lo.y.min(p.y));
+                    hi = Point2::new(hi.x.max(p.x), hi.y.max(p.y));
+                }
+            }
+            (k * CHORD_BLOCK, (lo, hi))
+        })
+        .collect()
+}
+
+/// Where two chord lists meet (points and overlaps), for the spline cases; pairs of
+/// blocks whose boxes are apart are skipped.
+fn chord_intersections(a: &[Segment2], b: &[Segment2]) -> Intersections {
+    let mut out = Intersections::default();
+    let (ba, bb) = (chord_blocks(a), chord_blocks(b));
+    for (ia, boxa) in &ba {
+        for (ib, boxb) in &bb {
+            if boxes_apart(*boxa, *boxb) {
+                continue;
+            }
+            for x in a.iter().skip(*ia).take(CHORD_BLOCK) {
+                for y in b.iter().skip(*ib).take(CHORD_BLOCK) {
+                    let hits = segment_segment(x, y);
+                    out.points.extend(hits.points);
+                    out.overlaps.extend(hits.overlaps);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// True when two chords of one spline that are not neighbours meet: the spline crosses
+/// or touches itself.
+fn chords_cross_themselves(c: &[Segment2]) -> bool {
+    let blocks = chord_blocks(c);
+    for (ka, (ia, boxa)) in blocks.iter().enumerate() {
+        for (ib, boxb) in blocks.iter().skip(ka) {
+            if boxes_apart(*boxa, *boxb) {
+                continue;
+            }
+            for (i, x) in c.iter().enumerate().skip(*ia).take(CHORD_BLOCK) {
+                for (j, y) in c.iter().enumerate().skip(*ib).take(CHORD_BLOCK) {
+                    if j <= i + 1 {
+                        continue;
+                    }
+                    if !segment_segment(x, y).is_empty() {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    false
 }
 
 fn intersections(a: &PlanarCurve, b: &PlanarCurve) -> Intersections {
-    use PlanarCurve::{Arc, Circle, Segment};
+    use PlanarCurve::{Arc, Circle, Polyline, Segment};
     match (a, b) {
+        (Polyline(_), _) | (_, Polyline(_)) => chord_intersections(&as_chords(a), &as_chords(b)),
         (Segment(x), Segment(y)) => segment_segment(x, y),
         (Segment(x), Arc(y)) => segment_arc(x, y),
         (Segment(x), Circle(y)) => segment_circle(x, y),
@@ -342,7 +508,7 @@ pub struct Profile {
 }
 
 /// One edge of a checked loop.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct CheckedEdge {
     /// The geometry, running in the checked loop's direction, starting exactly at this
     /// edge's vertex (lines also end exactly at the next vertex).
@@ -502,7 +668,7 @@ fn check_loop(edges: &[ProfileEdge], hole: Option<usize>) -> KernelResult<(Check
         )));
     }
     for i in 0..n {
-        let (e, next) = (checked[i], checked[(i + 1) % n]);
+        let (e, next) = (&checked[i], &checked[(i + 1) % n]);
         if e.end().distance(next.start()) > PROFILE_JOIN_TOLERANCE {
             return Err(KernelError::InvalidInput(format!(
                 "{name} is not closed: edge {i} must end where edge {} starts (within {PROFILE_JOIN_TOLERANCE} mm)",
@@ -529,7 +695,7 @@ fn check_loop(edges: &[ProfileEdge], hole: Option<usize>) -> KernelResult<(Check
         .iter()
         .enumerate()
         .map(|(i, e)| CheckedEdge {
-            edge: *e,
+            edge: e.clone(),
             source: i,
             vertex_source: i,
         })
@@ -577,6 +743,15 @@ fn check_simple(edges: &[ProfileEdge], name: &str) -> KernelResult<()> {
         .map(ProfileEdge::planar)
         .collect::<KernelResult<Vec<_>>>()?;
     let boxes: Vec<_> = edges.iter().map(ProfileEdge::bounds).collect();
+    for (i, c) in curves.iter().enumerate() {
+        if let PlanarCurve::Polyline(chords) = c
+            && chords_cross_themselves(chords)
+        {
+            return Err(KernelError::InvalidInput(format!(
+                "{name} must not cross or touch itself (spline edge {i} crosses itself)"
+            )));
+        }
+    }
     for i in 0..n {
         for j in i + 1..n {
             if boxes_apart(boxes[i], boxes[j]) {
@@ -618,6 +793,7 @@ fn ray_crossings(l: &CheckedLoop, p: Point2) -> usize {
     for (k, e) in l.edges.iter().enumerate() {
         let (start, end) = (l.vertex(k), l.vertex((k + 1) % n));
         match e.edge {
+            ProfileEdge::Spline(ref c) => count += c.ray_crossings(start, end, p),
             ProfileEdge::Line { .. } => {
                 let x = || start.x + (p.y - start.y) * (end.x - start.x) / (end.y - start.y);
                 count += usize::from(crosses(start, end, &x));

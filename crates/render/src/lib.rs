@@ -5,7 +5,9 @@
 
 pub use chamfera_geom as geom;
 
+pub mod display;
 mod theme;
+pub use display::{Appearance, Display, Section, VisualStyle};
 pub use theme::{Rgba, Theme, ThemeMode};
 
 use chamfera_geom::{Aabb, Point3, Ray, TriMesh, Vec3};
@@ -340,6 +342,15 @@ pub struct SceneBody {
     pub name: String,
     pub mesh: TriMesh,
     pub visible: bool,
+    /// The exact B-rep edges as polylines (from the tessellator), drawn as the body's
+    /// edges. Empty for mesh bodies, which show the mesh's sharp edges instead.
+    #[serde(default)]
+    pub edges: Vec<Vec<Point3>>,
+    #[serde(default)]
+    pub appearance: Appearance,
+    /// A component tint: an index into the theme's `component_tints`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tint: Option<u8>,
 }
 
 /// What a click picked.
@@ -368,6 +379,10 @@ pub enum OverlayStyle {
     Construct,
     /// What the pointer is over, before a click (`theme.hover_highlight`).
     Hover,
+    /// A toolpath's cutting moves.
+    ToolpathFeed,
+    /// A toolpath's rapid moves (the engine splits them into dashes).
+    ToolpathRapid,
 }
 
 impl OverlayStyle {
@@ -382,6 +397,8 @@ impl OverlayStyle {
             OverlayStyle::Measure => theme.measure,
             OverlayStyle::Construct => theme.construct,
             OverlayStyle::Hover => theme.hover_highlight,
+            OverlayStyle::ToolpathFeed => theme.toolpath_feed,
+            OverlayStyle::ToolpathRapid => theme.toolpath_rapid,
         }
     }
 }
@@ -452,6 +469,13 @@ pub struct Scene {
     /// See-through fills (construction planes), drawn before the overlays.
     #[serde(default)]
     pub fills: Vec<Fill>,
+    /// The ground grid's fixed spacing in mm, or `None` for the automatic grid that
+    /// follows the zoom (`view.grid`). A view setting, not part of the design.
+    #[serde(default)]
+    pub grid_spacing: Option<f64>,
+    /// Visual style and section plane.
+    #[serde(default)]
+    pub display: Display,
     next_id: u32,
 }
 
@@ -468,6 +492,9 @@ impl Scene {
             name: name.to_owned(),
             mesh,
             visible: true,
+            edges: Vec::new(),
+            appearance: Appearance::default(),
+            tint: None,
         });
         Some(id)
     }
@@ -528,13 +555,22 @@ impl Scene {
         self.selection = None;
     }
 
-    /// The nearest visible body the ray hits.
+    /// The nearest visible body the ray hits. With a section plane, only the part on its
+    /// kept side can be hit (what is cut away is not there to click).
     pub fn pick(&self, ray: &Ray) -> Option<Hit> {
+        let section = self.display.section;
         self.bodies
             .iter()
             .filter(|b| b.visible)
             .filter_map(|b| {
-                let (triangle, distance) = b.mesh.raycast(ray)?;
+                let (triangle, distance) = match section {
+                    None => b.mesh.raycast(ray)?,
+                    Some(s) => {
+                        let (kept, from) = s.clip_mesh(&b.mesh);
+                        let (t, d) = kept.raycast(ray)?;
+                        (*from.get(t)?, d)
+                    }
+                };
                 Some(Hit {
                     body: b.id,
                     triangle,
@@ -713,5 +749,33 @@ mod tests {
         assert!((hit.point.z - 20.0).abs() < 1e-9);
         s.body_mut(near).unwrap().visible = false;
         assert_eq!(s.pick(&ray).unwrap().body, far);
+    }
+
+    #[test]
+    fn a_section_lets_picks_through_the_cut_away_part() {
+        // Box 0..10 cut at z = 5 (the top half removed): a ray down from above passes the
+        // removed top face and hits the far side of the kept half, the bottom face z = 0
+        // (seen from inside). Without the section it hits the top at z = 10.
+        let mut s = Scene::default();
+        let id = s
+            .add(
+                "box",
+                TriMesh::cuboid(Point3::ORIGIN, Point3::new(10.0, 10.0, 10.0)),
+            )
+            .unwrap();
+        let ray = Ray::new(Point3::new(3.0, 4.0, 100.0), -Vec3::Z).unwrap();
+        assert!((s.pick(&ray).unwrap().point.z - 10.0).abs() < 1e-9);
+        s.display.section = Section::new(Point3::new(0.0, 0.0, 5.0), Vec3::Z);
+        let hit = s.pick(&ray).unwrap();
+        assert_eq!(hit.body, id);
+        assert!(hit.point.z.abs() < 1e-9, "{hit:?}");
+        // The triangle named is one of the mesh's own bottom triangles.
+        let n = s
+            .body(id)
+            .unwrap()
+            .mesh
+            .triangle_normal(hit.triangle)
+            .unwrap();
+        assert!((n.z + 1.0).abs() < 1e-9);
     }
 }

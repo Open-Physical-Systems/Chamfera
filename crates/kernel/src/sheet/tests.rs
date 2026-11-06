@@ -334,7 +334,7 @@ fn reliefs_free_a_flange_that_stops_short_of_the_edge() {
 }
 
 #[test]
-fn a_flat_outline_is_written_as_dxf() {
+fn a_flat_outline_is_the_unfolded_rectangle() {
     let s = base();
     let f = s.flange(edge(s.folded(), "top 1"), &spec(30.0)).unwrap();
     let flat = f.flat().unwrap();
@@ -350,9 +350,4 @@ fn a_flat_outline_is_written_as_dxf() {
         })
         .fold(f64::MIN, f64::max);
     close(max_x, len, 1e-9);
-    let dxf = flat_dxf(&outline);
-    assert!(dxf.starts_with("  0\nSECTION\n  2\nHEADER\n"));
-    assert!(dxf.contains("AC1009"));
-    assert_eq!(dxf.matches("\nLINE\n").count(), 4);
-    assert!(dxf.ends_with("  0\nEOF\n"));
 }

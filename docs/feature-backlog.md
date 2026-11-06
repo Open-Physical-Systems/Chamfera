@@ -5,7 +5,7 @@
 **Status:** `done` = on `dev`; `branch` = on an unmerged branch (named); `missing` = not started (a note says when groundwork exists).
 **Priority:** P0 = a Fusion user expects it on day one; P1 = important; P2 = later.
 **Size:** S = days; M = one to three weeks; L = a month or more, or a kernel rung.
-**Layer:** the crate(s) touched: `geom`, `sketch`, `kernel`, `render`, `doc`, `io`, `engine`, `gpu`, `ui`, `mcp`, `apps`; plus `cam` (a planned L1 crate).
+**Layer:** the crate(s) touched: `geom`, `sketch`, `kernel`, `render`, `doc`, `io`, `engine`, `gpu`, `ui`, `mcp`, `apps`; plus `cam` (L3).
 
 ## Next 10 to build
 
@@ -53,8 +53,8 @@ Close runners-up: selection filters and box selection (UI and NAV), splines (nee
 | Ellipse | Ellipse by centre and two axes (kernel ellipses exist) | branch (`sketch/shapes-project`) (not extruded yet) | P1 | S | sketch, ui |
 | Elliptical arc | Partial ellipse | branch (`sketch/shapes-project`) (command only) | P2 | S | sketch |
 | Conic curve | A conic with a shape value (rho) between two ends | missing | P2 | M | sketch, geom |
-| Fit-point spline | Smooth curve through clicked points, with tangent handles | missing | P1 | L | sketch, geom (needs K10) |
-| Control-point spline | Spline edited by its control polygon | missing | P1 | M | sketch, geom (needs K10) |
+| Fit-point spline | Smooth curve through clicked points, with tangent handles | branch (`kernel/k10-splines`): `sketch.spline`, Spline tool, open and closed, extrudes; tangent handles and end-tangent constraints not yet | P1 | L | sketch, geom (needs K10) |
+| Control-point spline | Spline edited by its control polygon | branch (`kernel/k10-splines`): `sketch.spline {kind: control}`, open and closed; no UI tool of its own yet | P1 | M | sketch, geom (needs K10) |
 | Sketch text | Text as closed profiles, with a font, height and alignment on a path | missing | P2 | L | sketch, io (font parsing) |
 | Trim | Delete the piece of a curve between crossings | branch (`sketch/tools`) | P0 | M | sketch, engine, ui |
 | Extend | Lengthen a curve to the next one it meets | branch (`sketch/tools`) | P0 | S | sketch, engine, ui |
@@ -155,8 +155,8 @@ Close runners-up: selection filters and box selection (UI and NAV), splines (nee
 | Mirror | Mirror features or bodies across a plane | branch (`solid/mirror-move`) | P0 | M | engine, kernel |
 | Move / copy body | Translate or rotate a body, by drag handles or values | branch (`solid/mirror-move`: typed values; drag handles missing) | P0 | M | engine, ui |
 | Align | Move a body so one face or edge meets another | missing | P2 | S | engine |
-| Sweep | Profile along a path, with guide rail and twist options | missing | P1 | L | kernel (K12, K10) |
-| Loft | Solid through several profiles, with rails and end conditions | missing | P1 | L | kernel (K12, K10) |
+| Sweep | Profile along a path, with guide rail and twist options | partial: tangent lines and arcs, exact surfaces; no rails, twist or mitred corners | P1 | L | kernel (K12, K10) |
+| Loft | Solid through several profiles, with rails and end conditions | partial: parallel planes, matching lines and coaxial arcs (planes, cones); no rails or end conditions | P1 | L | kernel (K12, K10) |
 | Rib and web | Thin supports from an open sketch line | missing | P2 | M | kernel |
 | Emboss / deboss | Raise or sink sketch text or profiles on a face | missing | P2 | M | kernel |
 | Draft | Tilt faces by an angle from a pull direction | missing | P1 | L | kernel (K12) |
@@ -190,7 +190,7 @@ Close runners-up: selection filters and box selection (UI and NAV), splines (nee
 
 | Feature | Description | Status | Pri | Size | Layer |
 |---|---|---|---|---|---|
-| Sheet metal rules | Thickness, bend radius, K-factor, relief shapes per design | done (`sheet.rule`, named rules in the design, format 23) | P2 | M | doc |
+| Sheet metal rules | Thickness, bend radius, K-factor, relief shapes per design | done (`sheet.rule`, named rules in the design, format 25) | P2 | M | doc |
 | Flange | Sheet from a profile, and bent walls from edges | done (`sheet.base`, `sheet.flange`: exact cylindrical bends on straight edges, inside/outside/bend-outside, offsets with rectangular, obround or rip reliefs; SHEET METAL tab) | P2 | L | kernel |
 | Bend | Bend a flat sheet along a sketch line | missing | P2 | L | kernel |
 | Flat pattern | Unfold to a flat part; export it as DXF | done (`sheet.flat_pattern` by BA = θ(R + K·T), shown beside the part; `sheet.export_flat` writes DXF R12) | P2 | L | kernel, io |
@@ -215,14 +215,14 @@ Close runners-up: selection filters and box selection (UI and NAV), splines (nee
 
 | Feature | Description | Status | Pri | Size | Layer |
 |---|---|---|---|---|---|
-| Components | Bodies grouped in named parts with their own origin, nested | missing | P1 | L | doc, engine, ui |
-| Activate a component | Edit one component in place; others shown faded | missing | P1 | M | doc, ui |
+| Components | Bodies grouped in named parts with their own origin, nested; linked copies (`component.*`) | done | P1 | L | doc, engine, ui |
+| Activate a component | Edit one component in place; others shown faded (new features go into the active one: done; fading: missing) | missing | P1 | M | doc, ui |
 | External references | Insert another design as a linked component that updates | missing | P2 | L | doc, io |
-| Joints | Connect components at joint origins: rigid, revolute, slider, cylindrical, pin-slot, planar, ball | missing | P1 | L | doc (new solver for joints) |
+| Joints | Connect components at joint origins: rigid, revolute, slider, cylindrical, planar done (`joint.*`, solved as an exact tree, loops refused); pin-slot, ball and loops missing | done | P1 | L | doc, engine |
 | As-built joints | Joint components where they already sit | missing | P1 | M | doc |
-| Joint limits and motion | Ranges, drive a joint, animate | missing | P2 | M | doc, ui |
+| Joint limits and motion | Ranges and driving a joint (`joint.set_value`): done; animation: missing | missing | P2 | M | doc, ui |
 | Rigid groups | Lock several components together | missing | P2 | S | doc |
-| Ground / fix a component | Keep a component in place | missing | P1 | S | doc |
+| Ground / fix a component | Keep a component in place (`component.ground`) | done | P1 | S | doc |
 | Motion links and contact sets | One joint drives another; parts stop on contact | missing | P2 | L | doc, kernel |
 | Interference check | Find overlapping volumes between components | missing | P1 | M | kernel (K7), engine |
 | Bill of materials | List of components with counts and properties | missing | P2 | M | doc, io |
@@ -236,7 +236,7 @@ Close runners-up: selection filters and box selection (UI and NAV), splines (nee
 | Measure distance and angle | Between any two picked points, edges, faces, bodies (minimum distance) | done (`inspect.measure`, `inspect.measure_at`, INSPECT > Measure) | P0 | M | kernel, engine, ui |
 | Measure length, area, radius | Of a picked edge or face | done | P0 | S | kernel, engine |
 | Mass properties | Volume, area, mass, centre of mass, moments of inertia | done (`inspect.mass`, INSPECT > Mass Properties) | P0 | M | kernel, engine |
-| Section analysis | Cut the view with a plane and show the cut face | missing | P1 | M | gpu, render, kernel |
+| Section analysis | Cut the view with a plane and show the cut face | done (`view.section`, hatched cap) | P1 | M | gpu, render, kernel |
 | Interference | See assemblies | missing | P1 | M | kernel |
 | Curvature and zebra analysis | Show surface quality (comb, zebra stripes, curvature map) | missing | P2 | M | gpu, kernel |
 | Draft analysis | Colour faces by draft angle | missing | P2 | M | gpu |
@@ -247,12 +247,12 @@ Close runners-up: selection filters and box selection (UI and NAV), splines (nee
 
 | Feature | Description | Status | Pri | Size | Layer |
 |---|---|---|---|---|---|
-| Drawing sheets | Sheets of chosen size with a title block template we design ourselves | missing | P1 | L | new `drawing` crate, ui |
-| Base and projected views | Orthographic views from the model, with hidden lines | missing | P1 | L | kernel (exact projection), drawing |
+| Drawing sheets | Sheets of chosen size with a title block template we design ourselves | done (A4/A3/A2, ANSI A/B, our own title block) | P1 | L | new `drawing` crate, ui |
+| Base and projected views | Orthographic views from the model, with hidden lines | done (cylinder silhouettes; cone, sphere and torus silhouettes missing) | P1 | L | kernel (exact projection), drawing |
 | Section, detail, auxiliary and break views | Further view kinds | missing | P2 | L | drawing, kernel |
-| Views update with the model | Associative views | missing | P1 | M | doc, drawing |
-| Dimensions on drawings | Linear, aligned, angular, radial, diameter, ordinate, baseline, chain | missing | P1 | L | drawing |
-| Centre marks and centre lines | Automatic marks on holes and axes | missing | P1 | S | drawing |
+| Views update with the model | Associative views | done (views; dimensions keep their picked points) | P1 | M | doc, drawing |
+| Dimensions on drawings | Linear, aligned, angular, radial, diameter, ordinate, baseline, chain | partial (linear, aligned, angular, radius, diameter) | P1 | L | drawing |
+| Centre marks and centre lines | Automatic marks on holes and axes | done | P1 | S | drawing |
 | Annotations | Notes, leaders, balloons, surface texture, weld and datum symbols, GD&T frames | missing | P2 | L | drawing |
 | Tables | Parts list, hole table, revision table | missing | P2 | M | drawing |
 | Hatching | Fill closed regions with a pattern (solid, lines at an angle, cross-hatch), associative to the boundary | missing | P1 | M | drawing, geom |
@@ -264,7 +264,7 @@ Close runners-up: selection filters and box selection (UI and NAV), splines (nee
 | Command line with aliases | Type a command or a short alias (`L` for line, `C` for circle); options as prompts | missing | P1 | M | ui (on top of the command registry) |
 | 2D modify tools | Move, copy, rotate, scale, stretch, array, mirror, offset, fillet, chamfer, join, break, explode | branch (`sketch/tools` has offset, mirror, fillet, chamfer, patterns, split) / missing for the rest | P1 | M | sketch, drawing |
 | Paper space / model space and viewports | Layouts with scaled windows into the model | missing | P2 | L | drawing |
-| Print and export to PDF, DXF, DWG | Output drawings (DWG through a clean-room reader/writer of the public spec only) | missing | P1 | L | io |
+| Print and export to PDF, DXF, DWG | Output drawings (DWG through a clean-room reader/writer of the public spec only) | partial (SVG, DXF R12, PDF 1.4) | P1 | L | io |
 
 ## 11. Import and export
 
@@ -295,14 +295,14 @@ Close runners-up: selection filters and box selection (UI and NAV), splines (nee
 | View cube | Clickable cube with faces and a corner for iso, plus home and fit | done | P0 | M | ui |
 | View cube edges and corners, drag to orbit | Click edges and every corner; drag the cube | missing | P1 | S | ui |
 | Navigation presets | Mouse mappings matching other CAD tools | missing | P1 | S | ui |
-| Visual styles | Shaded, shaded with edges, wireframe, hidden lines | missing | P1 | M | gpu, render |
+| Visual styles | Shaded, shaded with edges, wireframe, hidden lines | done (`view.style`) | P1 | M | gpu, render |
 | Ribbon with workspaces and tabs | Tool groups by task | done | P0 | M | ui |
 | Browser (model tree) | Bodies, sketches, parameters; show/hide, context menu | done | P0 | M | ui |
 | Browser: origin, construction, components folders | Tree items for planes, axes and components | missing | P0 | S | ui |
-| Timeline | Features in order; edit, suppress, delete from the context menu | done | P0 | M | ui, doc |
-| Rollback marker | Drag to roll back and insert features earlier | missing | P0 | M | doc, ui |
-| Reorder features | Drag features in the timeline | missing | P1 | M | doc |
-| Timeline groups | Collapse several features into a group | missing | P2 | S | doc, ui |
+| Timeline | Features in order; edit, suppress, delete, rename (F2), show error and broken reference from the context menu | done | P0 | M | ui, doc |
+| Rollback marker | Drag to roll back and insert features earlier | branch (`timeline/rollback`) | P0 | M | doc, ui |
+| Reorder features | Drag features in the timeline | branch (`timeline/rollback`) | P1 | M | doc |
+| Timeline groups | Collapse several features into a group | branch (`timeline/rollback`) | P2 | S | doc, ui |
 | Command search | A search box (on a key) that finds any command by name and runs it | missing | P0 | S | ui |
 | Keyboard shortcuts | Single keys for line, rectangle, circle, extrude, fillet, measure, dimension, trim, offset, and so on; editable | missing | P0 | S | ui (now only file, undo, fit, home) |
 | Radial context menu | Right-click menu laid out around the cursor with the common commands | missing | P1 | M | ui |
@@ -338,7 +338,7 @@ Close runners-up: selection filters and box selection (UI and NAV), splines (nee
 | Feature | Description | Status | Pri | Size | Layer |
 |---|---|---|---|---|---|
 | Shaded viewport with edges | Real-time display | done | P0 | M | gpu |
-| Appearance library | Colours and finishes (metal, plastic, glass) per body or face | missing | P1 | M | doc, gpu |
+| Appearance library | Colours and finishes (metal, plastic, glass) per body or face | done per body (`body.appearance`, presets); per face missing | P1 | M | doc, gpu |
 | Environment lighting, ground shadows, reflections | Nicer real-time display | missing | P2 | M | gpu |
 | Decals | Pictures placed on faces | missing | P2 | M | gpu |
 | Offline path-traced render | Photo-quality pictures | missing | P2 | L | new crate |
@@ -348,18 +348,18 @@ Close runners-up: selection filters and box selection (UI and NAV), splines (nee
 
 | Feature | Description | Status | Pri | Size | Layer |
 |---|---|---|---|---|---|
-| Setup: stock, work coordinate system, machine | Define the raw block, part zero and the machine | missing | P2 | M | cam, doc |
-| Tool library | Mills, drills, chamfer and ball tools with feeds and speeds | missing | P2 | M | cam |
-| Facing | Flatten the stock top | missing | P2 | S | cam |
-| 2D contour | Follow a profile, with lead-in/out and tabs | missing | P2 | M | cam |
-| 2D pocket | Clear a closed region | missing | P2 | M | cam |
-| Drilling | Drill, peck, tap cycles at hole positions | missing | P2 | M | cam |
+| Setup: stock, work coordinate system, machine | Define the raw block, part zero and the machine | done (stock, part zero, X axis from an edge; no machine model yet) | P2 | M | cam, doc |
+| Tool library | Mills, drills, chamfer and ball tools with feeds and speeds | done | P2 | M | cam |
+| Facing | Flatten the stock top | done | P2 | S | cam |
+| 2D contour | Follow a profile, with lead-in/out and tabs | done (no tabs yet) | P2 | M | cam |
+| 2D pocket | Clear a closed region | done (vertical walls, islands) | P2 | M | cam |
+| Drilling | Drill, peck, tap cycles at hole positions | done (drill, peck; no tapping) | P2 | M | cam |
 | 2D adaptive clearing | Constant tool engagement roughing | missing | P2 | L | cam |
 | 3D roughing and finishing | Adaptive, parallel, scallop, contour, pencil passes | missing | P2 | L | cam |
 | Multi-axis | 3+2 and simultaneous 4 and 5 axis | missing | P2 | L | cam |
 | Turning | Lathe operations | missing | P2 | L | cam |
 | Simulation | Show the tool removing stock; collision and gouge checks | missing | P2 | L | cam, gpu |
-| Post processors as data | G-code output for Grbl first, then LinuxCNC and others | missing | P2 | M | cam, io |
+| Post processors as data | G-code output for Grbl first, then LinuxCNC and others | done (LinuxCNC and GRBL dialects in code, not data yet) | P2 | M | cam, io |
 | Additive (3D-print) setup | Orient, support and slice | missing | P2 | L | cam |
 
 ## 16. Collaboration and data

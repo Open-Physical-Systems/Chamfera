@@ -1,24 +1,37 @@
 //! Layer 2: the design document: parameters and sketches now, the feature timeline from M4.
 
+pub mod appearance;
+pub mod cam;
+pub mod component;
 pub mod construct;
+pub mod drawing;
 pub mod expr;
 pub mod feature;
 pub mod imported;
+pub mod joint;
 pub mod sheet;
+pub mod timeline;
+pub mod units;
 
+pub use appearance::Appearance;
+pub use component::{Assembly, Component, ROOT};
 pub use construct::{
     AxisRef, ConstructKind, Construction, EdgeRef, OriginAxis, OriginPlane, PlaneRef, PointRef,
 };
+pub use drawing::Drawing;
 pub use feature::{
     Blend, BlendKind, Extrude, ExtrudeDirection, ExtrudeExtent, ExtrudeTo, ExtrudeValues, Feature,
-    FeatureKind, Hole, HoleKind, HoleSizes, Mirror, MirrorPlane, Move, MoveTransform, Operation,
-    Pattern, PatternLayout, Revolve, Shell,
+    FeatureKind, Hole, HoleKind, HoleSizes, Loft, LoftSection, Mirror, MirrorPlane, Move,
+    MoveTransform, Operation, Pattern, PatternLayout, Revolve, Shell, Sweep,
 };
 pub use imported::ImportedBody;
+pub use joint::{EdgeEnd, Joint, JointKind, JointOrigin, OriginAt};
 pub use sheet::{
     FlangePosition, FlangeSide, FlangeValues, ReliefShape, SheetBase, SheetFlange, SheetRule,
     SheetUnfold,
 };
+pub use timeline::{Group, ItemKind, Timeline};
+pub use units::{DisplayUnits, LengthUnit};
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -45,13 +58,25 @@ use thiserror::Error;
 ///   their own distances, a start offset and a taper angle. Older extrudes read as by
 ///   distance from the sketch plane without a taper.
 /// - 14: mirror and move/copy of bodies and features.
+/// - 15: components (bodies grouped, each with a placement) and joints between them.
+///   Older files open as a single root component.
+/// - 16: the timeline: an explicit build order of sketches and features, the rollback
+///   marker and groups (`timeline`). Older files open in id order with the marker at
+///   the end, as their timeline showed them.
+/// - 17: sweeps along a path and lofts between profiles.
+/// - 18: drawings: sheets with views of the solids and dimensions (`drawing`).
+///   Older files open with no sheets.
 /// - 19: projected (linked) sketch curves and ellipses.
-/// - 20, 21 and 22 are taken by work in progress on other branches (CAM, appearances,
-///   face editing).
-/// - 23: sheet metal: named rules (`sheet_rules`: thickness, bend radius, K-factor,
+/// - 20: the CAM section: setups, tools and machining operations (`cam`).
+/// - 21: body appearances (a colour and opacity per feature's body). Older files open
+///   with every body in the theme's colour.
+/// - 24: the design's display units (`units`: length unit and decimal places). A plain
+///   number in an expression means the design's length unit. Older files open in mm with
+///   two decimals, as before.
+/// - 25: sheet metal: named rules (`sheet_rules`: thickness, bend radius, K-factor,
 ///   relief) and the `sheet_base`, `sheet_flange` and `sheet_unfold` features. Older
 ///   files open with no rules.
-pub const FORMAT_VERSION: u32 = 23;
+pub const FORMAT_VERSION: u32 = 25;
 /// The tag every design file starts with, so other JSON is not mistaken for a design.
 pub const FORMAT_TAG: &str = "chamfera";
 /// Longest parameter name.
@@ -96,6 +121,10 @@ pub enum DocError {
     NoSuchFeature(u32),
     #[error("{reason}")]
     BadFeature { reason: String },
+    #[error("timeline: {0}")]
+    Timeline(String),
+    #[error("drawing: {reason}")]
+    BadDrawing { reason: String },
 }
 
 /// What a parameter measures. Values are stored in internal units: mm and radians.
@@ -217,7 +246,25 @@ pub struct Document {
     /// Solid bodies imported from other CAD files (STEP), kept as exact B-rep bodies.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub imported: Vec<ImportedBody>,
-    /// Sheet metal rules, by name (format 23).
+    /// Build order, rollback marker and groups of the sketches and features.
+    #[serde(default)]
+    pub timeline: Timeline,
+    /// Components and joints (format 15). A design without them is one root component.
+    #[serde(default, skip_serializing_if = "Assembly::is_empty")]
+    pub assembly: Assembly,
+    /// Drawing sheets (format 18).
+    #[serde(default, skip_serializing_if = "Drawing::is_empty")]
+    pub drawing: Drawing,
+    /// How the bodies a feature (or an import) made look, by its id. Display data only.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub appearances: BTreeMap<u32, Appearance>,
+    /// Manufacturing: setups, tools and operations (format 20). Older files have none.
+    #[serde(default, skip_serializing_if = "cam::Cam::is_empty")]
+    pub cam: cam::Cam,
+    /// How values are shown and typed: the length unit and decimal places.
+    #[serde(default, skip_serializing_if = "DisplayUnits::is_default")]
+    pub units: DisplayUnits,
+    /// Sheet metal rules, by name (format 25).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sheet_rules: Vec<SheetRule>,
 }
@@ -233,6 +280,12 @@ impl Default for Document {
             last_feature_id: 0,
             imported: Vec::new(),
             sheet_rules: Vec::new(),
+            timeline: Timeline::default(),
+            assembly: Assembly::default(),
+            drawing: Drawing::default(),
+            appearances: BTreeMap::new(),
+            cam: cam::Cam::default(),
+            units: DisplayUnits::default(),
         }
     }
 }
@@ -387,12 +440,12 @@ impl Document {
                 visit(&dep, doc, values, path)?;
             }
             path.pop();
-            let v = expr::evaluate_as(e, p.unit.dim(), values).map_err(|error| {
-                DocError::Expression {
+            let v = expr::evaluate_as_in(e, p.unit.dim(), doc.length_scale(), values).map_err(
+                |error| DocError::Expression {
                     name: name.to_owned(),
                     error,
-                }
-            })?;
+                },
+            )?;
             let limit = match p.unit {
                 Unit::Length => chamfera_geom::MAX_COORDINATE,
                 Unit::Angle => 1e3 * std::f64::consts::TAU,
@@ -423,6 +476,7 @@ impl Document {
             }
         }
         // Dimensions that follow expressions.
+        let scale = self.length_scale();
         for s in &mut self.sketches {
             if s.expressions.is_empty() {
                 continue;
@@ -438,11 +492,12 @@ impl Document {
                 } else {
                     expr::Dim::LENGTH
                 };
-                let v =
-                    expr::evaluate_as(e, dim, &values).map_err(|error| DocError::Expression {
+                let v = expr::evaluate_as_in(e, dim, scale, &values).map_err(|error| {
+                    DocError::Expression {
                         name: format!("{} dimension {c}", s.name),
                         error,
-                    })?;
+                    }
+                })?;
                 if constraint.value() != Some(v) {
                     s.sketch
                         .set_dimension(id, v)
@@ -496,6 +551,8 @@ impl Document {
             projections: Vec::new(),
             on_plane: None,
         });
+        self.timeline_insert(id);
+        self.assembly.adopt(id);
         Ok(id)
     }
 
@@ -519,7 +576,9 @@ impl Document {
             .iter()
             .position(|s| s.id == id)
             .ok_or(DocError::NoSuchSketch(id))?;
-        Ok(self.sketches.remove(i))
+        let s = self.sketches.remove(i);
+        self.timeline_remove();
+        Ok(s)
     }
 
     pub fn to_json(&self) -> Result<String, serde_json::Error> {
@@ -630,6 +689,18 @@ impl Document {
         checked.imported = doc.imported;
         Document::check_sheet_rules(&doc.sheet_rules)?;
         checked.sheet_rules = doc.sheet_rules;
+        doc.units.validate().map_err(DocError::Format)?;
+        checked.units = doc.units;
+        doc.assembly.check(checked.last_feature_id)?;
+        checked.assembly = doc.assembly;
+        checked.timeline = doc.timeline;
+        checked.check_timeline(&mut seen)?;
+        doc.drawing.check()?;
+        checked.drawing = doc.drawing;
+        appearance::check(&doc.appearances, checked.last_feature_id)?;
+        checked.appearances = doc.appearances;
+        doc.cam.validate()?;
+        checked.cam = doc.cam;
         // Values in the file must agree with their expressions.
         checked.evaluate()?;
         Ok(checked)

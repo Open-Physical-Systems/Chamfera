@@ -13,7 +13,11 @@
 //! and an end point, kept on the ellipse (two more implicit equations) and swept
 //! counter-clockwise from start to end, like a circular arc. Either semi-axis may be the
 //! longer one.
+//!
+//! A spline refers to its fit or control points in order and adds no unknowns or
+//! equations of its own: its degrees of freedom are its points'.
 
+use crate::spline::SplineForm;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
@@ -95,6 +99,18 @@ pub enum Curve {
         #[serde(default)]
         construction: bool,
     },
+    /// A smooth curve through its points in order (`form: fit`, the default) or guided by
+    /// them as a control polygon (`form: control`); see `spline.rs`. The points are
+    /// ordinary sketch points, so constraints on them shape the spline.
+    Spline {
+        points: Vec<PointId>,
+        #[serde(default)]
+        form: SplineForm,
+        #[serde(default)]
+        closed: bool,
+        #[serde(default)]
+        construction: bool,
+    },
 }
 
 impl Curve {
@@ -104,6 +120,7 @@ impl Curve {
             Curve::Line { construction, .. }
             | Curve::Circle { construction, .. }
             | Curve::Arc { construction, .. }
+            | Curve::Spline { construction, .. }
             | Curve::Ellipse { construction, .. }
             | Curve::EllipticalArc { construction, .. } => *construction,
         }
@@ -114,6 +131,7 @@ impl Curve {
             Curve::Line { construction, .. }
             | Curve::Circle { construction, .. }
             | Curve::Arc { construction, .. }
+            | Curve::Spline { construction, .. }
             | Curve::Ellipse { construction, .. }
             | Curve::EllipticalArc { construction, .. } => *construction = value,
         }
@@ -127,6 +145,7 @@ impl Curve {
             Curve::Arc {
                 centre, start, end, ..
             } => vec![*centre, *start, *end],
+            Curve::Spline { points, .. } => points.clone(),
             Curve::Ellipse {
                 centre,
                 major,
@@ -150,6 +169,10 @@ impl Curve {
             Curve::Line { start, end, .. }
             | Curve::Arc { start, end, .. }
             | Curve::EllipticalArc { start, end, .. } => Some((*start, *end)),
+            Curve::Spline { points, closed, .. } => match (points.first(), points.last()) {
+                (Some(a), Some(b)) if !*closed => Some((*a, *b)),
+                _ => None,
+            },
             Curve::Circle { .. } | Curve::Ellipse { .. } => None,
         }
     }
@@ -163,17 +186,22 @@ impl Curve {
         matches!(self, Curve::Circle { .. } | Curve::Arc { .. })
     }
 
+    /// True for splines.
+    pub fn is_spline(&self) -> bool {
+        matches!(self, Curve::Spline { .. })
+    }
     /// True for ellipses and elliptical arcs.
     pub fn is_elliptical(&self) -> bool {
         matches!(self, Curve::Ellipse { .. } | Curve::EllipticalArc { .. })
     }
-
-    /// A short name for messages: "line", "circle", "arc", "ellipse" or "elliptical arc".
+    /// A short name for messages: "line", "circle", "arc", "spline", "ellipse" or
+    /// "elliptical arc".
     pub fn kind_name(&self) -> &'static str {
         match self {
             Curve::Line { .. } => "line",
             Curve::Circle { .. } => "circle",
             Curve::Arc { .. } => "arc",
+            Curve::Spline { .. } => "spline",
             Curve::Ellipse { .. } => "ellipse",
             Curve::EllipticalArc { .. } => "elliptical arc",
         }

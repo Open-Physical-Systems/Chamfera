@@ -147,6 +147,8 @@ impl ChamferaApp {
             self.run("view.projection", json!({ "mode": mode }));
         }
         ui.separator();
+        self.display_menu(ui);
+        ui.separator();
         widgets::caption(ui, self.look(), "THEME");
         for (c, text) in [
             (ThemeChoice::System, "Follow system"),
@@ -154,8 +156,8 @@ impl ChamferaApp {
             (ThemeChoice::Dark, "Dark"),
         ] {
             if ui.radio(self.theme_choice == c, text).clicked() {
-                self.theme_choice = c;
-                self.styled_for = None;
+                self.prefs.theme = c;
+                self.preferences_changed();
             }
         }
     }
@@ -163,31 +165,65 @@ impl ChamferaApp {
     /// The ribbon: workspace tabs, then the tools of the active one.
     pub(crate) fn ribbon(&mut self, ui: &mut egui::Ui) {
         let sketching = self.session.active_sketch.is_some();
+        let drawing = self.drawing.active && !sketching;
         ui.add_space(2.0);
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = S2;
-            let sheet = self.sheet_metal.active && !sketching;
-            if self
-                .tab(ui, "SOLID", !sketching && !sheet, !sketching)
-                .on_hover_text(if sketching {
-                    "Finish the sketch to use the solid tools"
-                } else {
-                    "Solid modelling: sketches, extrudes and revolves"
-                })
-                .clicked()
-            {
+            let manufacture = self.cam.active && !sketching && !drawing;
+            let sheet = self.sheet_metal.active && !sketching && !drawing && !manufacture;
+            let solid = self.tab(
+                ui,
+                "SOLID",
+                !sketching && !drawing && !manufacture && !sheet,
+                !sketching,
+            );
+            if solid.clicked() {
+                self.drawing.active = false;
                 self.sheet_metal.active = false;
+                if manufacture {
+                    self.set_manufacture(false);
+                }
             }
-            if self
-                .tab(ui, "SHEET METAL", sheet, !sketching)
-                .on_hover_text("Sheet metal: base flanges, flanges, flat patterns and rules")
-                .clicked()
+            solid.on_hover_text(if sketching {
+                "Finish the sketch to use the solid tools"
+            } else {
+                "Solid modelling: sketches, extrudes and revolves"
+            });
+            if !sketching
+                && self
+                    .tab(ui, "SHEET METAL", sheet, true)
+                    .on_hover_text("Sheet metal: base flanges, flanges, flat patterns and rules")
+                    .clicked()
             {
+                self.drawing.active = false;
                 self.sheet_metal.active = true;
+                if manufacture {
+                    self.set_manufacture(false);
+                }
+            }
+            if !sketching
+                && self
+                    .tab(ui, "MANUFACTURE", manufacture, true)
+                    .on_hover_text("Manufacture: setups, 2D milling toolpaths and G-code")
+                    .clicked()
+                && !manufacture
+            {
+                self.drawing.active = false;
+                self.sheet_metal.active = false;
+                self.set_manufacture(true);
             }
             if sketching {
                 self.tab(ui, "SKETCH", true, true)
                     .on_hover_text("Editing a sketch: draw, constrain and dimension");
+            } else if self
+                .tab(ui, "DRAWING", drawing, true)
+                .on_hover_text("2D drawing sheets: views of the model, dimensions, export")
+                .clicked()
+            {
+                self.drawing.active = true;
+                if self.cam.active {
+                    self.set_manufacture(false);
+                }
             }
         });
         let look = self.look();
@@ -206,6 +242,10 @@ impl ChamferaApp {
                     ui.spacing_mut().item_spacing.x = 0.0;
                     if sketching {
                         self.sketch_toolbar(ui);
+                    } else if drawing {
+                        self.drawing_toolbar(ui);
+                    } else if self.cam.active {
+                        self.cam_toolbar(ui);
                     } else if self.sheet_metal.active {
                         self.sheet_toolbar(ui);
                     } else {
@@ -292,17 +332,25 @@ impl ChamferaApp {
                     widgets::bar_divider(ui, look, 14.0);
                 }
                 ui.label(small(crate::sketch_ui::tool_hint(self), muted));
+            } else if self.drawing.active {
+                ui.label(small(self.drawing_hint(), muted));
             } else if self.solid.pick_face {
-                ui.label(small("Click a flat face of a solid to sketch on it · Esc cancels", muted));
-            } else if self.solid.blend.is_some() {
-                ui.label(small("Click edges of a solid to pick them · click again to unpick · Esc cancels", muted));
-            } else if self.solid.extrude.is_some() {
-                ui.label(small("Click inside closed profiles to pick them · click again to unpick", muted));
-            } else {
                 ui.label(small(
-                    "Click: select · Shift/Ctrl+click: add or remove · Drag: box (right: window, left: crossing) · Middle-drag: pan · Right-drag: orbit · Wheel: zoom · F: fit",
+                    "Click a flat face of a solid to sketch on it · Esc cancels",
                     muted,
                 ));
+            } else if self.solid.blend.is_some() {
+                ui.label(small(
+                    "Click edges of a solid to pick them · click again to unpick · Esc cancels",
+                    muted,
+                ));
+            } else if self.solid.extrude.is_some() {
+                ui.label(small(
+                    "Click inside closed profiles to pick them · click again to unpick",
+                    muted,
+                ));
+            } else {
+                ui.label(small(&self.prefs.navigation.preset.status_hint(), muted));
             }
             if let Some((m, error)) = &self.message {
                 widgets::bar_divider(ui, look, 14.0);
@@ -328,11 +376,17 @@ impl ChamferaApp {
                 let bodies = if n == 1 { "body" } else { "bodies" };
                 ui.label(small(&format!("{n} {bodies} · {tris} triangles"), muted));
                 let selected = self.session.scene.selected_bodies();
-                if selected.len() > 1 || (selected.len() == 1 && self.session.scene.selection.is_none()) {
+                if selected.len() > 1
+                    || (selected.len() == 1 && self.session.scene.selection.is_none())
+                {
                     let text = match selected.as_slice() {
                         [one] => format!(
                             "{} selected",
-                            self.session.scene.body(*one).map(|b| b.name.as_str()).unwrap_or("1 body")
+                            self.session
+                                .scene
+                                .body(*one)
+                                .map(|b| b.name.as_str())
+                                .unwrap_or("1 body")
                         ),
                         many => format!("{} bodies selected", many.len()),
                     };
@@ -345,20 +399,24 @@ impl ChamferaApp {
                         .and_then(|b| b.mesh.triangle_normal(h.triangle))
                         .unwrap_or_default();
                     widgets::bar_divider(ui, look, 14.0);
+                    let u = self.session.doc.units;
                     ui.label(small(
                         &format!(
-                            "{name} · ({:.2}, {:.2}, {:.2}) mm · normal ({:.2}, {:.2}, {:.2})",
-                            h.point.x, h.point.y, h.point.z, n.x, n.y, n.z
+                            "{name} · ({}, {}, {}) {} · normal ({:.2}, {:.2}, {:.2})",
+                            u.length_number(h.point.x),
+                            u.length_number(h.point.y),
+                            u.length_number(h.point.z),
+                            u.length.symbol(),
+                            n.x,
+                            n.y,
+                            n.z
                         ),
                         look.c(|t| t.text),
                     ));
                 } else if !self.session.sketch_selection.is_empty() {
                     let k = self.session.sketch_selection.len();
                     widgets::bar_divider(ui, look, 14.0);
-                    ui.label(small(
-                        &format!("{k} selected"),
-                        look.c(|t| t.text),
-                    ));
+                    ui.label(small(&format!("{k} selected"), look.c(|t| t.text)));
                 }
             });
         });

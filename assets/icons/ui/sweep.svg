@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+  <!-- Chamfera interface icon: sweep. Original artwork, MIT OR Apache-2.0. -->
+  <ellipse stroke="#2B313B" cx="5" cy="17" rx="2" ry="3.5"/>
+  <path stroke="#E8770E" d="M7 17h4a7 7 0 0 0 7-7V4.5"/>
+  <path stroke="#E8770E" d="M14.75 7.25 18 4l3.25 3.25"/>
+</svg>
