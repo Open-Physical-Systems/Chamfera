@@ -1,0 +1,16 @@
+[
+  { "command": "param.set", "params": { "name": "gap", "expression": "15 mm" } },
+  { "command": "sketch.create", "params": { "plane": "xy" }, "as": "base" },
+  { "command": "sketch.rectangle", "params": { "x1": 0, "y1": 0, "x2": 80, "y2": 50 } },
+  { "command": "sketch.finish" },
+  { "command": "solid.extrude", "params": { "sketch": "$base.sketch", "profiles": [{ "x": 5, "y": 5 }], "distance": "10 mm" }, "as": "plate" },
+  { "command": "construct.plane_offset", "params": { "base": { "feature": "$plate.feature", "face": "top" }, "distance": "gap" }, "as": "plane" },
+  { "command": "construct.plane_midplane", "params": { "planes": [{ "feature": "$plate.feature", "face": "bottom" }, { "feature": "$plate.feature", "face": "top" }] } },
+  { "command": "construct.axis_two_planes", "params": { "planes": ["xz", "yz"] } },
+  { "command": "construct.point_coordinates", "params": { "x": 40, "y": 25, "z": "10 mm + gap" } },
+  { "command": "sketch.create", "params": { "plane": "$plane.feature" }, "as": "lid" },
+  { "command": "sketch.rectangle", "params": { "x1": 20, "y1": 10, "x2": 60, "y2": 40 } },
+  { "command": "sketch.finish" },
+  { "command": "solid.extrude", "params": { "sketch": "$lid.sketch", "profiles": [{ "x": 30, "y": 20 }], "distance": "5 mm" } },
+  { "command": "view.home", "params": { "width": 1100, "height": 760 } }
+]

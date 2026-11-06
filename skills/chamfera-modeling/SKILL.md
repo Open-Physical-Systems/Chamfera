@@ -57,8 +57,13 @@ Ids: the rectangle is points 1-4, lines 5-8, constraints 9-12; fix, lengths 13-1
 
 ## 6. Check, then look
 - Compare `dof`, `status` and every profile area from `sketch.get` or `design_summary` with your hand values. DOF above 0: something can still move, add a constraint. `OverConstrained`: remove the redundant constraint (`sketch.remove {"constraint": id}`).
+- For solids, `inspect.mass {"body": name}` (centre of mass, inertia) and `inspect.measure {"a", "b"}` (distance, angle between faces or edges) check them against your hand values.
 - `snapshot {"view": "top"}` and look at the image: the outline, the holes where you meant them, construction lines in their own colour. Fully determined geometry of the sketch being edited is drawn in the constrained colour.
 - `sketch.finish` ends editing; `design.save {"path": "plate.chamfera"}` saves into the scratch folder (or a path inside an `--allow-path` folder).
+
+## 7. Symmetric parts, moves and copies
+- Model half, then `solid.mirror {"bodies": ["Extrude1"], "plane": "yz", "operation": "join"}`: the half joined to its mirror is one symmetric body of twice the volume (`examples/mirrored-bracket.json`). `plane` is `xy`, `xz`, `yz`, `{"feature", "face"}` or `{"origin", "normal"}`; `features: [id]` mirrors a feature's own shape instead, with that operation (a mirrored cut drills the twin hole).
+- `solid.move {"bodies": [...], "dx", "dy", "dz"}`, or `"angle"` with `"axis"` and `"origin"`, or `"from"` and `"to"`; `"copy": true` keeps the original. Without `bodies`, both act on the selected body. Body names are the `name` in each solid of a reply.
 
 ## When something fails
 A failing command changes nothing and its error says what was wrong. In a `batch`, the steps before the failing one stay applied, one undo step each: fix the failing step and run the rest, or `edit.undo` what you do not want.

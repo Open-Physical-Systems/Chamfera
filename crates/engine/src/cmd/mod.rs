@@ -2,13 +2,16 @@
 
 mod app;
 mod body;
+mod construct;
 mod design;
 mod edit;
 mod feature;
 mod hole;
+mod inspect;
 mod param;
 mod select;
 mod sketch;
+mod transform;
 mod view;
 
 use crate::{CmdResult, Session};
@@ -33,13 +36,16 @@ pub fn registry() -> Vec<&'static CommandSpec> {
     for area in [
         app::COMMANDS,
         body::COMMANDS,
+        construct::COMMANDS,
         design::COMMANDS,
         edit::COMMANDS,
         feature::COMMANDS,
         hole::COMMANDS,
+        inspect::COMMANDS,
         param::COMMANDS,
         select::COMMANDS,
         sketch::COMMANDS,
+        transform::COMMANDS,
         view::COMMANDS,
     ] {
         all.extend(area.iter());
