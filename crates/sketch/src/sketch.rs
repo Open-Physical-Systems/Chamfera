@@ -367,6 +367,29 @@ impl Sketch {
         Ok(())
     }
 
+    // ----- crate-internal editing for the sketch tools -----
+
+    /// Adds a curve of any kind (checked like the public adders).
+    pub(crate) fn add_curve(&mut self, curve: Curve) -> Result<CurveId, SketchError> {
+        self.insert_curve(curve)
+    }
+
+    /// Replaces a curve's definition, keeping its id and the constraints on it. The tools
+    /// that call this drop the constraints that no longer make sense.
+    pub(crate) fn replace_curve(&mut self, id: CurveId, curve: Curve) -> Result<(), SketchError> {
+        if !self.curves.contains_key(&id) {
+            return Err(SketchError::UnknownCurve(id));
+        }
+        self.check_curve(&curve)?;
+        self.curves.insert(id, curve);
+        Ok(())
+    }
+
+    /// Keeps only the constraints `keep` says yes to.
+    pub(crate) fn retain_constraints(&mut self, mut keep: impl FnMut(&Constraint) -> bool) {
+        self.constraints.retain(|_, c| keep(c));
+    }
+
     // ----- crate-internal access for the solver -----
 
     pub(crate) fn set_point_unchecked(&mut self, id: PointId, at: Point2) {
