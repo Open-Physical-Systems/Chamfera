@@ -4,8 +4,25 @@
 //! (see `skills/chamfera-kernel/SKILL.md` and `docs/kernel-ladder.md`). No code from
 //! OpenCASCADE or any other GPL/LGPL kernel is read, copied or linked.
 //!
-//! M0 holds only the error type. The first rungs of the ladder (topology, analytic
-//! surfaces, extrude) arrive in M3.
+//! Rung K1 is here: curves in space ([`Line3`], [`Segment3`], [`Circle3`], [`Arc3`],
+//! [`Ellipse3`], [`EllipticalArc3`]), planar curves in a frame's plane ([`Line2`],
+//! [`Segment2`], [`Circle2`], [`Arc2`]) and their pairwise intersections. Frames,
+//! transforms and robust predicates (K0) live in `chamfera-geom`.
+
+mod check;
+mod curve3;
+mod intersect;
+mod planar;
+
+pub use curve3::{
+    Arc3, Circle3, ClosestPoint, ELLIPSE_LENGTH_RELATIVE_TOLERANCE, Ellipse3, EllipticalArc3,
+    Line3, Segment3,
+};
+pub use intersect::{
+    Contact, IntersectionPoint, Intersections, Overlap, arc_arc, circle_arc, circle_circle,
+    line_arc, line_circle, line_line, line_segment, segment_arc, segment_circle, segment_segment,
+};
+pub use planar::{Arc2, Circle2, Line2, Segment2};
 
 use thiserror::Error;
 
@@ -19,6 +36,8 @@ pub enum KernelError {
     Unsupported(String),
     #[error("the result would not be a valid solid: {0}")]
     InvalidResult(String),
+    #[error("a numeric method did not converge: {0}")]
+    NoConvergence(String),
 }
 
 pub type KernelResult<T> = Result<T, KernelError>;
