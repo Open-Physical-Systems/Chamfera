@@ -19,7 +19,7 @@
 //! was.
 
 use crate::Session;
-use crate::solids::edge_ref;
+use crate::naming::{Kind, NameError, Want};
 use chamfera_doc::Projection;
 use chamfera_geom::{Frame, LINEAR_TOLERANCE, Point2, Vec2, Vec3};
 use chamfera_kernel::{Body, Curve, EdgeId};
@@ -146,16 +146,23 @@ fn project_conic(
     })
 }
 
-/// The edge named `name` among `bodies`.
-fn find_edge<'a>(bodies: impl Iterator<Item = &'a Body>, name: &str) -> Option<(&'a Body, EdgeId)> {
-    for body in bodies {
-        for e in body.edges() {
-            if edge_ref(body, e).as_deref() == Some(name) {
-                return Some((body, e));
-            }
-        }
-    }
-    None
+/// The edge named `name` among `bodies`, through the resolver (rung K8) with the
+/// signature sketch `owner` keeps for it.
+fn find_edge<'a>(
+    doc: &chamfera_doc::Document,
+    owner: u32,
+    bodies: &[&'a Body],
+    name: &str,
+) -> Result<(&'a Body, EdgeId), String> {
+    let f = crate::naming::resolve(doc, owner, bodies, Kind::Edge, name, Want::One)
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .next()
+        .ok_or_else(|| format!("there is no edge named {name:?}"))?;
+    let body = bodies
+        .get(f.body)
+        .ok_or_else(|| format!("there is no edge named {name:?}"))?;
+    Ok((body, f.edge().ok_or("not an edge")?))
 }
 
 impl Session {
@@ -163,18 +170,25 @@ impl Session {
     /// first), in the solids built now.
     pub fn face_edge_refs(&self, feature: u32, face: &str) -> Result<Vec<String>, String> {
         let key = crate::solids::face_key(feature, face);
-        for s in self.solids() {
-            for f in s.body.faces() {
-                if s.body.face_name(f).ok().flatten() == Some(key.as_str()) {
-                    let edges = s.body.face_edges(f).map_err(|e| e.to_string())?;
-                    return Ok(edges
-                        .into_iter()
-                        .filter_map(|e| edge_ref(&s.body, e))
-                        .collect());
-                }
+        let found = match self.resolve_reference(None, Kind::Face, &key, Want::One) {
+            Ok(found) => found,
+            Err(NameError::Gone { .. }) => {
+                return Err(format!("feature {feature} has no face named {face:?}"));
             }
-        }
-        Err(format!("feature {feature} has no face named {face:?}"))
+            Err(e) => return Err(e.to_string()),
+        };
+        let f = found
+            .first()
+            .ok_or_else(|| format!("feature {feature} has no face named {face:?}"))?;
+        let s = self.solids().get(f.body).ok_or("the solid is gone")?;
+        let edges = s
+            .body
+            .face_edges(f.face().ok_or("not a face")?)
+            .map_err(|e| e.to_string())?;
+        Ok(edges
+            .into_iter()
+            .filter_map(|e| self.reference_name(f.body, chamfera_kernel::Entity::Edge(e)))
+            .collect())
     }
 
     /// Projects the named edges of the built solids into sketch `sketch`: each becomes a
@@ -188,11 +202,16 @@ impl Session {
     ) -> Result<Vec<(String, u32)>, String> {
         let plane = self.doc.sketch(sketch).map_err(|e| e.to_string())?.plane;
         let mut shapes = Vec::new();
+        {
+            let bodies: Vec<&Body> = self.solids().iter().map(|s| &s.body).collect();
+            for name in edges {
+                let (body, e) = find_edge(&self.doc, sketch, &bodies, name)?;
+                let g = project_edge(body, e, &plane).map_err(|x| format!("{name}: {x}"))?;
+                shapes.push((name.clone(), g));
+            }
+        }
         for name in edges {
-            let (body, e) = find_edge(self.solids().iter().map(|s| &s.body), name)
-                .ok_or_else(|| format!("there is no edge named {name:?}"))?;
-            let g = project_edge(body, e, &plane).map_err(|x| format!("{name}: {x}"))?;
-            shapes.push((name.clone(), g));
+            self.record_signature(sketch, Kind::Edge, name, None);
         }
         let f = self.doc.sketch_mut(sketch).map_err(|e| e.to_string())?;
         if f.projections.len() + shapes.len() > chamfera_doc::MAX_PROJECTIONS {
@@ -223,6 +242,7 @@ impl Session {
         sketch: u32,
         bodies: impl Iterator<Item = &'a Body> + Clone,
     ) -> Result<(), String> {
+        let bodies: Vec<&Body> = bodies.collect();
         let Ok(f) = self.doc.sketch(sketch) else {
             return Ok(());
         };
@@ -234,7 +254,7 @@ impl Session {
         let mut links = f.projections.clone();
         let mut moved = false;
         for link in links.iter_mut().filter(|p| p.linked) {
-            let Some((body, e)) = find_edge(bodies.clone(), &link.edge) else {
+            let Ok((body, e)) = find_edge(&self.doc, sketch, &bodies, &link.edge) else {
                 continue;
             };
             let Ok(g) = project_edge(body, e, &plane) else {

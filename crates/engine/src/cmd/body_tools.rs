@@ -162,7 +162,27 @@ fn split_tool(p: &Value) -> Result<Option<SplitFaceTool>, CommandError> {
 
 /// Adds the feature, rebuilds and replies, or fails (the session rolls back).
 fn add(s: &mut Session, kind: FeatureKind) -> CmdResult {
+    // What the tool's faces are now (rung K8), so they follow splits and renames.
+    let mut faces: Vec<String> = match &kind {
+        FeatureKind::SplitFace(f) => f.faces.clone(),
+        FeatureKind::Thicken(t) => t.faces.clone(),
+        _ => Vec::new(),
+    };
+    let plane = match &kind {
+        FeatureKind::SplitBody(b) => Some(&b.plane),
+        FeatureKind::SplitFace(chamfera_doc::SplitFace {
+            tool: chamfera_doc::SplitFaceTool::Plane { plane },
+            ..
+        }) => Some(plane),
+        _ => None,
+    };
+    if let Some(chamfera_doc::PlaneRef::Face(r)) = plane {
+        faces.push(crate::naming::face_ref_name(r));
+    }
     let id = s.doc.add_feature(kind)?;
+    for f in &faces {
+        s.record_signature(id, crate::naming::Kind::Face, f, None);
+    }
     s.rebuild();
     if let Some(e) = s.feature_errors().get(&id) {
         return Err(CommandError::Unavailable(e.clone()));

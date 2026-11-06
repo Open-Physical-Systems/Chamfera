@@ -79,7 +79,14 @@ fn points(s: &Session, p: &Value, on: &FaceRef) -> Result<Option<Vec<Point2>>, C
             let pt = if v.get("width").is_some() {
                 let (x, y, w, h) = params::pixel(v)?;
                 match s.face_point_at(x, y, w, h) {
-                    Some((f, role, at)) if f == on.feature && role == on.face => at,
+                    // Any piece of a split face will do: the centres pick the piece.
+                    Some((f, role, at))
+                        if f == on.feature
+                            && chamfera_doc::naming::split_piece(&role).0
+                                == chamfera_doc::naming::split_piece(&on.face).0 =>
+                    {
+                        at
+                    }
                     _ => {
                         return Err(CommandError::Unavailable(format!(
                             "the pixel ({x:.0}, {y:.0}) is not on the face {:?}",
@@ -201,7 +208,9 @@ fn hole(s: &mut Session, p: &Value) -> CmdResult {
         return Err(bad("give `depth` or `through_all: true`"));
     }
     apply(s, &mut h, p)?;
+    let on = h.face.clone();
     let id = s.doc.add_feature(FeatureKind::Hole(h))?;
+    s.record_face_signature(id, &on, None);
     s.rebuild();
     if let Some(e) = s.feature_errors().get(&id) {
         return Err(CommandError::Unavailable(e.clone()));

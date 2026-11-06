@@ -17,7 +17,8 @@
 //! | `countersink` | the countersink's cone |
 
 use crate::Session;
-use crate::solids::{face_key, face_plane, name_edges, name_faces, split_face_key};
+use crate::naming::{Kind, Want};
+use crate::solids::{face_plane, name_edges, name_faces, split_face_key};
 use chamfera_doc::{Document, Hole, HoleSizes};
 use chamfera_geom::{Frame, LINEAR_TOLERANCE, Point2, Point3, Vec2};
 use chamfera_kernel::{Body, KernelError, Line2, PointOnFace, Profile, polygon_edges};
@@ -187,44 +188,54 @@ pub(crate) fn build_hole(
     made: &[(u32, String, Body)],
 ) -> Result<(Made, Vec<Body>), String> {
     let sizes = doc.hole_sizes(h).map_err(|e| e.to_string())?;
-    let wanted = face_key(h.face.feature, &h.face.face);
-    let mut target = None;
-    for (i, (_, _, body)) in made.iter().enumerate() {
-        let faces: Vec<_> = body
-            .faces()
-            .into_iter()
-            .filter(|f| body.face_name(*f).ok().flatten() == Some(wanted.as_str()))
-            .collect();
-        if !faces.is_empty() {
-            target = Some((i, faces));
-            break;
-        }
-    }
-    let Some((index, faces)) = target else {
-        return Err(format!(
-            "the face {:?} the holes are on is gone (feature {} changed or failed)",
-            h.face.face, h.face.feature
-        ));
-    };
-    let body = &made.get(index).ok_or("the body is gone")?.2;
-    let plane = faces
-        .first()
-        .and_then(|f| face_plane(body, *f))
+    // The face through the resolver (rung K8): a piece by its `#k` name, or every piece
+    // of a face that split (possibly into several bodies, when a cut divided the solid):
+    // the hole centres pick the piece, as the point picked the face.
+    let bodies = crate::naming::bodies(made);
+    let found = crate::naming::resolve_face(doc, feature, &bodies, &h.face, Want::All).map_err(
+        |e| match e {
+            crate::naming::NameError::Gone { .. } => format!(
+                "the face {:?} the holes are on is gone (feature {} changed or failed)",
+                h.face.face, h.face.feature
+            ),
+            e => e.to_string(),
+        },
+    )?;
+    let first = found.first().ok_or("the face is gone")?;
+    let plane = bodies
+        .get(first.body)
+        .zip(first.face())
+        .and_then(|(b, f)| face_plane(b, f))
         .ok_or_else(|| format!("holes go on a flat face; {:?} is not flat", h.face.face))?;
     let centres = hole_centres(doc, h, &plane)?;
+    let mut index = None;
     for c in &centres {
         let p = plane.from_plane(*c);
-        let on = faces.iter().any(|f| {
-            body.classify_point_on_face(*f, p)
-                .is_ok_and(|x| x == PointOnFace::Inside)
+        let on = found.iter().find(|f| {
+            bodies.get(f.body).zip(f.face()).is_some_and(|(b, face)| {
+                b.classify_point_on_face(face, p)
+                    .is_ok_and(|x| x == PointOnFace::Inside)
+            })
         });
-        if !on {
+        let Some(on) = on else {
             return Err(format!(
                 "the hole centre ({:.3}, {:.3}) is not on the face {:?}",
                 c.x, c.y, h.face.face
             ));
+        };
+        match index {
+            None => index = Some(on.body),
+            Some(i) if i != on.body => {
+                return Err(format!(
+                    "the hole centres on {:?} fall on different bodies; make one hole feature per body",
+                    h.face.face
+                ));
+            }
+            Some(_) => {}
         }
     }
+    let index = index.unwrap_or(first.body);
+    let body = &made.get(index).ok_or("the body is gone")?.2;
     let (depth, through) = match sizes.depth {
         Some(d) => (d, false),
         None => {
@@ -277,13 +288,11 @@ impl Session {
     /// The plane of the named face (`2:top`) in the solids built last, if it is flat.
     pub fn named_face_plane(&self, name: &str) -> Option<Frame> {
         split_face_key(name)?;
-        self.solids().iter().find_map(|s| {
-            s.body
-                .faces()
-                .into_iter()
-                .find(|f| s.body.face_name(*f).ok().flatten() == Some(name))
-                .and_then(|f| face_plane(&s.body, f))
-        })
+        let found = self
+            .resolve_reference(None, Kind::Face, name, Want::Surface)
+            .ok()?;
+        let f = found.first()?;
+        face_plane(&self.solids().get(f.body)?.body, f.face()?)
     }
 }
 

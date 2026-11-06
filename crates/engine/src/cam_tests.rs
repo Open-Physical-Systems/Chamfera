@@ -162,13 +162,31 @@ fn the_cam_section_saves_posts_and_refuses_what_it_cannot_cut() {
     let written = std::fs::read_to_string(&path).unwrap();
     let _ = std::fs::remove_file(&path);
     assert_eq!(written, lin["gcode"].as_str().unwrap());
-    // The plate's top is open on every side: not a pocket. The operation keeps its
-    // error and posting refuses until it is fixed.
+    // The pocket left two pieces of the plate's top at z 12: the frame round the pocket
+    // and the island's top. A pocket needs one floor, so the plain name says to pick
+    // (rung K8).
     let tool = s.doc.cam.tools[1].id;
     let r = s
         .execute(
             "cam.op_add",
             &json!({"kind": "pocket", "tool": tool, "face": "2:top"}),
+        )
+        .unwrap();
+    assert!(
+        r["error"]
+            .as_str()
+            .unwrap()
+            .contains("split into 2 pieces; pick one: \"2:top#1\", \"2:top#2\""),
+        "{r}"
+    );
+    s.execute("edit.undo", &json!({})).unwrap();
+    // The frame (piece 1: its anchor, x 50, comes before the island's, x 56) is open on
+    // every side: not a pocket. The operation keeps its error and posting refuses until
+    // it is fixed.
+    let r = s
+        .execute(
+            "cam.op_add",
+            &json!({"kind": "pocket", "tool": tool, "face": "2:top#1"}),
         )
         .unwrap();
     assert!(r["error"].as_str().unwrap().contains("open"), "{r}");
