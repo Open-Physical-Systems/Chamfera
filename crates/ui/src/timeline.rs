@@ -108,6 +108,15 @@ impl ChamferaApp {
                         if b.edges.len() == 1 { "" } else { "s" }
                     ),
                 ),
+                FeatureKind::Shell(sh) => (
+                    Icon::Shell,
+                    format!(
+                        "Shell {} · {} open face{}",
+                        sh.thickness,
+                        sh.faces.len(),
+                        if sh.faces.len() == 1 { "" } else { "s" }
+                    ),
+                ),
             };
             Item {
                 id: f.id,
@@ -347,6 +356,7 @@ impl ChamferaApp {
             FeatureKind::Revolve(r) => (r.angle.clone(), ExtrudeDirection::Normal),
             FeatureKind::Pattern(p) => (p.count.clone(), ExtrudeDirection::Normal),
             FeatureKind::Blend(b) => (b.size.clone(), ExtrudeDirection::Normal),
+            FeatureKind::Shell(sh) => (sh.thickness.clone(), ExtrudeDirection::Normal),
         };
         self.timeline.editing = Some(FeatureEdit {
             feature: id,
@@ -369,11 +379,13 @@ impl ChamferaApp {
         // Extrudes edit distance and direction, fillets and chamfers their size; the
         // others show their value only.
         let extrude = matches!(feature.kind, FeatureKind::Extrude(_));
-        let blend = matches!(feature.kind, FeatureKind::Blend(_));
+        let shell = matches!(feature.kind, FeatureKind::Shell(_));
+        let blend = shell || matches!(feature.kind, FeatureKind::Blend(_));
         let revolve = !extrude && !blend;
         let value_label = match &feature.kind {
             FeatureKind::Revolve(_) => "Angle",
             FeatureKind::Pattern(_) => "Count",
+            FeatureKind::Shell(_) => "Thickness",
             _ => "Size",
         };
         const WIDTH: f32 = 300.0;
@@ -487,7 +499,9 @@ impl ChamferaApp {
         }
         if ok {
             let mut params = json!({ "feature": edit.feature, "suppressed": edit.suppressed });
-            if blend {
+            if shell {
+                params["thickness"] = json!(edit.distance.trim());
+            } else if blend {
                 params["size"] = json!(edit.distance.trim());
             } else if extrude {
                 params["distance"] = json!(edit.distance.trim());

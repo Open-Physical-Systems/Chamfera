@@ -145,7 +145,7 @@ Close runners-up: selection filters and box selection (UI and NAV), splines (nee
 | Variable-radius fillet | Radius changes along the edge | missing | P2 | L | kernel |
 | Rule fillet / full round | Round all edges of a face, or a full round between three faces | missing | P2 | M | kernel |
 | Tangent chain selection | Picking one edge selects its tangent-connected chain | missing | P0 | S | engine, ui |
-| Shell | Hollow a body with chosen faces removed | missing | P0 | L | kernel (K12), engine |
+| Shell | Hollow a body with chosen faces removed | branch `kernel/k12-shell` (planes, cylinders, cones; inward or outward; closed hollow) | P0 | L | kernel (K12), engine |
 | Hole | Simple, counterbore, countersink; blind, to a face, through all | missing | P0 | M | engine, doc, kernel |
 | Thread | Cosmetic thread (attribute + drawing note), later modelled thread | missing | P1 | M | doc, kernel |
 | Linear (rectangular) pattern | Features repeated in one or two directions | done | P0 | M | engine, doc |

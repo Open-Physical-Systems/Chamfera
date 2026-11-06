@@ -22,6 +22,8 @@ pub static COMMANDS: &[CommandSpec] = &[
                  direction: string (optional) - normal, reversed or symmetric\n\
                  operation: string (optional) - new_body, join, cut or intersect\n\
                  size: string or number (optional) - new fillet radius or chamfer distance\n\
+                 thickness: string or number (optional) - new shell wall thickness\n\
+                 faces: list of strings (optional) - new open faces of a shell\n\
                  suppressed: boolean (optional)",
         mutates: true,
         run: edit,
@@ -94,6 +96,15 @@ pub static COMMANDS: &[CommandSpec] = &[
                  radius: string or number (required) - such as 2 or \"2 mm\"",
         mutates: true,
         run: fillet,
+    },
+    CommandSpec {
+        id: "solid.shell",
+        label: "Shell",
+        params: "faces: list of strings (optional) - faces to remove (open), names like \"2:top\"; none: closed and hollow\n\
+                 pick: {x, y, width, height} (optional) - open the face under this pixel, instead\n\
+                 thickness: string or number (required) - wall thickness, such as 2 or \"2 mm\"; negative grows outward",
+        mutates: true,
+        run: shell,
     },
     CommandSpec {
         id: "solid.pattern_circular",
@@ -305,6 +316,47 @@ fn chamfer(s: &mut Session, p: &Value) -> CmdResult {
     blend(s, p, BlendKind::Chamfer, "distance")
 }
 
+/// The faces a shell opens: a list (possibly empty), the one under a pixel, or none.
+fn shell_faces(s: &Session, p: &Value) -> Result<Vec<String>, CommandError> {
+    match (p.get("faces"), p.get("pick")) {
+        (Some(Value::Array(list)), None | Some(Value::Null)) => list
+            .iter()
+            .map(|f| {
+                f.as_str()
+                    .map(str::to_owned)
+                    .ok_or_else(|| bad("`faces` must be a list of face names"))
+            })
+            .collect(),
+        (None | Some(Value::Null), Some(pick)) => {
+            let (x, y) = (params::req_f64(pick, "x")?, params::req_f64(pick, "y")?);
+            let (w, h) = (
+                params::req_f64(pick, "width")?,
+                params::req_f64(pick, "height")?,
+            );
+            s.face_ref_at(x, y, w, h).map(|r| vec![r]).ok_or_else(|| {
+                CommandError::Unavailable("there is no face of a solid under that pixel".into())
+            })
+        }
+        (None | Some(Value::Null), None) => Ok(Vec::new()),
+        (Some(_), None | Some(Value::Null)) => Err(bad("`faces` must be a list of face names")),
+        _ => Err(bad("give either `faces` (a list) or `pick`, not both")),
+    }
+}
+
+fn shell(s: &mut Session, p: &Value) -> CmdResult {
+    let faces = shell_faces(s, p)?;
+    let thickness =
+        expression(p, "thickness", "mm")?.ok_or_else(|| bad("`thickness` is required"))?;
+    let id = s
+        .doc
+        .add_feature(FeatureKind::Shell(chamfera_doc::Shell { faces, thickness }))?;
+    s.rebuild();
+    if let Some(e) = s.feature_errors().get(&id) {
+        return Err(CommandError::Unavailable(e.clone()));
+    }
+    Ok(feature_reply(s, id))
+}
+
 fn edge_at(s: &mut Session, p: &Value) -> CmdResult {
     let (x, y) = (params::req_f64(p, "x")?, params::req_f64(p, "y")?);
     let (w, h) = (params::req_f64(p, "width")?, params::req_f64(p, "height")?);
@@ -436,6 +488,9 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
             FeatureKind::Blend(_) => {
                 return Err(bad("a fillet or chamfer has no operation"));
             }
+            FeatureKind::Shell(_) => {
+                return Err(bad("a shell has no operation"));
+            }
         }
     }
     let new_size = expression(p, "size", "mm")?;
@@ -444,6 +499,22 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
             return Err(bad("size belongs to fillets and chamfers"));
         };
         b.size = size;
+    }
+    let new_thickness = expression(p, "thickness", "mm")?;
+    let new_faces = match p.get("faces") {
+        None | Some(Value::Null) => None,
+        Some(_) => Some(shell_faces(s, &json!({ "faces": p.get("faces") }))?),
+    };
+    if new_thickness.is_some() || new_faces.is_some() {
+        let FeatureKind::Shell(sh) = &mut kind else {
+            return Err(bad("thickness and faces belong to shells"));
+        };
+        if let Some(t) = new_thickness {
+            sh.thickness = t;
+        }
+        if let Some(f) = new_faces {
+            sh.faces = f;
+        }
     }
     if let FeatureKind::Extrude(e) = &mut kind {
         if let Some(d) = new_distance {

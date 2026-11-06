@@ -27,6 +27,7 @@ static SHOT_FAILED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBoo
 mod icons;
 mod params_ui;
 mod search;
+mod shell_ui;
 mod shortcuts;
 mod sketch_select;
 mod sketch_ui;
@@ -390,6 +391,14 @@ impl ChamferaApp {
                 return;
             }
         }
+        if self.solid.shell.is_some()
+            && response.clicked()
+            && let Some(pos) = response.interact_pointer_pos()
+        {
+            let (x, y) = local(pos);
+            self.shell_click(x, y, w, h);
+            return;
+        }
         if self.solid.extrude.is_some()
             && response.clicked()
             && let Some(pos) = response.interact_pointer_pos()
@@ -699,6 +708,7 @@ impl eframe::App for ChamferaApp {
             self.parameters_window(&ctx);
             self.extrude_dialog(&ctx);
             self.blend_dialog(&ctx);
+            self.shell_dialog(&ctx);
             self.feature_dialog(&ctx);
             self.rename_dialog(&ctx);
             self.properties_window(&ctx);
