@@ -710,6 +710,7 @@ pub(super) mod curved {
             Surface::Sphere(_) => "SPHERICAL_SURFACE",
             Surface::Torus(t) if t.major_radius() >= t.minor_radius() => "TOROIDAL_SURFACE",
             Surface::Torus(_) => "DEGENERATE_TOROIDAL_SURFACE",
+            Surface::Extrusion(_) => "SURFACE_OF_LINEAR_EXTRUSION",
         }
     }
 
@@ -983,5 +984,93 @@ pub(super) mod curved {
             let ex = read::parse(&text.replace(&line, &bad)).unwrap();
             assert!(summarize(&ex).is_err(), "{bad}");
         }
+    }
+}
+
+/// Splines (K10) export as B_SPLINE_CURVE_WITH_KNOTS and SURFACE_OF_LINEAR_EXTRUSION.
+mod splines {
+    use super::*;
+    use chamfera_geom::BSplineCurve2;
+    use chamfera_kernel::{Profile, ProfileEdge, extrude};
+
+    /// The arch: the quadratic through (0, 0), (10, 10), (20, 0), closed by a line, extruded
+    /// by 5. Faces: two caps, the spline side and the flat side; edges: the spline and the
+    /// line at both ends and the two struts.
+    fn arch() -> Body {
+        let pts = [
+            Point2::new(0.0, 0.0),
+            Point2::new(10.0, 10.0),
+            Point2::new(20.0, 0.0),
+        ];
+        let s = BSplineCurve2::interpolate(&pts, None, None).unwrap();
+        let p = Profile::new(
+            vec![ProfileEdge::Spline(s), ProfileEdge::line(pts[2], pts[0])],
+            vec![],
+        );
+        extrude(&Frame::XY, &p, 5.0).unwrap()
+    }
+
+    #[test]
+    fn an_extruded_spline_writes_b_splines_and_a_linear_extrusion() {
+        let (text, ex) = export(&[("arch", &arch())]);
+        assert_eq!(ex.count("ADVANCED_FACE"), 4);
+        assert_eq!(ex.count("EDGE_CURVE"), 6);
+        assert_eq!(ex.count("SURFACE_OF_LINEAR_EXTRUSION"), 1);
+        // Two spline edges and the extrusion's swept curve.
+        assert_eq!(ex.count("B_SPLINE_CURVE_WITH_KNOTS"), 3);
+        assert_eq!(ex.count("PLANE"), 3);
+        // Degree 2, three control points, knots 0 and 1 each three times.
+        assert!(text.contains(".UNSPECIFIED.,.F.,.F.,(3,3),(0.,1.),.UNSPECIFIED.)"));
+        let s = summarize(&ex).unwrap();
+        let [solid] = s.solids.as_slice() else {
+            panic!("one solid expected");
+        };
+        assert_eq!((solid.faces, solid.edges, solid.vertices), (4, 6, 4));
+        let ext = solid
+            .face_surfaces
+            .iter()
+            .find(|f| f.entity == "SURFACE_OF_LINEAR_EXTRUSION")
+            .unwrap();
+        assert_eq!(ext.axis, [0.0, 0.0, 1.0]);
+        // Importing splines comes later: refused per solid, never a broken body.
+        let imported = import::import(&text).unwrap();
+        assert!(imported.solids.is_empty());
+        assert_eq!(imported.failed.len(), 1);
+    }
+
+    #[test]
+    fn a_rational_spline_is_a_complex_instance_with_its_weights() {
+        // The unit circle as two rational quadratic halves, extruded by 1.
+        let w = std::f64::consts::FRAC_1_SQRT_2;
+        let corners = [
+            (1.0, 0.0),
+            (1.0, 1.0),
+            (0.0, 1.0),
+            (-1.0, 1.0),
+            (-1.0, 0.0),
+            (-1.0, -1.0),
+            (0.0, -1.0),
+            (1.0, -1.0),
+            (1.0, 0.0),
+        ];
+        let c = BSplineCurve2::new(
+            2,
+            vec![
+                0.0, 0.0, 0.0, 0.25, 0.25, 0.5, 0.5, 0.75, 0.75, 1.0, 1.0, 1.0,
+            ],
+            corners.iter().map(|(x, y)| Point2::new(*x, *y)).collect(),
+            Some(vec![1.0, w, 1.0, w, 1.0, w, 1.0, w, 1.0]),
+        )
+        .unwrap();
+        let (a, b) = c.split_at(0.5).unwrap();
+        let p = Profile::new(vec![ProfileEdge::Spline(a), ProfileEdge::Spline(b)], vec![]);
+        let body = extrude(&Frame::XY, &p, 1.0).unwrap();
+        let (text, ex) = export(&[("disc", &body)]);
+        assert!(text.contains("RATIONAL_B_SPLINE_CURVE(("));
+        // The first half: knots 0, 0.25, 0.5 with multiplicities 3, 2, 3.
+        assert!(text.contains("B_SPLINE_CURVE_WITH_KNOTS((3,2,3),(0.,0.25,0.5),.UNSPECIFIED.)"));
+        assert_eq!(ex.count("SURFACE_OF_LINEAR_EXTRUSION"), 2);
+        let s = summarize(&ex).unwrap();
+        assert_eq!(s.solids.len(), 1);
     }
 }

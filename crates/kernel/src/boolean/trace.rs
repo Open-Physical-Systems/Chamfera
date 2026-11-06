@@ -46,7 +46,7 @@ const CHORD: f64 = 1e-3;
 const IMAGE_TOLERANCE: f64 = 1e-9;
 
 /// A face's surface and how its outward normal relates to it.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(super) struct Side {
     pub surface: Surface,
     /// `+1` when the outward normal is the surface normal, `-1` otherwise.
@@ -55,7 +55,7 @@ pub(super) struct Side {
 
 impl Side {
     pub fn normal(&self, p: Point3) -> Vec3 {
-        match self.surface {
+        match &self.surface {
             Surface::Plane(f) => f.z() * self.orient,
             s => {
                 let q = s.parameters(p);
@@ -370,7 +370,7 @@ fn image(reg: &Registry, side: &Side, cycle: &[Use]) -> KernelResult<Image> {
         let area = 0.5 * moment.dot(frame.z()) * side.orient;
         return Ok(Image { edges, area });
     }
-    let surface = side.surface;
+    let surface = &side.surface;
     let orient = side.orient;
     let pu = surface.period_u();
     let pv = surface.period_v();

@@ -91,6 +91,7 @@ pub enum Icon {
     SketchFinish,
     Slot,
     Split,
+    Spline,
     Trim,
     Undo,
     ViewFront,
@@ -102,7 +103,7 @@ pub enum Icon {
 
 impl Icon {
     #[cfg(test)]
-    pub const ALL: [Icon; 79] = [
+    pub const ALL: [Icon; 80] = [
         Icon::Arc,
         Icon::ArcTangent,
         Icon::ArcThreePoint,
@@ -175,6 +176,7 @@ impl Icon {
         Icon::SketchFinish,
         Icon::Slot,
         Icon::Split,
+        Icon::Spline,
         Icon::Trim,
         Icon::Undo,
         Icon::ViewFront,
@@ -265,6 +267,7 @@ impl Icon {
             Icon::PatternRectangular => master!("pattern_rectangular"),
             Icon::RectangleCentre => master!("rectangle_centre"),
             Icon::Split => master!("split"),
+            Icon::Spline => master!("spline"),
             Icon::Trim => master!("trim"),
             Icon::Warning => master!("warning"),
             Icon::Component => master!("component"),

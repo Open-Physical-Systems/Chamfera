@@ -538,6 +538,7 @@ impl Session {
             Some((Surface::Cone(_), _)) => "cone",
             Some((Surface::Sphere(_), _)) => "sphere",
             Some((Surface::Torus(_), _)) => "torus",
+            Some((Surface::Extrusion(_), _)) => "extrusion",
             None => "unknown",
         };
         let p = hit.point;
@@ -564,6 +565,7 @@ impl Session {
                 Curve::Circle(_) => "circle",
                 Curve::Arc(_) => "arc",
                 Curve::Ellipse(_) | Curve::EllipticalArc(_) => "ellipse",
+                Curve::BSpline(_) => "spline",
             };
             if edge.as_ref().is_none_or(|b| d < b.0) {
                 edge = Some((

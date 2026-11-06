@@ -50,6 +50,9 @@ pub fn project_edge(body: &Body, e: EdgeId, plane: &Frame) -> Result<FixedCurve,
         )),
         Curve::Ellipse(x) => Some((*x.frame(), x.rx(), x.ry())),
         Curve::EllipticalArc(a) => Some((*a.ellipse().frame(), a.ellipse().rx(), a.ellipse().ry())),
+        Curve::BSpline(_) => {
+            return Err("spline edges cannot be projected into a sketch yet".into());
+        }
     };
     let Some((frame, rx, ry)) = conic else {
         let (a, b) = (at(lo), at(hi));

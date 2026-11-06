@@ -1,4 +1,5 @@
-//! Area and volume of faces and solids on planes, cylinders, cones, spheres and tori.
+//! Area and volume of faces and solids on planes, cylinders, cones, spheres and tori
+//! (faces on extruded splines: `spline.rs`).
 //!
 //! # Planar faces (exact)
 //! The vector area of a loop is `½ ∮ (p - r) × dp` (Stokes' theorem on the plane), summed
@@ -226,6 +227,14 @@ impl Body {
     /// `kind` (see the module documentation).
     fn curved_integral(&self, face: FaceId, kind: Integrand) -> KernelResult<(f64, f64)> {
         let (surface, orient) = self.face_orientation(face)?;
+        if let Surface::Extrusion(e) = &surface {
+            let centre = match kind {
+                Integrand::Area => None,
+                Integrand::Volume(c) => Some(c),
+            };
+            let total = self.extrusion_integral(face, &surface, e, orient, centre)?;
+            return Ok((total, orient));
+        }
         let m = surface.meridian().ok_or_else(|| {
             KernelError::InvalidInput(format!("{face} is planar, not on a curved surface"))
         })?;

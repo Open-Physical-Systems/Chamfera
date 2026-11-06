@@ -53,8 +53,8 @@ Close runners-up: selection filters and box selection (UI and NAV), splines (nee
 | Ellipse | Ellipse by centre and two axes (kernel ellipses exist) | branch (`sketch/shapes-project`) (not extruded yet) | P1 | S | sketch, ui |
 | Elliptical arc | Partial ellipse | branch (`sketch/shapes-project`) (command only) | P2 | S | sketch |
 | Conic curve | A conic with a shape value (rho) between two ends | missing | P2 | M | sketch, geom |
-| Fit-point spline | Smooth curve through clicked points, with tangent handles | missing | P1 | L | sketch, geom (needs K10) |
-| Control-point spline | Spline edited by its control polygon | missing | P1 | M | sketch, geom (needs K10) |
+| Fit-point spline | Smooth curve through clicked points, with tangent handles | branch (`kernel/k10-splines`): `sketch.spline`, Spline tool, open and closed, extrudes; tangent handles and end-tangent constraints not yet | P1 | L | sketch, geom (needs K10) |
+| Control-point spline | Spline edited by its control polygon | branch (`kernel/k10-splines`): `sketch.spline {kind: control}`, open and closed; no UI tool of its own yet | P1 | M | sketch, geom (needs K10) |
 | Sketch text | Text as closed profiles, with a font, height and alignment on a path | missing | P2 | L | sketch, io (font parsing) |
 | Trim | Delete the piece of a curve between crossings | branch (`sketch/tools`) | P0 | M | sketch, engine, ui |
 | Extend | Lengthen a curve to the next one it meets | branch (`sketch/tools`) | P0 | S | sketch, engine, ui |

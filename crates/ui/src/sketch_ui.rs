@@ -32,6 +32,7 @@ pub enum Tool {
     Arc,
     ThreePointArc,
     TangentArc,
+    Spline,
     Offset,
     Mirror,
     RectangularPattern,
@@ -49,7 +50,7 @@ pub enum Tool {
 }
 
 /// The CREATE tools shown in the ribbon; the group's list has all of `CREATE_ALL`.
-const CREATE_SHOWN: [Tool; 9] = [
+const CREATE_SHOWN: [Tool; 10] = [
     Tool::Line,
     Tool::Rectangle,
     Tool::Circle,
@@ -57,10 +58,11 @@ const CREATE_SHOWN: [Tool; 9] = [
     Tool::Polygon,
     Tool::Slot,
     Tool::Ellipse,
+    Tool::Spline,
     Tool::Offset,
     Tool::Mirror,
 ];
-pub(crate) const CREATE_ALL: [Tool; 15] = [
+pub(crate) const CREATE_ALL: [Tool; 16] = [
     Tool::Line,
     Tool::Rectangle,
     Tool::CentreRectangle,
@@ -72,6 +74,7 @@ pub(crate) const CREATE_ALL: [Tool; 15] = [
     Tool::Slot,
     Tool::Ellipse,
     Tool::Project,
+    Tool::Spline,
     Tool::Offset,
     Tool::Mirror,
     Tool::RectangularPattern,
@@ -97,6 +100,7 @@ impl Tool {
             Tool::Arc => label("sketch.arc"),
             Tool::ThreePointArc => label("sketch.arc.three_point"),
             Tool::TangentArc => label("sketch.arc.tangent"),
+            Tool::Spline => label("sketch.spline"),
             Tool::Offset => label("sketch.offset"),
             Tool::Mirror => label("sketch.mirror"),
             Tool::RectangularPattern => label("sketch.pattern.rectangular"),
@@ -124,6 +128,7 @@ impl Tool {
             Tool::Arc => Icon::Arc,
             Tool::ThreePointArc => Icon::ArcThreePoint,
             Tool::TangentArc => Icon::ArcTangent,
+            Tool::Spline => Icon::Spline,
             Tool::Offset => Icon::Offset,
             Tool::Mirror => Icon::Mirror,
             Tool::RectangularPattern => Icon::PatternRectangular,
@@ -141,6 +146,7 @@ impl Tool {
 
     fn tooltip(self) -> &'static str {
         match self {
+            Tool::Spline => crate::spline_ui::TOOLTIP,
             t @ (Tool::Polygon | Tool::Slot | Tool::Ellipse | Tool::Project) => {
                 crate::sketch_shapes::tooltip(t)
             }
@@ -217,6 +223,7 @@ Click a curve to split it where other curves cross it; Split All splits every cr
 
     fn hint(self, clicks: usize) -> &'static str {
         match (self, clicks) {
+            (Tool::Spline, n) => crate::spline_ui::hint(n),
             (t @ (Tool::Polygon | Tool::Slot | Tool::Ellipse | Tool::Project), n) => {
                 crate::sketch_shapes::hint(t, n)
             }
@@ -291,10 +298,10 @@ Click a curve to split it where other curves cross it; Split All splits every cr
 
 /// A placed click: where it is, the existing point it snapped to, and the snap.
 #[derive(Debug, Clone, Copy)]
-struct Click {
-    at: Point2,
-    point: Option<u32>,
-    snap: Option<Snap>,
+pub(crate) struct Click {
+    pub(crate) at: Point2,
+    pub(crate) point: Option<u32>,
+    pub(crate) snap: Option<Snap>,
 }
 
 /// The direction lock the modifier keys hold while drawing.
@@ -435,7 +442,7 @@ impl Default for ToolOptions {
 #[derive(Default)]
 pub struct SketchUi {
     pub tool: Option<Tool>,
-    clicks: Vec<Click>,
+    pub(crate) clicks: Vec<Click>,
     /// The first point of the current line chain, to close the loop on it.
     chain_start: Option<u32>,
     hover: Option<Point2>,
@@ -1047,6 +1054,12 @@ impl ChamferaApp {
         } else {
             self.heads_up_keys(ui)
         };
+        if self.sketch.tool() == Tool::Spline
+            && !typing
+            && ui.input(|i| i.key_pressed(egui::Key::Enter))
+        {
+            self.spline_finish(false);
+        }
         if esc && !typing && !esc_used {
             if self.sketch.clicks.is_empty() {
                 self.sketch.tool = Some(Tool::Select);
@@ -1370,6 +1383,10 @@ impl ChamferaApp {
         };
         if tool.edits() {
             self.edit_click(tool, (x, y, w, h), click);
+            return;
+        }
+        if tool == Tool::Spline {
+            self.spline_click(click, (x, y, w, h));
             return;
         }
         if tool == Tool::Project {
@@ -1699,6 +1716,7 @@ impl ChamferaApp {
                     polylines.extend(self.op_polylines(&op));
                 }
             }
+            (Tool::Spline, _) => polylines.extend(self.spline_preview(hover)),
             (tool, _) if tool.edits() => polylines.extend(self.edit_preview(tool, hover)),
             (tool, _) if crate::sketch_shapes::is_shape(tool) => {
                 let pts: Vec<Point2> = c.iter().map(|k| k.at).collect();

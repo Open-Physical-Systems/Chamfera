@@ -869,6 +869,11 @@ fn dimension_selection(s: &mut Session, p: &Value) -> CmdResult {
                 curve: *c,
                 value: sk.radius(*c).ok_or_else(|| bad("the arc has no radius"))?,
             },
+            Some(Curve::Spline { .. }) => {
+                return Err(bad(
+                    "a spline has no dimension of its own; dimension its points",
+                ));
+            }
             Some(Curve::Ellipse { .. } | Curve::EllipticalArc { .. }) => {
                 return Err(bad(
                     "dimension an ellipse by its points: select its centre and an axis end",

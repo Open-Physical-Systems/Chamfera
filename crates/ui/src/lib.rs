@@ -37,6 +37,7 @@ mod sketch_select;
 mod sketch_shapes;
 mod sketch_ui;
 mod solid_ui;
+mod spline_ui;
 mod timeline;
 mod transform_ui;
 mod viewcube;

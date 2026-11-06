@@ -73,6 +73,10 @@ pub fn curve_polyline(sketch: &Sketch, curve: &Curve) -> Vec<Point2> {
                 })
                 .collect()
         }
+        Curve::Spline { .. } => sketch
+            .spline_of(curve)
+            .map(|c| chamfera_sketch::spline_polyline(&c))
+            .unwrap_or_default(),
         Curve::Ellipse { .. } | Curve::EllipticalArc { .. } => sketch
             .ellipse_arc_of(curve)
             .map(|e| e.polyline(CIRCLE_SEGMENTS))

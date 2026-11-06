@@ -108,6 +108,11 @@ pub fn intersect_curve_surface_on(
     t1: f64,
     surface: &Surface,
 ) -> KernelResult<CurveSurfaceIntersection> {
+    if matches!(curve, Curve::BSpline(_)) || matches!(surface, Surface::Extrusion(_)) {
+        return Err(KernelError::Unsupported(
+            "intersections of spline curves and surfaces are not supported yet (K10)".into(),
+        ));
+    }
     let ordered = !t0.is_nan() && !t1.is_nan() && t0 <= t1;
     let finite = t0.is_finite() && t1.is_finite();
     let bad_range = |what: &str| {
@@ -156,6 +161,9 @@ pub fn intersect_curve_surface_on(
                 surface,
             )
         }
+        Curve::BSpline(_) => Err(KernelError::Unsupported(
+            "intersections of spline curves are not supported yet (K10)".into(),
+        )),
     }
 }
 
@@ -164,7 +172,8 @@ fn implicit(surface: &Surface, x: &Poly, y: &Poly, z: &Poly, d: &Poly) -> Poly {
     let sq = |p: &Poly| p.mul(p);
     let rho2 = sq(x).add(&sq(y));
     match surface {
-        Surface::Plane(_) => z.clone(),
+        // Refused before (`intersect_curve_surface_on`); no implicit form here.
+        Surface::Plane(_) | Surface::Extrusion(_) => z.clone(),
         Surface::Cylinder(c) => rho2.sub(&sq(d).scale(c.radius() * c.radius())),
         Surface::Sphere(s) => rho2.add(&sq(z)).sub(&sq(d).scale(s.radius() * s.radius())),
         Surface::Cone(c) => {

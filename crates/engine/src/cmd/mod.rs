@@ -13,6 +13,7 @@ mod joint;
 mod param;
 mod select;
 mod sketch;
+mod spline;
 mod timeline;
 mod transform;
 mod view;
@@ -50,6 +51,7 @@ pub fn registry() -> Vec<&'static CommandSpec> {
         param::COMMANDS,
         select::COMMANDS,
         sketch::COMMANDS,
+        spline::COMMANDS,
         timeline::COMMANDS,
         transform::COMMANDS,
         view::COMMANDS,

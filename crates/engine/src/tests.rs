@@ -206,6 +206,10 @@ fn hostile_params_never_panic() {
         json!({"edges": [long], "radius": -1, "distance": "0 mm", "size": "q"}),
         json!({"edges": [], "pick": {"x": 1e300, "y": "a"}, "radius": 1}),
         json!({"pick": {"x": 400, "y": 300, "width": 800, "height": 600}, "radius": 1e9}),
+        json!({"points": [{"x": 0, "y": 0}, {"x": 10, "y": 5}, {"x": 20, "y": 0}], "kind": "fit"}),
+        json!({"points": [{"point": 1}, {"point": 1}, {"x": f64::NAN, "y": 0}], "closed": true}),
+        json!({"points": [{"x": 1e300}, nested, {"point": -1}], "kind": "control", "closed": 1}),
+        json!({"points": [{"x": 0, "y": 0}, {"x": 0, "y": 0}, {"x": 0, "y": 0}], "kind": "control"}),
         json!({"component": 0, "name": "Part", "from_bodies": [1, 2, 99999], "parent": 0}),
         json!({"component": 4294967295u64, "from_bodies": "all", "parent": -1, "grounded": "no", "tint": 1}),
         json!({"component": 1, "transform": {"translate": {"x": 1e300, "y": 0, "z": 0}}}),
@@ -784,6 +788,133 @@ fn extruding_a_rectangle_makes_a_box_with_its_exact_volume() {
         .map(|b| b.mesh.signed_volume())
         .sum::<f64>();
     assert!((mesh_volume - 15_000.0).abs() < 1e-6, "{mesh_volume}");
+}
+
+/// The arch: a fit spline through (0, 0), (10, h), (20, 0) closed by a line. Equal
+/// chords give the parameters 0, ½, 1 and the quadratic y = 4 h t (1 - t), x = 20 t:
+/// a parabola over a 20 mm base whose area is 2/3 · 20 · h (Archimedes).
+fn spline_arch(s: &mut Session, h: f64) -> serde_json::Value {
+    s.execute("sketch.create", &json!({"plane": "xy"})).unwrap();
+    let r = s
+        .execute(
+            "sketch.spline",
+            &json!({"points": [{"x": 0, "y": 0}, {"x": 10, "y": h}, {"x": 20, "y": 0}]}),
+        )
+        .unwrap();
+    let (a, b) = (r["points"][0].clone(), r["points"][2].clone());
+    s.execute(
+        "sketch.line",
+        &json!({"x1": 20, "y1": 0, "x2": 0, "y2": 0, "start": b, "end": a}),
+    )
+    .unwrap();
+    r
+}
+
+fn profile_areas(s: &mut Session) -> Vec<f64> {
+    s.execute("sketch.get", &json!({})).unwrap()["profiles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["area"].as_f64().unwrap())
+        .collect()
+}
+
+#[test]
+fn a_fit_spline_closed_by_a_line_extrudes_to_area_times_height() {
+    let mut s = Session::new();
+    let r = spline_arch(&mut s, 10.0);
+    assert_eq!(r["kind"], "fit");
+    let areas = profile_areas(&mut s);
+    assert_eq!(areas.len(), 1);
+    assert!((areas[0] - 400.0 / 3.0).abs() < 1e-9, "{areas:?}");
+    // Dragging the middle point to (10, 20) reshapes the spline: 2/3 · 20 · 20 = 800/3.
+    let mid = r["points"][1].clone();
+    s.execute("sketch.drag", &json!({"point": mid, "x": 10, "y": 20}))
+        .unwrap();
+    let areas = profile_areas(&mut s);
+    assert!((areas[0] - 800.0 / 3.0).abs() < 1e-6, "{areas:?}");
+    s.execute("sketch.finish", &json!({})).unwrap();
+    // Extruded by 6: V = 800/3 · 6 = 1600.
+    let e = s
+        .execute(
+            "solid.extrude",
+            &json!({"sketch": 1, "profiles": [{"x": 10, "y": 5}], "distance": 6}),
+        )
+        .unwrap();
+    let v = e["solids"][0]["volume"].as_f64().unwrap();
+    assert!((v - 1600.0).abs() < 1e-6, "{v}");
+    // Undo takes the extrude back.
+    s.execute("edit.undo", &json!({})).unwrap();
+    let list = s.execute("feature.list", &json!({})).unwrap();
+    assert!(list["features"].as_array().unwrap().is_empty(), "{list}");
+}
+
+#[test]
+fn a_closed_control_spline_is_a_profile_of_its_own() {
+    // The closed uniform cubic on the square (±10, ±10): integrating ½ (x y' - y x') over
+    // its four spans of uniform cubic basis polynomials gives 2440/9 mm²; extruded by 9
+    // that is 2440 mm³.
+    let mut s = Session::new();
+    s.execute("sketch.create", &json!({"plane": "xy"})).unwrap();
+    let r = s
+        .execute(
+            "sketch.spline",
+            &json!({"points": [{"x": 10, "y": -10}, {"x": 10, "y": 10}, {"x": -10, "y": 10}, {"x": -10, "y": -10}],
+                    "kind": "control", "closed": true}),
+        )
+        .unwrap();
+    assert_eq!(r["closed"], true);
+    let areas = profile_areas(&mut s);
+    assert!((areas[0] - 2440.0 / 9.0).abs() < 1e-9, "{areas:?}");
+    s.execute("sketch.finish", &json!({})).unwrap();
+    let e = s
+        .execute(
+            "solid.extrude",
+            &json!({"sketch": 1, "profiles": [{"x": 0, "y": 0}], "distance": 9}),
+        )
+        .unwrap();
+    let v = e["solids"][0]["volume"].as_f64().unwrap();
+    assert!((v - 2440.0).abs() < 1e-6, "{v}");
+}
+
+#[test]
+fn bad_splines_are_refused_and_change_nothing() {
+    let mut s = Session::new();
+    // No sketch being edited.
+    assert!(
+        s.execute(
+            "sketch.spline",
+            &json!({"points": [{"x": 0, "y": 0}, {"x": 1, "y": 1}]})
+        )
+        .is_err()
+    );
+    s.execute("sketch.create", &json!({"plane": "xy"})).unwrap();
+    for p in [
+        json!({}),
+        json!({"points": [{"x": 0, "y": 0}]}),
+        json!({"points": "many"}),
+        json!({"points": [{"x": 0, "y": 0}, {"x": 0, "y": 0}]}),
+        json!({"points": [{"x": 0, "y": 0}, {"x": 1e300, "y": 0}]}),
+        json!({"points": [{"x": 0, "y": 0}, {"x": 5}]}),
+        json!({"points": [{"x": 0, "y": 0}, {"x": 5, "y": 1, "z": 3}]}),
+        json!({"points": [{"point": 999}, {"x": 5, "y": 1}]}),
+        json!({"points": [{"x": 0, "y": 0}, {"x": 5, "y": 1}], "kind": "bezier"}),
+        json!({"points": [{"x": 0, "y": 0}, {"x": 5, "y": 1}], "closed": true}),
+        json!({"points": [{"x": 0, "y": 0}, {"x": 5, "y": 1}], "closed": "yes"}),
+    ] {
+        assert!(s.execute("sketch.spline", &p).is_err(), "{p}");
+    }
+    let sk = &s.doc.sketches[0].sketch;
+    assert!(sk.is_empty(), "a failed spline leaves nothing behind");
+    // An existing point can be reused.
+    let a = s.execute("sketch.point", &json!({"x": 0, "y": 0})).unwrap()["point"].clone();
+    let r = s
+        .execute(
+            "sketch.spline",
+            &json!({"points": [{"point": a}, {"x": 5, "y": 5}, {"x": 10, "y": 0}]}),
+        )
+        .unwrap();
+    assert_eq!(r["points"][0], a);
 }
 
 #[test]

@@ -78,7 +78,7 @@ pub(crate) fn meridians(axis: &Frame, s: &Surface) -> Vec<Meridian> {
     let height = |p: Point3| (p - axis.origin()).dot(axis.z());
     let hc = height(s.frame().origin());
     match s {
-        Surface::Plane(_) => Vec::new(),
+        Surface::Plane(_) | Surface::Extrusion(_) => Vec::new(),
         Surface::Cylinder(c) => [-1.0, 1.0]
             .map(|k| Meridian::Line {
                 p: Point2::new(k * c.radius(), hc),
