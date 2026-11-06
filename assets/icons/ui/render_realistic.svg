@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+  <!-- Chamfera interface icon: realistic view (a lit ball and its shadow on the floor). Original artwork, MIT OR Apache-2.0. -->
+  <circle cx="11" cy="10" r="6.5" stroke="#2B313B"/>
+  <path stroke="#2B313B" d="M8 6.8a4 4 0 0 1 3-1.3"/>
+  <ellipse cx="14" cy="19.5" rx="6.5" ry="1.75" stroke="#E8770E" fill="#E8770E"/>
+</svg>

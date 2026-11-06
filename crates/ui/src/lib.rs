@@ -44,6 +44,7 @@ mod prefs;
 mod prefs_ui;
 mod press_pull_ui;
 mod recovery_ui;
+mod render_ui;
 mod ribbon;
 mod search;
 mod sheet_ui;
@@ -123,6 +124,11 @@ pub struct Options {
     /// Keep the design the script built as if a crash had left it unsaved, and start
     /// with the question to recover it (for screenshots; a scratch recovery folder).
     pub recovery_demo: bool,
+    /// Open the RENDER workspace at start.
+    pub render: bool,
+    /// Open the Render window and start a render of this width, height and sample count
+    /// (the screenshot waits for it to finish).
+    pub render_window: Option<[u32; 3]>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -212,6 +218,8 @@ pub struct ChamferaApp {
     cam: cam_ui::CamUi,
     /// Visual style, section and the Appearance panel.
     display: display_ui::DisplayUi,
+    /// The RENDER workspace (`render_ui`).
+    render: render_ui::RenderUi,
     /// The browser's file picker, downloads and local storage.
     #[cfg(target_arch = "wasm32")]
     web: web::WebFiles,
@@ -334,6 +342,7 @@ impl ChamferaApp {
             ctx_menu: context_menu::ContextMenuUi::default(),
             cam: cam_ui::CamUi::default(),
             display: display_ui::DisplayUi::default(),
+            render: render_ui::RenderUi::default(),
             #[cfg(target_arch = "wasm32")]
             web: web::WebFiles::default(),
             ctx_close: false,
@@ -438,6 +447,18 @@ impl ChamferaApp {
         }
         if options.history {
             app.open_history();
+        }
+        if options.render || options.render_window.is_some() {
+            app.set_workspace(ribbon::Workspace::Render);
+        }
+        if let Some([w, h, samples]) = options.render_window {
+            app.open_render_window();
+            if let Some(win) = &mut app.render.window {
+                win.width = w.to_string();
+                win.height = h.to_string();
+                win.samples = samples.to_string();
+            }
+            app.start_render();
         }
         if let Some(caption) = &options.ribbon_menu {
             let tab = app.ribbon_tab();
@@ -883,6 +904,11 @@ impl ChamferaApp {
 
     /// `--screenshot`: wait a few frames for the view to settle, grab the window, save, quit.
     fn screenshot_step(&mut self, ctx: &egui::Context) {
+        let rendering = self.render.busy();
+        if rendering {
+            // A render takes as long as it takes: the time-out counts from its end.
+            self.shot_started = None;
+        }
         let Some((path, state)) = &mut self.screenshot else {
             return;
         };
@@ -899,9 +925,11 @@ impl ChamferaApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             return;
         }
-        // A request of the Assistant still running, or a version thumbnail being drawn, is
-        // part of the picture to wait for.
-        if (self.assistant.running() || self.history.thumbnails_pending(self.gpu.is_some()))
+        // A request of the Assistant, a render, or a version thumbnail being drawn is part
+        // of the picture to wait for.
+        if (self.assistant.running()
+            || rendering
+            || self.history.thumbnails_pending(self.gpu.is_some()))
             && matches!(state, Shot::Waiting(_))
         {
             *state = Shot::Waiting(6);
@@ -1032,6 +1060,8 @@ impl eframe::App for ChamferaApp {
             .show(ui, |ui| {
                 if self.cam.active {
                     self.cam_tree(ui);
+                } else if self.render.active && self.render.library {
+                    self.render_library(ui);
                 } else {
                     self.browser(ui);
                 }
@@ -1086,6 +1116,7 @@ impl eframe::App for ChamferaApp {
             self.cam_dialogs(&ctx);
             self.appearance_window(&ctx);
             self.history_windows(&ctx);
+            self.render_windows(&ctx);
         }
         if self.frames >= 2 {
             self.preferences_window(&ctx);

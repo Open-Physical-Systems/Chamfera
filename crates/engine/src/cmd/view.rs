@@ -122,8 +122,9 @@ pub static COMMANDS: &[CommandSpec] = &[
         id: "view.style",
         label: "Visual Style",
         params: "style: string (required) - shaded, shaded_edges (visible edges), \
-                 shaded_hidden_edges (hidden edges dashed), wireframe, or wireframe_hidden \
-                 (hidden lines removed)",
+                 shaded_hidden_edges (hidden edges dashed), wireframe, wireframe_hidden \
+                 (hidden lines removed), or realistic (materials, environment lights, floor \
+                 and shadows)",
         mutates: false,
         run: crate::display::style,
     },

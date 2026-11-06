@@ -63,6 +63,11 @@ It uses the GPU if there is one, else a software Vulkan driver (lavapipe, `mesa-
 - A script that runs `version.compare` opens with the History panel showing it (`examples/version-history.json`, run it in a scratch folder: it saves `history-example.chamfera` there); `--history` opens the panel.
 - `--recovery-demo` keeps the design the script built as a crashed run's recovery file (a scratch folder) and starts with the recovery question. Screenshots otherwise never read or write recovery files.
 
+## Rendering
+- Materials: `body.appearance {body: id or name, preset}` with a library id (`render.materials` lists them: brass, chrome, glass, rubber, plastic_white, wood_oak, ...), or `metallic`, `roughness`, `transmission`, `ior` set by hand; `render.environment {preset: studio|outdoor|dark}`; `view.style {style: realistic}` shows them in the viewport (`examples/render-studio.json`: brass, glass and rubber parts).
+- `render.image {width, height, samples, path, time_limit?}` path-traces the current view to a PNG (at most 4096 px a side and 4096 samples; start with 64 samples at 640x400, a few seconds); `render.image_bytes` replies with base64 `data`.
+- `chamfera --script examples/render-studio.json --render` opens the RENDER workspace; `--render-window 640x400,64` also opens the Render window and renders, and a screenshot waits for it to finish.
+
 ## Commands and scripts
 - `chamfera-cli commands` lists every command; `chamfera-cli exec <id> '<json>'` runs one.
 - `chamfera-cli run script.json` runs a list of `{"command", "params"}` steps and prints one reply per line (`examples/parameters.json`).

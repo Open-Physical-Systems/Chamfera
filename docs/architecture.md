@@ -5,7 +5,7 @@
 | L0 | `geom` | vectors, points, tolerances; later curves, surfaces, transforms, meshes |
 | L1 | `sketch`, `kernel`, `render` | the constraint solver and profiles; our own B-rep kernel; camera math and the headless scene |
 | L2 | `doc` | parameters, expressions, the feature timeline, persistent names, the design format |
-| L3 | `io`, `drawing`, `cam` | design files; STEP, STL, 3MF import and export. 2D drawings: projected views with hidden lines from the exact B-rep, sheets, dimensions, SVG/DXF/PDF export. CAM: 2.5D milling toolpaths (facing, contour, pocket, drilling) from the exact model, and G-code for LinuxCNC and GRBL |
+| L3 | `io`, `drawing`, `cam`, `raytrace` | design files; STEP, STL, 3MF import and export. 2D drawings: projected views with hidden lines from the exact B-rep, sheets, dimensions, SVG/DXF/PDF export. CAM: 2.5D milling toolpaths (facing, contour, pocket, drilling) from the exact model, and G-code for LinuxCNC and GRBL. Raytrace: a CPU path tracer for presentation images of the display meshes |
 | L4 | `engine` | the session, undo, and the command registry (everything is a command) |
 | L5 | `gpu`, `assistant` | the wgpu viewport renderer, and windowless snapshots of the same picture; the in-app Claude assistant (Messages API client, streaming, the tool loop; no egui) |
 | L6 | `ui`, `mcp` | the egui front end for desktop and browser; the MCP server for agents over stdio (`docs/mcp.md`) |
@@ -33,6 +33,9 @@ doc::Document (parameters, timeline) --recompute--> sketch solver + kernel ops -
 ```
 
 A rebuild does not start from nothing: after each timeline item the session keeps a checkpoint of the bodies built so far, keyed by a hash of the item's definition, the parameter values it reads and the key of the item before it, and starts the next rebuild after the last item whose key is unchanged; meshes are kept by the exact body. Both caches are bounded LRUs and give the same result as a full rebuild, bit for bit (`crates/engine/src/perf.rs`, tests in `perf_tests.rs`, numbers in `docs/performance.md`).
+
+## Rendering
+Materials are part of `body.appearance` (`crates/doc/src/appearance.rs`, format 34: metallic, roughness, transmission, IOR); the library is `crates/render/src/material.rs` and the lighting presets (sky gradient, key, fill and rim disc lights, a floor) `crates/render/src/environment.rs`, so the viewport's realistic style (`crates/gpu/src/realistic.rs`, `realistic.wgsl`: GGX, a key-light shadow map) and the path tracer (`chamfera-raytrace`, L3: BVH, Lambert + GGX, smooth dielectric, MIS towards the lights, progressive on std threads) show the same scene. The environment is view state (`render.environment`). Commands: `render.*` (`crates/engine/src/cmd/render.rs`); the session holds the last started render (`Session::render_job`), which the RENDER workspace (`crates/ui/src/render_ui.rs`) steps on a worker thread and shows as it refines.
 
 ## Assemblies
 Components and joints are stored in the design (`crates/doc/src/component.rs`, `joint.rs`, format 15) and solved as an exact chain from the grounded components (`crates/engine/src/assembly.rs`). Motion study keys (`crates/doc/src/motion.rs`, format 27) are joint values at times, interpolated linearly. What a joint drag, a motion time and an exploded view show is display state in the session (`crates/engine/src/motion.rs`, `AssemblyView`): never part of the design or of undo; an exploded view moves the shown meshes, not the exact bodies. Interference intersects the placed exact bodies (K7) for pairs whose boxes overlap. UI: `crates/ui/src/assembly_ui.rs` and `crates/ui/src/motion_ui.rs`.

@@ -31,6 +31,9 @@ pub mod perf;
 mod perf_tests;
 pub mod pick_filter;
 pub mod projection;
+pub mod render;
+#[cfg(test)]
+mod render_tests;
 pub mod script;
 pub mod sheet;
 pub mod sketching;
@@ -95,6 +98,9 @@ pub struct Session {
     /// What a joint drag, the motion study's time and an exploded view show. Display
     /// state: not part of the design or of undo.
     pub(crate) view_state: motion::AssemblyView,
+    /// The last presentation render started (`render.start`), stepped by whoever shows
+    /// it. Not part of the design or of undo.
+    pub render_job: Option<std::sync::Arc<chamfera_raytrace::Render>>,
     /// The file the design was last opened from or saved to.
     pub path: Option<std::path::PathBuf>,
     /// Whether saves keep versions beside the file, and how many (`versions`).

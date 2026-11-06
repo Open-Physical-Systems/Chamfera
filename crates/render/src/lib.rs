@@ -6,8 +6,13 @@
 pub use chamfera_geom as geom;
 
 pub mod display;
+pub mod environment;
+pub mod material;
+pub mod normals;
 mod theme;
 pub use display::{Appearance, Display, Section, VisualStyle};
+pub use environment::{Environment, EnvironmentPreset};
+pub use material::Material;
 pub use theme::{Rgba, Theme, ThemeMode};
 
 use chamfera_geom::{Aabb, Point3, Ray, TriMesh, Vec3};

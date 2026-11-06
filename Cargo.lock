@@ -353,6 +353,7 @@ dependencies = [
  "chamfera-geom",
  "chamfera-io",
  "chamfera-kernel",
+ "chamfera-raytrace",
  "chamfera-render",
  "chamfera-sketch",
  "serde",
@@ -414,6 +415,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "chamfera-raytrace"
+version = "0.0.1"
+dependencies = [
+ "chamfera-geom",
+ "chamfera-render",
+ "png",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "chamfera-render"
 version = "0.0.1"
 dependencies = [
@@ -442,6 +453,7 @@ dependencies = [
  "chamfera-geom",
  "chamfera-gpu",
  "chamfera-io",
+ "chamfera-raytrace",
  "chamfera-render",
  "chamfera-sketch",
  "eframe",
