@@ -15,6 +15,7 @@ mod feature;
 mod hole;
 mod inspect;
 mod joint;
+mod motion;
 mod param;
 mod select;
 mod sheet;
@@ -59,6 +60,7 @@ pub fn registry() -> Vec<&'static CommandSpec> {
         hole::COMMANDS,
         inspect::COMMANDS,
         joint::COMMANDS,
+        motion::COMMANDS,
         param::COMMANDS,
         select::COMMANDS,
         sheet::COMMANDS,
