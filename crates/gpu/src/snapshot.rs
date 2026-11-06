@@ -154,6 +154,17 @@ pub(crate) fn skip_without_gpu(reason: &str) {
     eprintln!("skipped (no GPU): {reason}");
 }
 
+/// Software GPU drivers (lavapipe) can crash when several tests drive them at once,
+/// so the GPU tests take turns.
+#[cfg(test)]
+static GPU: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(test)]
+pub(crate) fn gpu_lock() -> std::sync::MutexGuard<'static, ()> {
+    GPU.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -165,6 +176,7 @@ mod tests {
     /// Skipped when the machine has no GPU and no software adapter.
     #[test]
     fn a_front_view_of_a_box_draws_the_box_in_the_middle() {
+        let _gpu = crate::snapshot::gpu_lock();
         let mut scene = Scene::default();
         scene.add(
             "box",
@@ -224,6 +236,7 @@ mod overlay_tests {
     /// 27.4 and row 19.4, a 7 px square.
     #[test]
     fn overlays_draw_over_bodies_in_the_sketch_colour() {
+        let _gpu = crate::snapshot::gpu_lock();
         let mut scene = Scene::default();
         scene.add(
             "box",
@@ -347,6 +360,7 @@ mod display_tests {
     /// `section_cap`; (30, 20): 50 mod 10 = 0, a hatch stripe.
     #[test]
     fn a_sectioned_box_shows_its_cut_face_in_the_cap_colour() {
+        let _gpu = crate::snapshot::gpu_lock();
         let theme = Theme::light();
         let (mut scene, _) = box_scene();
         let Some(plain) = render(&scene) else {
@@ -375,6 +389,7 @@ mod display_tests {
     /// colour, above 220), where the shaded style shows the grey body.
     #[test]
     fn wireframe_shows_the_background_through_the_faces() {
+        let _gpu = crate::snapshot::gpu_lock();
         let (mut scene, _) = box_scene();
         scene.display.style = VisualStyle::Wireframe;
         let Some(rgba) = render(&scene) else {
@@ -389,6 +404,7 @@ mod display_tests {
     /// than the opaque black body.
     #[test]
     fn a_glass_body_lets_the_background_through() {
+        let _gpu = crate::snapshot::gpu_lock();
         let (mut scene, id) = box_scene();
         if let Some(b) = scene.body_mut(id) {
             b.appearance.colour = Some(Rgba(0, 0, 0, 255));
