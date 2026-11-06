@@ -21,12 +21,18 @@
 //! Rung K4 is here: a planar [`Profile`] of lines and arcs with holes is swept into a valid
 //! solid by [`extrude`], [`extrude_symmetric`] and [`revolve`], every face, edge and vertex
 //! named from the profile element and role that made it.
+//!
+//! Rung K6 is here: surface-surface intersection ([`intersect_surfaces`], exact lines,
+//! circles and ellipses or an explicit [`SurfaceIntersection`]), curve-surface
+//! intersection ([`intersect_curve_surface`]) and point-solid classification
+//! ([`classify_point`]), the geometry booleans (K7) need.
 
 mod check;
 mod curve3;
 mod intersect;
 mod planar;
 mod profile;
+mod ssi;
 mod surface;
 mod sweep;
 mod tessellate;
@@ -42,6 +48,11 @@ pub use intersect::{
 };
 pub use planar::{Arc2, Circle2, Line2, Segment2};
 pub use profile::{PROFILE_JOIN_TOLERANCE, Profile, ProfileEdge, polygon_edges};
+pub use ssi::{
+    CurveSurfaceIntersection, CurveSurfacePoint, IntersectionCurve, ON_SURFACE_SAMPLES,
+    PointInSolid, RAY_DIRECTIONS, SurfaceIntersection, UnsupportedIntersection, classify_point,
+    intersect_curve_surface, intersect_curve_surface_on, intersect_surfaces,
+};
 pub use surface::{Cone, Cylinder, Sphere, Surface, SurfaceParameters, SurfacePoint, Torus};
 pub use sweep::{extrude, extrude_symmetric, revolve};
 pub use tessellate::{BodyMesh, TessOptions, tessellate};
