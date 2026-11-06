@@ -12,6 +12,7 @@ mod cam_tests;
 pub mod cmd;
 pub mod construct;
 pub mod display;
+pub mod face_edit;
 pub mod hole;
 mod imported;
 mod params;

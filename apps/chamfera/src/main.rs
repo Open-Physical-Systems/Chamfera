@@ -2,8 +2,9 @@
 //!
 //! ```text
 //! chamfera [part.stl ...] [--sample] [--theme light|dark] [--script steps.json]
-//!          [--parameters] [--preferences PAGE] [--drawing] [--extrude] [--extrude-with JSON] [--hole]
-//!          [--box X1,Y1,X2,Y2] [--search QUERY] [--context-menu X,Y] [--size WxH]
+//!          [--parameters] [--preferences PAGE] [--drawing] [--extrude] [--extrude-with JSON]
+//!          [--hole] [--box X1,Y1,X2,Y2] [--search QUERY] [--context-menu X,Y]
+//!          [--press-pull X,Y,D] [--size WxH]
 //!          [--zoom F] [--screenshot shot.png]
 //!          [--sketch-input "tool line; click 0,0; hover 30,12; type 25"]
 //! ```
@@ -16,7 +17,8 @@ use std::process::ExitCode;
 const USAGE: &str = "usage: chamfera [part.stl ...] [--sample] [--theme light|dark] \
 [--script steps.json] [--parameters] [--preferences PAGE] [--drawing] [--extrude] \
 [--extrude-with JSON] [--hole] \
-[--box X1,Y1,X2,Y2] [--search QUERY] [--context-menu X,Y] [--size WxH] [--zoom F] \
+[--box X1,Y1,X2,Y2] [--search QUERY] [--context-menu X,Y] [--press-pull X,Y,D] [--size WxH] \
+[--zoom F] \
 [--screenshot shot.png] \
 [--sketch-input \"tool line; click X,Y; hover X,Y; shift; type 25; tab\"]";
 
@@ -53,6 +55,14 @@ fn main() -> ExitCode {
             "--search" => match args.next() {
                 Some(q) => options.search = Some(q),
                 None => return fail(USAGE),
+            },
+            "--press-pull" => match args.next().as_deref().and_then(parse_press_pull) {
+                Some(p) => options.press_pull = Some(p),
+                None => {
+                    return fail(
+                        "--press-pull takes X,Y,DISTANCE: a viewport point and a distance in mm",
+                    );
+                }
             },
             "--context-menu" => match args.next().as_deref().and_then(parse_point) {
                 Some(p) => options.context_menu = Some(p),
@@ -113,6 +123,14 @@ fn parse_point(text: &str) -> Option<[f32; 2]> {
     let (x, y) = (x.trim().parse::<f32>().ok()?, y.trim().parse::<f32>().ok()?);
     let ok = |v: f32| v.is_finite() && (0.0..=8192.0).contains(&v);
     (ok(x) && ok(y)).then_some([x, y])
+}
+
+/// `600,400,8` → Press Pull at viewport (600, 400), dragged to 8 mm.
+fn parse_press_pull(text: &str) -> Option<[f32; 3]> {
+    let (point, d) = text.rsplit_once(',')?;
+    let [x, y] = parse_point(point)?;
+    let d = d.trim().parse::<f32>().ok()?;
+    (d.is_finite() && d.abs() <= 10_000.0).then_some([x, y, d])
 }
 
 /// `1000x680` → [1000, 680], within sensible window sizes.

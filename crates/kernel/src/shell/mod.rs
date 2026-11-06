@@ -50,7 +50,7 @@
 //! `shell of <vertex>` when the original has a name; the subtraction names the edges
 //! where walls meet open faces `<face> x shell of <face>` (K7).
 
-mod offset;
+pub(crate) mod offset;
 #[cfg(test)]
 mod tests;
 

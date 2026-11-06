@@ -94,6 +94,10 @@ pub fn kind_dependencies(kind: &FeatureKind) -> Vec<u32> {
         FeatureKind::Blend(b) => deps.extend(b.edges.iter().flat_map(|e| edge_features(e))),
         // Open faces are named like edges: `2:top`.
         FeatureKind::Shell(sh) => deps.extend(sh.faces.iter().flat_map(|f| edge_features(f))),
+        // Direct face edits name their faces the same way.
+        FeatureKind::OffsetFace(o) => deps.extend(o.faces.iter().flat_map(|f| edge_features(f))),
+        FeatureKind::DeleteFace(d) => deps.extend(d.faces.iter().flat_map(|f| edge_features(f))),
+        FeatureKind::MoveFace(m) => deps.extend(m.faces.iter().flat_map(|f| edge_features(f))),
         FeatureKind::Extrude(e) => {
             if let Some(crate::ExtrudeTo::Face(r)) = &e.to {
                 deps.push(r.feature);

@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+  <!-- Chamfera interface icon: delete face. Original artwork, MIT OR Apache-2.0. -->
+  <path stroke="#2B313B" d="M3.75 20.25h16.5V8.5"/>
+  <path stroke="#2B313B" d="M3.75 20.25V9"/>
+  <path stroke="#2B313B" stroke-dasharray="1.5 2" d="M9 3.75h5.25l6 4.75"/>
+  <path stroke="#E8770E" d="M3.75 9C3.75 6.1 6.1 3.75 9 3.75"/>
+  <path stroke="#E8770E" d="M13.5 12l4 4M17.5 12l-4 4"/>
+</svg>

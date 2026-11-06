@@ -87,6 +87,7 @@ fn command_of(action: Action) -> Option<&'static str> {
         Action::FinishSketch => "sketch.finish",
         Action::Extrude => "solid.extrude",
         Action::Revolve => "solid.revolve",
+        Action::PressPull => "solid.press_pull",
         Action::Sweep => "solid.sweep",
         Action::Loft => "solid.loft",
         Action::Fillet => "solid.fillet",
@@ -122,6 +123,7 @@ fn ui_actions() -> Vec<Action> {
     let mut v = vec![
         Action::Extrude,
         Action::Revolve,
+        Action::PressPull,
         Action::Sweep,
         Action::Loft,
         Action::Fillet,
@@ -189,6 +191,7 @@ fn context_of(action: Action) -> &'static str {
         | Action::SketchOnFace
         | Action::Extrude
         | Action::Revolve
+        | Action::PressPull
         | Action::Sweep
         | Action::Loft
         | Action::Fillet
@@ -224,6 +227,7 @@ pub(crate) fn icon_of(action: Action) -> Icon {
         Action::FinishSketch => Icon::SketchFinish,
         Action::Extrude => Icon::Extrude,
         Action::Revolve => Icon::Revolve,
+        Action::PressPull => Icon::PressPull,
         Action::Sweep => Icon::Sweep,
         Action::Loft => Icon::Loft,
         Action::Fillet => Icon::Fillet,
@@ -373,6 +377,7 @@ impl ChamferaApp {
             | Action::SketchOnFace
             | Action::Extrude
             | Action::Revolve
+            | Action::PressPull
             | Action::Sweep
             | Action::Loft
             | Action::Fillet
@@ -389,8 +394,12 @@ impl ChamferaApp {
             {
                 format!("{name}: draw a closed profile in a sketch first")
             }
+            Action::PressPull if !has_solids && !self.has_profiles() => {
+                format!("{name}: draw a profile or build a solid first")
+            }
             Action::Extrude
             | Action::Revolve
+            | Action::PressPull
             | Action::Sweep
             | Action::Loft
             | Action::Fillet
@@ -513,6 +522,7 @@ impl ChamferaApp {
             Action::FinishSketch => self.finish_sketch(),
             Action::Extrude => self.open_extrude(false),
             Action::Revolve => self.open_extrude(true),
+            Action::PressPull => self.open_press_pull(crate::press_pull_ui::PullMode::Auto),
             Action::Sweep => self.open_sweep(false),
             Action::Loft => self.open_sweep(true),
             Action::Fillet => self.open_blend(false),

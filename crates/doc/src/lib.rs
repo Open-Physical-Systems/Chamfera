@@ -6,6 +6,7 @@ pub mod component;
 pub mod construct;
 pub mod drawing;
 pub mod expr;
+pub mod face_edit;
 pub mod feature;
 pub mod imported;
 pub mod joint;
@@ -18,6 +19,7 @@ pub use construct::{
     AxisRef, ConstructKind, Construction, EdgeRef, OriginAxis, OriginPlane, PlaneRef, PointRef,
 };
 pub use drawing::Drawing;
+pub use face_edit::{DeleteFace, FaceTurn, MoveFace, OffsetFace};
 pub use feature::{
     Blend, BlendKind, Extrude, ExtrudeDirection, ExtrudeExtent, ExtrudeTo, ExtrudeValues, Feature,
     FeatureKind, Hole, HoleKind, HoleSizes, Loft, LoftSection, Mirror, MirrorPlane, Move,
@@ -65,6 +67,8 @@ use thiserror::Error;
 /// - 20: the CAM section: setups, tools and machining operations (`cam`).
 /// - 21: body appearances (a colour and opacity per feature's body). Older files open
 ///   with every body in the theme's colour.
+/// - 22: direct face edits on the timeline: offset faces (`offset_face`), delete faces
+///   (`delete_face`) and move faces (`move_face`). Older files open unchanged.
 /// - 24: the design's display units (`units`: length unit and decimal places). A plain
 ///   number in an expression means the design's length unit. Older files open in mm with
 ///   two decimals, as before.

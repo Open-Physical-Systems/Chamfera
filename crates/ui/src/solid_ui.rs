@@ -372,6 +372,8 @@ pub struct SolidUi {
     pub transform: Option<crate::transform_ui::TransformTool>,
     /// The Shell tool.
     pub shell: Option<crate::shell_ui::ShellTool>,
+    /// The Press Pull, Offset Face or Delete Face tool (`press_pull_ui.rs`).
+    pub press_pull: Option<crate::press_pull_ui::PressPullTool>,
     /// The Sweep or Loft tool.
     pub sweep: Option<crate::sweep_ui::SweepTool>,
     /// Waiting for a click on a flat face to sketch on.
@@ -399,6 +401,7 @@ impl ChamferaApp {
             && self.solid.transform.is_none()
             && self.solid.inspect.is_none()
             && self.solid.shell.is_none()
+            && self.solid.press_pull.is_none()
             && self.solid.sweep.is_none();
         let sweep_open = self.solid.sweep.as_ref().map(|t| t.loft);
         let mut open_sweep: Option<bool> = None;
@@ -556,6 +559,7 @@ impl ChamferaApp {
         let mut parameters = false;
         let mut open_blend: Option<bool> = None;
         let mut open_shell = false;
+        let mut open_pull = None;
         let filleting = self.solid.blend.as_ref().is_some_and(|t| !t.chamfer);
         let chamfering = self.solid.blend.as_ref().is_some_and(|t| t.chamfer);
         widgets::ribbon_group(ui, look, "MODIFY", false, |ui| {
@@ -594,6 +598,14 @@ impl ChamferaApp {
                 }
             }
             open_shell = crate::shell_ui::ribbon_button(ui, look, has_solids, tool_free);
+            open_pull = crate::press_pull_ui::ribbon_buttons(
+                ui,
+                look,
+                has_solids || has_profiles,
+                has_solids,
+                tool_free,
+                self.solid.press_pull.as_ref().map(|t| t.mode),
+            );
             if widgets::tool_button(
                 ui,
                 look,
@@ -616,6 +628,9 @@ impl ChamferaApp {
         }
         if open_shell {
             self.open_shell_tool();
+        }
+        if let Some(mode) = open_pull {
+            self.open_press_pull(mode);
         }
         if let Some(chamfer) = open_blend {
             self.open_blend(chamfer);
