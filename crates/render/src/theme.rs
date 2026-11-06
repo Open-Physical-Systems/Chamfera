@@ -52,13 +52,38 @@ pub struct Theme {
     pub sketch_preview: Rgba,
     /// What the pointer is over, or what is picked.
     pub highlight: Rgba,
-    // interface
+    // interface surfaces (see docs/design/ui.md)
+    /// The app bar, ribbon, timeline and status bar.
+    pub chrome: Rgba,
+    /// The Browser and dialogs.
     pub panel: Rgba,
+    /// Text fields, tiles and pressed buttons.
     pub panel_alt: Rgba,
+    /// Hairlines between areas and around fields.
+    pub border: Rgba,
+    /// What the pointer is over: rows, buttons, tabs.
+    pub hover: Rgba,
+    /// The active or selected row, tool or tab.
+    pub selected: Rgba,
+    /// Drop shadow under popups and dialogs.
+    pub shadow: Rgba,
+    // interface content
     pub text: Rgba,
     pub text_muted: Rgba,
+    /// Interactive accent: focus rings, the primary button, selection.
     pub accent: Rgba,
+    /// Text and icons on an `accent` fill.
+    pub on_accent: Rgba,
+    /// The base strokes of icons.
+    pub icon: Rgba,
+    /// The accent part of icons (the brand's chamfer orange).
+    pub icon_accent: Rgba,
+    pub success: Rgba,
+    pub warning: Rgba,
     pub error: Rgba,
+    // the view cube
+    pub cube_face: Rgba,
+    pub cube_edge: Rgba,
 }
 
 impl Theme {
@@ -80,12 +105,24 @@ impl Theme {
             sketch_construction: Rgba(214, 120, 30, 255),
             sketch_preview: Rgba(30, 100, 220, 140),
             highlight: Rgba(240, 160, 20, 255),
+            chrome: Rgba(252, 252, 253, 255),
             panel: Rgba(246, 247, 249, 255),
-            panel_alt: Rgba(234, 237, 241, 255),
+            panel_alt: Rgba(236, 239, 243, 255),
+            border: Rgba(219, 223, 229, 255),
+            hover: Rgba(231, 235, 241, 255),
+            selected: Rgba(219, 232, 250, 255),
+            shadow: Rgba(16, 24, 40, 40),
             text: Rgba(28, 32, 38, 255),
-            text_muted: Rgba(98, 106, 118, 255),
+            text_muted: Rgba(92, 100, 112, 255),
             accent: Rgba(30, 112, 214, 255),
+            on_accent: Rgba(255, 255, 255, 255),
+            icon: Rgba(52, 58, 68, 255),
+            icon_accent: Rgba(196, 98, 8, 255),
+            success: Rgba(30, 135, 70, 255),
+            warning: Rgba(166, 102, 0, 255),
             error: Rgba(196, 44, 44, 255),
+            cube_face: Rgba(236, 240, 245, 240),
+            cube_edge: Rgba(128, 137, 150, 255),
         }
     }
 
@@ -107,12 +144,24 @@ impl Theme {
             sketch_construction: Rgba(240, 150, 60, 255),
             sketch_preview: Rgba(96, 170, 255, 140),
             highlight: Rgba(255, 190, 60, 255),
-            panel: Rgba(36, 39, 44, 255),
-            panel_alt: Rgba(44, 48, 54, 255),
+            chrome: Rgba(29, 31, 35, 255),
+            panel: Rgba(35, 38, 43, 255),
+            panel_alt: Rgba(45, 49, 56, 255),
+            border: Rgba(55, 60, 68, 255),
+            hover: Rgba(50, 55, 63, 255),
+            selected: Rgba(31, 58, 97, 255),
+            shadow: Rgba(0, 0, 0, 120),
             text: Rgba(226, 230, 236, 255),
-            text_muted: Rgba(150, 158, 170, 255),
+            text_muted: Rgba(156, 164, 176, 255),
             accent: Rgba(84, 160, 255, 255),
+            on_accent: Rgba(10, 18, 30, 255),
+            icon: Rgba(206, 211, 219, 255),
+            icon_accent: Rgba(255, 158, 62, 255),
+            success: Rgba(88, 196, 124, 255),
+            warning: Rgba(236, 178, 64, 255),
             error: Rgba(240, 100, 100, 255),
+            cube_face: Rgba(54, 58, 66, 235),
+            cube_edge: Rgba(112, 120, 132, 255),
         }
     }
 
@@ -136,18 +185,58 @@ mod tests {
         assert!((Rgba(128, 0, 0, 0).linear()[0] - 0.2158).abs() < 1e-3);
     }
 
-    #[test]
-    fn text_stands_out_from_panels_in_both_themes() {
-        // WCAG relative luminance contrast of at least 4.5:1.
+    /// WCAG contrast ratio between two opaque colours.
+    fn contrast(a: Rgba, b: Rgba) -> f32 {
         let lum = |c: Rgba| {
             let l = c.linear();
             0.2126 * l[0] + 0.7152 * l[1] + 0.0722 * l[2]
         };
+        let (a, b) = (lum(a), lum(b));
+        (a.max(b) + 0.05) / (a.min(b) + 0.05)
+    }
+
+    #[test]
+    fn text_stands_out_from_panels_in_both_themes() {
+        // WCAG AA for text: at least 4.5:1 on every surface text is drawn on.
         for t in [Theme::light(), Theme::dark()] {
-            for bg in [t.panel, t.panel_alt] {
-                let (a, b) = (lum(t.text), lum(bg));
-                let ratio = (a.max(b) + 0.05) / (a.min(b) + 0.05);
-                assert!(ratio >= 4.5, "{:?}: {ratio}", t.mode);
+            let surfaces = [
+                ("chrome", t.chrome),
+                ("panel", t.panel),
+                ("panel_alt", t.panel_alt),
+                ("hover", t.hover),
+                ("selected", t.selected),
+            ];
+            for (name, bg) in surfaces {
+                for (what, fg) in [("text", t.text), ("text_muted", t.text_muted)] {
+                    let ratio = contrast(fg, bg);
+                    assert!(ratio >= 4.5, "{:?}: {what} on {name}: {ratio}", t.mode);
+                }
+            }
+            for bg in [t.chrome, t.panel] {
+                let ratio = contrast(t.error, bg);
+                assert!(ratio >= 4.5, "{:?}: error text: {ratio}", t.mode);
+            }
+            let ratio = contrast(t.on_accent, t.accent);
+            assert!(ratio >= 4.5, "{:?}: on_accent: {ratio}", t.mode);
+        }
+    }
+
+    #[test]
+    fn icons_and_status_marks_stand_out_in_both_themes() {
+        // WCAG AA for graphics (icons, the sketch status dot, focus rings): at least 3:1.
+        for t in [Theme::light(), Theme::dark()] {
+            for bg in [t.chrome, t.panel, t.hover, t.selected] {
+                for (what, fg) in [
+                    ("icon", t.icon),
+                    ("icon_accent", t.icon_accent),
+                    ("accent", t.accent),
+                    ("success", t.success),
+                    ("warning", t.warning),
+                    ("error", t.error),
+                ] {
+                    let ratio = contrast(fg, bg);
+                    assert!(ratio >= 3.0, "{:?}: {what}: {ratio}", t.mode);
+                }
             }
         }
     }

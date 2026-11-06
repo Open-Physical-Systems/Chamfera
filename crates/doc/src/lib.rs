@@ -3,7 +3,7 @@
 pub mod expr;
 pub mod feature;
 
-pub use feature::{Extrude, ExtrudeDirection, Feature, FeatureKind, Revolve};
+pub use feature::{Extrude, ExtrudeDirection, Feature, FeatureKind, Operation, Revolve};
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -16,7 +16,8 @@ use thiserror::Error;
 /// - 3: parameter expressions, and sketch dimensions driven by expressions.
 /// - 4: the feature timeline (extrude, revolve).
 /// - 5: sketches attached to a face of a feature's solid.
-pub const FORMAT_VERSION: u32 = 5;
+/// - 6: feature operations (new body, join, cut, intersect).
+pub const FORMAT_VERSION: u32 = 6;
 /// The tag every design file starts with, so other JSON is not mistaken for a design.
 pub const FORMAT_TAG: &str = "chamfera";
 /// Longest parameter name.

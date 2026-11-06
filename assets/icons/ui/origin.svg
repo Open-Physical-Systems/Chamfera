@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+  <!-- Chamfera interface icon: origin. Original artwork, MIT OR Apache-2.0. -->
+  <path stroke="#2B313B" d="M12 13.5V4"/>
+  <path stroke="#2B313B" d="M12 13.5 4.5 18"/>
+  <path stroke="#2B313B" d="M12 13.5l7.5 4.5"/>
+  <circle cx="12" cy="13.5" r="2.3" fill="#E8770E" stroke="none"/>
+</svg>
