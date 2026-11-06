@@ -555,6 +555,15 @@ pub const TOOLS: &[RibbonTool] = &[
     tool(
         P,
         "INSERT",
+        Action::Tool("body.import_step"),
+        Icon::ImportMesh,
+        "Insert STEP…",
+        "Add the solids of a STEP file (AP203, AP214, AP242) as exact bodies",
+    )
+    .short("Insert STEP"),
+    tool(
+        P,
+        "INSERT",
         Action::Sample,
         Icon::Body,
         "Insert Sample Part",
@@ -1504,6 +1513,7 @@ impl ChamferaApp {
             "joint.create" => self.toggle_joint(),
             "component.ground" => self.toggle_ground(),
             "sketch.import_dxf" => self.dxf_dialog(),
+            "body.import_step" => self.step_dialog(),
             "sketch.export_dxf" => self.export("DXF drawing", &["dxf"], "sketch.export_dxf"),
             "sketch.split_all" => {
                 self.run_sketch("sketch.split", json!({}));
@@ -1966,9 +1976,8 @@ mod tests {
         // listing, the Browser or the timeline. A newly landed tool command must get a
         // row in `TOOLS` (or a line here saying where it is used).
         const ELSEWHERE: &[&str] = &[
-            "body.appearance",  // View > Appearance, the display bar
-            "body.import_step", // not in the interface yet
-            "body.import_3mf",  // Insert Mesh takes STL, OBJ and 3MF
+            "body.appearance", // View > Appearance, the display bar
+            "body.import_3mf", // Insert Mesh takes STL, OBJ and 3MF
             "body.import_3mf_bytes",
             "body.import_obj",
             "body.import_obj_bytes",

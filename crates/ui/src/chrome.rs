@@ -4,7 +4,7 @@
 use crate::icons::Icon;
 use crate::widgets::{self, S2, S3, T_SMALL};
 use crate::{ChamferaApp, ThemeChoice, label};
-use egui::{Align, CornerRadius, FontId, Layout, Rect, Sense, Stroke, Vec2, vec2};
+use egui::{CornerRadius, FontId, Rect, Sense, Stroke, Vec2, vec2};
 use serde_json::json;
 
 impl ChamferaApp {
@@ -262,131 +262,163 @@ impl ChamferaApp {
         response
     }
 
-    /// The status bar: the tool hint, the sketch's constraint state, messages, selection.
+    /// The status bar: the tool hint, the sketch's constraint state and messages on the
+    /// left; the body count and the selection on the right. The right side is laid out
+    /// first and the left side gets what is left, truncated with an ellipsis, so a long
+    /// hint never runs under the body count in a narrow window.
     pub(crate) fn status_bar(&mut self, ui: &mut egui::Ui) {
+        let height = ui.available_height();
+        egui::containers::Sides::new()
+            .height(height)
+            .shrink_left()
+            .truncate()
+            .show(ui, |ui| self.status_left(ui), |ui| self.status_right(ui));
+    }
+
+    /// The left side: the hint, then the last message. With a message the hint gets at
+    /// most half the room, so the message (what just happened) stays readable.
+    fn status_left(&self, ui: &mut egui::Ui) {
+        let room = ui.available_width();
+        let hint_room = if self.message.is_some() {
+            room * 0.5
+        } else {
+            room
+        };
+        ui.allocate_ui(Vec2::new(hint_room, ui.available_height()), |ui| {
+            ui.horizontal_centered(|ui| self.status_hint(ui));
+        });
+        let look = self.look();
+        let small = |text: &str, c| egui::RichText::new(text).size(T_SMALL).color(c);
+        if let Some((m, error)) = &self.message {
+            // Nothing is drawn where not even an ellipsis fits.
+            if ui.available_width() < 40.0 {
+                return;
+            }
+            widgets::bar_divider(ui, look, 14.0);
+            if *error {
+                let (r, _) = ui.allocate_exact_size(Vec2::splat(16.0), Sense::hover());
+                let e = look.c(|t| t.error);
+                look.icons.paint(ui.painter(), Icon::Error, r, e, e);
+                ui.label(small(m, e));
+            } else {
+                ui.label(small(m, look.c(|t| t.text)));
+            }
+        }
+    }
+
+    fn status_hint(&self, ui: &mut egui::Ui) {
         let look = self.look();
         let muted = look.c(|t| t.text_muted);
-        ui.horizontal_centered(|ui| {
-            ui.spacing_mut().item_spacing.x = S3;
-            let small = |text: &str, c| egui::RichText::new(text).size(T_SMALL).color(c);
-            if let Some(hint) = self.box_hint() {
-                ui.label(small(hint, muted));
-            } else if self.session.active_sketch.is_some() {
-                if let Some(state) = self.sketch.state {
-                    let (dot, text) = match state {
-                        crate::sketch_ui::SketchState::Full => {
-                            (look.c(|t| t.success), "Fully constrained".to_owned())
-                        }
-                        crate::sketch_ui::SketchState::Over => {
-                            (look.c(|t| t.error), "Over-constrained".to_owned())
-                        }
-                        crate::sketch_ui::SketchState::Free(n) => (
-                            look.c(|t| t.warning),
-                            if n == 1 {
-                                "1 degree of freedom".to_owned()
-                            } else {
-                                format!("{n} degrees of freedom")
-                            },
-                        ),
-                        crate::sketch_ui::SketchState::Unsolved => {
-                            (look.c(|t| t.error), "Not solved".to_owned())
-                        }
-                    };
-                    let r = widgets::dot(ui, dot, 8.0);
-                    let text_r = ui.label(small(&text, look.c(|t| t.text)));
-                    let tip = self.sketch.status.clone().unwrap_or_default();
-                    r.union(text_r).on_hover_text(tip);
-                    widgets::bar_divider(ui, look, 14.0);
-                }
-                ui.label(small(crate::sketch_ui::tool_hint(self), muted));
-            } else if self.drawing.active {
-                ui.label(small(self.drawing_hint(), muted));
-            } else if self.solid.pick_face {
-                ui.label(small(
-                    "Click a flat face of a solid to sketch on it · Esc cancels",
-                    muted,
-                ));
-            } else if self.solid.blend.is_some() {
-                ui.label(small(
-                    "Click edges of a solid to pick them · click again to unpick · Esc cancels",
-                    muted,
-                ));
-            } else if self.solid.extrude.is_some() {
-                ui.label(small(
-                    "Click inside closed profiles to pick them · click again to unpick",
-                    muted,
-                ));
-            } else {
-                ui.label(small(&self.prefs.navigation.preset.status_hint(), muted));
-            }
-            if let Some((m, error)) = &self.message {
+        ui.spacing_mut().item_spacing.x = S3;
+        let small = |text: &str, c| egui::RichText::new(text).size(T_SMALL).color(c);
+        if let Some(hint) = self.box_hint() {
+            ui.label(small(hint, muted));
+        } else if self.session.active_sketch.is_some() {
+            if let Some(state) = self.sketch.state {
+                let (dot, text) = match state {
+                    crate::sketch_ui::SketchState::Full => {
+                        (look.c(|t| t.success), "Fully constrained".to_owned())
+                    }
+                    crate::sketch_ui::SketchState::Over => {
+                        (look.c(|t| t.error), "Over-constrained".to_owned())
+                    }
+                    crate::sketch_ui::SketchState::Free(n) => (
+                        look.c(|t| t.warning),
+                        if n == 1 {
+                            "1 degree of freedom".to_owned()
+                        } else {
+                            format!("{n} degrees of freedom")
+                        },
+                    ),
+                    crate::sketch_ui::SketchState::Unsolved => {
+                        (look.c(|t| t.error), "Not solved".to_owned())
+                    }
+                };
+                let r = widgets::dot(ui, dot, 8.0);
+                let text_r = ui.label(small(&text, look.c(|t| t.text)));
+                let tip = self.sketch.status.clone().unwrap_or_default();
+                r.union(text_r).on_hover_text(tip);
                 widgets::bar_divider(ui, look, 14.0);
-                if *error {
-                    let (r, _) = ui.allocate_exact_size(Vec2::splat(16.0), Sense::hover());
-                    let e = look.c(|t| t.error);
-                    look.icons.paint(ui.painter(), Icon::Error, r, e, e);
-                    ui.label(small(m, e));
-                } else {
-                    ui.label(small(m, look.c(|t| t.text)));
-                }
             }
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                ui.spacing_mut().item_spacing.x = S3;
-                let tris: usize = self
-                    .session
-                    .scene
-                    .bodies
-                    .iter()
-                    .map(|b| b.mesh.triangles.len())
-                    .sum();
-                let n = self.session.scene.bodies.len();
-                let bodies = if n == 1 { "body" } else { "bodies" };
-                ui.label(small(&format!("{n} {bodies} · {tris} triangles"), muted));
-                let selected = self.session.scene.selected_bodies();
-                if selected.len() > 1
-                    || (selected.len() == 1 && self.session.scene.selection.is_none())
-                {
-                    let text = match selected.as_slice() {
-                        [one] => format!(
-                            "{} selected",
-                            self.session
-                                .scene
-                                .body(*one)
-                                .map(|b| b.name.as_str())
-                                .unwrap_or("1 body")
-                        ),
-                        many => format!("{} bodies selected", many.len()),
-                    };
-                    widgets::bar_divider(ui, look, 14.0);
-                    ui.label(small(&text, look.c(|t| t.text)));
-                } else if let Some(h) = self.session.scene.selection {
-                    let body = self.session.scene.body(h.body);
-                    let name = body.map(|b| b.name.as_str()).unwrap_or("");
-                    let n = body
-                        .and_then(|b| b.mesh.triangle_normal(h.triangle))
-                        .unwrap_or_default();
-                    widgets::bar_divider(ui, look, 14.0);
-                    let u = self.session.doc.units;
-                    ui.label(small(
-                        &format!(
-                            "{name} · ({}, {}, {}) {} · normal ({:.2}, {:.2}, {:.2})",
-                            u.length_number(h.point.x),
-                            u.length_number(h.point.y),
-                            u.length_number(h.point.z),
-                            u.length.symbol(),
-                            n.x,
-                            n.y,
-                            n.z
-                        ),
-                        look.c(|t| t.text),
-                    ));
-                } else if !self.session.sketch_selection.is_empty() {
-                    let k = self.session.sketch_selection.len();
-                    widgets::bar_divider(ui, look, 14.0);
-                    ui.label(small(&format!("{k} selected"), look.c(|t| t.text)));
-                }
-            });
-        });
+            ui.label(small(crate::sketch_ui::tool_hint(self), muted));
+        } else if self.drawing.active {
+            ui.label(small(self.drawing_hint(), muted));
+        } else if self.solid.pick_face {
+            ui.label(small(
+                "Click a flat face of a solid to sketch on it · Esc cancels",
+                muted,
+            ));
+        } else if self.solid.blend.is_some() {
+            ui.label(small(
+                "Click edges of a solid to pick them · click again to unpick · Esc cancels",
+                muted,
+            ));
+        } else if self.solid.extrude.is_some() {
+            ui.label(small(
+                "Click inside closed profiles to pick them · click again to unpick",
+                muted,
+            ));
+        } else {
+            ui.label(small(&self.prefs.navigation.preset.status_hint(), muted));
+        }
+    }
+
+    fn status_right(&self, ui: &mut egui::Ui) {
+        let look = self.look();
+        let muted = look.c(|t| t.text_muted);
+        ui.spacing_mut().item_spacing.x = S3;
+        let small = |text: &str, c| egui::RichText::new(text).size(T_SMALL).color(c);
+        let tris: usize = self
+            .session
+            .scene
+            .bodies
+            .iter()
+            .map(|b| b.mesh.triangles.len())
+            .sum();
+        let n = self.session.scene.bodies.len();
+        let bodies = if n == 1 { "body" } else { "bodies" };
+        ui.label(small(&format!("{n} {bodies} · {tris} triangles"), muted));
+        let selected = self.session.scene.selected_bodies();
+        if selected.len() > 1 || (selected.len() == 1 && self.session.scene.selection.is_none()) {
+            let text = match selected.as_slice() {
+                [one] => format!(
+                    "{} selected",
+                    self.session
+                        .scene
+                        .body(*one)
+                        .map(|b| b.name.as_str())
+                        .unwrap_or("1 body")
+                ),
+                many => format!("{} bodies selected", many.len()),
+            };
+            widgets::bar_divider(ui, look, 14.0);
+            ui.label(small(&text, look.c(|t| t.text)));
+        } else if let Some(h) = self.session.scene.selection {
+            let body = self.session.scene.body(h.body);
+            let name = body.map(|b| b.name.as_str()).unwrap_or("");
+            let n = body
+                .and_then(|b| b.mesh.triangle_normal(h.triangle))
+                .unwrap_or_default();
+            widgets::bar_divider(ui, look, 14.0);
+            let u = self.session.doc.units;
+            ui.label(small(
+                &format!(
+                    "{name} · ({}, {}, {}) {} · normal ({:.2}, {:.2}, {:.2})",
+                    u.length_number(h.point.x),
+                    u.length_number(h.point.y),
+                    u.length_number(h.point.z),
+                    u.length.symbol(),
+                    n.x,
+                    n.y,
+                    n.z
+                ),
+                look.c(|t| t.text),
+            ));
+        } else if !self.session.sketch_selection.is_empty() {
+            let k = self.session.sketch_selection.len();
+            widgets::bar_divider(ui, look, 14.0);
+            ui.label(small(&format!("{k} selected"), look.c(|t| t.text)));
+        }
     }
 
     /// A quiet hint in the middle of an empty viewport.
@@ -421,5 +453,76 @@ impl ChamferaApp {
             FontId::proportional(widgets::T_BODY),
             look.c(|t| t.text),
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::ChamferaApp;
+    use eframe::App as _;
+    use egui::{Rect, Shape};
+    use serde_json::json;
+
+    /// Every text drawn in a frame `width` wide: its text and screen rectangle.
+    fn texts(app: &mut ChamferaApp, ctx: &egui::Context, width: f32) -> Vec<(String, Rect)> {
+        let mut out = Vec::new();
+        for k in 0..3 {
+            let raw = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(width, 700.0),
+                )),
+                time: Some(k as f64 * 0.05),
+                ..Default::default()
+            };
+            let mut f = eframe::Frame::_new_kittest();
+            let mut full = ctx.run_ui(raw, |ui| app.ui(ui, &mut f));
+            full.textures_delta.clear();
+            out.clear();
+            for c in &full.shapes {
+                if let Shape::Text(t) = &c.shape {
+                    let rect = t.galley.rect.translate(t.pos.to_vec2());
+                    out.push((t.galley.text().to_owned(), rect.intersect(c.clip_rect)));
+                }
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn a_long_status_message_is_cut_short_instead_of_running_under_the_body_count() {
+        // At 1000 points the navigation hint and a long message together are wider than
+        // the space left of "N bodies · M triangles": the left side must end before it.
+        let ctx = egui::Context::default();
+        let mut app = ChamferaApp::headless();
+        app.run("body.sample", json!({}));
+        app.message = Some((
+            "A deliberately long status message that says a great deal about what just \
+             happened to the design, far more than fits next to the body count"
+                .into(),
+            false,
+        ));
+        let shown = texts(&mut app, &ctx, 1000.0);
+        let count = shown
+            .iter()
+            .find(|(t, _)| t.contains("triangles"))
+            .map(|(_, r)| *r)
+            .unwrap_or_else(|| panic!("the body count is drawn: {shown:?}"));
+        let left: Vec<&(String, Rect)> = shown
+            .iter()
+            .filter(|(_, r)| (r.center().y - count.center().y).abs() < 4.0 && r.max.x < 1000.0)
+            .filter(|(t, _)| !t.contains("triangles"))
+            .collect();
+        assert!(!left.is_empty(), "the status bar's left side is drawn");
+        for (t, r) in left {
+            if r.is_positive() {
+                assert!(
+                    r.max.x <= count.min.x + 0.5,
+                    "{t:?} ends at {} but the body count starts at {}",
+                    r.max.x,
+                    count.min.x
+                );
+            }
+        }
     }
 }
