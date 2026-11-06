@@ -113,7 +113,16 @@ fn faces(s: &Session, p: &Value) -> Result<Vec<String>, CommandError> {
 /// Adds `kind` to the timeline and rebuilds; the feature's error is the command's.
 fn add(s: &mut Session, kind: FeatureKind) -> CmdResult {
     s.scene.previews.clear();
+    let named: Vec<String> = match &kind {
+        FeatureKind::OffsetFace(o) => o.faces.clone(),
+        FeatureKind::DeleteFace(d) => d.faces.clone(),
+        FeatureKind::MoveFace(m) => m.faces.clone(),
+        _ => Vec::new(),
+    };
     let id = s.doc.add_feature(kind)?;
+    for n in &named {
+        s.record_signature(id, crate::naming::Kind::Face, n, None);
+    }
     s.rebuild();
     if let Some(e) = s.feature_errors().get(&id) {
         return Err(CommandError::Unavailable(e.clone()));
@@ -132,16 +141,19 @@ fn delete_face(s: &mut Session, p: &Value) -> CmdResult {
     add(s, FeatureKind::DeleteFace(DeleteFace { faces }))
 }
 
-/// The outward normal of the first named flat face among the built solids.
+/// The outward normal of the named flat face among the built solids (through the
+/// resolver: pieces of a split face share their plane).
 fn face_normal(s: &Session, name: &str) -> Option<chamfera_geom::Vec3> {
-    s.solids().iter().find_map(|x| {
-        let f = x
-            .body
-            .faces()
-            .into_iter()
-            .find(|f| x.body.face_name(*f).ok().flatten() == Some(name))?;
-        crate::solids::face_plane(&x.body, f).map(|p| p.z())
-    })
+    let found = s
+        .resolve_reference(
+            None,
+            crate::naming::Kind::Face,
+            name,
+            crate::naming::Want::All,
+        )
+        .ok()?;
+    let f = found.first()?;
+    crate::solids::face_plane(&s.solids().get(f.body)?.body, f.face()?).map(|p| p.z())
 }
 
 fn move_face(s: &mut Session, p: &Value) -> CmdResult {

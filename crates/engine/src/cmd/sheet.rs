@@ -236,7 +236,9 @@ fn flange(s: &mut Session, p: &Value) -> CmdResult {
         offset_start: expression(p, "offset_start", "mm")?,
         offset_end: expression(p, "offset_end", "mm")?,
     };
+    let edge = f.edge.clone();
     let id = s.doc.add_feature(FeatureKind::SheetFlange(f))?;
+    s.record_signature(id, crate::naming::Kind::Edge, &edge, None);
     built_reply(s, id)
 }
 

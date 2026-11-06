@@ -64,10 +64,12 @@
 //! to `top` still resolves. The engine names operand faces `feature:role` (e.g. `A:top`,
 //! `B:side 2`), so the result tells which feature each face came from; booleans nest
 //! without renaming. When one operand face ends up as several result faces (a slot cuts a
-//! top in two), they all carry its name. Faces merged from several pieces take the name of
-//! the first piece, operand A before B. Edges keep the names of the operand edges they are
-//! pieces of; an edge made by an intersection is named `<face of A> x <face of B>` (an
-//! imprinted edge keeps its operand edge's name); vertices keep operand vertex names.
+//! top in two), they all carry its name; `chamfera_doc::naming` tells the pieces apart
+//! (`A:top#1`, `A:top#2`) and resolves references to them. Faces merged from several
+//! pieces take the name of the first piece, operand A before B. Edges keep the names of
+//! the operand edges they are pieces of; an edge made by an intersection is named
+//! `<face of A> x <face of B>` (an imprinted edge keeps its operand edge's name);
+//! vertices keep operand vertex names.
 //!
 //! # What is refused
 //! - Operands that are not valid solids ([`KernelError::InvalidInput`]).

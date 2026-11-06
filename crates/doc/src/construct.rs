@@ -288,6 +288,11 @@ impl Construction {
         }
     }
 
+    /// Every face the construction refers to (for recording their signatures, rung K8).
+    pub fn face_refs(&self) -> Vec<FaceRef> {
+        self.refs().faces.into_iter().cloned().collect()
+    }
+
     fn refs(&self) -> Refs<'_> {
         let mut r = Refs::default();
         match self {
