@@ -6,8 +6,10 @@
 //! - geometry is exact (f64); meshes are only for display and export.
 
 mod mesh;
+mod vec2;
 
 pub use mesh::{Aabb, MAX_TRIANGLES, MeshError, Ray, TriMesh, same_length};
+pub use vec2::{Point2, Vec2};
 
 use serde::{Deserialize, Serialize};
 use std::ops::{Add, Mul, Neg, Sub};
