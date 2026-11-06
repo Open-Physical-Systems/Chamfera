@@ -160,8 +160,8 @@ Close runners-up: selection filters and box selection (UI and NAV), splines (nee
 | Rib and web | Thin supports from an open sketch line | missing | P2 | M | kernel |
 | Emboss / deboss | Raise or sink sketch text or profiles on a face | missing | P2 | M | kernel |
 | Draft | Tilt faces by an angle from a pull direction | missing | P1 | L | kernel (K12) |
-| Push/pull a face | Move or offset a face directly; the model follows | missing | P1 | M | kernel, engine |
-| Replace face, offset face, delete face | Direct edits of faces | missing | P2 | L | kernel |
+| Push/pull a face | Move or offset a face directly; the model follows. Press Pull (Q): profile → extrude, face → offset, fillet face → its radius, edge → fillet, by dragging an arrow or typing; Move Face for planar faces | branch (solid/direct-edit) | P1 | M | kernel, engine |
+| Replace face, offset face, delete face | Direct edits of faces: offset and delete done (`solid.offset_face`, `solid.delete_face`); replace face missing | branch (solid/direct-edit) | P2 | L | kernel |
 | Split body / split face | Cut a body or face with a plane, surface or sketch | missing | P1 | M | kernel |
 | Scale body | Uniform and non-uniform scale | missing | P2 | S | kernel |
 | Coil / helix | Spring and thread shapes | missing | P2 | L | kernel (K10) |

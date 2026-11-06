@@ -46,6 +46,7 @@ pub enum Icon {
     ConstructPoint,
     Construction,
     Delete,
+    DeleteFace,
     Dimension,
     Edit,
     Ellipse,
@@ -68,6 +69,7 @@ pub enum Icon {
     Move,
     New,
     Offset,
+    OffsetFace,
     Open,
     Origin,
     Parameters,
@@ -75,6 +77,7 @@ pub enum Icon {
     PatternRectangular,
     Plane,
     Polygon,
+    PressPull,
     Project,
     Rectangle,
     RectangleCentre,
@@ -99,7 +102,7 @@ pub enum Icon {
 
 impl Icon {
     #[cfg(test)]
-    pub const ALL: [Icon; 76] = [
+    pub const ALL: [Icon; 79] = [
         Icon::Arc,
         Icon::ArcTangent,
         Icon::ArcThreePoint,
@@ -127,6 +130,7 @@ impl Icon {
         Icon::ConstructPoint,
         Icon::Construction,
         Icon::Delete,
+        Icon::DeleteFace,
         Icon::Dimension,
         Icon::Edit,
         Icon::Ellipse,
@@ -149,6 +153,7 @@ impl Icon {
         Icon::Move,
         Icon::New,
         Icon::Offset,
+        Icon::OffsetFace,
         Icon::Open,
         Icon::Origin,
         Icon::Parameters,
@@ -156,6 +161,7 @@ impl Icon {
         Icon::PatternRectangular,
         Icon::Plane,
         Icon::Polygon,
+        Icon::PressPull,
         Icon::Project,
         Icon::Rectangle,
         Icon::RectangleCentre,
@@ -209,6 +215,7 @@ impl Icon {
             Icon::ConstructPoint => master!("construct_point"),
             Icon::Construction => master!("construction"),
             Icon::Delete => master!("delete"),
+            Icon::DeleteFace => master!("delete_face"),
             Icon::Dimension => master!("dimension"),
             Icon::Edit => master!("edit"),
             Icon::Ellipse => master!("ellipse"),
@@ -255,6 +262,8 @@ impl Icon {
             Icon::MirrorBody => master!("mirror_body"),
             Icon::Move => master!("move"),
             Icon::Offset => master!("offset"),
+            Icon::OffsetFace => master!("offset_face"),
+            Icon::PressPull => master!("press_pull"),
             Icon::PatternCircular => master!("pattern_circular"),
             Icon::PatternRectangular => master!("pattern_rectangular"),
             Icon::RectangleCentre => master!("rectangle_centre"),

@@ -372,6 +372,8 @@ pub struct SolidUi {
     pub transform: Option<crate::transform_ui::TransformTool>,
     /// The Shell tool.
     pub shell: Option<crate::shell_ui::ShellTool>,
+    /// The Press Pull, Offset Face or Delete Face tool (`press_pull_ui.rs`).
+    pub press_pull: Option<crate::press_pull_ui::PressPullTool>,
     /// Waiting for a click on a flat face to sketch on.
     pub pick_face: bool,
     /// `--extrude`: pick the profile under the viewport's centre on the first frame.
@@ -396,7 +398,8 @@ impl ChamferaApp {
             && self.solid.hole.is_none()
             && self.solid.transform.is_none()
             && self.solid.inspect.is_none()
-            && self.solid.shell.is_none();
+            && self.solid.shell.is_none()
+            && self.solid.press_pull.is_none();
         let extruding = self.solid.extrude.as_ref().is_some_and(|t| !t.revolve);
         let revolving = self.solid.extrude.as_ref().is_some_and(|t| t.revolve);
         let mut plane: Option<(&str, &str)> = None;
@@ -546,6 +549,7 @@ impl ChamferaApp {
         let mut parameters = false;
         let mut open_blend: Option<bool> = None;
         let mut open_shell = false;
+        let mut open_pull = None;
         let filleting = self.solid.blend.as_ref().is_some_and(|t| !t.chamfer);
         let chamfering = self.solid.blend.as_ref().is_some_and(|t| t.chamfer);
         widgets::ribbon_group(ui, look, "MODIFY", false, |ui| {
@@ -584,6 +588,14 @@ impl ChamferaApp {
                 }
             }
             open_shell = crate::shell_ui::ribbon_button(ui, look, has_solids, tool_free);
+            open_pull = crate::press_pull_ui::ribbon_buttons(
+                ui,
+                look,
+                has_solids || has_profiles,
+                has_solids,
+                tool_free,
+                self.solid.press_pull.as_ref().map(|t| t.mode),
+            );
             if widgets::tool_button(
                 ui,
                 look,
@@ -606,6 +618,9 @@ impl ChamferaApp {
         }
         if open_shell {
             self.open_shell_tool();
+        }
+        if let Some(mode) = open_pull {
+            self.open_press_pull(mode);
         }
         if let Some(chamfer) = open_blend {
             self.open_blend(chamfer);

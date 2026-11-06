@@ -7,6 +7,7 @@
 pub mod box_select;
 pub mod cmd;
 pub mod construct;
+pub mod face_edit;
 pub mod hole;
 mod imported;
 mod params;

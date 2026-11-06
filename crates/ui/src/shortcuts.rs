@@ -20,6 +20,8 @@ pub enum Action {
     FinishSketch,
     Extrude,
     Revolve,
+    /// Press Pull: extrude a profile, offset a face or fillet an edge by dragging.
+    PressPull,
     Fillet,
     Chamfer,
     Parameters,
@@ -141,7 +143,7 @@ const fn row(action: Action, keys: Keys, context: &'static str, handler: Handler
 }
 
 /// Every default shortcut. Keys are unique (`no_two_shortcuts_share_a_key`).
-pub const SHORTCUTS: [Shortcut; 22] = [
+pub const SHORTCUTS: [Shortcut; 23] = [
     row(
         Action::Search,
         Keys::CtrlSpaceThen(Key::F),
@@ -197,6 +199,7 @@ pub const SHORTCUTS: [Shortcut; 22] = [
         Handler::Here,
     ),
     row(Action::Extrude, Keys::key(Key::E), "Solid", Handler::Here),
+    row(Action::PressPull, Keys::key(Key::Q), "Solid", Handler::Here),
     row(
         Action::Delete,
         Keys::key(Key::Delete),
@@ -272,7 +275,7 @@ pub const SHORTCUTS: [Shortcut; 22] = [
 ];
 
 /// Keys kept free for tools that are planned, so nothing else takes them.
-pub const RESERVED: [(Key, &str); 1] = [(Key::Q, "Press Pull (planned)")];
+pub const RESERVED: [(Key, &str); 0] = [];
 
 /// The first shortcut of an action, as text ("L", "Ctrl+Z").
 pub fn keys_for(action: Action) -> Option<String> {
@@ -310,6 +313,7 @@ pub fn action_label(action: Action) -> String {
         Action::FinishSketch => label("sketch.finish").into(),
         Action::Extrude => label("solid.extrude").into(),
         Action::Revolve => label("solid.revolve").into(),
+        Action::PressPull => label("solid.press_pull").into(),
         Action::Fillet => label("solid.fillet").into(),
         Action::Chamfer => label("solid.chamfer").into(),
         Action::Parameters => "Parameters".into(),
@@ -426,6 +430,7 @@ mod tests {
             (Action::SketchTool(Tool::Offset), "O"),
             (Action::Construction, "X"),
             (Action::Extrude, "E"),
+            (Action::PressPull, "Q"),
             (Action::Delete, "Del"),
             (Action::Cancel, "Esc"),
             (Action::Undo, "Ctrl+Z"),

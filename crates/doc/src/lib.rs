@@ -2,12 +2,14 @@
 
 pub mod construct;
 pub mod expr;
+pub mod face_edit;
 pub mod feature;
 pub mod imported;
 
 pub use construct::{
     AxisRef, ConstructKind, Construction, EdgeRef, OriginAxis, OriginPlane, PlaneRef, PointRef,
 };
+pub use face_edit::{DeleteFace, FaceTurn, MoveFace, OffsetFace};
 pub use feature::{
     Blend, BlendKind, Extrude, ExtrudeDirection, ExtrudeExtent, ExtrudeTo, ExtrudeValues, Feature,
     FeatureKind, Hole, HoleKind, HoleSizes, Mirror, MirrorPlane, Move, MoveTransform, Operation,
@@ -41,7 +43,9 @@ use thiserror::Error;
 ///   distance from the sketch plane without a taper.
 /// - 14: mirror and move/copy of bodies and features.
 /// - 19: projected (linked) sketch curves and ellipses.
-pub const FORMAT_VERSION: u32 = 19;
+/// - 22: direct face edits on the timeline: offset faces (`offset_face`), delete faces
+///   (`delete_face`) and move faces (`move_face`). Older files open unchanged.
+pub const FORMAT_VERSION: u32 = 22;
 /// The tag every design file starts with, so other JSON is not mistaken for a design.
 pub const FORMAT_TAG: &str = "chamfera";
 /// Longest parameter name.

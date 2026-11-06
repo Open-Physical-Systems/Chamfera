@@ -115,6 +115,9 @@ impl ChamferaApp {
                     (Icon::MirrorBody, crate::transform_ui::mirror_details(m))
                 }
                 FeatureKind::Move(m) => (Icon::Move, crate::transform_ui::move_details(m)),
+                FeatureKind::OffsetFace(_)
+                | FeatureKind::DeleteFace(_)
+                | FeatureKind::MoveFace(_) => crate::press_pull_ui::timeline_entry(&f.kind),
                 FeatureKind::Shell(sh) => (
                     Icon::Shell,
                     format!(
@@ -372,6 +375,9 @@ impl ChamferaApp {
             FeatureKind::Mirror(m) => (crate::transform_ui::mirror_details(m), None),
             FeatureKind::Move(m) => (crate::transform_ui::move_details(m), None),
             FeatureKind::Shell(sh) => (sh.thickness.clone(), None),
+            FeatureKind::OffsetFace(o) => (o.distance.clone(), None),
+            FeatureKind::DeleteFace(_) => (crate::press_pull_ui::timeline_entry(&f.kind).1, None),
+            FeatureKind::MoveFace(m) => (m.distance.clone(), None),
         };
         self.timeline.editing = Some(FeatureEdit {
             feature: id,
@@ -395,13 +401,20 @@ impl ChamferaApp {
         // others show their value only.
         let extrude = matches!(feature.kind, FeatureKind::Extrude(_));
         let shell = matches!(feature.kind, FeatureKind::Shell(_));
-        let blend = shell || matches!(feature.kind, FeatureKind::Blend(_));
+        // Offset and move face edit their distance in the same field.
+        let face_edit = matches!(
+            feature.kind,
+            FeatureKind::OffsetFace(_) | FeatureKind::MoveFace(_)
+        );
+        let blend = shell || face_edit || matches!(feature.kind, FeatureKind::Blend(_));
         let revolve = !extrude && !blend;
         let value_label = match &feature.kind {
             FeatureKind::Revolve(_) => "Angle",
             FeatureKind::Pattern(_) => "Count",
             FeatureKind::Mirror(_) | FeatureKind::Move(_) => "Definition",
             FeatureKind::Shell(_) => "Thickness",
+            FeatureKind::OffsetFace(_) | FeatureKind::MoveFace(_) => "Distance",
+            FeatureKind::DeleteFace(_) => "Faces",
             _ => "Size",
         };
         const WIDTH: f32 = 300.0;
@@ -491,6 +504,8 @@ impl ChamferaApp {
             let mut params = json!({ "feature": edit.feature, "suppressed": edit.suppressed });
             if shell {
                 params["thickness"] = json!(edit.distance.trim());
+            } else if face_edit {
+                params["distance"] = json!(edit.distance.trim());
             } else if blend {
                 params["size"] = json!(edit.distance.trim());
             } else if let Some(form) = &edit.extrude
