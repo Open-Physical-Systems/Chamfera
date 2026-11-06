@@ -127,6 +127,12 @@ fn export_bytes(s: &mut Session, p: &Value) -> CmdResult {
             }
             let bodies = solid_bodies(s)?;
             let options = chamfera_io::step::StepOptions {
+                // The header names the file the user will get: the design's name.
+                file_name: s
+                    .path
+                    .as_ref()
+                    .map(|_| format!("{}.step", product_name(s)))
+                    .unwrap_or_default(),
                 product_name: product_name(s),
                 timestamp: timestamp.map(str::to_owned),
                 ..Default::default()
@@ -407,6 +413,16 @@ mod tests {
         assert!(text.starts_with("ISO-10303-21;"));
         assert!(text.contains("2026-11-06T12:00:00"));
         assert_eq!(text.matches("ADVANCED_FACE(").count(), 6);
+        // A design with a name (the browser sets one when it opens a file) names the file
+        // and the product after it.
+        s.path = Some("plate.chamfera".into());
+        let r = s
+            .execute("design.export_bytes", &json!({"format": "step"}))
+            .unwrap();
+        let text = String::from_utf8(decode_base64(r["data"].as_str().unwrap(), u64::MAX).unwrap())
+            .unwrap();
+        assert!(text.contains("FILE_NAME('plate.step'"), "{text}");
+        assert!(text.contains("PRODUCT('plate'"));
         // Bad formats and parameters are refused.
         for p in [
             json!({}),
