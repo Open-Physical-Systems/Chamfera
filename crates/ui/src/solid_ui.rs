@@ -266,13 +266,12 @@ impl ChamferaApp {
         let mut import = false;
         let mut sample = false;
         widgets::ribbon_group(ui, look, "INSERT", false, |ui| {
-            let desktop = cfg!(not(target_arch = "wasm32"));
             if widgets::tool_button(
                 ui,
                 look,
                 Icon::ImportMesh,
                 label("body.import_stl"),
-                desktop,
+                true,
                 false,
                 false,
             )

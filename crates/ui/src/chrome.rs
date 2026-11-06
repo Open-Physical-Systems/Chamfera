@@ -33,13 +33,14 @@ impl ChamferaApp {
             let (brand, _) = ui.allocate_exact_size(Vec2::splat(22.0), Sense::hover());
             self.icons.paint_brand(ui.painter(), brand);
             ui.add_space(S2);
-            ui.menu_button("File", |ui| self.file_menu(ui));
+            let _file = ui.menu_button("File", |ui| self.file_menu(ui));
+            #[cfg(target_arch = "wasm32")]
+            self.web.target("File", _file.response.rect);
             ui.menu_button("View", |ui| self.view_menu(ui));
             ui.menu_button("Help", |ui| self.help_menu(ui));
             widgets::bar_divider(ui, self.look(), 20.0);
             let look = self.look();
-            let desktop = cfg!(not(target_arch = "wasm32"));
-            if widgets::icon_button(ui, look, Icon::Save, 30.0, 20.0, desktop, false)
+            if widgets::icon_button(ui, look, Icon::Save, 30.0, 20.0, true, false)
                 .on_hover_text("Save the design  (Ctrl+S)")
                 .clicked()
             {

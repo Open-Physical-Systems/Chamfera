@@ -18,8 +18,6 @@ const ACCENT: &str = "#E8770E";
 const MAX_PIXELS: u32 = 256;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-// The browser build has no file dialogs, so a few file icons go unused there.
-#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub enum Icon {
     Arc,
     ArcTangent,

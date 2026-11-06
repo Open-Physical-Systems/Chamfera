@@ -83,6 +83,88 @@ struct Targets {
     /// The same pixels seen as plain `Rgba8Unorm`, for UIs that composite in sRGB space
     /// and would otherwise decode the colours twice.
     raw_view: wgpu::TextureView,
+    /// Where the device cannot view a texture in another format (wgpu's GL backend, so
+    /// WebGL 2), `raw_view` is a separate `Rgba8Unorm` texture that [`RawBlit`] fills from
+    /// the sRGB picture after each frame. GL cannot copy between the two formats.
+    raw_blit: Option<wgpu::BindGroup>,
+}
+
+/// Re-encodes the sRGB picture into a plain `Rgba8Unorm` texture (GL backends only).
+struct RawBlit {
+    layout: wgpu::BindGroupLayout,
+    pipeline: wgpu::RenderPipeline,
+}
+
+const RAW_BLIT_WGSL: &str = r"
+@group(0) @binding(0) var picture: texture_2d<f32>;
+
+@vertex
+fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
+    let uv = vec2<f32>(f32((i << 1u) & 2u), f32(i & 2u));
+    return vec4<f32>(uv * 2.0 - 1.0, 0.0, 1.0);
+}
+
+@fragment
+fn fs(@builtin(position) p: vec4<f32>) -> @location(0) vec4<f32> {
+    // Reading the sRGB texture decodes to linear; encode again for the plain target.
+    let c = textureLoad(picture, vec2<i32>(p.xy), 0);
+    let lo = c.rgb * 12.92;
+    let hi = 1.055 * pow(c.rgb, vec3<f32>(1.0 / 2.4)) - 0.055;
+    return vec4<f32>(select(hi, lo, c.rgb <= vec3<f32>(0.0031308)), c.a);
+}
+";
+
+impl RawBlit {
+    fn new(device: &wgpu::Device) -> RawBlit {
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("raw blit"),
+            source: wgpu::ShaderSource::Wgsl(RAW_BLIT_WGSL.into()),
+        });
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("raw blit"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            }],
+        });
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("raw blit"),
+            bind_group_layouts: &[Some(&layout)],
+            immediate_size: 0,
+        });
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("raw blit"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &module,
+                entry_point: Some("vs"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &module,
+                entry_point: Some("fs"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+        RawBlit { layout, pipeline }
+    }
 }
 
 pub struct ViewRenderer {
@@ -100,6 +182,8 @@ pub struct ViewRenderer {
     overlay_points_depth: wgpu::RenderPipeline,
     targets: Option<Targets>,
     bodies: HashMap<u32, GpuBody>,
+    /// Made on first use, only on backends without texture view formats.
+    raw_blit: Option<RawBlit>,
 }
 
 fn f3(p: Point3) -> [f32; 3] {
@@ -342,6 +426,7 @@ impl ViewRenderer {
             overlay_points_depth,
             targets: None,
             bodies: HashMap::new(),
+            raw_blit: None,
         }
     }
 
@@ -388,22 +473,44 @@ impl ViewRenderer {
         let msaa = tex("msaa", COLOR_FORMAT, SAMPLES, attach, &[]);
         let depth = tex("depth", DEPTH_FORMAT, SAMPLES, attach, &[]);
         let raw = wgpu::TextureFormat::Rgba8Unorm;
+        let sampled = wgpu::TextureUsages::TEXTURE_BINDING;
+        // wgpu's GL backend (WebGL 2 in browsers) lacks `DownlevelFlags::VIEW_FORMATS`.
+        let views = device.adapter_info().backend != wgpu::Backend::Gl;
+        let raw_formats = [raw];
         let resolve = tex(
             "view",
             COLOR_FORMAT,
             1,
-            attach | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
-            &[raw],
+            attach | sampled | wgpu::TextureUsages::COPY_SRC,
+            if views { &raw_formats } else { &[] },
         );
+        let resolve_view = resolve.create_view(&Default::default());
+        let (raw_view, raw_blit) = if views {
+            let view = resolve.create_view(&wgpu::TextureViewDescriptor {
+                format: Some(raw),
+                ..Default::default()
+            });
+            (view, None)
+        } else {
+            let blit = self.raw_blit.get_or_insert_with(|| RawBlit::new(device));
+            let copy = tex("view (raw)", raw, 1, attach | sampled, &[]);
+            let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("raw blit"),
+                layout: &blit.layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&resolve_view),
+                }],
+            });
+            (copy.create_view(&Default::default()), Some(bind))
+        };
         self.targets = Some(Targets {
             size: (w, h),
             msaa: msaa.create_view(&Default::default()),
             depth: depth.create_view(&Default::default()),
-            resolve_view: resolve.create_view(&Default::default()),
-            raw_view: resolve.create_view(&wgpu::TextureViewDescriptor {
-                format: Some(raw),
-                ..Default::default()
-            }),
+            resolve_view,
+            raw_view,
+            raw_blit,
             resolve,
         });
     }
@@ -614,6 +721,29 @@ impl ViewRenderer {
                 pass.set_vertex_buffer(0, buf.slice(..));
                 pass.draw(0..6, 0..overlay_points.len() as u32);
             }
+        }
+        if let (Some(t), Some(blit)) = (&self.targets, &self.raw_blit)
+            && let Some(bind) = &t.raw_blit
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("raw blit"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &t.raw_view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&blit.pipeline);
+            pass.set_bind_group(0, bind, &[]);
+            pass.draw(0..3, 0..1);
         }
         encoder.finish()
     }

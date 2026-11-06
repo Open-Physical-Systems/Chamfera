@@ -1,5 +1,9 @@
 //! The File menu: New, Open, Save, Save As, Export, Insert, and the question before
 //! unsaved changes are thrown away. Keyboard shortcuts for files and undo live here too.
+//!
+//! The desktop uses file dialogs and paths. In the browser (wasm32) Open and Insert Mesh
+//! use the browser's file picker, Save and Export download the file, and the design is
+//! kept in local storage (`crate::web`); there is no Save As or Quit.
 
 use crate::icons::Icon;
 use crate::widgets;
@@ -26,8 +30,11 @@ pub struct FileUi {
 impl ChamferaApp {
     pub(crate) fn file_menu(&mut self, ui: &mut egui::Ui) {
         let look = self.look();
-        let item = |ui: &mut egui::Ui, icon: Icon, text: &str, keys: &str| {
+        // Where each item is, for tests in the browser (`crate::web`).
+        let mut drawn: Vec<(String, egui::Rect)> = Vec::new();
+        let mut item = |ui: &mut egui::Ui, icon: Icon, text: &str, keys: &str| {
             let r = widgets::menu_item(ui, look, icon, text, true);
+            drawn.push((text.to_owned(), r.rect));
             if !keys.is_empty() {
                 ui.painter().text(
                     egui::pos2(r.rect.max.x - 8.0, r.rect.center().y),
@@ -41,70 +48,71 @@ impl ChamferaApp {
         };
         ui.set_min_width(240.0);
         let new = item(ui, Icon::New, "New", "Ctrl+N");
+        let open = item(ui, Icon::Open, "Open…", "Ctrl+O");
+        ui.separator();
+        let save = item(ui, Icon::Save, "Save", "Ctrl+S");
         #[cfg(not(target_arch = "wasm32"))]
-        let (open, save, save_as, step, stl, import) = {
-            let open = item(ui, Icon::Open, "Open…", "Ctrl+O");
-            ui.separator();
-            let save = item(ui, Icon::Save, "Save", "Ctrl+S");
-            let save_as = item(ui, Icon::Save, "Save As…", "Ctrl+Shift+S");
-            ui.separator();
-            let step = item(
-                ui,
-                Icon::Export,
-                &format!("{}…", label("design.export_step")),
-                "",
-            );
-            let stl = item(
-                ui,
-                Icon::Export,
-                &format!("{}…", label("design.export_stl")),
-                "",
-            );
-            ui.separator();
-            let import = item(
-                ui,
-                Icon::ImportMesh,
-                &format!("{}…", label("body.import_stl")),
-                "",
-            );
-            (open, save, save_as, step, stl, import)
-        };
+        let save_as = item(ui, Icon::Save, "Save As…", "Ctrl+Shift+S");
+        ui.separator();
+        let step = item(
+            ui,
+            Icon::Export,
+            &format!("{}…", label("design.export_step")),
+            "",
+        );
+        let stl = item(
+            ui,
+            Icon::Export,
+            &format!("{}…", label("design.export_stl")),
+            "",
+        );
+        ui.separator();
+        let import = item(
+            ui,
+            Icon::ImportMesh,
+            &format!("{}…", label("body.import_stl")),
+            "",
+        );
         let sample = item(ui, Icon::Body, label("body.sample"), "");
         #[cfg(not(target_arch = "wasm32"))]
         let quit = {
             ui.separator();
             item(ui, Icon::Close, "Quit", "")
         };
+        #[cfg(target_arch = "wasm32")]
+        for (text, rect) in &drawn {
+            self.web.target(text, *rect);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        drop(drawn);
         if new {
             ui.close();
             self.ask_or(Pending::New);
         }
+        if open {
+            ui.close();
+            self.ask_or(Pending::Open);
+        }
+        if save {
+            ui.close();
+            self.save(false);
+        }
         #[cfg(not(target_arch = "wasm32"))]
-        {
-            if open {
-                ui.close();
-                self.ask_or(Pending::Open);
-            }
-            if save {
-                ui.close();
-                self.save(false);
-            }
-            if save_as {
-                ui.close();
-                self.save(true);
-            }
-            if step {
-                ui.close();
-                self.export("STEP", &["step", "stp"], "design.export_step");
-            }
-            if stl {
-                ui.close();
-                self.export("STL mesh", &["stl"], "design.export_stl");
-            }
-            if import {
-                ui.close();
-                self.import_dialog();
-            }
+        if save_as {
+            ui.close();
+            self.save(true);
+        }
+        if step {
+            ui.close();
+            self.export("STEP", &["step", "stp"], "design.export_step");
+        }
+        if stl {
+            ui.close();
+            self.export("STL mesh", &["stl"], "design.export_stl");
+        }
+        if import {
+            ui.close();
+            self.import_dialog();
         }
         if sample {
             ui.close();
@@ -132,6 +140,8 @@ impl ChamferaApp {
             Pending::New => {
                 self.run("design.new", json!({}));
                 self.after_new_design();
+                #[cfg(target_arch = "wasm32")]
+                self.web.clear();
             }
             Pending::Open => self.open_dialog(),
             Pending::Quit => {
@@ -165,8 +175,99 @@ impl ChamferaApp {
         }
     }
 
+    /// The browser's file picker; the design is opened in `browser_files` once read.
     #[cfg(target_arch = "wasm32")]
-    fn open_dialog(&mut self) {}
+    fn open_dialog(&mut self) {
+        self.web.pick(crate::web::Kind::Design, ".chamfera", false);
+    }
+
+    /// The browser's file picker for STL meshes, inserted in `browser_files` once read.
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn import_dialog(&mut self) {
+        self.web.pick(crate::web::Kind::Mesh, ".stl,.STL", true);
+    }
+
+    /// Opens the design this browser kept (local storage), if any, at start.
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn restore_from_browser(&mut self) {
+        let Some((text, name)) = crate::web::WebFiles::stored_design() else {
+            return;
+        };
+        let Some(data) = crate::web::to_base64(text.as_bytes()) else {
+            return;
+        };
+        if self
+            .run("design.open_bytes", json!({ "data": data }))
+            .is_some()
+        {
+            self.session.path = name.map(std::path::PathBuf::from);
+            self.web.restored(&self.session.doc);
+            self.after_new_design();
+            self.message = Some((
+                format!("Restored {} from this browser", self.design_name()),
+                false,
+            ));
+        }
+    }
+
+    /// Every frame in the browser: opens or inserts the files the picker has read, and
+    /// keeps the design in local storage.
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn browser_files(&mut self, ctx: &egui::Context) {
+        self.web.set_context(ctx);
+        for picked in self.web.take_picked() {
+            let data = match picked.data {
+                Ok(d) => d,
+                Err(e) => {
+                    self.message = Some((e, true));
+                    continue;
+                }
+            };
+            match picked.kind {
+                crate::web::Kind::Design => {
+                    if self
+                        .run("design.open_bytes", json!({ "data": data }))
+                        .is_some()
+                    {
+                        // Only the name, for the title and downloads: there is no file path.
+                        self.session.path = Some(std::path::PathBuf::from(&picked.name));
+                        self.after_new_design();
+                        self.message = Some((format!("Opened {}", picked.name), false));
+                    }
+                }
+                crate::web::Kind::Mesh => {
+                    let name = picked.name.as_str();
+                    if let Some(v) = self.run(
+                        "body.import_stl_bytes",
+                        json!({ "data": data, "name": name }),
+                    ) {
+                        self.message = Some((
+                            format!(
+                                "Inserted {} ({} triangles)",
+                                v["name"].as_str().unwrap_or("mesh"),
+                                v["triangles"]
+                            ),
+                            false,
+                        ));
+                        self.fit_pending = true;
+                    }
+                }
+            }
+        }
+        let name = self
+            .session
+            .path
+            .as_ref()
+            .and_then(|p| p.file_name())
+            .map(|n| n.to_string_lossy().into_owned());
+        if let Some(problem) = self.web.autosave(ctx, &self.session.doc, name.as_deref()) {
+            self.message = Some((problem, true));
+        }
+        let message = self.message.as_ref().map_or("", |(m, _)| m.as_str());
+        self.web
+            .show_status(message, self.session.scene.bodies.len());
+        self.web.show_targets(ctx.zoom_factor());
+    }
 
     /// Saves to the current file, or asks where (always, with `choose`).
     #[cfg(not(target_arch = "wasm32"))]
@@ -196,8 +297,47 @@ impl ChamferaApp {
         }
     }
 
+    /// Downloads the design (the browser has no Save As: it asks where, or not, itself).
     #[cfg(target_arch = "wasm32")]
-    pub(crate) fn save(&mut self, _choose: bool) {}
+    pub(crate) fn save(&mut self, _choose: bool) {
+        let Some(v) = self.run("design.save_bytes", json!({})) else {
+            return;
+        };
+        let name = format!("{}.chamfera", self.design_name());
+        match crate::web::download(
+            &name,
+            "application/octet-stream",
+            v["data"].as_str().unwrap_or(""),
+        ) {
+            Ok(()) => self.message = Some((format!("Downloaded {name}"), false)),
+            Err(e) => self.message = Some((format!("Save: {e}"), true)),
+        }
+    }
+
+    /// Downloads a STEP or STL export.
+    #[cfg(target_arch = "wasm32")]
+    fn export(&mut self, _kind: &str, extensions: &[&str], command: &str) {
+        let ext = extensions.first().copied().unwrap_or("out");
+        let format = if command == "design.export_step" {
+            "step"
+        } else {
+            "stl"
+        };
+        let params = json!({ "format": format, "timestamp": crate::web::now_iso8601() });
+        let Some(v) = self.run("design.export_bytes", params) else {
+            return;
+        };
+        let name = format!("{}.{ext}", self.design_name());
+        let mime = if format == "step" {
+            "model/step"
+        } else {
+            "model/stl"
+        };
+        match crate::web::download(&name, mime, v["data"].as_str().unwrap_or("")) {
+            Ok(()) => self.message = Some((format!("Downloaded {name}"), false)),
+            Err(e) => self.message = Some((format!("{}: {e}", label(command)), true)),
+        }
+    }
 
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn export(&mut self, kind: &str, extensions: &[&str], command: &str) {
@@ -333,7 +473,13 @@ impl ChamferaApp {
         };
         let title = format!("{name}{dot} — Chamfera");
         if title != self.file.title {
+            #[cfg(not(target_arch = "wasm32"))]
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
+            #[cfg(target_arch = "wasm32")]
+            {
+                let _ = ctx;
+                crate::web::set_title(&title);
+            }
             self.file.title = title;
         }
     }
