@@ -653,7 +653,7 @@ impl ViewRenderer {
                 queue.write_buffer(&g.uniform, 0, bytemuck::cast_slice(&c.linear()));
             }
         }
-        let grid = grid_vertices(cam, frame.theme);
+        let grid = grid_vertices(cam, frame.theme, frame.scene.grid_spacing);
         let grid_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("grid"),
             contents: bytemuck::cast_slice(&grid),
@@ -939,11 +939,27 @@ pub fn grid_step(distance: f64) -> f64 {
     10f64.powf((d / 10.0).log10().floor())
 }
 
+/// The grid spacing drawn: the fixed `spacing` when it is set and no finer than 1/200 of
+/// the camera distance (so the grid stays at most about 400 lines each way), else the
+/// automatic [`grid_step`].
+pub fn grid_spacing(distance: f64, spacing: Option<f64>) -> f64 {
+    let auto = grid_step(distance);
+    let d = if distance.is_finite() {
+        distance.abs()
+    } else {
+        250.0
+    };
+    match spacing {
+        Some(s) if s.is_finite() && s > 0.0 && s >= d / 200.0 => s,
+        _ => auto,
+    }
+}
+
 /// The ground grid on the XY plane around the target, fading out at its rim, plus the
 /// X (red), Y (green) and Z (blue) axes through the origin.
-fn grid_vertices(cam: &Camera, theme: &Theme) -> Vec<LineVertex> {
+fn grid_vertices(cam: &Camera, theme: &Theme, spacing: Option<f64>) -> Vec<LineVertex> {
     const SEGMENTS: usize = 8;
-    let minor = grid_step(cam.distance);
+    let minor = grid_spacing(cam.distance, spacing);
     let major = minor * 10.0;
     let extent = major * (cam.distance * 2.0 / major).ceil().max(1.0);
     let cx = (cam.target.x / major).round() * major;
@@ -1008,6 +1024,17 @@ fn grid_vertices(cam: &Camera, theme: &Theme) -> Vec<LineVertex> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_fixed_grid_spacing_is_used_unless_it_is_too_fine_for_the_view() {
+        // At 250 mm the automatic step is 10 mm (10^floor(log10 25)).
+        assert_eq!(grid_spacing(250.0, None), 10.0);
+        assert_eq!(grid_spacing(250.0, Some(5.0)), 5.0);
+        // 0.5 mm is finer than 250 / 200 = 1.25 mm: the automatic grid instead.
+        assert_eq!(grid_spacing(250.0, Some(0.5)), 10.0);
+        assert_eq!(grid_spacing(250.0, Some(f64::NAN)), 10.0);
+        assert_eq!(grid_spacing(250.0, Some(-1.0)), 10.0);
+    }
 
     #[test]
     fn grid_steps_are_powers_of_ten_near_a_tenth_of_the_distance() {

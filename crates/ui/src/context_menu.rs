@@ -833,17 +833,24 @@ impl ChamferaApp {
                 (Some(b.mesh.signed_volume().abs()), Some(b.mesh.area()))
             }
         };
-        let text = |v: Option<f64>, unit: &str| match v {
-            Some(v) => format!("{v:.2} {unit}"),
+        let u = self.session.doc.units;
+        let text = |v: Option<f64>, show: &dyn Fn(f64) -> String| match v {
+            Some(v) => show(v),
             None => "could not be measured".into(),
         };
-        rows.push(("Volume".into(), text(volume, "mm³")));
-        rows.push(("Area".into(), text(area, "mm²")));
+        rows.push(("Volume".into(), text(volume, &|v| u.volume(v))));
+        rows.push(("Area".into(), text(area, &|v| u.area(v))));
         if let Some(bb) = b.mesh.bounds() {
             let d = bb.max - bb.min;
             rows.push((
                 "Size".into(),
-                format!("{:.2} × {:.2} × {:.2} mm", d.x, d.y, d.z),
+                format!(
+                    "{} × {} × {} {}",
+                    u.length_number(d.x),
+                    u.length_number(d.y),
+                    u.length_number(d.z),
+                    u.length.symbol()
+                ),
             ));
         }
         self.ctx_menu.properties = Some(Properties {

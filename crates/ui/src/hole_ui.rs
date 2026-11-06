@@ -338,8 +338,9 @@ impl ChamferaApp {
         let v = r["solids"][0]["volume"].as_f64().unwrap_or(0.0);
         self.message = Some((
             format!(
-                "{} · volume {v:.2} mm³",
-                r["name"].as_str().unwrap_or(label("solid.hole"))
+                "{} · volume {}",
+                r["name"].as_str().unwrap_or(label("solid.hole")),
+                self.units().volume(v),
             ),
             false,
         ));

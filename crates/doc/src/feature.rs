@@ -1049,9 +1049,11 @@ impl Document {
                 )
             })
             .collect();
-        expr::evaluate_as(src, dim, &values).map_err(|error| DocError::Expression {
-            name: "feature".into(),
-            error,
+        expr::evaluate_as_in(src, dim, self.length_scale(), &values).map_err(|error| {
+            DocError::Expression {
+                name: "feature".into(),
+                error,
+            }
         })
     }
 

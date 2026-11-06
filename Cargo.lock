@@ -398,6 +398,7 @@ dependencies = [
  "chamfera-engine",
  "chamfera-geom",
  "chamfera-gpu",
+ "chamfera-io",
  "chamfera-render",
  "chamfera-sketch",
  "eframe",

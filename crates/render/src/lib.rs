@@ -455,6 +455,10 @@ pub struct Scene {
     /// See-through fills (construction planes), drawn before the overlays.
     #[serde(default)]
     pub fills: Vec<Fill>,
+    /// The ground grid's fixed spacing in mm, or `None` for the automatic grid that
+    /// follows the zoom (`view.grid`). A view setting, not part of the design.
+    #[serde(default)]
+    pub grid_spacing: Option<f64>,
     next_id: u32,
 }
 

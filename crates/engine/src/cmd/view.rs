@@ -22,6 +22,14 @@ pub static COMMANDS: &[CommandSpec] = &[
         run: get,
     },
     CommandSpec {
+        id: "view.grid",
+        label: "Grid Spacing",
+        params: "spacing: number (optional) - the ground grid's spacing in mm, 0.001 to 100000; \
+                 omit or null for the automatic grid that follows the zoom",
+        mutates: false,
+        run: grid,
+    },
+    CommandSpec {
         id: "view.home",
         label: "Home View",
         params: "width, height: number (required) - viewport size in pixels",
@@ -38,7 +46,9 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         id: "view.orbit",
         label: "Orbit",
-        params: "yaw: number (required) - radians around +Z\npitch: number (required) - radians up",
+        params: "yaw: number (required) - radians around +Z\npitch: number (required) - radians \
+                 up\npivot: object (optional) - {x, y, z} in mm: turn about this point (from \
+                 `view.point_at`) instead of the view's target",
         mutates: false,
         run: orbit,
     },
@@ -49,6 +59,15 @@ pub static COMMANDS: &[CommandSpec] = &[
                  height: number (required) - viewport height in pixels",
         mutates: false,
         run: pan,
+    },
+    CommandSpec {
+        id: "view.point_at",
+        label: "Point Under Cursor",
+        params: "x, y, width, height: number (required) - a pixel of the viewport\nReplies with \
+                 `point` {x, y, z}: the model point there, or the point on that pixel's ray \
+                 level with the target",
+        mutates: false,
+        run: point_at,
     },
     CommandSpec {
         id: "view.projection",
@@ -138,8 +157,67 @@ fn normal_to(s: &mut Session, p: &Value) -> CmdResult {
 fn orbit(s: &mut Session, p: &Value) -> CmdResult {
     let yaw = angle(p, "yaw")?;
     let pitch = angle(p, "pitch")?;
+    let pivot = match params::object_field(p, "pivot")? {
+        None => None,
+        Some(v) => {
+            let c = |k: &str| -> Result<f64, CommandError> {
+                let x = params::req_f64(v, k)
+                    .map_err(|e| CommandError::BadParams(format!("pivot: {e}")))?;
+                if x.abs() > chamfera_geom::MAX_COORDINATE {
+                    return Err(CommandError::BadParams(
+                        "the pivot is too far from the origin".into(),
+                    ));
+                }
+                Ok(x)
+            };
+            Some(chamfera_geom::Point3::new(c("x")?, c("y")?, c("z")?))
+        }
+    };
+    let before = s.camera.basis();
     s.camera.orbit(yaw, pitch);
+    if let Some(pivot) = pivot {
+        // Turn the target about the pivot by the same rotation as the view: its offset
+        // keeps its coordinates in the camera's frame, so the pivot stays put on screen.
+        let d = s.camera.target - pivot;
+        let (r, u, f) = (d.dot(before.right), d.dot(before.up), d.dot(before.forward));
+        let after = s.camera.basis();
+        s.camera.target = pivot + after.right * r + after.up * u + after.forward * f;
+        s.camera.sanitize();
+    }
     Ok(reply(s))
+}
+
+/// The model point under a pixel, or the point on its ray level with the target.
+fn under_pixel(s: &Session, p: &Value) -> Result<Option<chamfera_geom::Point3>, CommandError> {
+    let (x, y, w, h) = params::pixel(p)?;
+    let bounds = s.scene.bounds();
+    Ok(s.camera
+        .ray_through(x, y, w, h, bounds.as_ref())
+        .map(|ray| match s.scene.pick(&ray) {
+            Some(hit) => hit.point,
+            None => {
+                let to_target = s.camera.target - ray.origin;
+                ray.at(to_target.dot(ray.direction).max(0.0))
+            }
+        }))
+}
+
+fn point_at(s: &mut Session, p: &Value) -> CmdResult {
+    let point = under_pixel(s, p)?;
+    Ok(json!({ "point": point.map(|q| json!({ "x": q.x, "y": q.y, "z": q.z })) }))
+}
+
+fn grid(s: &mut Session, p: &Value) -> CmdResult {
+    let spacing = params::opt_f64(p, "spacing")?;
+    if let Some(v) = spacing
+        && !(0.001..=100_000.0).contains(&v)
+    {
+        return Err(CommandError::BadParams(
+            "`spacing` must be 0.001 to 100000 mm".into(),
+        ));
+    }
+    s.scene.grid_spacing = spacing;
+    Ok(json!({ "spacing": spacing }))
 }
 
 fn pan(s: &mut Session, p: &Value) -> CmdResult {
@@ -165,19 +243,7 @@ fn zoom(s: &mut Session, p: &Value) -> CmdResult {
     // Zoom toward what is under the cursor, or toward the cursor's ray at target depth.
     let toward = match params::opt_f64(p, "x")? {
         None => None,
-        Some(_) => {
-            let (x, y, w, h) = params::pixel(p)?;
-            let bounds = s.scene.bounds();
-            s.camera
-                .ray_through(x, y, w, h, bounds.as_ref())
-                .map(|ray| match s.scene.pick(&ray) {
-                    Some(hit) => hit.point,
-                    None => {
-                        let to_target = s.camera.target - ray.origin;
-                        ray.at(to_target.dot(ray.direction).max(0.0))
-                    }
-                })
-        }
+        Some(_) => under_pixel(s, p)?,
     };
     s.camera.zoom(factor, toward);
     Ok(reply(s))

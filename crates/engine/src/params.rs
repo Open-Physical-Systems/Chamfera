@@ -54,6 +54,17 @@ pub fn opt_f64(params: &Value, key: &str) -> Result<Option<f64>, CommandError> {
     }
 }
 
+/// An optional JSON object (`null` or missing: none).
+pub fn object_field<'a>(params: &'a Value, key: &str) -> Result<Option<&'a Value>, CommandError> {
+    match object(params)?.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(v @ Value::Object(_)) => Ok(Some(v)),
+        Some(_) => Err(CommandError::BadParams(format!(
+            "`{key}` must be an object"
+        ))),
+    }
+}
+
 /// A required boolean.
 pub fn req_bool(params: &Value, key: &str) -> Result<bool, CommandError> {
     match object(params)?.get(key) {
