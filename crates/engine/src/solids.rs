@@ -45,7 +45,7 @@ pub fn edge_ref(body: &Body, e: EdgeId) -> Option<String> {
 }
 
 /// Gives every edge of a feature's new body its full name, like [`name_faces`].
-fn name_edges(body: &mut Body, feature: u32) {
+pub(crate) fn name_edges(body: &mut Body, feature: u32) {
     for edge in body.edges() {
         let role = body.edge_name(edge).ok().flatten().map(str::to_owned);
         if let Some(role) = role
@@ -175,7 +175,7 @@ pub fn split_face_key(name: &str) -> Option<(u32, &str)> {
 }
 
 /// Gives every face of a feature's new body its full name (see [`face_key`]).
-fn name_faces(body: &mut Body, feature: u32) {
+pub(crate) fn name_faces(body: &mut Body, feature: u32) {
     for face in body.faces() {
         let role = body.face_name(face).ok().flatten().map(str::to_owned);
         if let Some(role) = role
@@ -784,6 +784,18 @@ impl Session {
                 }
                 continue;
             }
+            if let FeatureKind::Hole(h) = &feature.kind {
+                match crate::hole::build_hole(&self.doc, h, feature.id, &made) {
+                    Ok((next, cuts)) => {
+                        made = next;
+                        tools.insert(feature.id, (cuts, Operation::Cut));
+                    }
+                    Err(e) => {
+                        built.errors.insert(feature.id, e);
+                    }
+                }
+                continue;
+            }
             if let FeatureKind::Shell(sh) = &feature.kind {
                 match build_shell(&self.doc, sh, feature.id, &made) {
                     Ok(next) => made = next,
@@ -801,7 +813,8 @@ impl Session {
                 | FeatureKind::Blend(_)
                 | FeatureKind::Shell(_)
                 | FeatureKind::Mirror(_)
-                | FeatureKind::Move(_) => continue,
+                | FeatureKind::Move(_)
+                | FeatureKind::Hole(_) => continue,
             };
             let operation = feature.kind.operation();
             let result = result.map(|bodies| {

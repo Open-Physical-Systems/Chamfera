@@ -56,6 +56,7 @@ pub enum Icon {
     EyeOff,
     Fillet,
     Fit,
+    Hole,
     Home,
     ImportMesh,
     Line,
@@ -94,7 +95,7 @@ pub enum Icon {
 
 impl Icon {
     #[cfg(test)]
-    pub const ALL: [Icon; 71] = [
+    pub const ALL: [Icon; 72] = [
         Icon::Arc,
         Icon::ArcTangent,
         Icon::ArcThreePoint,
@@ -132,6 +133,7 @@ impl Icon {
         Icon::EyeOff,
         Icon::Fillet,
         Icon::Fit,
+        Icon::Hole,
         Icon::Home,
         Icon::ImportMesh,
         Icon::Line,
@@ -207,6 +209,7 @@ impl Icon {
             Icon::Eye => master!("eye"),
             Icon::EyeOff => master!("eye_off"),
             Icon::Fit => master!("fit"),
+            Icon::Hole => master!("hole"),
             Icon::Home => master!("home"),
             Icon::ImportMesh => master!("import_mesh"),
             Icon::Line => master!("line"),

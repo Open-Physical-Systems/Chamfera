@@ -23,6 +23,8 @@ pub static COMMANDS: &[CommandSpec] = &[
                  direction: string (optional) - normal, reversed or symmetric\n\
                  operation: string (optional) - new_body, join, cut or intersect\n\
                  size: string or number (optional) - new fillet radius or chamfer distance\n\
+                 points, kind, diameter, depth, through_all, cb_diameter, cb_depth, cs_diameter,\n\
+                 cs_angle, tip_angle (optional) - a hole's new values, as for solid.hole\n\
                  plane: string or object (optional) - a mirror's new plane, as in solid.mirror\n\
                  dx, dy, dz, angle, axis, origin, from, to (optional) - a move's new transform\n\
                  copy: boolean (optional) - whether a move keeps the originals\n\
@@ -527,12 +529,21 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
             FeatureKind::Blend(_) => {
                 return Err(bad("a fillet or chamfer has no operation"));
             }
+            FeatureKind::Hole(_) => return Err(bad("a hole always cuts")),
             FeatureKind::Mirror(m) => m.operation = o,
             FeatureKind::Move(_) => return Err(bad("a move has no operation")),
             FeatureKind::Shell(_) => {
                 return Err(bad("a shell has no operation"));
             }
         }
+    }
+    let hole_keys = super::hole::EDIT_KEYS
+        .iter()
+        .any(|k| p.get(*k).is_some_and(|v| !v.is_null()));
+    if let FeatureKind::Hole(h) = &mut kind {
+        super::hole::apply(s, h, p)?;
+    } else if hole_keys {
+        return Err(bad("points, kind and the hole sizes belong to holes"));
     }
     super::transform::edit_transform(&mut kind, p)?;
     let new_size = expression(p, "size", "mm")?;

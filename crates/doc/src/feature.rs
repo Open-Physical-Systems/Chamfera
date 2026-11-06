@@ -150,6 +150,90 @@ pub struct Blend {
 /// Most edges one blend may hold.
 pub const MAX_BLEND_EDGES: usize = 10_000;
 
+/// The shape of a hole's mouth.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum HoleKind {
+    /// A plain drilled hole.
+    #[default]
+    Simple,
+    /// A wider, flat-bottomed recess at the mouth (for a socket head).
+    Counterbore,
+    /// A cone at the mouth (for a flat head).
+    Countersink,
+}
+
+impl HoleKind {
+    pub fn parse(s: &str) -> Option<HoleKind> {
+        Some(match s {
+            "simple" => HoleKind::Simple,
+            "counterbore" => HoleKind::Counterbore,
+            "countersink" => HoleKind::Countersink,
+            _ => return None,
+        })
+    }
+
+    pub fn key(self) -> &'static str {
+        match self {
+            HoleKind::Simple => "simple",
+            HoleKind::Counterbore => "counterbore",
+            HoleKind::Countersink => "countersink",
+        }
+    }
+}
+
+/// Holes drilled into a flat face of the solids built so far, one at each point. The face
+/// is found again by name on every rebuild, so the holes follow it when the solid changes.
+/// Sizes are expressions.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Hole {
+    pub face: crate::FaceRef,
+    /// Hole centres in the face's own plane coordinates (the frame of its plane, normal
+    /// out of the solid).
+    #[serde(default)]
+    pub points: Vec<Point2>,
+    /// A sketch whose standalone points are hole centres too (projected onto the face).
+    #[serde(default)]
+    pub sketch: Option<u32>,
+    #[serde(default)]
+    pub hole: HoleKind,
+    pub diameter: String,
+    /// How deep the drilled part goes, to the shoulder of a drill point; `None` is through
+    /// all (through the whole body).
+    #[serde(default)]
+    pub depth: Option<String>,
+    #[serde(default)]
+    pub cb_diameter: Option<String>,
+    #[serde(default)]
+    pub cb_depth: Option<String>,
+    #[serde(default)]
+    pub cs_diameter: Option<String>,
+    /// The countersink's included angle, such as `90 deg` (90 degrees when not given).
+    #[serde(default)]
+    pub cs_angle: Option<String>,
+    /// The drill point's included angle, such as `118 deg`; `None` is a flat bottom.
+    /// Ignored for a through hole.
+    #[serde(default)]
+    pub tip_angle: Option<String>,
+}
+
+/// Most points one hole feature may drill.
+pub const MAX_HOLE_POINTS: usize = 1_000;
+
+/// The checked sizes of a hole, in mm and radians.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct HoleSizes {
+    pub diameter: f64,
+    /// `None`: through all.
+    pub depth: Option<f64>,
+    /// Counterbore (diameter, depth).
+    pub counterbore: Option<(f64, f64)>,
+    /// Countersink (diameter, included angle).
+    pub countersink: Option<(f64, f64)>,
+    /// Drill point included angle; `None` is flat.
+    pub tip_angle: Option<f64>,
+}
+
 /// The plane a mirror reflects in.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -254,6 +338,7 @@ pub enum FeatureKind {
     /// A construction plane, axis or point.
     Construct(crate::construct::Construction),
     Blend(Blend),
+    Hole(Hole),
     Mirror(Mirror),
     Move(Move),
     Shell(Shell),
@@ -276,6 +361,7 @@ impl FeatureKind {
         match self {
             FeatureKind::Extrude(e) => Some(e.sketch),
             FeatureKind::Revolve(r) => Some(r.sketch),
+            FeatureKind::Hole(h) => h.sketch,
             FeatureKind::Pattern(_)
             | FeatureKind::Construct(_)
             | FeatureKind::Blend(_)
@@ -290,6 +376,7 @@ impl FeatureKind {
         match self {
             FeatureKind::Extrude(e) => e.operation,
             FeatureKind::Revolve(r) => r.operation,
+            FeatureKind::Hole(_) => Operation::Cut,
             FeatureKind::Mirror(m) => m.operation,
             FeatureKind::Pattern(_)
             | FeatureKind::Construct(_)
@@ -304,6 +391,7 @@ impl FeatureKind {
             FeatureKind::Extrude(e) => &e.profiles,
             FeatureKind::Revolve(r) => &r.profiles,
             FeatureKind::Pattern(_)
+            | FeatureKind::Hole(_)
             | FeatureKind::Construct(_)
             | FeatureKind::Blend(_)
             | FeatureKind::Shell(_)
@@ -317,6 +405,7 @@ impl FeatureKind {
             FeatureKind::Extrude(_) => "Extrude",
             FeatureKind::Revolve(_) => "Revolve",
             FeatureKind::Pattern(_) => "Pattern",
+            FeatureKind::Hole(_) => "Hole",
             FeatureKind::Construct(c) => c.kind().label(),
             FeatureKind::Blend(b) => match b.blend {
                 BlendKind::Fillet => "Fillet",
@@ -340,6 +429,21 @@ impl FeatureKind {
             FeatureKind::Extrude(e) => vec![e.distance.as_str()],
             FeatureKind::Revolve(r) => vec![r.angle.as_str()],
             FeatureKind::Blend(b) => vec![b.size.as_str()],
+            FeatureKind::Hole(h) => std::iter::once(&h.diameter)
+                .chain(
+                    [
+                        &h.depth,
+                        &h.cb_diameter,
+                        &h.cb_depth,
+                        &h.cs_diameter,
+                        &h.cs_angle,
+                        &h.tip_angle,
+                    ]
+                    .into_iter()
+                    .flatten(),
+                )
+                .map(String::as_str)
+                .collect(),
             FeatureKind::Mirror(_) => Vec::new(),
             FeatureKind::Move(m) => match &m.transform {
                 MoveTransform::Translate { dx, dy, dz } => {
@@ -365,6 +469,9 @@ impl Document {
         let bad = |reason: String| DocError::BadFeature { reason };
         if let FeatureKind::Pattern(p) = kind {
             return self.check_pattern(p);
+        }
+        if let FeatureKind::Hole(h) = kind {
+            return self.check_hole(h);
         }
         if let FeatureKind::Mirror(m) = kind {
             return self.check_mirror(m);
@@ -437,6 +544,7 @@ impl Document {
                 }
             }
             FeatureKind::Pattern(_)
+            | FeatureKind::Hole(_)
             | FeatureKind::Construct(_)
             | FeatureKind::Blend(_)
             | FeatureKind::Shell(_)
@@ -479,6 +587,109 @@ impl Document {
             });
         }
         Ok(n as usize)
+    }
+
+    /// A hole's sizes, evaluated and checked: every size above 0, a counterbore or
+    /// countersink wider than the hole, a blind counterbore or countersink shallower than
+    /// the hole, angles between 0 and 180 degrees.
+    pub fn hole_sizes(&self, h: &Hole) -> Result<HoleSizes, DocError> {
+        let bad = |reason: String| DocError::BadFeature { reason };
+        let tol = chamfera_geom::LINEAR_TOLERANCE;
+        let length = |src: &str, what: &str| -> Result<f64, DocError> {
+            let v = self.evaluate_feature_value(src, expr::Dim::LENGTH)?;
+            if !v.is_finite() || v <= tol || v > chamfera_geom::MAX_COORDINATE {
+                return Err(bad(format!("the {what} must be above 0")));
+            }
+            Ok(v)
+        };
+        let angle = |src: &str, what: &str| -> Result<f64, DocError> {
+            let v = self.evaluate_feature_value(src, expr::Dim::ANGLE)?;
+            let a = chamfera_geom::ANGULAR_TOLERANCE;
+            if !v.is_finite() || v <= a || v >= std::f64::consts::PI - a {
+                return Err(bad(format!(
+                    "the {what} must be above 0 and below 180 degrees"
+                )));
+            }
+            Ok(v)
+        };
+        let need = |v: &Option<String>, what: &str| -> Result<f64, DocError> {
+            let src = v
+                .as_deref()
+                .ok_or_else(|| bad(format!("a {} hole needs a {what}", h.hole.key())))?;
+            length(src, what)
+        };
+        let diameter = length(&h.diameter, "diameter")?;
+        let depth = h.depth.as_deref().map(|d| length(d, "depth")).transpose()?;
+        let shallower = |mouth: f64, what: &str| -> Result<(), DocError> {
+            match depth {
+                Some(d) if mouth >= d - tol => Err(bad(format!(
+                    "the {what} ({mouth:.3} mm deep) must be shallower than the hole ({d:.3} mm)"
+                ))),
+                _ => Ok(()),
+            }
+        };
+        let (mut counterbore, mut countersink) = (None, None);
+        match h.hole {
+            HoleKind::Simple => {}
+            HoleKind::Counterbore => {
+                let cd = need(&h.cb_diameter, "counterbore diameter")?;
+                let ch = need(&h.cb_depth, "counterbore depth")?;
+                if cd <= diameter + tol {
+                    return Err(bad("the counterbore must be wider than the hole".into()));
+                }
+                shallower(ch, "counterbore")?;
+                counterbore = Some((cd, ch));
+            }
+            HoleKind::Countersink => {
+                let cd = need(&h.cs_diameter, "countersink diameter")?;
+                let ca = match &h.cs_angle {
+                    Some(a) => angle(a, "countersink angle")?,
+                    None => std::f64::consts::FRAC_PI_2,
+                };
+                if cd <= diameter + tol {
+                    return Err(bad("the countersink must be wider than the hole".into()));
+                }
+                shallower((cd - diameter) * 0.5 / (ca * 0.5).tan(), "countersink")?;
+                countersink = Some((cd, ca));
+            }
+        }
+        let tip_angle = h
+            .tip_angle
+            .as_deref()
+            .map(|a| angle(a, "drill point angle"))
+            .transpose()?;
+        Ok(HoleSizes {
+            diameter,
+            depth,
+            counterbore,
+            countersink,
+            tip_angle,
+        })
+    }
+
+    fn check_hole(&self, h: &Hole) -> Result<(), DocError> {
+        let bad = |reason: String| DocError::BadFeature { reason };
+        self.feature(h.face.feature)?;
+        if h.face.face.is_empty() || h.face.face.chars().count() > 512 {
+            return Err(bad("the face name is empty or too long".into()));
+        }
+        if h.points.len() > MAX_HOLE_POINTS {
+            return Err(bad(format!("at most {MAX_HOLE_POINTS} hole points")));
+        }
+        if h.points.iter().any(|p| !p.is_valid()) {
+            return Err(bad("a hole point is not a finite coordinate".into()));
+        }
+        match h.sketch {
+            Some(s) => {
+                self.sketch(s)?;
+            }
+            None if h.points.is_empty() => {
+                return Err(bad("place at least one hole point".into()));
+            }
+            None => {}
+        }
+        self.hole_sizes(h)?;
+        Ok(())
     }
 
     fn check_pattern(&self, p: &Pattern) -> Result<(), DocError> {
@@ -722,6 +933,7 @@ impl Document {
                 }
                 FeatureKind::Revolve(r) => r.axis_feature == Some(feature),
                 FeatureKind::Construct(c) => c.features_used().contains(&feature),
+                FeatureKind::Hole(h) => h.face.feature == feature,
                 FeatureKind::Mirror(m) => {
                     m.features.contains(&feature)
                         || matches!(&m.plane, MirrorPlane::Face { feature: g, .. } if *g == feature)

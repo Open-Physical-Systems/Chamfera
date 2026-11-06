@@ -9,8 +9,8 @@ pub use construct::{
     AxisRef, ConstructKind, Construction, EdgeRef, OriginAxis, OriginPlane, PlaneRef, PointRef,
 };
 pub use feature::{
-    Blend, BlendKind, Extrude, ExtrudeDirection, Feature, FeatureKind, Mirror, MirrorPlane, Move,
-    MoveTransform, Operation, Pattern, PatternLayout, Revolve, Shell,
+    Blend, BlendKind, Extrude, ExtrudeDirection, Feature, FeatureKind, Hole, HoleKind, HoleSizes,
+    Mirror, MirrorPlane, Move, MoveTransform, Operation, Pattern, PatternLayout, Revolve, Shell,
 };
 pub use imported::ImportedBody;
 
@@ -34,6 +34,7 @@ use thiserror::Error;
 ///   on a construction plane (`on_plane`), and revolves and circular patterns about a
 ///   construction axis (`axis_feature`). Older files open unchanged: every new field is
 ///   optional.
+/// - 12: hole features (simple, counterbore, countersink) on a flat face.
 /// - 14: mirror and move/copy of bodies and features.
 pub const FORMAT_VERSION: u32 = 14;
 /// The tag every design file starts with, so other JSON is not mistaken for a design.
