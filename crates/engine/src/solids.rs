@@ -293,6 +293,8 @@ pub struct Built {
     /// The solids each direct face edit changed, by name (their faces keep the names of
     /// the features that made them).
     pub edited: BTreeMap<u32, Vec<String>>,
+    /// Exploded components: where each sits and how far it is shown moved.
+    pub exploded: BTreeMap<u32, crate::motion::Exploded>,
 }
 
 /// A sketch loop as exact kernel profile edges: lines stay lines, arcs and circles stay
@@ -909,18 +911,15 @@ fn construct_axis(
     }
 }
 
-/// The bodies one revolve makes: one per profile, about a line of the same sketch or a
-/// construction axis in the sketch plane.
-fn build_revolve(
-    doc: &chamfera_doc::Document,
-    r: &Revolve,
+/// A revolve's axis in its sketch's plane coordinates: a construction axis lying in the
+/// sketch plane, or a line of the sketch.
+pub(crate) fn revolve_axis(
+    f: &chamfera_doc::SketchFeature,
+    axis_curve: u32,
+    axis_feature: Option<u32>,
     constructs: &BTreeMap<u32, crate::construct::Constructed>,
-) -> Result<Vec<Body>, String> {
-    let f = doc.sketch(r.sketch).map_err(|x| x.to_string())?;
-    let angle = doc
-        .evaluate_feature_value(&r.angle, chamfera_doc::expr::Dim::ANGLE)
-        .map_err(|x| x.to_string())?;
-    let sketch_line = match r.axis_feature {
+) -> Result<Line2, String> {
+    let sketch_line = match axis_feature {
         Some(id) => {
             let (o, d) = construct_axis(constructs, id)?;
             // The axis must lie in the sketch plane: its direction has no normal part and
@@ -940,7 +939,7 @@ fn build_revolve(
     };
     let axis = match (
         sketch_line,
-        f.sketch.curve(chamfera_sketch::CurveId(r.axis)),
+        f.sketch.curve(chamfera_sketch::CurveId(axis_curve)),
     ) {
         (Some(line), _) => line,
         (None, Some(Curve::Line { start, end, .. })) => {
@@ -949,8 +948,28 @@ fn build_revolve(
             };
             Line2::new(a, b - a).map_err(|e| format!("the axis: {e}"))?
         }
-        _ => return Err(format!("the axis {} is not a line of {}", r.axis, f.name)),
+        _ => {
+            return Err(format!(
+                "the axis {} is not a line of {}",
+                axis_curve, f.name
+            ));
+        }
     };
+    Ok(axis)
+}
+
+/// The bodies one revolve makes: one per profile, about a line of the same sketch or a
+/// construction axis in the sketch plane.
+fn build_revolve(
+    doc: &chamfera_doc::Document,
+    r: &Revolve,
+    constructs: &BTreeMap<u32, crate::construct::Constructed>,
+) -> Result<Vec<Body>, String> {
+    let f = doc.sketch(r.sketch).map_err(|x| x.to_string())?;
+    let angle = doc
+        .evaluate_feature_value(&r.angle, chamfera_doc::expr::Dim::ANGLE)
+        .map_err(|x| x.to_string())?;
+    let axis = revolve_axis(f, r.axis, r.axis_feature, constructs)?;
     feature_profiles(f, &r.profiles)?
         .iter()
         .map(|profile| {
@@ -962,7 +981,7 @@ fn build_revolve(
 
 /// A sweep's path as kernel segments in space (lines, and arcs counter-clockwise about
 /// the path sketch's normal as the sketch stores them).
-fn sweep_path_segments(
+pub(crate) fn sweep_path_segments(
     f: &chamfera_doc::SketchFeature,
     curves: &[u32],
 ) -> Result<Vec<chamfera_kernel::PathSegment>, String> {
@@ -1267,6 +1286,15 @@ impl Session {
                 }
                 continue;
             }
+            if let FeatureKind::Surface(sf) = &feature.kind {
+                match crate::surface::build(&self.doc, feature, sf, &made, &built.constructs) {
+                    Ok(next) => made = next,
+                    Err(e) => {
+                        built.errors.insert(feature.id, e);
+                    }
+                }
+                continue;
+            }
             if feature.kind.is_body_tool() {
                 match crate::body_tools::build(&self.doc, feature, &made, &built.constructs) {
                     Ok(next) => made = next,
@@ -1314,6 +1342,7 @@ impl Session {
                 | FeatureKind::SplitFace(_)
                 | FeatureKind::Thicken(_)
                 | FeatureKind::Remove(_)
+                | FeatureKind::Surface(_)
                 | FeatureKind::Hole(_)
                 | FeatureKind::SheetBase(_)
                 | FeatureKind::SheetFlange(_)
@@ -1394,16 +1423,41 @@ impl Session {
         self.scene.deselect(|b| old.contains(&b));
         let options = TessOptions::default();
         let placed = self.place_components(made, &mut built);
+        // An exploded view moves what is shown, not the exact bodies.
+        built.exploded = if self.view_state.explode_factor.is_some()
+            || !self.view_state.explode_manual.is_empty()
+        {
+            crate::motion::explode_offsets(
+                &placed,
+                self.view_state.explode_factor,
+                &self.view_state.explode_manual,
+            )
+        } else {
+            BTreeMap::new()
+        };
+        // An interference highlight shows the design as it was checked.
+        self.view_state.overlaps.clear();
         for (feature, component, name, body) in placed {
             // A solid that cannot be shown is still built: its measures and export work.
             let mut faces = Vec::new();
             let mut edges = Vec::new();
             let scene_id = match tessellate(&body, &options) {
-                Ok(m) => {
+                Ok(mut m) => {
+                    if let Some(e) = built.exploded.get(&component) {
+                        for p in &mut m.mesh.positions {
+                            *p = *p + e.offset;
+                        }
+                        for (_, l) in &mut m.edge_polylines {
+                            for p in l.iter_mut() {
+                                *p = *p + e.offset;
+                            }
+                        }
+                    }
                     faces = m.face_of_triangle;
                     edges = m.edge_polylines;
                     let id = self.scene.add(&name, m.mesh);
                     self.dress_body(id, feature, edges.iter().map(|(_, l)| l.clone()).collect());
+                    self.mark_surface(id, body.is_open());
                     if id.is_none() {
                         built
                             .display_errors

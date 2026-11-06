@@ -125,6 +125,7 @@ const fn group(tab: Tab, caption: &'static str) -> Group {
 pub const GROUPS: &[Group] = &[
     group(Tab::Solid, "CREATE"),
     group(Tab::Solid, "MODIFY"),
+    group(Tab::Solid, "SURFACE"),
     group(Tab::Solid, "ASSEMBLE"),
     group(Tab::Solid, "CONSTRUCT"),
     group(Tab::Solid, "INSPECT"),
@@ -430,6 +431,60 @@ pub const TOOLS: &[RibbonTool] = &[
         "Named values and formulas that dimensions and features follow",
     )
     .sep(),
+    // SOLID > SURFACE
+    tool(
+        P,
+        "SURFACE",
+        Action::Tool("surface.extrude"),
+        Icon::SurfaceExtrude,
+        "Surface Extrude",
+        "Pull profiles or open curves straight out into open sheets, without caps",
+    )
+    .short("Extrude")
+    .primary(),
+    tool(
+        P,
+        "SURFACE",
+        Action::Tool("surface.revolve"),
+        Icon::SurfaceRevolve,
+        "Surface Revolve",
+        "Turn profiles or open curves about a sketch line into open sheets",
+    ),
+    tool(
+        P,
+        "SURFACE",
+        Action::Tool("surface.sweep"),
+        Icon::SurfaceSweep,
+        "Surface Sweep",
+        "Sweep profiles or open curves along a path of lines and arcs",
+    ),
+    tool(
+        P,
+        "SURFACE",
+        Action::Tool("surface.patch"),
+        Icon::Patch,
+        "Patch",
+        "Fill a closed sketch profile, or a closed flat loop of edges, with a flat face",
+    )
+    .primary(),
+    tool(
+        P,
+        "SURFACE",
+        Action::Tool("surface.stitch"),
+        Icon::Stitch,
+        "Stitch",
+        "Join surfaces along their shared edges; a closed result becomes a solid",
+    )
+    .primary(),
+    tool(
+        P,
+        "SURFACE",
+        Action::Tool("surface.trim"),
+        Icon::SurfaceTrim,
+        "Trim Surface",
+        "Cut a surface with a plane or a body and keep one side",
+    )
+    .short("Trim"),
     // SOLID > ASSEMBLE
     tool(
         P,
@@ -458,6 +513,43 @@ pub const TOOLS: &[RibbonTool] = &[
         Icon::Ground,
         "Ground",
         "Fix the selected body's component in place: joints move the other side",
+    ),
+    tool(
+        P,
+        "ASSEMBLE",
+        Action::Tool("joint.drag"),
+        Icon::DriveJoint,
+        "Drive Joint",
+        "Turn or slide a joint: drag a jointed part in the viewport, or set its value",
+    )
+    .primary()
+    .short("Drive")
+    .sep(),
+    tool(
+        P,
+        "ASSEMBLE",
+        Action::Tool("motion.set_time"),
+        Icon::MotionStudy,
+        "Motion Study",
+        "Keyframes of joint values over time: play, pause and scrub the motion",
+    )
+    .short("Motion"),
+    tool(
+        P,
+        "ASSEMBLE",
+        Action::Tool("inspect.interference"),
+        Icon::Interference,
+        "Interference",
+        "Find bodies that overlap where they are placed, and the overlap volume",
+    ),
+    tool(
+        P,
+        "ASSEMBLE",
+        Action::Tool("view.explode"),
+        Icon::Explode,
+        "Explode",
+        "Show the components moved apart along the assembly's axes, with trails; the \
+         model does not change",
     ),
     // SOLID > CONSTRUCT
     construct(
@@ -1089,6 +1181,13 @@ fn body_tool_kind(id: &str) -> Option<crate::body_tools_ui::BodyToolKind> {
         .find(|k| k.command() == id)
 }
 
+/// The surface tool of a `surface.*` id.
+fn surface_kind(id: &str) -> Option<crate::surface_ui::SurfaceKind> {
+    crate::surface_ui::SurfaceKind::ALL
+        .into_iter()
+        .find(|k| k.command() == id)
+}
+
 /// The sheet tool of a `drawing.view.*` or `drawing.dim.*` id.
 fn draw_tool(id: &str) -> Option<crate::drawing_ui::DrawTool> {
     use crate::drawing_ui::DrawTool;
@@ -1322,6 +1421,7 @@ impl ChamferaApp {
             || s.press_pull.is_some()
             || s.sweep.is_some()
             || s.body_tool.is_some()
+            || s.surface.is_some()
             || self.construct.tool.is_some()
             || self.assembly.joint.is_some()
             || self.sheet_tool_open()
@@ -1355,6 +1455,10 @@ impl ChamferaApp {
                 "inspect.mass" => inspect == Some(InspectMode::Mass),
                 "joint.create" => self.assembly.joint.is_some(),
                 "component.ground" => self.ground_state().1,
+                "joint.drag" => self.motion.drive.is_some(),
+                "motion.set_time" => self.motion.study.is_some(),
+                "inspect.interference" => self.motion.interference.is_some(),
+                "view.explode" => self.motion.explode.is_some(),
                 "cam.tool_add" => self.cam.tool_dialog.is_some(),
                 "sheet.base" => self.sheet_metal.base.is_some(),
                 "sheet.flange" => self.sheet_metal.flange.is_some(),
@@ -1362,6 +1466,8 @@ impl ChamferaApp {
                 _ => {
                     if let Some(k) = body_tool_kind(id) {
                         s.body_tool.as_ref().is_some_and(|t| t.kind == k)
+                    } else if let Some(k) = surface_kind(id) {
+                        s.surface.as_ref().is_some_and(|t| t.kind == k)
                     } else if let Some(k) = transform_kind(id) {
                         s.transform.as_ref().is_some_and(|t| t.kind == k)
                     } else if let Some(k) = construct_kind(id) {
@@ -1411,8 +1517,35 @@ impl ChamferaApp {
                 "joint.create" if !has_solids => {
                     format!("{name}: build bodies in two components first")
                 }
+                "joint.drag" | "motion.set_time" if self.session.doc.assembly.joints.is_empty() => {
+                    format!("{name}: connect two components with a Joint first")
+                }
+                "joint.drag" | "motion.set_time" => return None,
+                "inspect.interference" if self.session.solids().len() < 2 => {
+                    format!("{name}: build at least two bodies first")
+                }
+                "inspect.interference" => return None,
+                "view.explode" if self.session.doc.assembly.components.is_empty() => {
+                    format!("{name}: group bodies into components first")
+                }
+                "view.explode" => return None,
                 "solid.remove" if has_solids && self.session.scene.selected_bodies().is_empty() => {
                     format!("{name}: select the bodies to remove first")
+                }
+                _ if surface_kind(id)
+                    .is_some_and(|k| k.needs_sketch() && !self.has_sketch_curves()) =>
+                {
+                    format!("{name}: draw a sketch first")
+                }
+                _ if surface_kind(id).is_some_and(|k| {
+                    k == crate::surface_ui::SurfaceKind::Patch && self.has_sketch_curves()
+                }) || surface_kind(id).is_some_and(|k| k.needs_sketch()) =>
+                {
+                    if self.tool_open() {
+                        format!("{name}: close the open tool first")
+                    } else {
+                        return None;
+                    }
                 }
                 _ if !has_solids && construct_kind(id).is_none_or(|k| k.needs_solid()) => {
                     format!("{name}: build a solid first")
@@ -1512,6 +1645,10 @@ impl ChamferaApp {
             "component.new" => self.new_component(),
             "joint.create" => self.toggle_joint(),
             "component.ground" => self.toggle_ground(),
+            "joint.drag" => self.toggle_drive(),
+            "motion.set_time" => self.toggle_study(),
+            "inspect.interference" => self.toggle_interference(),
+            "view.explode" => self.toggle_explode(),
             "sketch.import_dxf" => self.dxf_dialog(),
             "body.import_step" => self.step_dialog(),
             "sketch.export_dxf" => self.export("DXF drawing", &["dxf"], "sketch.export_dxf"),
@@ -1536,6 +1673,8 @@ impl ChamferaApp {
             _ => {
                 if let Some(k) = body_tool_kind(id) {
                     self.open_body_tool(k);
+                } else if let Some(k) = surface_kind(id) {
+                    self.open_surface_tool(k);
                 } else if let Some(kind) = id.strip_prefix("constraint.") {
                     self.run_sketch("sketch.constrain_selection", json!({ "kind": kind }));
                 } else if let Some(k) = transform_kind(id) {
@@ -1561,7 +1700,14 @@ impl ChamferaApp {
                 if id.starts_with("inspect.")
                     || id.starts_with("drawing.view.")
                     || id.starts_with("drawing.dim.")
-                    || matches!(id, "joint.create" | "component.ground") =>
+                    || matches!(
+                        id,
+                        "joint.create"
+                            | "component.ground"
+                            | "joint.drag"
+                            | "motion.set_time"
+                            | "view.explode"
+                    ) =>
             {
                 self.run_tool(id);
             }

@@ -236,7 +236,7 @@ pub(super) fn operation(p: &Value) -> Result<Option<Operation>, CommandError> {
     }
 }
 
-fn seeds(p: &Value) -> Result<Vec<Point2>, CommandError> {
+pub(super) fn seeds(p: &Value) -> Result<Vec<Point2>, CommandError> {
     let list = p
         .get("profiles")
         .and_then(Value::as_array)
@@ -273,6 +273,7 @@ pub(super) fn feature_reply(s: &Session, id: u32) -> Value {
                 "body": x.scene_id,
                 "volume": x.body.volume().ok(),
                 "area": x.body.area().ok(),
+                "surface": x.body.is_open(),
             })
         })
         .collect();
@@ -474,7 +475,7 @@ fn revolve(s: &mut Session, p: &Value) -> CmdResult {
 }
 
 /// A list of curve ids.
-fn ids(p: &Value, key: &str) -> Result<Vec<u32>, CommandError> {
+pub(super) fn ids(p: &Value, key: &str) -> Result<Vec<u32>, CommandError> {
     let list = p
         .get(key)
         .and_then(Value::as_array)
@@ -784,6 +785,9 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
     if super::face_edit::is_face_edit(&s.doc.feature(id)?.kind) {
         return super::face_edit::edit(s, id, p);
     }
+    if matches!(s.doc.feature(id)?.kind, FeatureKind::Surface(_)) {
+        return super::surface::edit(s, id, p);
+    }
     refuse_unknown_edit_keys(p)?;
     let new_distance = distance(p)?;
     let new_direction = direction(p)?;
@@ -825,6 +829,9 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
             }
             FeatureKind::Combine(c) => c.operation = o,
             FeatureKind::Thicken(t) => t.operation = o,
+            FeatureKind::Surface(_) => {
+                return Err(bad("a surface feature always makes a new body"));
+            }
             FeatureKind::SplitBody(_) | FeatureKind::SplitFace(_) | FeatureKind::Remove(_) => {
                 return Err(bad("a split or remove has no operation"));
             }
@@ -973,7 +980,7 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
     Ok(feature_reply(s, id))
 }
 
-/// Every key `feature.edit` reads (outside face edits, which check their own). A key not
+/// Every key `feature.edit` reads (outside face edits and surfaces, which have their own). A key not
 /// in it is refused: a misspelt or unsupported key used to succeed without changing
 /// anything and without an undo step, so the next undo removed an earlier change.
 const EDIT_KEYS: &[&str] = &[

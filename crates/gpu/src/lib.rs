@@ -202,6 +202,8 @@ pub struct ViewRenderer {
     grid: wgpu::RenderPipeline,
     /// See-through fills (construction planes): hidden by bodies, hiding nothing.
     fills: wgpu::RenderPipeline,
+    /// See-through fills drawn over the bodies (overlaps inside them).
+    fills_on_top: wgpu::RenderPipeline,
     overlay_lines: wgpu::RenderPipeline,
     overlay_points: wgpu::RenderPipeline,
     /// The same, hidden by bodies in front (finished sketches).
@@ -452,6 +454,19 @@ impl ViewRenderer {
             blend: Some(wgpu::BlendState::ALPHA_BLENDING),
             write: all,
         });
+        let fills_on_top = make(Spec {
+            label: "fills on top",
+            layout: &base_layout,
+            vs: "line_vs",
+            fs: "line_fs",
+            buffers: &line_buffers,
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            depth_write: false,
+            compare: wgpu::CompareFunction::Always,
+            bias: no_bias,
+            blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+            write: all,
+        });
         // Overlays draw over everything, in order, blended.
         let overlay_lines = make(Spec {
             label: "overlay lines",
@@ -531,6 +546,7 @@ impl ViewRenderer {
             hidden_edges,
             grid,
             fills,
+            fills_on_top,
             overlay_lines,
             overlay_points,
             overlay_lines_depth,
@@ -753,9 +769,13 @@ impl ViewRenderer {
                 let c = if selected {
                     frame.theme.body_selected
                 } else {
-                    b.appearance
-                        .colour
-                        .unwrap_or_else(|| frame.theme.body_colour(b.tint))
+                    b.appearance.colour.unwrap_or_else(|| {
+                        if b.surface {
+                            frame.theme.surface_colour(b.tint)
+                        } else {
+                            frame.theme.body_colour(b.tint)
+                        }
+                    })
                 };
                 let mut c = c.linear();
                 c[3] = b.appearance.opacity();
@@ -769,7 +789,8 @@ impl ViewRenderer {
             usage: wgpu::BufferUsages::VERTEX,
         });
 
-        let fills = fill_vertices(frame.scene, frame.theme);
+        let fills = fill_vertices(frame.scene, frame.theme, false);
+        let top_fills = fill_vertices(frame.scene, frame.theme, true);
         let (depth_lines, depth_points) = overlay_vertices(frame.scene, frame.theme, false);
         let (overlay_lines, overlay_points) = overlay_vertices(frame.scene, frame.theme, true);
         let vertex_buffer = |label, data: &[LineVertex]| {
@@ -782,6 +803,7 @@ impl ViewRenderer {
             })
         };
         let fill_buf = vertex_buffer("fills", &fills);
+        let top_fill_buf = vertex_buffer("fills on top", &top_fills);
         let overlay_line_buf = vertex_buffer("overlay lines", &overlay_lines);
         let overlay_point_buf = vertex_buffer("overlay points", &overlay_points);
         let depth_line_buf = vertex_buffer("overlay lines (depth)", &depth_lines);
@@ -917,6 +939,11 @@ impl ViewRenderer {
                 pass.set_vertex_buffer(0, buf.slice(..));
                 pass.draw(0..fills.len() as u32, 0..1);
             }
+            if let Some(buf) = &top_fill_buf {
+                pass.set_pipeline(&self.fills_on_top);
+                pass.set_vertex_buffer(0, buf.slice(..));
+                pass.draw(0..top_fills.len() as u32, 0..1);
+            }
             if let Some(buf) = &depth_line_buf {
                 pass.set_pipeline(&self.overlay_lines_depth);
                 pass.set_vertex_buffer(0, buf.slice(..));
@@ -1009,10 +1036,10 @@ fn overlay_vertices(
 
 /// The fills' triangle corners, in drawing order, capped at [`MAX_OVERLAY_ITEMS`]
 /// triangles. Triangles with an invalid corner are skipped.
-fn fill_vertices(scene: &Scene, theme: &Theme) -> Vec<LineVertex> {
+fn fill_vertices(scene: &Scene, theme: &Theme, on_top: bool) -> Vec<LineVertex> {
     let mut out = Vec::new();
     let mut budget = MAX_OVERLAY_ITEMS;
-    for f in &scene.fills {
+    for f in scene.fills.iter().filter(|f| f.on_top == on_top) {
         let color = f.style.color(theme).linear();
         for t in f.triangles.iter().take(budget) {
             if t.iter().all(|p| p.is_valid()) {

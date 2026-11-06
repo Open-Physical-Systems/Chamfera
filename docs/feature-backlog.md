@@ -174,13 +174,13 @@ Close runners-up: selection filters and box selection (UI and NAV), splines (nee
 
 | Feature | Description | Status | Pri | Size | Layer |
 |---|---|---|---|---|---|
-| Surface bodies (open shells) | Bodies that are not closed solids | missing | P1 | M | kernel |
-| Surface extrude, revolve, sweep, loft | Open curves swept into surfaces | missing | P1 | M | kernel |
-| Patch | Fill a closed boundary with a surface | missing | P1 | L | kernel (K10) |
+| Surface bodies (open shells) | Bodies that are not closed solids | branch `surface/basics` (open shells with boundary faces as openings, `Validation::Surface`, area, tessellation, rim edges, volume refused; STEP as `SHELL_BASED_SURFACE_MODEL` of `OPEN_SHELL`s; drawn two-sided in the `surface_body` tint) | P1 | M | kernel |
+| Surface extrude, revolve, sweep, loft | Open curves swept into surfaces | branch `surface/basics` (`surface.extrude`, `surface.revolve`, `surface.sweep` of closed profiles' sides and open chains of lines, arcs and splines; loft missing) | P1 | M | kernel |
+| Patch | Fill a closed boundary with a surface | partial: `surface.patch` fills closed sketch profiles or a closed planar loop of model edges with a flat face; non-planar boundaries wait for K10 | P1 | L | kernel (K10) |
 | Offset surface | Surface at a distance from faces | missing | P1 | L | kernel |
-| Thicken | Give a surface a thickness to make a solid | branch `solid/body-tools` (`solid.thicken` of faces of solids: flat faces extruded, full cylindrical faces as rings; one side, symmetric, both sides; open surfaces wait for surface bodies) | P1 | L | kernel |
-| Trim, untrim, extend surface | Edit surface boundaries | missing | P2 | L | kernel |
-| Stitch / unstitch | Sew surfaces into a solid, or take a solid apart | missing | P1 | M | kernel |
+| Thicken | Give a surface a thickness to make a solid | branch `solid/body-tools` (`solid.thicken` of faces of solids: flat faces extruded, full cylindrical faces as rings; one side, symmetric, both sides; faces of surface bodies too, which the thicken uses up) | P1 | L | kernel |
+| Trim, untrim, extend surface | Edit surface boundaries | partial: `surface.trim` by a plane, a flat one-face surface or a closed solid (K7 split and classify, wherever K6 meets the faces); untrim and extend missing | P2 | L | kernel |
+| Stitch / unstitch | Sew surfaces into a solid, or take a solid apart | partial: `surface.stitch` joins surfaces along coincident rim edges, reversing whole bodies to agree, and makes a closed result a solid; unstitch missing | P1 | M | kernel |
 | Ruled surface | Surface between an edge and a direction | missing | P2 | M | kernel |
 | Boundary fill | Make solids from the cells that surfaces enclose | missing | P2 | L | kernel |
 | Reverse normal | Flip a surface's side | missing | P2 | S | kernel |
@@ -221,13 +221,13 @@ Close runners-up: selection filters and box selection (UI and NAV), splines (nee
 | External references | Insert another design as a linked component that updates | missing | P2 | L | doc, io |
 | Joints | Connect components at joint origins: rigid, revolute, slider, cylindrical, planar done (`joint.*`, solved as an exact tree, loops refused); pin-slot, ball and loops missing | done | P1 | L | doc, engine |
 | As-built joints | Joint components where they already sit | missing | P1 | M | doc |
-| Joint limits and motion | Ranges and driving a joint (`joint.set_value`): done; animation: missing | missing | P2 | M | doc, ui |
+| Joint limits and motion | Ranges enforced by `joint.set_value`; drag a jointed part in the viewport (`joint.drag`, ASSEMBLE > Drive Joint); motion study keyframes with linear interpolation, play, pause and scrub (`motion.*`, format 27) | done | P2 | M | doc, engine, ui |
 | Rigid groups | Lock several components together | missing | P2 | S | doc |
 | Ground / fix a component | Keep a component in place (`component.ground`) | done | P1 | S | doc |
 | Motion links and contact sets | One joint drives another; parts stop on contact | missing | P2 | L | doc, kernel |
-| Interference check | Find overlapping volumes between components | missing | P1 | M | kernel (K7), engine |
+| Interference check | Overlapping pairs and volumes from the exact K7 intersection of box-overlapping pairs, highlighted; also at each motion keyframe (`inspect.interference`, ASSEMBLE > Interference) | done | P1 | M | kernel (K7), engine |
 | Bill of materials | List of components with counts and properties | missing | P2 | M | doc, io |
-| Exploded views | Move components apart for presentation | missing | P2 | M | doc, ui |
+| Exploded views | A display state: auto-explode along the assembly's axes by a factor, manual offsets per component, trails (`view.explode`, `view.explode_clear`); saved exploded views missing | done | P2 | M | engine, ui |
 
 ## 9. Inspect
 
@@ -238,7 +238,7 @@ Close runners-up: selection filters and box selection (UI and NAV), splines (nee
 | Measure length, area, radius | Of a picked edge or face | done | P0 | S | kernel, engine |
 | Mass properties | Volume, area, mass, centre of mass, moments of inertia | done (`inspect.mass`, INSPECT > Mass Properties) | P0 | M | kernel, engine |
 | Section analysis | Cut the view with a plane and show the cut face | done (`view.section`, hatched cap) | P1 | M | gpu, render, kernel |
-| Interference | See assemblies | missing | P1 | M | kernel |
+| Interference | See assemblies (`inspect.interference`) | done | P1 | M | kernel |
 | Curvature and zebra analysis | Show surface quality (comb, zebra stripes, curvature map) | missing | P2 | M | gpu, kernel |
 | Draft analysis | Colour faces by draft angle | missing | P2 | M | gpu |
 | Accessibility (undercut) analysis | For machining and moulding | missing | P2 | M | gpu |

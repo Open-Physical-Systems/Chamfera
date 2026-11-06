@@ -11,8 +11,10 @@ pub mod face_edit;
 pub mod feature;
 pub mod imported;
 pub mod joint;
+pub mod motion;
 pub mod naming;
 pub mod sheet;
+pub mod surface;
 pub mod timeline;
 pub mod units;
 
@@ -33,9 +35,14 @@ pub use feature::{
 };
 pub use imported::ImportedBody;
 pub use joint::{EdgeEnd, Joint, JointKind, JointOrigin, OriginAt};
+pub use motion::{Motion, MotionKey};
 pub use sheet::{
     FlangePosition, FlangeSide, FlangeValues, ReliefShape, SheetBase, SheetFlange, SheetRule,
     SheetUnfold,
+};
+pub use surface::{
+    SurfaceExtrude, SurfaceFeature, SurfacePatch, SurfaceRevolve, SurfaceShapes, SurfaceStitch,
+    SurfaceSweep, SurfaceTrim, TrimKeep, TrimTool,
 };
 pub use timeline::{Group, ItemKind, Timeline};
 pub use units::{DisplayUnits, LengthUnit};
@@ -92,7 +99,12 @@ use thiserror::Error;
 ///   the shape, normal or axis, a point and the neighbouring faces of what it was made
 ///   on), so split pieces (`2:top#2`) and renamed faces resolve (rung K8). Older files
 ///   open unchanged and resolve by name alone, as before.
-pub const FORMAT_VERSION: u32 = 27;
+/// - 28: surface features (`kind: surface`, with `surface`: `extrude`, `revolve`,
+///   `sweep`, `patch`, `stitch` or `trim`), making surface bodies (open shells). Older
+///   files open unchanged: they hold none.
+/// - 29: motion studies: keyframes of joint values over time (`motion.keys`: joint,
+///   time in seconds, value). Older files open with no keys.
+pub const FORMAT_VERSION: u32 = 29;
 /// The tag every design file starts with, so other JSON is not mistaken for a design.
 pub const FORMAT_TAG: &str = "chamfera";
 /// Longest parameter name.
@@ -283,6 +295,9 @@ pub struct Document {
     /// Sheet metal rules, by name (format 25).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sheet_rules: Vec<SheetRule>,
+    /// The motion study's keyframes (format 29).
+    #[serde(default, skip_serializing_if = "Motion::is_empty")]
+    pub motion: Motion,
     /// What each reference was made on (format 27): by the sketch or feature that holds
     /// it, then by the reference name (`2:top`, `2:top 0#2`). See [`naming`].
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -307,6 +322,7 @@ impl Default for Document {
             appearances: BTreeMap::new(),
             cam: cam::Cam::default(),
             units: DisplayUnits::default(),
+            motion: Motion::default(),
         }
     }
 }
@@ -715,6 +731,8 @@ impl Document {
         checked.units = doc.units;
         doc.assembly.check(checked.last_feature_id)?;
         checked.assembly = doc.assembly;
+        doc.motion.check(&checked.assembly)?;
+        checked.motion = doc.motion.sorted();
         checked.timeline = doc.timeline;
         checked.check_timeline(&mut seen)?;
         doc.drawing.check()?;

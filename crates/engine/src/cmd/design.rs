@@ -353,10 +353,13 @@ fn mesh_bodies(
         .into_iter()
         .filter(|b| !b.mesh.triangles.is_empty())
         .map(|b| {
-            let c = b
-                .appearance
-                .colour
-                .unwrap_or_else(|| theme.body_colour(b.tint));
+            let c = b.appearance.colour.unwrap_or_else(|| {
+                if b.surface {
+                    theme.surface_colour(b.tint)
+                } else {
+                    theme.body_colour(b.tint)
+                }
+            });
             (b.name.clone(), b.mesh.clone(), [c.0, c.1, c.2])
         })
         .collect();

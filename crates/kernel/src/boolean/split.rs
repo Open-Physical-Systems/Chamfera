@@ -234,7 +234,15 @@ pub(super) fn load<'a>(
             .edge_curve(*e)?
             .ok_or_else(|| KernelError::InvalidInput(format!("{e} has no curve")))?;
         let [v0, v1] = body.edge_vertices(*e)?;
-        let [f0, f1] = body.edge_faces(*e)?;
+        let [mut f0, mut f1] = body.edge_faces(*e)?;
+        // On a surface's rim the other side is an opening: the face is alone there, as
+        // at a seam.
+        if body.face_is_boundary(f0)? {
+            f0 = f1;
+        }
+        if body.face_is_boundary(f1)? {
+            f1 = f0;
+        }
         let lookup = |m: &HashMap<_, usize>, k| {
             m.get(&k)
                 .copied()

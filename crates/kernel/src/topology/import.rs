@@ -163,6 +163,7 @@ fn link(points: &[Point3], edges: &[InEdge], faces: &[InFace]) -> Result<Body, T
             surface: Some(s),
             same_sense: *same_sense,
             name: None,
+            boundary: false,
         });
         shell_faces.push(f);
     }

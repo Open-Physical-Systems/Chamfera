@@ -40,6 +40,9 @@ pub struct Theme {
     pub axis_y: Rgba,
     pub axis_z: Rgba,
     pub body: Rgba,
+    /// A surface body (an open shell), drawn from both sides: the body colour with a
+    /// light teal tint, so sheets read apart from solids.
+    pub surface_body: Rgba,
     pub body_selected: Rgba,
     pub edge: Rgba,
     /// The shape a tool would make (the extrude preview), drawn translucent over the
@@ -83,6 +86,13 @@ pub struct Theme {
     pub toolpath_feed: Rgba,
     /// Rapid moves, drawn dashed.
     pub toolpath_rapid: Rgba,
+    // assemblies
+    /// Where bodies overlap (`inspect.interference`): the outline, drawn over everything.
+    pub interference: Rgba,
+    /// The see-through fill of an overlap.
+    pub interference_fill: Rgba,
+    /// Exploded view trails: lines from where a component sits to where it is shown.
+    pub explode_trail: Rgba,
     // interface surfaces (see docs/design/ui.md)
     /// The app bar, ribbon, timeline and status bar.
     pub chrome: Rgba,
@@ -133,17 +143,21 @@ impl Theme {
     /// The colour of a body: the plain body colour, or with a component tint mixed in
     /// (a quarter of the tint, so shading and edges still read as one material).
     pub fn body_colour(&self, tint: Option<u8>) -> Rgba {
+        self.tinted(self.body, tint)
+    }
+
+    /// The colour of a surface body, with a component tint mixed in like [`Theme::body_colour`].
+    pub fn surface_colour(&self, tint: Option<u8>) -> Rgba {
+        self.tinted(self.surface_body, tint)
+    }
+
+    fn tinted(&self, base: Rgba, tint: Option<u8>) -> Rgba {
         let Some(i) = tint else {
-            return self.body;
+            return base;
         };
         let t = self.component_tints[usize::from(i) % self.component_tints.len()];
         let mix = |a: u8, b: u8| ((u16::from(a) * 3 + u16::from(b)) / 4) as u8;
-        Rgba(
-            mix(self.body.0, t.0),
-            mix(self.body.1, t.1),
-            mix(self.body.2, t.2),
-            self.body.3,
-        )
+        Rgba(mix(base.0, t.0), mix(base.1, t.1), mix(base.2, t.2), base.3)
     }
 
     pub fn light() -> Theme {
@@ -157,6 +171,7 @@ impl Theme {
             axis_y: Rgba(52, 160, 82, 255),
             axis_z: Rgba(56, 108, 214, 255),
             body: Rgba(176, 184, 196, 255),
+            surface_body: Rgba(150, 196, 192, 255),
             body_selected: Rgba(64, 140, 230, 255),
             edge: Rgba(40, 46, 56, 255),
             preview_body: Rgba(30, 112, 214, 110),
@@ -179,6 +194,9 @@ impl Theme {
             select_crossing_fill: Rgba(30, 135, 70, 36),
             toolpath_feed: Rgba(96, 72, 204, 255),
             toolpath_rapid: Rgba(200, 50, 60, 220),
+            interference: Rgba(214, 30, 60, 255),
+            interference_fill: Rgba(230, 40, 70, 120),
+            explode_trail: Rgba(52, 58, 72, 255),
             chrome: Rgba(252, 252, 253, 255),
             panel: Rgba(246, 247, 249, 255),
             panel_alt: Rgba(236, 239, 243, 255),
@@ -227,6 +245,7 @@ impl Theme {
             axis_y: Rgba(86, 190, 110, 255),
             axis_z: Rgba(90, 140, 240, 255),
             body: Rgba(150, 158, 170, 255),
+            surface_body: Rgba(118, 168, 164, 255),
             body_selected: Rgba(84, 160, 255, 255),
             edge: Rgba(18, 20, 24, 255),
             preview_body: Rgba(84, 160, 255, 110),
@@ -249,6 +268,9 @@ impl Theme {
             select_crossing_fill: Rgba(88, 196, 124, 40),
             toolpath_feed: Rgba(170, 150, 255, 255),
             toolpath_rapid: Rgba(255, 110, 110, 220),
+            interference: Rgba(255, 80, 110, 255),
+            interference_fill: Rgba(255, 70, 100, 120),
+            explode_trail: Rgba(200, 206, 218, 255),
             chrome: Rgba(29, 31, 35, 255),
             panel: Rgba(35, 38, 43, 255),
             panel_alt: Rgba(45, 49, 56, 255),

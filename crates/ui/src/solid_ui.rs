@@ -376,6 +376,8 @@ pub struct SolidUi {
     pub press_pull: Option<crate::press_pull_ui::PressPullTool>,
     /// Combine, Split Body, Split Face or Thicken (`body_tools_ui.rs`).
     pub body_tool: Option<crate::body_tools_ui::BodyTool>,
+    /// A surface tool (`surface_ui.rs`).
+    pub surface: Option<crate::surface_ui::SurfaceTool>,
     /// The Sweep or Loft tool.
     pub sweep: Option<crate::sweep_ui::SweepTool>,
     /// Waiting for a click on a flat face to sketch on.

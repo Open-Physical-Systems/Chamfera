@@ -15,11 +15,13 @@ mod feature;
 mod hole;
 mod inspect;
 mod joint;
+mod motion;
 mod param;
 mod select;
 mod sheet;
 mod sketch;
 mod spline;
+mod surface;
 mod timeline;
 mod transform;
 mod view;
@@ -59,11 +61,13 @@ pub fn registry() -> Vec<&'static CommandSpec> {
         hole::COMMANDS,
         inspect::COMMANDS,
         joint::COMMANDS,
+        motion::COMMANDS,
         param::COMMANDS,
         select::COMMANDS,
         sheet::COMMANDS,
         sketch::COMMANDS,
         spline::COMMANDS,
+        surface::COMMANDS,
         timeline::COMMANDS,
         transform::COMMANDS,
         view::COMMANDS,

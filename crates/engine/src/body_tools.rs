@@ -252,8 +252,10 @@ fn thicken(
     let (lo, hi) = t.direction.span(thickness);
     let mut shapes = Vec::new();
     // Each face through the resolver (rung K8): every piece of a split face is thickened.
+    // Surface bodies whose faces are thickened become the solids (they are used up).
     let bodies = crate::naming::bodies(made);
     let mut faces = Vec::new();
+    let mut used_surfaces: Vec<usize> = Vec::new();
     for name in &t.faces {
         let found = crate::naming::resolve(
             doc,
@@ -266,6 +268,9 @@ fn thicken(
         .map_err(|e| format!("thicken: {e}"))?;
         for f in found {
             if let (Some(b), Some(face)) = (bodies.get(f.body), f.face()) {
+                if b.is_open() && !used_surfaces.contains(&f.body) {
+                    used_surfaces.push(f.body);
+                }
                 faces.push((name, *b, face));
             }
         }
@@ -284,7 +289,12 @@ fn thicken(
             shapes.push(out);
         }
     }
-    let mut next = made.to_vec();
+    let mut next: Made = made
+        .iter()
+        .enumerate()
+        .filter(|(k, _)| !used_surfaces.contains(k))
+        .map(|(_, m)| m.clone())
+        .collect();
     if t.operation == Operation::NewBody {
         let n = shapes.len();
         for (k, b) in shapes.into_iter().enumerate() {

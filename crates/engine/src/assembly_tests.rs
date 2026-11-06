@@ -382,3 +382,332 @@ fn a_face_origin_follows_its_face_when_the_part_changes() {
         [20.0, 15.0, 6.0, 30.0, 25.0, 16.0]
     ));
 }
+
+// ---- Assembly tools: limits, drag, motion study, interference, exploded view ----
+
+fn revolute_about_z(s: &mut Session, a: u64, b: u64, extra: Value) -> u64 {
+    let mut p = json!({"type": "revolute", "a": at_origin(a, [0.0, 0.0, 1.0]),
+                       "b": at_origin(b, [0.0, 0.0, 1.0])});
+    if let (Some(p), Some(e)) = (p.as_object_mut(), extra.as_object()) {
+        for (k, v) in e {
+            p.insert(k.clone(), v.clone());
+        }
+    }
+    s.execute("joint.create", &p).unwrap()["joint"]
+        .as_u64()
+        .unwrap()
+}
+
+#[test]
+fn a_revolute_limited_to_0_to_90_degrees_refuses_120() {
+    let mut s = Session::new();
+    let (a, b) = two_plates(&mut s);
+    let j = revolute_about_z(&mut s, a, b, json!({"min": 0, "max": 90}));
+    let before = s.doc.clone();
+    let e = s
+        .execute("joint.set_value", &json!({"joint": j, "value": 120}))
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("120°") && e.contains("0° to 90°"), "{e}");
+    assert_eq!(s.doc, before, "a refused value changes nothing");
+    // 90 is the limit itself and is allowed.
+    s.execute("joint.set_value", &json!({"joint": j, "value": 90}))
+        .unwrap();
+}
+
+#[test]
+fn dragging_from_the_x_side_to_the_y_side_turns_a_hinge_a_quarter() {
+    let mut s = Session::new();
+    let (a, b) = two_plates(&mut s);
+    let j = revolute_about_z(&mut s, a, b, json!({}));
+    s.execute("view.standard", &json!({"view": "top"})).unwrap();
+    let (w, h) = (800.0, 600.0);
+    // Seen from above, a drag from the point (20, 0, 0) to (0, 20, 0) sweeps a quarter
+    // turn counter-clockwise about +z through the origin: +90°.
+    let from = s
+        .world_to_screen(chamfera_geom::Point3::new(20.0, 0.0, 0.0), w, h)
+        .unwrap();
+    let to = s
+        .world_to_screen(chamfera_geom::Point3::new(0.0, 20.0, 0.0), w, h)
+        .unwrap();
+    let doc = s.doc.clone();
+    let r = s
+        .execute(
+            "joint.drag",
+            &json!({"joint": j, "from": {"x": from.0, "y": from.1},
+                    "to": {"x": to.0, "y": to.1}, "width": w, "height": h}),
+        )
+        .unwrap();
+    assert!((r["value"].as_f64().unwrap() - 90.0).abs() < 1e-6, "{r}");
+    assert_eq!(s.doc, doc, "a drag only shows the move");
+    // B turned a quarter: 0..40 x 0..10 becomes -10..0 x 0..40.
+    assert!(close(bounds(&mut s, b), [-10.0, 0.0, 0.0, 0.0, 40.0, 4.0]));
+    // Ending the drag keeps it as one undo step.
+    s.execute("joint.set_value", &json!({"joint": j, "value": r["value"]}))
+        .unwrap();
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(close(bounds(&mut s, b), [0.0, 0.0, 0.0, 40.0, 10.0, 4.0]));
+}
+
+#[test]
+fn a_limited_drag_stops_at_the_limit() {
+    let mut s = Session::new();
+    let (a, b) = two_plates(&mut s);
+    let j = revolute_about_z(&mut s, a, b, json!({"min": 0, "max": 30}));
+    s.execute("view.standard", &json!({"view": "top"})).unwrap();
+    let (w, h) = (800.0, 600.0);
+    let p = |s: &Session, x: f64, y: f64| {
+        s.world_to_screen(chamfera_geom::Point3::new(x, y, 0.0), w, h)
+            .unwrap()
+    };
+    let (from, to) = (p(&s, 20.0, 0.0), p(&s, 0.0, 20.0));
+    let r = s
+        .execute(
+            "joint.drag",
+            &json!({"joint": j, "from": {"x": from.0, "y": from.1},
+                    "to": {"x": to.0, "y": to.1}, "width": w, "height": h}),
+        )
+        .unwrap();
+    assert!((r["value"].as_f64().unwrap() - 30.0).abs() < 1e-6, "{r}");
+    assert_eq!(r["clamped"], json!(true));
+}
+
+#[test]
+fn halfway_between_keys_at_0_and_90_degrees_the_hinge_is_at_45() {
+    let mut s = Session::new();
+    let (a, b) = two_plates(&mut s);
+    let j = revolute_about_z(&mut s, a, b, json!({}));
+    s.execute(
+        "motion.add_key",
+        &json!({"joint": j, "time": 0, "value": 0}),
+    )
+    .unwrap();
+    s.execute(
+        "motion.add_key",
+        &json!({"joint": j, "time": 1, "value": 90}),
+    )
+    .unwrap();
+    let doc = s.doc.clone();
+    let r = s.execute("motion.set_time", &json!({"t": 0.5})).unwrap();
+    // Linear: 0 + (90 - 0) * 0.5 = 45.
+    assert!(
+        (r["joints"][0]["value"].as_f64().unwrap() - 45.0).abs() < 1e-9,
+        "{r}"
+    );
+    assert_eq!(s.doc, doc, "showing a time changes nothing in the design");
+    // B (0..40 x 0..10) turned 45° about z: (x, y) -> ((x - y)/√2, (x + y)/√2). Its far
+    // edge's outer corner (40, 0) lands on (20√2, 20√2); the corner (40, 10) on
+    // (15√2, 25√2) and (0, 10) on (-5√2, 5√2). So x runs -5√2..20√2, y 0..25√2.
+    let r2 = std::f64::consts::SQRT_2;
+    assert!(close(
+        bounds(&mut s, b),
+        [-5.0 * r2, 0.0, 0.0, 20.0 * r2, 25.0 * r2, 4.0]
+    ));
+    let world = component(&mut s, b)["world"].clone();
+    let (m, t) = (&world["matrix"], &world["translation"]);
+    let at = |i: usize, k: &str| m[i][0].as_f64().unwrap() * 40.0 + t[k].as_f64().unwrap();
+    assert!((at(0, "x") - 20.0 * r2).abs() < 1e-9 && (at(1, "y") - 20.0 * r2).abs() < 1e-9);
+    // Playing adds no undo step: undo takes back the last key, not a time.
+    s.execute("motion.set_time", &json!({"t": 0.75})).unwrap();
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.doc.motion.keys.len(), 1);
+    // Leaving the study shows the joint's own value (0) again.
+    s.execute("motion.set_time", &json!({"t": null})).unwrap();
+    assert!(close(bounds(&mut s, b), [0.0, 0.0, 0.0, 40.0, 10.0, 4.0]));
+}
+
+#[test]
+fn a_key_outside_the_joints_limits_is_refused() {
+    let mut s = Session::new();
+    let (a, b) = two_plates(&mut s);
+    let j = revolute_about_z(&mut s, a, b, json!({"min": 0, "max": 90}));
+    assert!(
+        s.execute(
+            "motion.add_key",
+            &json!({"joint": j, "time": 1, "value": 120})
+        )
+        .is_err()
+    );
+    assert!(s.doc.motion.keys.is_empty());
+}
+
+/// A `size` mm cube from x0 in x (y and z from 0), as its own component.
+fn cube(s: &mut Session, name: &str, x0: f64, size: f64) -> u64 {
+    let f = plate(s, x0, 0.0, x0 + size, size, size);
+    new_component(s, name, f)
+}
+
+#[test]
+fn two_cubes_overlapping_by_5_interfere_by_500_and_moving_one_6_clears_it() {
+    let mut s = Session::new();
+    let a = cube(&mut s, "A", 0.0, 10.0);
+    let b = cube(&mut s, "B", 5.0, 10.0);
+    let r = s.execute("inspect.interference", &json!({})).unwrap();
+    // x overlap 5..10 (5 mm) by the full 10 x 10 in y and z: 500 mm³.
+    assert_eq!(r["count"], json!(1), "{r}");
+    let v = r["pairs"][0]["volume"].as_f64().unwrap();
+    assert!((v - 500.0).abs() < 1e-6, "{v}");
+    // The overlap is drawn in the interference colour.
+    assert!(
+        s.scene
+            .fills
+            .iter()
+            .any(|f| f.style == chamfera_render::FillStyle::Interference)
+    );
+    // Limited to one component there is nothing to compare it with.
+    let r = s
+        .execute("inspect.interference", &json!({"components": [a]}))
+        .unwrap();
+    assert_eq!(r["count"], json!(0));
+    // B moved 6 in x sits at 11..21: a 1 mm gap from A.
+    s.execute(
+        "component.move",
+        &json!({"component": b, "transform": {"translate": {"x": 6, "y": 0, "z": 0}}}),
+    )
+    .unwrap();
+    let r = s.execute("inspect.interference", &json!({})).unwrap();
+    assert_eq!(r["count"], json!(0), "{r}");
+    assert!(
+        s.scene
+            .fills
+            .iter()
+            .all(|f| f.style != chamfera_render::FillStyle::Interference)
+    );
+}
+
+#[test]
+fn hinge_leaves_collide_at_180_degrees_but_not_at_90() {
+    // Leaf A (grounded): x 0..20, y 0..10, z 0..2. Leaf B lies open beside it: x -22..-2.
+    // The hinge turns B about the y axis through (-2, 0, 1).
+    //   At 90°, a point at (x, z) relative to the pivot goes to (z, -x): B's x -20..0,
+    //   z -1..1 relative becomes x -1..1, z 0..20, so world x -3..-1: 1 mm short of A.
+    //   At 180°, (x, z) -> (-x, -z): world x -2..18, z 0..2, overlapping A in x 0..18,
+    //   all of y 0..10 and z 0..2: 18 * 10 * 2 = 360 mm³.
+    let mut s = Session::new();
+    let fa = plate(&mut s, 0.0, 0.0, 20.0, 10.0, 2.0);
+    let fb = plate(&mut s, -22.0, 0.0, -2.0, 10.0, 2.0);
+    let a = new_component(&mut s, "LeafA", fa);
+    let b = new_component(&mut s, "LeafB", fb);
+    s.execute("component.ground", &json!({"component": a}))
+        .unwrap();
+    let pivot = |c: u64| {
+        json!({"component": c, "point": {"x": -2, "y": 0, "z": 1},
+               "axis": {"x": 0, "y": 1, "z": 0}})
+    };
+    let j = s
+        .execute(
+            "joint.create",
+            &json!({"type": "revolute", "a": pivot(a), "b": pivot(b)}),
+        )
+        .unwrap()["joint"]
+        .as_u64()
+        .unwrap();
+    for (t, v) in [(0, 90), (1, 180)] {
+        s.execute(
+            "motion.add_key",
+            &json!({"joint": j, "time": t, "value": v}),
+        )
+        .unwrap();
+    }
+    let r = s
+        .execute("inspect.interference", &json!({"at_keys": true}))
+        .unwrap();
+    let keys = r["keys"].as_array().unwrap();
+    assert_eq!(keys.len(), 2);
+    assert_eq!(keys[0]["time"], json!(0.0));
+    assert_eq!(keys[0]["count"], json!(0), "{r}");
+    assert_eq!(keys[1]["count"], json!(1), "{r}");
+    let v = keys[1]["pairs"][0]["volume"].as_f64().unwrap();
+    assert!((v - 360.0).abs() < 1e-6, "{v}");
+    // As designed (value 0) the leaves lie side by side: no interference, and the check
+    // left the design and the time shown as they were.
+    assert_eq!(r["count"], json!(0));
+    assert!(s.assembly_view().motion_time.is_none());
+    assert!(close(bounds(&mut s, b), [-22.0, 0.0, 0.0, -2.0, 10.0, 2.0]));
+}
+
+#[test]
+fn explode_factor_2_moves_the_outer_cubes_20_mm_apart_and_keeps_the_model() {
+    // Cubes at x 0..10, 20..30 and 40..50: the assembly's box is 0..50 by 10 by 10,
+    // centre (25, 5, 5). The outer cubes' centres are 20 from it along x (and nothing in
+    // y or z), so factor 2 shows them (2 - 1) * 20 = 20 mm further out; the middle one,
+    // at the centre, does not move.
+    let mut s = Session::new();
+    let a = cube(&mut s, "A", 0.0, 10.0);
+    let m = cube(&mut s, "M", 20.0, 10.0);
+    let c = cube(&mut s, "C", 40.0, 10.0);
+    let doc = s.doc.clone();
+    let r = s.execute("view.explode", &json!({"factor": 2})).unwrap();
+    let comps = r["components"].as_array().unwrap();
+    assert_eq!(comps.len(), 2, "{r}");
+    let off = |id: u64| {
+        comps
+            .iter()
+            .find(|x| x["component"] == json!(id))
+            .map(|x| x["offset"]["x"].as_f64().unwrap())
+    };
+    assert!((off(a).unwrap() + 20.0).abs() < 1e-9);
+    assert!((off(c).unwrap() - 20.0).abs() < 1e-9);
+    assert!(off(m).is_none());
+    assert_eq!(s.doc, doc, "an exploded view is not a change to the design");
+    // The exact bodies stay where they are; the shown mesh of A moves to -20..-10.
+    assert!(close(bounds(&mut s, a), [0.0, 0.0, 0.0, 10.0, 10.0, 10.0]));
+    let shown = s
+        .solids()
+        .iter()
+        .find(|x| x.component == a as u32)
+        .and_then(|x| x.scene_id)
+        .and_then(|id| s.scene.body(id))
+        .map(|b| {
+            b.mesh
+                .positions
+                .iter()
+                .map(|p| p.x)
+                .fold(f64::INFINITY, f64::min)
+        })
+        .unwrap();
+    assert!((shown + 20.0).abs() < 1e-9, "{shown}");
+    // Trails run from each moved cube's centre to where it is shown.
+    let trail = s
+        .scene
+        .overlays
+        .iter()
+        .find(|o| o.style == chamfera_render::OverlayStyle::ExplodeTrail)
+        .unwrap();
+    assert_eq!(trail.lines.len(), 2);
+    // A manual offset adds to the automatic one; clearing shows the assembly again.
+    let r = s
+        .execute(
+            "view.explode",
+            &json!({"component": m, "offset": {"x": 0, "y": 0, "z": 15}}),
+        )
+        .unwrap();
+    assert_eq!(r["components"].as_array().unwrap().len(), 3);
+    s.execute("view.explode_clear", &json!({})).unwrap();
+    assert!(s.exploded().is_empty());
+}
+
+#[test]
+fn motion_keys_survive_save_and_open() {
+    let mut s = Session::new();
+    let (a, b) = two_plates(&mut s);
+    let j = revolute_about_z(&mut s, a, b, json!({}));
+    for (t, v) in [(0.0, 0.0), (1.5, 90.0), (3.0, 45.0)] {
+        s.execute(
+            "motion.add_key",
+            &json!({"joint": j, "time": t, "value": v}),
+        )
+        .unwrap();
+    }
+    let saved = s.execute("design.save_bytes", &json!({})).unwrap();
+    let mut t = Session::new();
+    t.execute("design.open_bytes", &json!({"data": saved["data"]}))
+        .unwrap();
+    assert_eq!(t.doc.motion, s.doc.motion);
+    let l = t.execute("motion.list", &json!({})).unwrap();
+    assert_eq!(l["times"], json!([0.0, 1.5, 3.0]));
+    assert!((l["keys"][1]["value"].as_f64().unwrap() - 90.0).abs() < 1e-9);
+    // Deleting the joint drops its keys.
+    t.execute("joint.delete", &json!({"joint": j})).unwrap();
+    assert!(t.doc.motion.keys.is_empty());
+}
