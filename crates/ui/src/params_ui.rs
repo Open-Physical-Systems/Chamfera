@@ -1,7 +1,9 @@
 //! The Parameters window: named values and expressions that dimensions refer to.
 //! Edits go through `param.set` and `param.remove`.
 
-use crate::{ChamferaApp, color, label};
+use crate::icons::Icon;
+use crate::widgets::{self, Look};
+use crate::{ChamferaApp, label};
 use serde_json::json;
 use std::collections::BTreeMap;
 
@@ -50,109 +52,192 @@ impl ChamferaApp {
             return;
         }
         let mut open = true;
+        let vr = self.viewport_rect;
+        let pos = egui::pos2(vr.min.x + widgets::S5, vr.min.y + widgets::S5);
+        let look = Look {
+            theme: &self.theme,
+            icons: &self.icons,
+        };
+        let rows: Vec<(String, chamfera_doc::Parameter)> = self
+            .session
+            .doc
+            .parameters
+            .iter()
+            .map(|(n, p)| (n.clone(), p.clone()))
+            .collect();
+        let error = match &self.message {
+            Some((m, true)) => Some(m.clone()),
+            _ => None,
+        };
+        // Commands to run once the window is drawn: (name, expression, unit) to set, or a
+        // name to remove.
+        let mut set: Vec<(String, String, &str, bool)> = Vec::new();
+        let mut remove: Option<String> = None;
+        let params = &mut self.params;
         egui::Window::new("Parameters")
-            .open(&mut open)
-            .default_pos([240.0, 110.0])
-            .default_width(520.0)
-            .resizable(true)
+            .id(egui::Id::unique("parameters window"))
+            .title_bar(false)
+            .frame(widgets::dialog_frame(look))
+            .default_pos(pos)
+            .default_height(200.0)
+            .fade_in(false)
+            .default_width(560.0)
+            .resizable(false)
             .show(ctx, |ui| {
-                ui.weak("Expressions may use units (mm, cm, in, deg), + − × ÷ ^, other parameters and functions such as sqrt or min.");
-                ui.separator();
-                let rows: Vec<(String, chamfera_doc::Parameter)> = self
-                    .session
-                    .doc
-                    .parameters
-                    .iter()
-                    .map(|(n, p)| (n.clone(), p.clone()))
-                    .collect();
-                egui::Grid::new("parameter grid")
-                    .striped(true)
-                    .num_columns(5)
-                    .show(ui, |ui| {
-                        ui.strong("Name");
-                        ui.strong("Expression");
-                        ui.strong("Value");
-                        ui.strong("Unit");
-                        ui.label("");
-                        ui.end_row();
-                        for (name, p) in rows {
-                            ui.label(&name);
-                            let current = p.expression.clone().unwrap_or_else(|| value_expression(&p));
-                            let text = self.params.edits.entry(name.clone()).or_insert(current);
-                            let edit = ui.add_sized([200.0, 20.0], egui::TextEdit::singleline(text));
-                            // Enter or clicking elsewhere applies the text.
-                            if edit.lost_focus() {
-                                let expression = text.clone();
-                                let unit = UNITS.get(unit_index(p.unit)).map_or("length", |u| u.0);
-                                if self
-                                    .run(
-                                        "param.set",
-                                        json!({ "name": name, "expression": expression, "unit": unit }),
-                                    )
-                                    .is_some()
-                                {
-                                    self.refresh_sketch_status();
-                                    self.message = Some((format!("{name} = {expression}"), false));
-                                }
-                                self.params.edits.remove(&name);
+                ui.set_width(560.0);
+                if widgets::dialog_title(ui, look, Icon::Parameters, "Parameters") {
+                    open = false;
+                }
+                widgets::dialog_body(ui, |ui| {
+                    ui.label(
+                        egui::RichText::new(
+                            "Named values that dimensions and features can use. Expressions take units (mm, cm, in, deg), + − × ÷ ^, other parameters and functions such as sqrt or min.",
+                        )
+                        .size(widgets::T_SMALL)
+                        .color(look.c(|t| t.text_muted)),
+                    );
+                    ui.add_space(widgets::S4);
+                    egui::Grid::new("parameter grid")
+                        .num_columns(5)
+                        .spacing([widgets::S3, widgets::S2 + 2.0])
+                        .min_col_width(0.0)
+                        .show(ui, |ui| {
+                            for (h, align) in [
+                                ("NAME", egui::Align::Min),
+                                ("EXPRESSION", egui::Align::Min),
+                                ("VALUE", egui::Align::Max),
+                                ("UNIT", egui::Align::Min),
+                            ] {
+                                let text = egui::RichText::new(h)
+                                    .size(widgets::T_CAPTION)
+                                    .color(look.c(|t| t.text_muted));
+                                let width = match h {
+                                    "NAME" => 110.0,
+                                    "EXPRESSION" => 230.0,
+                                    "VALUE" => 72.0,
+                                    _ => 40.0,
+                                };
+                                widgets::fixed_text(ui, width, text, align);
                             }
-                            ui.label(show_value(&p));
-                            ui.label(UNITS.get(unit_index(p.unit)).map_or("", |u| u.1));
-                            if ui
-                                .small_button("Delete")
-                                .on_hover_text(label("param.remove"))
-                                .clicked()
-                                && self.run("param.remove", json!({ "name": name })).is_some()
-                            {
-                                self.params.edits.remove(&name);
-                            }
+                            ui.label("");
                             ui.end_row();
-                        }
-                        // A row to add a parameter.
+                            if rows.is_empty() {
+                                ui.label(
+                                    egui::RichText::new("No parameters yet: add one below")
+                                        .color(look.c(|t| t.text_muted)),
+                                );
+                                ui.end_row();
+                            }
+                            for (name, p) in &rows {
+                                widgets::fixed_text(
+                                    ui,
+                                    110.0,
+                                    egui::RichText::new(name).color(look.c(|t| t.text)),
+                                    egui::Align::Min,
+                                );
+                                let current =
+                                    p.expression.clone().unwrap_or_else(|| value_expression(p));
+                                let text = params.edits.entry(name.clone()).or_insert(current);
+                                let edit = ui.add_sized(
+                                    [230.0, 26.0],
+                                    egui::TextEdit::singleline(text).align(egui::Align2::LEFT_CENTER),
+                                );
+                                // Enter or clicking elsewhere applies the text.
+                                if edit.lost_focus() {
+                                    let unit = UNITS.get(unit_index(p.unit)).map_or("length", |u| u.0);
+                                    set.push((name.clone(), text.clone(), unit, true));
+                                    params.edits.remove(name);
+                                }
+                                widgets::fixed_text(
+                                    ui,
+                                    72.0,
+                                    egui::RichText::new(show_value(p)).color(look.c(|t| t.text)),
+                                    egui::Align::Max,
+                                );
+                                ui.label(
+                                    egui::RichText::new(
+                                        UNITS.get(unit_index(p.unit)).map_or("", |u| u.1),
+                                    )
+                                    .color(look.c(|t| t.text_muted)),
+                                );
+                                if widgets::icon_button(ui, look, Icon::Delete, 26.0, 16.0, true, false)
+                                    .on_hover_text(format!("{name}: {}", label("param.remove")))
+                                    .clicked()
+                                {
+                                    remove = Some(name.clone());
+                                }
+                                ui.end_row();
+                            }
+                        });
+                    ui.add_space(widgets::S3);
+                    ui.separator();
+                    ui.add_space(widgets::S3);
+                    // A row to add a parameter.
+                    ui.horizontal(|ui| {
                         ui.add_sized(
-                            [90.0, 20.0],
-                            egui::TextEdit::singleline(&mut self.params.new_name).hint_text("name"),
+                            [110.0, 26.0],
+                            egui::TextEdit::singleline(&mut params.new_name)
+                                .hint_text("name")
+                                .align(egui::Align2::LEFT_CENTER),
                         );
                         ui.add_sized(
-                            [200.0, 20.0],
-                            egui::TextEdit::singleline(&mut self.params.new_expression)
-                                .hint_text("e.g. 80 mm"),
+                            [230.0, 26.0],
+                            egui::TextEdit::singleline(&mut params.new_expression)
+                                .hint_text("e.g. 80 mm or width / 2")
+                                .align(egui::Align2::LEFT_CENTER),
                         );
-                        ui.label("");
                         egui::ComboBox::from_id_salt("new parameter unit")
-                            .selected_text(UNITS.get(self.params.new_unit).map_or("", |u| u.1))
+                            .selected_text(UNITS.get(params.new_unit).map_or("", |u| u.1))
+                            .width(72.0)
                             .show_ui(ui, |ui| {
                                 for (i, (_, text)) in UNITS.iter().enumerate() {
-                                    ui.selectable_value(&mut self.params.new_unit, i, *text);
+                                    ui.selectable_value(&mut params.new_unit, i, *text);
                                 }
                             });
-                        let can_add = !self.params.new_name.trim().is_empty()
-                            && !self.params.new_expression.trim().is_empty();
-                        if ui.add_enabled(can_add, egui::Button::new("Add")).clicked() {
-                            let unit = UNITS.get(self.params.new_unit).map_or("length", |u| u.0);
-                            let name = self.params.new_name.trim().to_owned();
-                            if self
-                                .run(
-                                    "param.set",
-                                    json!({
-                                        "name": name,
-                                        "expression": self.params.new_expression.trim(),
-                                        "unit": unit,
-                                    }),
-                                )
-                                .is_some()
-                            {
-                                self.params.new_name.clear();
-                                self.params.new_expression.clear();
-                            }
+                        let can_add = !params.new_name.trim().is_empty()
+                            && !params.new_expression.trim().is_empty();
+                        if widgets::primary_button(ui, look, "Add", can_add).clicked() {
+                            let unit = UNITS.get(params.new_unit).map_or("length", |u| u.0);
+                            set.push((
+                                params.new_name.trim().to_owned(),
+                                params.new_expression.trim().to_owned(),
+                                unit,
+                                false,
+                            ));
                         }
-                        ui.end_row();
                     });
-                if let Some((m, true)) = &self.message {
-                    ui.separator();
-                    ui.colored_label(color(self.theme.error), m);
-                }
+                    if let Some(m) = &error {
+                        ui.add_space(widgets::S3);
+                        ui.horizontal(|ui| {
+                            let (r, _) = ui.allocate_exact_size(egui::Vec2::splat(16.0), egui::Sense::hover());
+                            let e = look.c(|t| t.error);
+                            look.icons.paint(ui.painter(), Icon::Error, r, e, e);
+                            ui.label(egui::RichText::new(m).color(e));
+                        });
+                    }
+                });
             });
-        self.params.open = open;
+        for (name, expression, unit, existing) in set {
+            if self
+                .run(
+                    "param.set",
+                    json!({ "name": name, "expression": expression, "unit": unit }),
+                )
+                .is_some()
+            {
+                self.refresh_sketch_status();
+                self.message = Some((format!("{name} = {expression}"), false));
+                if !existing {
+                    self.params.new_name.clear();
+                    self.params.new_expression.clear();
+                }
+            }
+        }
+        if let Some(name) = remove
+            && self.run("param.remove", json!({ "name": name })).is_some()
+        {
+            self.params.edits.remove(&name);
+        }
+        self.params.open = open && self.params.open;
     }
 }

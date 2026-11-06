@@ -1,6 +1,8 @@
 //! The File menu: New, Open, Save, Save As, Export, Insert, and the question before
 //! unsaved changes are thrown away. Keyboard shortcuts for files and undo live here too.
 
+use crate::icons::Icon;
+use crate::widgets;
 use crate::{ChamferaApp, label};
 use serde_json::json;
 
@@ -23,64 +25,96 @@ pub struct FileUi {
 
 impl ChamferaApp {
     pub(crate) fn file_menu(&mut self, ui: &mut egui::Ui) {
-        let item = |ui: &mut egui::Ui, text: &str, keys: &str| {
-            ui.add(egui::Button::new(text).shortcut_text(keys))
-                .clicked()
+        let look = self.look();
+        let item = |ui: &mut egui::Ui, icon: Icon, text: &str, keys: &str| {
+            let r = widgets::menu_item(ui, look, icon, text, true);
+            if !keys.is_empty() {
+                ui.painter().text(
+                    egui::pos2(r.rect.max.x - 8.0, r.rect.center().y),
+                    egui::Align2::RIGHT_CENTER,
+                    keys,
+                    egui::FontId::proportional(widgets::T_SMALL),
+                    look.c(|t| t.text_muted),
+                );
+            }
+            r.clicked()
         };
-        if item(ui, "New", "Ctrl+N") {
+        ui.set_min_width(240.0);
+        let new = item(ui, Icon::New, "New", "Ctrl+N");
+        #[cfg(not(target_arch = "wasm32"))]
+        let (open, save, save_as, step, stl, import) = {
+            let open = item(ui, Icon::Open, "Open…", "Ctrl+O");
+            ui.separator();
+            let save = item(ui, Icon::Save, "Save", "Ctrl+S");
+            let save_as = item(ui, Icon::Save, "Save As…", "Ctrl+Shift+S");
+            ui.separator();
+            let step = item(
+                ui,
+                Icon::Export,
+                &format!("{}…", label("design.export_step")),
+                "",
+            );
+            let stl = item(
+                ui,
+                Icon::Export,
+                &format!("{}…", label("design.export_stl")),
+                "",
+            );
+            ui.separator();
+            let import = item(
+                ui,
+                Icon::ImportMesh,
+                &format!("{}…", label("body.import_stl")),
+                "",
+            );
+            (open, save, save_as, step, stl, import)
+        };
+        let sample = item(ui, Icon::Body, label("body.sample"), "");
+        #[cfg(not(target_arch = "wasm32"))]
+        let quit = {
+            ui.separator();
+            item(ui, Icon::Close, "Quit", "")
+        };
+        if new {
             ui.close();
             self.ask_or(Pending::New);
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
-            if item(ui, "Open…", "Ctrl+O") {
+            if open {
                 ui.close();
                 self.ask_or(Pending::Open);
             }
-            if item(ui, "Save", "Ctrl+S") {
+            if save {
                 ui.close();
                 self.save(false);
             }
-            if item(ui, "Save As…", "Ctrl+Shift+S") {
+            if save_as {
                 ui.close();
                 self.save(true);
             }
-            ui.separator();
-            if ui
-                .button(format!("{}…", label("design.export_step")))
-                .clicked()
-            {
+            if step {
                 ui.close();
                 self.export("STEP", &["step", "stp"], "design.export_step");
             }
-            if ui
-                .button(format!("{}…", label("design.export_stl")))
-                .clicked()
-            {
+            if stl {
                 ui.close();
                 self.export("STL mesh", &["stl"], "design.export_stl");
             }
-            ui.separator();
-            if ui
-                .button(format!("{}…", label("body.import_stl")))
-                .clicked()
-            {
+            if import {
                 ui.close();
                 self.import_dialog();
             }
         }
-        if ui.button(label("body.sample")).clicked() {
+        if sample {
             ui.close();
             self.run("body.sample", json!({}));
             self.fit_pending = true;
         }
         #[cfg(not(target_arch = "wasm32"))]
-        {
-            ui.separator();
-            if ui.button("Quit").clicked() {
-                ui.close();
-                self.ask_or(Pending::Quit);
-            }
+        if quit {
+            ui.close();
+            self.ask_or(Pending::Quit);
         }
     }
 
@@ -199,24 +233,41 @@ impl ChamferaApp {
             return;
         };
         let mut answer: Option<&str> = None;
-        egui::Window::new("Unsaved changes")
-            .collapsible(false)
-            .resizable(false)
-            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+        let look = self.look();
+        let name = self.design_name();
+        let what = match action {
+            Pending::New => "starting a new design",
+            Pending::Open => "opening another design",
+            Pending::Quit => "quitting",
+        };
+        let modal = egui::Modal::new(egui::Id::unique("unsaved changes"))
+            .frame(widgets::dialog_frame(look))
+            .backdrop_color(look.c(|t| t.shadow))
             .show(ctx, |ui| {
-                ui.label("The design has changes that are not saved.");
-                ui.horizontal(|ui| {
-                    if ui.button("Save").clicked() {
+                ui.set_width(380.0);
+                if widgets::dialog_title(ui, look, Icon::Warning, "Unsaved changes") {
+                    answer = Some("cancel");
+                }
+                widgets::dialog_body(ui, |ui| {
+                    ui.label(format!(
+                        "{name} has changes that are not saved. Save them before {what}?"
+                    ));
+                });
+                widgets::dialog_footer(ui, look, |ui| {
+                    if widgets::primary_button(ui, look, "Save", true).clicked() {
                         answer = Some("save");
                     }
-                    if ui.button("Don't Save").clicked() {
-                        answer = Some("discard");
-                    }
-                    if ui.button("Cancel").clicked() {
+                    if widgets::secondary_button(ui, look, "Cancel").clicked() {
                         answer = Some("cancel");
+                    }
+                    if widgets::secondary_button(ui, look, "Don't Save").clicked() {
+                        answer = Some("discard");
                     }
                 });
             });
+        if modal.should_close() && answer.is_none() {
+            answer = Some("cancel");
+        }
         match answer {
             Some("save") => {
                 self.save(false);

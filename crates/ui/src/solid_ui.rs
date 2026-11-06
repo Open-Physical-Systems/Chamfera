@@ -1,8 +1,11 @@
-//! Solid modelling in the UI: the Extrude tool (pick profiles, set a distance) and the
-//! timeline list of features. Acts only through `solid.*` and `feature.*` commands.
+//! Solid modelling in the UI: the SOLID ribbon and the Extrude and Revolve tools (pick
+//! profiles, set a distance or an axis). Acts only through `solid.*` and `sketch.*`
+//! commands.
 
-use crate::{ChamferaApp, color, label};
-use chamfera_doc::{ExtrudeDirection, FeatureKind};
+use crate::icons::Icon;
+use crate::widgets::{self, Look};
+use crate::{ChamferaApp, label};
+use chamfera_doc::ExtrudeDirection;
 use chamfera_geom::Point2;
 use chamfera_render::{Overlay, OverlayStyle};
 use serde_json::json;
@@ -40,61 +43,156 @@ pub struct SolidUi {
     pub extrude: Option<ExtrudeTool>,
     /// Waiting for a click on a flat face to sketch on.
     pub pick_face: bool,
-    /// Feature distance being edited in the timeline: (feature id, text).
-    editing: Option<(u32, String)>,
+    /// `--extrude`: pick the profile under the viewport's centre on the first frame.
+    pub pick_centre: bool,
 }
 
 impl ChamferaApp {
+    /// The SOLID ribbon: CREATE (sketch, extrude, revolve), MODIFY and INSERT groups.
     pub(crate) fn solid_toolbar(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            ui.strong("SOLID");
-            ui.separator();
-            ui.menu_button(label("sketch.create"), |ui| {
-                for (plane, text, view) in crate::sketch_ui::PLANES {
-                    if ui.button(text).clicked() {
+        let look = self.look();
+        let has_profiles = self
+            .session
+            .doc
+            .sketches
+            .iter()
+            .any(|s| !s.sketch.profiles().is_empty());
+        let has_solids = !self.session.solids().is_empty();
+        let tool_free = self.solid.extrude.is_none();
+        let extruding = self.solid.extrude.as_ref().is_some_and(|t| !t.revolve);
+        let revolving = self.solid.extrude.as_ref().is_some_and(|t| t.revolve);
+        let mut plane: Option<(&str, &str)> = None;
+        let mut on_face = false;
+        let mut open_tool: Option<bool> = None;
+        let mut sketch_button: Option<egui::Response> = None;
+        let (_, menu) = widgets::ribbon_group(ui, look, "CREATE", true, |ui| {
+            let r = widgets::tool_button(
+                ui,
+                look,
+                Icon::SketchCreate,
+                label("sketch.create"),
+                true,
+                false,
+                true,
+            )
+            .on_hover_text("Create Sketch\nStart a 2D sketch on an origin plane or a flat face");
+            sketch_button = Some(r);
+            if widgets::tool_button(
+                ui,
+                look,
+                Icon::Extrude,
+                label("solid.extrude"),
+                has_profiles && (tool_free || extruding),
+                extruding,
+                false,
+            )
+            .on_hover_text(if has_profiles {
+                "Extrude\nPull closed sketch profiles straight out into a solid"
+            } else {
+                "Extrude\nDraw a closed profile in a sketch first"
+            })
+            .clicked()
+                && tool_free
+            {
+                open_tool = Some(false);
+            }
+            if widgets::tool_button(
+                ui,
+                look,
+                Icon::Revolve,
+                label("solid.revolve"),
+                has_profiles && (tool_free || revolving),
+                revolving,
+                false,
+            )
+            .on_hover_text(if has_profiles {
+                "Revolve\nTurn closed sketch profiles around a line of the same sketch"
+            } else {
+                "Revolve\nDraw a closed profile and a line to turn it around first"
+            })
+            .clicked()
+                && tool_free
+            {
+                open_tool = Some(true);
+            }
+        });
+        // Create Sketch opens the list of planes under its button.
+        if let Some(r) = &sketch_button {
+            egui::Popup::menu(r).show(|ui| {
+                widgets::caption(ui, look, "SKETCH ON");
+                for (p, text, view) in crate::sketch_ui::PLANES {
+                    if widgets::menu_item(ui, look, Icon::Plane, text, true).clicked() {
                         ui.close();
-                        self.create_sketch(plane, view);
+                        plane = Some((p, view));
                     }
                 }
                 ui.separator();
-                if ui
-                    .add_enabled(
-                        !self.session.solids().is_empty(),
-                        egui::Button::new("On a face… (then click a flat face)"),
-                    )
-                    .clicked()
+                if widgets::menu_item(ui, look, Icon::Body, "A flat face…", has_solids).clicked()
                 {
                     ui.close();
-                    self.solid.pick_face = true;
-                    self.message =
-                        Some(("Click a flat face of a solid to sketch on".into(), false));
+                    on_face = true;
                 }
             });
-            let has_profiles = self
-                .session
-                .doc
-                .sketches
-                .iter()
-                .any(|s| !s.sketch.profiles().is_empty());
-            if ui
-                .add_enabled(
-                    has_profiles && self.solid.extrude.is_none(),
-                    egui::Button::new(label("solid.extrude")),
-                )
-                .on_disabled_hover_text("Draw a closed profile in a sketch first")
-                .clicked()
+        }
+        egui::Popup::menu(&menu).show(|ui| {
+            for (p, text, view) in crate::sketch_ui::PLANES {
+                let item = format!("{} on {text}", label("sketch.create"));
+                if widgets::menu_item(ui, look, Icon::SketchCreate, &item, true).clicked() {
+                    ui.close();
+                    plane = Some((p, view));
+                }
+            }
+            if widgets::menu_item(
+                ui,
+                look,
+                Icon::SketchCreate,
+                label("sketch.create_on_face"),
+                has_solids,
+            )
+            .clicked()
             {
+                ui.close();
+                on_face = true;
+            }
+            ui.separator();
+            if widgets::menu_item(
+                ui,
+                look,
+                Icon::Extrude,
+                label("solid.extrude"),
+                has_profiles && tool_free,
+            )
+            .clicked()
+            {
+                ui.close();
+                open_tool = Some(false);
+            }
+            if widgets::menu_item(
+                ui,
+                look,
+                Icon::Revolve,
+                label("solid.revolve"),
+                has_profiles && tool_free,
+            )
+            .clicked()
+            {
+                ui.close();
+                open_tool = Some(true);
+            }
+        });
+        if let Some((p, view)) = plane {
+            self.create_sketch(p, view);
+        }
+        if on_face {
+            self.solid.pick_face = true;
+            self.message = Some(("Click a flat face of a solid to sketch on".into(), false));
+        }
+        match open_tool {
+            Some(false) => {
                 self.solid.extrude = Some(ExtrudeTool::default());
                 self.message = Some(("Click inside the profiles to extrude".into(), false));
             }
-            if ui
-                .add_enabled(
-                    has_profiles && self.solid.extrude.is_none(),
-                    egui::Button::new(label("solid.revolve")),
-                )
-                .on_disabled_hover_text("Draw a closed profile and a line to turn around")
-                .clicked()
-            {
+            Some(true) => {
                 self.solid.extrude = Some(ExtrudeTool {
                     revolve: true,
                     ..ExtrudeTool::default()
@@ -104,7 +202,80 @@ impl ChamferaApp {
                     false,
                 ));
             }
+            None => {}
+        }
+        let look = self.look();
+        widgets::ribbon_divider(ui, look);
+        let mut parameters = false;
+        widgets::ribbon_group(ui, look, "MODIFY", false, |ui| {
+            if widgets::tool_button(
+                ui,
+                look,
+                Icon::Parameters,
+                "Parameters",
+                true,
+                self.params.open,
+                false,
+            )
+            .on_hover_text(
+                "Parameters\nNamed values and formulas that dimensions and features follow",
+            )
+            .clicked()
+            {
+                parameters = true;
+            }
         });
+        if parameters {
+            self.params.open = !self.params.open;
+        }
+        let look = self.look();
+        widgets::ribbon_divider(ui, look);
+        let mut import = false;
+        let mut sample = false;
+        widgets::ribbon_group(ui, look, "INSERT", false, |ui| {
+            let desktop = cfg!(not(target_arch = "wasm32"));
+            if widgets::tool_button(
+                ui,
+                look,
+                Icon::ImportMesh,
+                label("body.import_stl"),
+                desktop,
+                false,
+                false,
+            )
+            .on_hover_text(format!(
+                "{}\nAdd a triangle mesh from an STL file, for reference",
+                label("body.import_stl")
+            ))
+            .clicked()
+            {
+                import = true;
+            }
+            if widgets::tool_button(
+                ui,
+                look,
+                Icon::Body,
+                label("body.sample"),
+                true,
+                false,
+                false,
+            )
+            .on_hover_text(format!(
+                "{}\nA small bracket mesh to try the viewer on",
+                label("body.sample")
+            ))
+            .clicked()
+            {
+                sample = true;
+            }
+        });
+        if import {
+            self.import_dialog();
+        }
+        if sample {
+            self.run("body.sample", json!({}));
+            self.fit_pending = true;
+        }
     }
 
     /// A click while waiting for a face: creates a sketch on it and looks straight at it.
@@ -194,7 +365,17 @@ impl ChamferaApp {
         })
     }
 
-    /// The Extrude dialog.
+    /// Where a tool dialog opens: the viewport's right side, under the view cube, so it
+    /// does not cover the model in the middle.
+    pub(crate) fn tool_dialog_pos(&self, width: f32) -> egui::Pos2 {
+        let r = self.viewport_rect;
+        egui::pos2(
+            (r.max.x - width - widgets::S5).max(r.min.x + widgets::S5),
+            r.min.y + crate::viewcube::CUBE_AREA + widgets::S3,
+        )
+    }
+
+    /// The Extrude (or Revolve) dialog.
     pub(crate) fn extrude_dialog(&mut self, ctx: &egui::Context) {
         // The lines of the picked sketch, for the revolve axis.
         let lines: Vec<(u32, String)> = self
@@ -209,94 +390,144 @@ impl ChamferaApp {
                     .filter(|(_, c)| c.is_line())
                     .map(|(id, c)| {
                         let kind = if c.is_construction() {
-                            "construction line"
+                            "Construction line"
                         } else {
-                            "line"
+                            "Line"
                         };
                         (id.0, format!("{kind} {}", id.0))
                     })
                     .collect()
             })
             .unwrap_or_default();
+        const WIDTH: f32 = 300.0;
+        let pos = self.tool_dialog_pos(WIDTH);
+        let look = Look {
+            theme: &self.theme,
+            icons: &self.icons,
+        };
         let Some(tool) = self.solid.extrude.as_mut() else {
             return;
         };
         let mut ok = false;
         let mut cancel = false;
-        let title = if tool.revolve {
-            label("solid.revolve")
+        let (title, icon) = if tool.revolve {
+            (label("solid.revolve"), Icon::Revolve)
         } else {
-            label("solid.extrude")
+            (label("solid.extrude"), Icon::Extrude)
         };
+        let ready = !tool.seeds.is_empty() && (!tool.revolve || tool.axis.is_some());
         egui::Window::new(title)
-            .default_pos([240.0, 110.0])
+            .id(egui::Id::unique("extrude dialog"))
+            .title_bar(false)
+            .frame(widgets::dialog_frame(look))
+            .default_pos(pos)
+            .default_height(200.0)
+            .fade_in(false)
+            .default_width(WIDTH)
+            .min_width(WIDTH)
             .resizable(false)
-            .collapsible(false)
             .show(ctx, |ui| {
-                ui.label(match tool.seeds.len() {
-                    0 => "Click inside a closed profile to pick it".to_owned(),
-                    1 => "1 profile picked (click it again to unpick)".to_owned(),
-                    n => format!("{n} profiles picked"),
-                });
-                egui::Grid::new("extrude grid")
-                    .num_columns(2)
-                    .show(ui, |ui| {
-                        if tool.revolve {
-                            ui.label("Axis");
-                            let current = lines
-                                .iter()
-                                .find(|(id, _)| Some(*id) == tool.axis)
-                                .map_or("choose a line", |(_, n)| n.as_str());
-                            egui::ComboBox::from_id_salt("revolve axis")
-                                .selected_text(current)
+                ui.set_width(WIDTH);
+                if widgets::dialog_title(ui, look, icon, title) {
+                    cancel = true;
+                }
+                widgets::dialog_body(ui, |ui| {
+                    egui::Grid::new("extrude grid")
+                        .num_columns(2)
+                        .spacing([widgets::S3, widgets::S3])
+                        .show(ui, |ui| {
+                            widgets::field_label(ui, look, "Profiles");
+                            ui.horizontal(|ui| {
+                                let (r, _) = ui.allocate_exact_size(
+                                    egui::Vec2::splat(16.0),
+                                    egui::Sense::hover(),
+                                );
+                                let picked = !tool.seeds.is_empty();
+                                let (b, a) = look.icon_colours(picked);
+                                look.icons.paint(ui.painter(), Icon::Sketch, r, b, a);
+                                let text = match tool.seeds.len() {
+                                    0 => "Click inside a profile".to_owned(),
+                                    1 => "1 selected".to_owned(),
+                                    n => format!("{n} selected"),
+                                };
+                                let colour = if picked {
+                                    look.c(|t| t.text)
+                                } else {
+                                    look.c(|t| t.text_muted)
+                                };
+                                ui.label(egui::RichText::new(text).color(colour));
+                            })
+                            .response
+                            .on_hover_text("Click a picked profile again to unpick it");
+                            ui.end_row();
+                            if tool.revolve {
+                                widgets::field_label(ui, look, "Axis");
+                                let current = lines
+                                    .iter()
+                                    .find(|(id, _)| Some(*id) == tool.axis)
+                                    .map_or("Choose a line", |(_, n)| n.as_str());
+                                egui::ComboBox::from_id_salt("revolve axis")
+                                    .selected_text(current)
+                                    .width(180.0)
+                                    .show_ui(ui, |ui| {
+                                        for (id, name) in &lines {
+                                            ui.selectable_value(&mut tool.axis, Some(*id), name);
+                                        }
+                                    });
+                                ui.end_row();
+                                widgets::field_label(ui, look, "Angle");
+                                ui.add_sized(
+                                    [180.0, 26.0],
+                                    egui::TextEdit::singleline(&mut tool.angle)
+                                        .hint_text("360 deg")
+                                        .align(egui::Align2::LEFT_CENTER),
+                                );
+                                ui.end_row();
+                                return;
+                            }
+                            widgets::field_label(ui, look, "Distance");
+                            let edit = ui.add_sized(
+                                [180.0, 26.0],
+                                egui::TextEdit::singleline(&mut tool.distance)
+                                    .hint_text("10 mm or thickness * 2")
+                                    .align(egui::Align2::LEFT_CENTER),
+                            );
+                            if edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                                ok = true;
+                            }
+                            ui.end_row();
+                            widgets::field_label(ui, look, "Direction");
+                            egui::ComboBox::from_id_salt("extrude direction")
+                                .selected_text(direction_name(tool.direction))
+                                .width(180.0)
                                 .show_ui(ui, |ui| {
-                                    for (id, name) in &lines {
-                                        ui.selectable_value(&mut tool.axis, Some(*id), name);
+                                    for d in [
+                                        ExtrudeDirection::Normal,
+                                        ExtrudeDirection::Reversed,
+                                        ExtrudeDirection::Symmetric,
+                                    ] {
+                                        ui.selectable_value(
+                                            &mut tool.direction,
+                                            d,
+                                            direction_name(d),
+                                        );
                                     }
                                 });
                             ui.end_row();
-                            ui.label("Angle");
-                            ui.add_sized(
-                                [160.0, 20.0],
-                                egui::TextEdit::singleline(&mut tool.angle),
-                            );
-                            ui.end_row();
-                            return;
-                        }
-                        ui.label("Distance");
-                        let edit = ui.add_sized(
-                            [160.0, 20.0],
-                            egui::TextEdit::singleline(&mut tool.distance)
-                                .hint_text("10 mm or thickness * 2"),
-                        );
-                        if edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                            ok = true;
-                        }
-                        ui.end_row();
-                        ui.label("Direction");
-                        egui::ComboBox::from_id_salt("extrude direction")
-                            .selected_text(direction_name(tool.direction))
-                            .show_ui(ui, |ui| {
-                                for d in [
-                                    ExtrudeDirection::Normal,
-                                    ExtrudeDirection::Reversed,
-                                    ExtrudeDirection::Symmetric,
-                                ] {
-                                    ui.selectable_value(&mut tool.direction, d, direction_name(d));
-                                }
-                            });
-                        ui.end_row();
-                    });
-                ui.horizontal(|ui| {
-                    let ready = !tool.seeds.is_empty() && (!tool.revolve || tool.axis.is_some());
-                    if ui.add_enabled(ready, egui::Button::new("OK")).clicked() {
+                        });
+                });
+                widgets::dialog_footer(ui, look, |ui| {
+                    if widgets::primary_button(ui, look, "OK", ready).clicked() {
                         ok = true;
                     }
-                    if ui.button("Cancel").clicked() {
+                    if widgets::secondary_button(ui, look, "Cancel").clicked() {
                         cancel = true;
                     }
                 });
             });
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) && !ctx.egui_wants_keyboard_input() {
+            cancel = true;
+        }
         if ok && tool.revolve && !tool.seeds.is_empty() && tool.axis.is_some() {
             let params = json!({
                 "sketch": tool.sketch,
@@ -338,83 +569,9 @@ impl ChamferaApp {
             self.solid.extrude = None;
         }
     }
-
-    /// The timeline in the Browser: features with their errors, suppress, edit, delete.
-    pub(crate) fn timeline(&mut self, ui: &mut egui::Ui) {
-        if self.session.doc.features.is_empty() {
-            return;
-        }
-        ui.separator();
-        ui.strong("Timeline");
-        let rows: Vec<(u32, String, bool, Option<String>)> = self
-            .session
-            .doc
-            .features
-            .iter()
-            .map(|f| {
-                let distance = match &f.kind {
-                    FeatureKind::Extrude(e) => Some(e.distance.clone()),
-                    FeatureKind::Revolve(r) => Some(r.angle.clone()),
-                };
-                (f.id, f.name.clone(), f.suppressed, distance)
-            })
-            .collect();
-        for (id, name, suppressed, distance) in rows {
-            let error = self.session.feature_errors().get(&id).cloned();
-            ui.horizontal(|ui| {
-                let mut text = egui::RichText::new(&name);
-                if suppressed {
-                    text = text.strikethrough().weak();
-                }
-                if error.is_some() {
-                    text = text.color(color(self.theme.error));
-                }
-                let resp = ui.label(text);
-                if let Some(e) = &error {
-                    resp.on_hover_text(e);
-                } else if let Some(d) = self.session.display_errors().get(&id) {
-                    ui.weak("(not shown)").on_hover_text(d);
-                }
-                let mut on = !suppressed;
-                if ui
-                    .checkbox(&mut on, "")
-                    .on_hover_text("Build this feature (off suppresses it)")
-                    .changed()
-                {
-                    self.run("feature.edit", json!({ "feature": id, "suppressed": !on }));
-                }
-                if ui.small_button("Edit").clicked() {
-                    self.solid.editing = Some((id, distance.clone().unwrap_or_default()));
-                }
-                if ui.small_button("Delete").clicked() {
-                    self.run("feature.delete", json!({ "feature": id }));
-                }
-            });
-            if let Some((eid, text)) = self.solid.editing.as_mut()
-                && *eid == id
-            {
-                let mut done = false;
-                ui.horizontal(|ui| {
-                    ui.label("Distance");
-                    let edit = ui.add_sized([110.0, 20.0], egui::TextEdit::singleline(text));
-                    if edit.lost_focus() {
-                        done = true;
-                    }
-                });
-                if done {
-                    let distance = text.trim().to_owned();
-                    self.solid.editing = None;
-                    self.run(
-                        "feature.edit",
-                        json!({ "feature": id, "distance": distance }),
-                    );
-                }
-            }
-        }
-    }
 }
 
-fn direction_name(d: ExtrudeDirection) -> &'static str {
+pub(crate) fn direction_name(d: ExtrudeDirection) -> &'static str {
     match d {
         ExtrudeDirection::Normal => "One side",
         ExtrudeDirection::Reversed => "Flipped",
@@ -422,7 +579,7 @@ fn direction_name(d: ExtrudeDirection) -> &'static str {
     }
 }
 
-fn direction_key(d: ExtrudeDirection) -> &'static str {
+pub(crate) fn direction_key(d: ExtrudeDirection) -> &'static str {
     match d {
         ExtrudeDirection::Normal => "normal",
         ExtrudeDirection::Reversed => "reversed",
