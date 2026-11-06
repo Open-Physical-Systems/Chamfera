@@ -62,6 +62,8 @@ pub enum Icon {
     Mass,
     Measure,
     Mirror,
+    MirrorBody,
+    Move,
     New,
     Offset,
     Open,
@@ -92,7 +94,7 @@ pub enum Icon {
 
 impl Icon {
     #[cfg(test)]
-    pub const ALL: [Icon; 69] = [
+    pub const ALL: [Icon; 71] = [
         Icon::Arc,
         Icon::ArcTangent,
         Icon::ArcThreePoint,
@@ -136,6 +138,8 @@ impl Icon {
         Icon::Mass,
         Icon::Measure,
         Icon::Mirror,
+        Icon::MirrorBody,
+        Icon::Move,
         Icon::New,
         Icon::Offset,
         Icon::Open,
@@ -233,6 +237,8 @@ impl Icon {
             Icon::Extend => master!("extend"),
             Icon::Fillet => master!("fillet"),
             Icon::Mirror => master!("mirror"),
+            Icon::MirrorBody => master!("mirror_body"),
+            Icon::Move => master!("move"),
             Icon::Offset => master!("offset"),
             Icon::PatternCircular => master!("pattern_circular"),
             Icon::PatternRectangular => master!("pattern_rectangular"),

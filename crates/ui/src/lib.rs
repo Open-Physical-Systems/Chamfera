@@ -35,6 +35,7 @@ mod sketch_select;
 mod sketch_ui;
 mod solid_ui;
 mod timeline;
+mod transform_ui;
 mod viewcube;
 #[cfg(target_arch = "wasm32")]
 mod web;
@@ -415,6 +416,14 @@ impl ChamferaApp {
                 return;
             }
         }
+        if self.solid.transform.is_some()
+            && response.clicked()
+            && let Some(pos) = response.interact_pointer_pos()
+        {
+            let (x, y) = local(pos);
+            self.transform_click(x, y, w, h);
+            return;
+        }
         if self.solid.inspect.is_some()
             && response.clicked()
             && let Some(pos) = response.interact_pointer_pos()
@@ -747,6 +756,7 @@ impl eframe::App for ChamferaApp {
             self.parameters_window(&ctx);
             self.extrude_dialog(&ctx);
             self.blend_dialog(&ctx);
+            self.transform_dialog(&ctx);
             self.inspect_dialog(&ctx);
             self.shell_dialog(&ctx);
             self.feature_dialog(&ctx);

@@ -46,6 +46,8 @@ pub struct SolidUi {
     pub extrude: Option<ExtrudeTool>,
     /// The Fillet or Chamfer tool.
     pub blend: Option<crate::blend_ui::BlendTool>,
+    /// The Mirror, Move or pattern tool.
+    pub transform: Option<crate::transform_ui::TransformTool>,
     /// The Shell tool.
     pub shell: Option<crate::shell_ui::ShellTool>,
     /// Waiting for a click on a flat face to sketch on.
@@ -69,6 +71,7 @@ impl ChamferaApp {
         let has_solids = !self.session.solids().is_empty();
         let tool_free = self.solid.extrude.is_none()
             && self.solid.blend.is_none()
+            && self.solid.transform.is_none()
             && self.solid.inspect.is_none()
             && self.solid.shell.is_none();
         let extruding = self.solid.extrude.as_ref().is_some_and(|t| !t.revolve);
@@ -279,6 +282,7 @@ impl ChamferaApp {
         if let Some(chamfer) = open_blend {
             self.open_blend(chamfer);
         }
+        self.transform_group(ui, has_solids && tool_free);
         let look = self.look();
         widgets::ribbon_divider(ui, look);
         self.construct_group(ui);

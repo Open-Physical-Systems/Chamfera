@@ -483,6 +483,119 @@ fn pattern_copies(
     Ok((out, *op))
 }
 
+/// Renames a copy's faces and edges `<feature>:<k> <role>` (from `<source>:<role>`), so
+/// each copy's names are its own and a fillet or sketch finds the one it means.
+fn rename_copy(body: &mut Body, feature: u32, k: usize) {
+    let renamed = |name: Option<&str>| {
+        name.and_then(split_face_key)
+            .map(|(_, role)| face_key(feature, &format!("{k} {role}")))
+    };
+    for face in body.faces() {
+        if let Some(n) = renamed(body.face_name(face).ok().flatten()) {
+            let _ = body.set_face_name(face, &n);
+        }
+    }
+    for edge in body.edges() {
+        if let Some(n) = renamed(body.edge_name(edge).ok().flatten()) {
+            let _ = body.set_edge_name(edge, &n);
+        }
+    }
+}
+
+/// The body built so far with this name.
+fn named_body<'a>(made: &'a [(u32, String, Body)], name: &str) -> Result<&'a Body, String> {
+    made.iter()
+        .find(|m| m.1 == name)
+        .map(|m| &m.2)
+        .ok_or_else(|| format!("there is no body named {name:?} at this point"))
+}
+
+/// The mirror plane as a point and a normal.
+fn mirror_plane(
+    plane: &chamfera_doc::MirrorPlane,
+    made: &[(u32, String, Body)],
+) -> Result<(Point3, chamfera_geom::Vec3), String> {
+    use chamfera_doc::MirrorPlane;
+    use chamfera_geom::Frame;
+    let frame = match plane {
+        MirrorPlane::Xy => Frame::XY,
+        MirrorPlane::Xz => Frame::XZ,
+        MirrorPlane::Yz => Frame::YZ,
+        MirrorPlane::Face { feature, face } => attached_plane(
+            made,
+            &chamfera_doc::FaceRef {
+                feature: *feature,
+                face: face.clone(),
+            },
+        )?,
+        MirrorPlane::Plane { origin, normal } => return Ok((*origin, *normal)),
+    };
+    Ok((frame.origin(), frame.z()))
+}
+
+/// The mirror images a mirror makes: of the named bodies as built so far, then of the
+/// listed features' own shapes. Each is renamed as copy `k` of the mirror.
+fn mirror_bodies(
+    m: &chamfera_doc::Mirror,
+    mirror_id: u32,
+    made: &[(u32, String, Body)],
+    tools: &BTreeMap<u32, (Vec<Body>, Operation)>,
+) -> Result<Vec<Body>, String> {
+    let (point, normal) = mirror_plane(&m.plane, made)?;
+    let mut sources: Vec<&Body> = Vec::new();
+    for name in &m.bodies {
+        sources.push(named_body(made, name)?);
+    }
+    for id in &m.features {
+        let (shapes, _) = tools.get(id).ok_or_else(|| {
+            format!("feature {id} it mirrors is suppressed, later or could not be built")
+        })?;
+        sources.extend(shapes.iter());
+    }
+    sources
+        .into_iter()
+        .enumerate()
+        .map(|(i, b)| {
+            let mut copy = b
+                .mirrored(point, normal)
+                .map_err(|e| format!("mirror: {e}"))?;
+            rename_copy(&mut copy, mirror_id, i + 1);
+            Ok(copy)
+        })
+        .collect()
+}
+
+/// The bodies after a move: each named body moved in place (keeping its names, so faces
+/// that sketches are drawn on follow it), or with `copy`, a moved copy added after it.
+fn move_bodies(
+    doc: &chamfera_doc::Document,
+    m: &chamfera_doc::Move,
+    feature: &chamfera_doc::Feature,
+    made: &[(u32, String, Body)],
+) -> Result<Vec<(u32, String, Body)>, String> {
+    let t = doc.move_transform(m).map_err(|e| e.to_string())?;
+    let mut next = made.to_vec();
+    for (k, name) in m.bodies.iter().enumerate() {
+        let moved = named_body(made, name)?
+            .transformed(&t)
+            .map_err(|e| format!("move: {e}"))?;
+        if m.copy {
+            let mut copy = moved;
+            rename_copy(&mut copy, feature.id, k + 1);
+            let label = if m.bodies.len() == 1 {
+                feature.name.clone()
+            } else {
+                format!("{} ({})", feature.name, k + 1)
+            };
+            next.push((feature.id, label, copy));
+        } else if let Some(slot) = next.iter_mut().find(|x| x.1 == *name) {
+            slot.0 = feature.id;
+            slot.2 = moved;
+        }
+    }
+    Ok(next)
+}
+
 /// The bodies one extrude makes: one per profile.
 fn build_extrude(doc: &chamfera_doc::Document, e: &Extrude) -> Result<Vec<Body>, String> {
     let f = doc.sketch(e.sketch).map_err(|x| x.to_string())?;
@@ -626,6 +739,42 @@ impl Session {
                 }
                 continue;
             }
+            if let FeatureKind::Mirror(m) = &feature.kind {
+                let result = mirror_bodies(m, feature.id, &made, &tools).and_then(|bodies| {
+                    tools.insert(feature.id, (bodies.clone(), m.operation));
+                    let mut next = made.clone();
+                    if m.operation == Operation::NewBody {
+                        let n = bodies.len();
+                        for (k, b) in bodies.into_iter().enumerate() {
+                            let name = if n == 1 {
+                                feature.name.clone()
+                            } else {
+                                format!("{} ({})", feature.name, k + 1)
+                            };
+                            next.push((feature.id, name, b));
+                        }
+                    } else {
+                        apply_operation(&mut next, &bodies, m.operation)?;
+                    }
+                    Ok(next)
+                });
+                match result {
+                    Ok(next) => made = next,
+                    Err(e) => {
+                        built.errors.insert(feature.id, e);
+                    }
+                }
+                continue;
+            }
+            if let FeatureKind::Move(m) = &feature.kind {
+                match move_bodies(&self.doc, m, feature, &made) {
+                    Ok(next) => made = next,
+                    Err(e) => {
+                        built.errors.insert(feature.id, e);
+                    }
+                }
+                continue;
+            }
             if let FeatureKind::Blend(b) = &feature.kind {
                 match build_blend(&self.doc, b, feature.id, &made) {
                     Ok(next) => made = next,
@@ -650,7 +799,9 @@ impl Session {
                 FeatureKind::Pattern(_)
                 | FeatureKind::Construct(_)
                 | FeatureKind::Blend(_)
-                | FeatureKind::Shell(_) => continue,
+                | FeatureKind::Shell(_)
+                | FeatureKind::Mirror(_)
+                | FeatureKind::Move(_) => continue,
             };
             let operation = feature.kind.operation();
             let result = result.map(|bodies| {
@@ -910,6 +1061,20 @@ impl Session {
     /// The solids of the last rebuild.
     pub fn solids(&self) -> &[Solid] {
         &self.built.solids
+    }
+
+    /// The names of the selected solid bodies (what `solid.mirror` and `solid.move` act
+    /// on when no `bodies` are given).
+    pub fn selected_body_names(&self) -> Vec<String> {
+        let Some(hit) = self.scene.selection else {
+            return Vec::new();
+        };
+        self.built
+            .solids
+            .iter()
+            .filter(|x| x.scene_id == Some(hit.body))
+            .map(|x| x.name.clone())
+            .collect()
     }
 
     /// Features that failed in the last rebuild.

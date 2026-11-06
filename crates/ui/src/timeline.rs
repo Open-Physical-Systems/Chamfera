@@ -109,6 +109,10 @@ impl ChamferaApp {
                         if b.edges.len() == 1 { "" } else { "s" }
                     ),
                 ),
+                FeatureKind::Mirror(m) => {
+                    (Icon::MirrorBody, crate::transform_ui::mirror_details(m))
+                }
+                FeatureKind::Move(m) => (Icon::Move, crate::transform_ui::move_details(m)),
                 FeatureKind::Shell(sh) => (
                     Icon::Shell,
                     format!(
@@ -358,6 +362,14 @@ impl ChamferaApp {
             FeatureKind::Pattern(p) => (p.count.clone(), ExtrudeDirection::Normal),
             FeatureKind::Construct(_) => return self.edit_construct(id),
             FeatureKind::Blend(b) => (b.size.clone(), ExtrudeDirection::Normal),
+            FeatureKind::Mirror(m) => (
+                crate::transform_ui::mirror_details(m),
+                ExtrudeDirection::Normal,
+            ),
+            FeatureKind::Move(m) => (
+                crate::transform_ui::move_details(m),
+                ExtrudeDirection::Normal,
+            ),
             FeatureKind::Shell(sh) => (sh.thickness.clone(), ExtrudeDirection::Normal),
         };
         self.timeline.editing = Some(FeatureEdit {
@@ -387,6 +399,7 @@ impl ChamferaApp {
         let value_label = match &feature.kind {
             FeatureKind::Revolve(_) => "Angle",
             FeatureKind::Pattern(_) => "Count",
+            FeatureKind::Mirror(_) | FeatureKind::Move(_) => "Definition",
             FeatureKind::Shell(_) => "Thickness",
             _ => "Size",
         };

@@ -23,6 +23,9 @@ pub static COMMANDS: &[CommandSpec] = &[
                  direction: string (optional) - normal, reversed or symmetric\n\
                  operation: string (optional) - new_body, join, cut or intersect\n\
                  size: string or number (optional) - new fillet radius or chamfer distance\n\
+                 plane: string or object (optional) - a mirror's new plane, as in solid.mirror\n\
+                 dx, dy, dz, angle, axis, origin, from, to (optional) - a move's new transform\n\
+                 copy: boolean (optional) - whether a move keeps the originals\n\
                  thickness: string or number (optional) - new shell wall thickness\n\
                  faces: list of strings (optional) - new open faces of a shell\n\
                  suppressed: boolean (optional)",
@@ -167,7 +170,7 @@ fn direction(p: &Value) -> Result<Option<ExtrudeDirection>, CommandError> {
     })
 }
 
-fn operation(p: &Value) -> Result<Option<Operation>, CommandError> {
+pub(super) fn operation(p: &Value) -> Result<Option<Operation>, CommandError> {
     match params::opt_str(p, "operation")? {
         None => Ok(None),
         Some(o) => Operation::parse(o).map(Some).ok_or_else(|| {
@@ -200,7 +203,7 @@ fn seeds(p: &Value) -> Result<Vec<Point2>, CommandError> {
 }
 
 /// The reply for a feature: its solids' exact volumes from the kernel, and any error.
-fn feature_reply(s: &Session, id: u32) -> Value {
+pub(super) fn feature_reply(s: &Session, id: u32) -> Value {
     let solids: Vec<Value> = s
         .solids()
         .iter()
@@ -409,7 +412,7 @@ fn edges(s: &mut Session, _p: &Value) -> CmdResult {
     Ok(json!({ "solids": solids }))
 }
 
-fn expression(p: &Value, key: &str, unit: &str) -> Result<Option<String>, CommandError> {
+pub(super) fn expression(p: &Value, key: &str, unit: &str) -> Result<Option<String>, CommandError> {
     match p.get(key) {
         None | Some(Value::Null) => Ok(None),
         Some(Value::String(s)) => Ok(Some(s.clone())),
@@ -425,7 +428,7 @@ fn expression(p: &Value, key: &str, unit: &str) -> Result<Option<String>, Comman
     }
 }
 
-fn vec3(p: &Value, key: &str) -> Result<chamfera_geom::Vec3, CommandError> {
+pub(super) fn vec3(p: &Value, key: &str) -> Result<chamfera_geom::Vec3, CommandError> {
     let v = p
         .get(key)
         .ok_or_else(|| bad(format!("`{key}` is required")))?;
@@ -524,11 +527,14 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
             FeatureKind::Blend(_) => {
                 return Err(bad("a fillet or chamfer has no operation"));
             }
+            FeatureKind::Mirror(m) => m.operation = o,
+            FeatureKind::Move(_) => return Err(bad("a move has no operation")),
             FeatureKind::Shell(_) => {
                 return Err(bad("a shell has no operation"));
             }
         }
     }
+    super::transform::edit_transform(&mut kind, p)?;
     let new_size = expression(p, "size", "mm")?;
     if let Some(size) = new_size {
         let FeatureKind::Blend(b) = &mut kind else {
@@ -581,6 +587,8 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
                 *angle = a;
             }
         }
+        // A move's angle was applied by edit_transform above.
+        FeatureKind::Move(_) => {}
         _ if new_angle.is_some() => {
             return Err(bad("angle belongs to planes at an angle"));
         }
