@@ -14,6 +14,7 @@ use egui::{Color32, PointerButton, Rect, Sense, Vec2};
 use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
 
+mod blend_ui;
 mod browser;
 mod chrome;
 mod file_ui;
@@ -337,6 +338,17 @@ impl ChamferaApp {
             self.face_click(x, y, w, h);
             return;
         }
+        if self.solid.blend.is_some() {
+            let at = response.hover_pos().map(local);
+            self.blend_hover(at, w, h);
+            if response.clicked()
+                && let Some(pos) = response.interact_pointer_pos()
+            {
+                let (x, y) = local(pos);
+                self.blend_click(x, y, w, h);
+                return;
+            }
+        }
         if self.solid.extrude.is_some()
             && response.clicked()
             && let Some(pos) = response.interact_pointer_pos()
@@ -401,6 +413,8 @@ impl ChamferaApp {
         if let Some(preview) = self.sketch_preview() {
             self.session.scene.overlays.push(preview);
         }
+        let blends = self.blend_overlays();
+        self.session.scene.overlays.extend(blends);
         if let Some(picked) = self.extrude_overlay() {
             self.session.scene.overlays.push(Overlay {
                 style: chamfera_render::OverlayStyle::Highlight,
@@ -611,6 +625,7 @@ impl eframe::App for ChamferaApp {
         } else {
             self.parameters_window(&ctx);
             self.extrude_dialog(&ctx);
+            self.blend_dialog(&ctx);
             self.feature_dialog(&ctx);
         }
         self.unsaved_dialog(&ctx);

@@ -92,6 +92,19 @@ impl ChamferaApp {
                     Icon::Extrude,
                     format!("Pattern × {} of feature {}", p.count, p.source),
                 ),
+                FeatureKind::Blend(b) => (
+                    Icon::Extrude,
+                    format!(
+                        "{} {} · {} edge{}",
+                        match b.blend {
+                            chamfera_doc::BlendKind::Fillet => "Fillet",
+                            chamfera_doc::BlendKind::Chamfer => "Chamfer",
+                        },
+                        b.size,
+                        b.edges.len(),
+                        if b.edges.len() == 1 { "" } else { "s" }
+                    ),
+                ),
             };
             Item {
                 id: f.id,
@@ -296,6 +309,7 @@ impl ChamferaApp {
             FeatureKind::Extrude(e) => (e.distance.clone(), e.direction),
             FeatureKind::Revolve(r) => (r.angle.clone(), ExtrudeDirection::Normal),
             FeatureKind::Pattern(p) => (p.count.clone(), ExtrudeDirection::Normal),
+            FeatureKind::Blend(b) => (b.size.clone(), ExtrudeDirection::Normal),
         };
         self.timeline.editing = Some(FeatureEdit {
             feature: item.id,
@@ -315,7 +329,16 @@ impl ChamferaApp {
             return;
         };
         let name = feature.name.clone();
-        let revolve = matches!(feature.kind, FeatureKind::Revolve(_));
+        // Extrudes edit distance and direction, fillets and chamfers their size; the
+        // others show their value only.
+        let extrude = matches!(feature.kind, FeatureKind::Extrude(_));
+        let blend = matches!(feature.kind, FeatureKind::Blend(_));
+        let revolve = !extrude && !blend;
+        let value_label = match &feature.kind {
+            FeatureKind::Revolve(_) => "Angle",
+            FeatureKind::Pattern(_) => "Count",
+            _ => "Size",
+        };
         const WIDTH: f32 = 300.0;
         let pos = self.tool_dialog_pos(WIDTH);
         let look = Look {
@@ -353,8 +376,20 @@ impl ChamferaApp {
                         .spacing([widgets::S3, widgets::S3])
                         .show(ui, |ui| {
                             if revolve {
-                                widgets::field_label(ui, look, "Angle");
+                                widgets::field_label(ui, look, value_label);
                                 ui.label(&edit.distance);
+                                ui.end_row();
+                            } else if blend {
+                                widgets::field_label(ui, look, value_label);
+                                let r = ui.add_sized(
+                                    [180.0, 26.0],
+                                    egui::TextEdit::singleline(&mut edit.distance)
+                                        .hint_text("2 mm")
+                                        .align(egui::Align2::LEFT_CENTER),
+                                );
+                                if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                                    ok = true;
+                                }
                                 ui.end_row();
                             } else {
                                 widgets::field_label(ui, look, "Distance");
@@ -415,7 +450,9 @@ impl ChamferaApp {
         }
         if ok {
             let mut params = json!({ "feature": edit.feature, "suppressed": edit.suppressed });
-            if !revolve {
+            if blend {
+                params["size"] = json!(edit.distance.trim());
+            } else if extrude {
                 params["distance"] = json!(edit.distance.trim());
                 params["direction"] = json!(direction_key(edit.direction));
             }

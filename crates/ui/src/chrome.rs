@@ -275,6 +275,8 @@ impl ChamferaApp {
                 ui.label(small(crate::sketch_ui::tool_hint(self), muted));
             } else if self.solid.pick_face {
                 ui.label(small("Click a flat face of a solid to sketch on it · Esc cancels", muted));
+            } else if self.solid.blend.is_some() {
+                ui.label(small("Click edges of a solid to pick them · click again to unpick · Esc cancels", muted));
             } else if self.solid.extrude.is_some() {
                 ui.label(small("Click inside closed profiles to pick them · click again to unpick", muted));
             } else {

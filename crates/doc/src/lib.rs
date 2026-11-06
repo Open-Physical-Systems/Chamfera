@@ -4,7 +4,8 @@ pub mod expr;
 pub mod feature;
 
 pub use feature::{
-    Extrude, ExtrudeDirection, Feature, FeatureKind, Operation, Pattern, PatternLayout, Revolve,
+    Blend, BlendKind, Extrude, ExtrudeDirection, Feature, FeatureKind, Operation, Pattern,
+    PatternLayout, Revolve,
 };
 
 use serde::{Deserialize, Serialize};
@@ -20,7 +21,8 @@ use thiserror::Error;
 /// - 5: sketches attached to a face of a feature's solid.
 /// - 6: feature operations (new body, join, cut, intersect).
 /// - 7: linear and circular patterns of features.
-pub const FORMAT_VERSION: u32 = 7;
+/// - 9: fillets and chamfers of edges (8 is imported bodies).
+pub const FORMAT_VERSION: u32 = 9;
 /// The tag every design file starts with, so other JSON is not mistaken for a design.
 pub const FORMAT_TAG: &str = "chamfera";
 /// Longest parameter name.

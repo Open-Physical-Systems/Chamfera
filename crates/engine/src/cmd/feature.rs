@@ -2,7 +2,7 @@
 
 use super::CommandSpec;
 use crate::{CmdResult, CommandError, Session, params};
-use chamfera_doc::{Extrude, ExtrudeDirection, FeatureKind, Operation, Revolve};
+use chamfera_doc::{Blend, BlendKind, Extrude, ExtrudeDirection, FeatureKind, Operation, Revolve};
 use chamfera_geom::Point2;
 use serde_json::{Value, json};
 
@@ -21,6 +21,7 @@ pub static COMMANDS: &[CommandSpec] = &[
                  distance: string or number (optional) - new extrude distance expression\n\
                  direction: string (optional) - normal, reversed or symmetric\n\
                  operation: string (optional) - new_body, join, cut or intersect\n\
+                 size: string or number (optional) - new fillet radius or chamfer distance\n\
                  suppressed: boolean (optional)",
         mutates: true,
         run: edit,
@@ -31,6 +32,29 @@ pub static COMMANDS: &[CommandSpec] = &[
         params: "(none)",
         mutates: false,
         run: list,
+    },
+    CommandSpec {
+        id: "solid.chamfer",
+        label: "Chamfer",
+        params: "edges: list of strings (optional) - edge names from solid.edges or solid.edge_at\n\
+                 pick: {x, y, width, height} (optional) - the edge under this pixel, instead\n\
+                 distance: string or number (required) - such as 1 or \"1 mm\"",
+        mutates: true,
+        run: chamfer,
+    },
+    CommandSpec {
+        id: "solid.edge_at",
+        label: "Edge Under Cursor",
+        params: "x, y, width, height: number (required) - pixel and viewport size",
+        mutates: false,
+        run: edge_at,
+    },
+    CommandSpec {
+        id: "solid.edges",
+        label: "List Edges",
+        params: "(none)",
+        mutates: false,
+        run: edges,
     },
     CommandSpec {
         id: "solid.extrude",
@@ -53,6 +77,15 @@ pub static COMMANDS: &[CommandSpec] = &[
                  operation: string (optional) - new_body (default), join, cut or intersect",
         mutates: true,
         run: revolve,
+    },
+    CommandSpec {
+        id: "solid.fillet",
+        label: "Fillet",
+        params: "edges: list of strings (optional) - edge names from solid.edges or solid.edge_at\n\
+                 pick: {x, y, width, height} (optional) - the edge under this pixel, instead\n\
+                 radius: string or number (required) - such as 2 or \"2 mm\"",
+        mutates: true,
+        run: fillet,
     },
     CommandSpec {
         id: "solid.pattern_circular",
@@ -213,6 +246,97 @@ fn revolve(s: &mut Session, p: &Value) -> CmdResult {
     Ok(feature_reply(s, id))
 }
 
+/// The edges a fillet or chamfer names: a list, or the one under a pixel.
+fn blend_edges(s: &Session, p: &Value) -> Result<Vec<String>, CommandError> {
+    match (p.get("edges"), p.get("pick")) {
+        (Some(Value::Array(list)), None | Some(Value::Null)) => list
+            .iter()
+            .map(|e| {
+                e.as_str()
+                    .map(str::to_owned)
+                    .ok_or_else(|| bad("`edges` must be a list of edge names"))
+            })
+            .collect(),
+        (None | Some(Value::Null), Some(pick)) => {
+            let (x, y) = (params::req_f64(pick, "x")?, params::req_f64(pick, "y")?);
+            let (w, h) = (
+                params::req_f64(pick, "width")?,
+                params::req_f64(pick, "height")?,
+            );
+            s.edge_at(x, y, w, h)
+                .map(|(_, _, r)| vec![r])
+                .ok_or_else(|| {
+                    CommandError::Unavailable("there is no edge under that pixel".into())
+                })
+        }
+        (None | Some(Value::Null), None) => Err(bad("give `edges` or `pick`")),
+        _ => Err(bad("give either `edges` (a list) or `pick`, not both")),
+    }
+}
+
+fn blend(s: &mut Session, p: &Value, kind: BlendKind, key: &str) -> CmdResult {
+    let edges = blend_edges(s, p)?;
+    let size = expression(p, key, "mm")?.ok_or_else(|| bad(format!("`{key}` is required")))?;
+    let id = s.doc.add_feature(FeatureKind::Blend(Blend {
+        blend: kind,
+        edges,
+        size,
+    }))?;
+    s.rebuild();
+    if let Some(e) = s.feature_errors().get(&id) {
+        return Err(CommandError::Unavailable(e.clone()));
+    }
+    Ok(feature_reply(s, id))
+}
+
+fn fillet(s: &mut Session, p: &Value) -> CmdResult {
+    blend(s, p, BlendKind::Fillet, "radius")
+}
+
+fn chamfer(s: &mut Session, p: &Value) -> CmdResult {
+    blend(s, p, BlendKind::Chamfer, "distance")
+}
+
+fn edge_at(s: &mut Session, p: &Value) -> CmdResult {
+    let (x, y) = (params::req_f64(p, "x")?, params::req_f64(p, "y")?);
+    let (w, h) = (params::req_f64(p, "width")?, params::req_f64(p, "height")?);
+    Ok(match s.edge_at(x, y, w, h) {
+        Some((si, _, r)) => json!({
+            "edge": r,
+            "solid": s.solids().get(si).map(|x| x.name.clone()),
+            "body": s.solids().get(si).and_then(|x| x.scene_id),
+        }),
+        None => json!({ "edge": null }),
+    })
+}
+
+/// Every edge of every solid, by name, with its end points.
+fn edges(s: &mut Session, _p: &Value) -> CmdResult {
+    let pt = |q: chamfera_geom::Point3| json!([q.x, q.y, q.z]);
+    let solids: Vec<Value> = s
+        .solids()
+        .iter()
+        .map(|x| {
+            let edges: Vec<Value> = x
+                .body
+                .edges()
+                .into_iter()
+                .filter_map(|e| {
+                    let name = crate::solids::edge_ref(&x.body, e)?;
+                    let [a, b] = x.body.edge_vertices(e).ok()?;
+                    Some(json!({
+                        "edge": name,
+                        "from": pt(x.body.vertex_point(a).ok()?),
+                        "to": pt(x.body.vertex_point(b).ok()?),
+                    }))
+                })
+                .collect();
+            json!({ "solid": x.name, "body": x.scene_id, "edges": edges })
+        })
+        .collect();
+    Ok(json!({ "solids": solids }))
+}
+
 fn expression(p: &Value, key: &str, unit: &str) -> Result<Option<String>, CommandError> {
     match p.get(key) {
         None | Some(Value::Null) => Ok(None),
@@ -301,7 +425,17 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
             FeatureKind::Pattern(_) => {
                 return Err(bad("a pattern does what the feature it repeats does"));
             }
+            FeatureKind::Blend(_) => {
+                return Err(bad("a fillet or chamfer has no operation"));
+            }
         }
+    }
+    let new_size = expression(p, "size", "mm")?;
+    if let Some(size) = new_size {
+        let FeatureKind::Blend(b) = &mut kind else {
+            return Err(bad("size belongs to fillets and chamfers"));
+        };
+        b.size = size;
     }
     if let FeatureKind::Extrude(e) = &mut kind {
         if let Some(d) = new_distance {
