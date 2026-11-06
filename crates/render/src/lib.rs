@@ -5,6 +5,9 @@
 
 pub use chamfera_geom as geom;
 
+mod theme;
+pub use theme::{Rgba, Theme, ThemeMode};
+
 use chamfera_geom::{Aabb, Point3, Ray, TriMesh, Vec3};
 use serde::{Deserialize, Serialize};
 use std::f64::consts::{FRAC_PI_2, FRAC_PI_4};

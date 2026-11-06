@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Chamfera
+GenericName=Parametric 3D CAD
+Comment=Open-source parametric 3D CAD
+Exec=chamfera %F
+Icon=chamfera
+Terminal=false
+Categories=Graphics;Engineering;3DGraphics;
+MimeType=model/stl;

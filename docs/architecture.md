@@ -7,10 +7,14 @@
 | L2 | `doc` | parameters, expressions, the feature timeline, persistent names, the design format |
 | L3 | `io` | design files; STEP, STL, 3MF import and export |
 | L4 | `engine` | the session, undo, and the command registry (everything is a command) |
-| L5 | `ui` (M1), `mcp` (M6) | the egui + wgpu front end; the MCP server for agents |
-| apps | `chamfera-cli`, `chamfera` (M1), `chamfera-web` (M1) | headless CLI, desktop app, browser app |
+| L5 | `gpu` | the wgpu viewport renderer, and windowless snapshots of the same picture |
+| L6 | `ui`, `mcp` (M6) | the egui front end for desktop and browser; the MCP server for agents |
+| L7 | `chamfera`, `chamfera-cli`, `chamfera-web` | desktop app, headless CLI, browser app |
 
 A crate depends only on lower layers (`cargo xtask layers`). Nothing below L5 uses window, GPU or dialog crates, so the core builds for wasm (`cargo xtask wasm`) and runs headless.
+
+## The viewport
+`render` (L1) holds everything the picture depends on as plain data: the camera, the scene of bodies, the selection and the theme colours. `gpu` (L5) draws that into its own texture; the UI shows the texture, and `chamfera-cli snapshot` draws the same frame without a window. The UI never moves the camera itself: mouse, touchpad and keys become `view.*` and `select.*` commands (`navigate` in `crates/ui/src/lib.rs`).
 
 ## Data flow
 ```

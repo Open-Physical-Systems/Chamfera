@@ -1,0 +1,647 @@
+//! Layer 5: the GPU viewport renderer (wgpu).
+//!
+//! It draws a [`Frame`] (scene, camera, theme, size) into its own texture. The desktop and
+//! browser UI show that texture; [`snapshot`] draws the same frame without a window, so the
+//! CLI and tests see exactly what users see.
+
+use chamfera_geom::{Point3, TriMesh};
+use chamfera_render::{Camera, Projection, Scene, Theme, mat_mul};
+use std::collections::HashMap;
+
+#[cfg(not(target_arch = "wasm32"))]
+mod snapshot;
+#[cfg(not(target_arch = "wasm32"))]
+pub use snapshot::{SnapshotError, snapshot_png, snapshot_rgba};
+
+pub use wgpu;
+
+/// The colour format of the rendered view (sRGB, so the GPU converts from linear light).
+pub const COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
+const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
+const SAMPLES: u32 = 4;
+/// Edges are drawn where faces meet at more than this angle (radians, 30 degrees).
+pub const EDGE_ANGLE: f64 = std::f64::consts::PI / 6.0;
+/// Largest view size (pixels per side).
+pub const MAX_SIZE: u32 = 8192;
+
+/// What to draw.
+pub struct Frame<'a> {
+    pub scene: &'a Scene,
+    pub camera: &'a Camera,
+    pub theme: &'a Theme,
+    pub width: u32,
+    pub height: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct Globals {
+    view_proj: [[f32; 4]; 4],
+    eye: [f32; 4],
+    light: [f32; 4],
+    forward: [f32; 4],
+    background_top: [f32; 4],
+    background_bottom: [f32; 4],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct MeshVertex {
+    position: [f32; 3],
+    normal: [f32; 3],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct LineVertex {
+    position: [f32; 3],
+    color: [f32; 4],
+}
+
+struct GpuBody {
+    /// Triangle and vertex counts of the mesh the buffers were built from.
+    key: (usize, usize),
+    triangles: wgpu::Buffer,
+    triangle_vertices: u32,
+    edges: wgpu::Buffer,
+    edge_vertices: u32,
+    uniform: wgpu::Buffer,
+    bind: wgpu::BindGroup,
+}
+
+struct Targets {
+    size: (u32, u32),
+    msaa: wgpu::TextureView,
+    depth: wgpu::TextureView,
+    resolve: wgpu::Texture,
+    resolve_view: wgpu::TextureView,
+    /// The same pixels seen as plain `Rgba8Unorm`, for UIs that composite in sRGB space
+    /// and would otherwise decode the colours twice.
+    raw_view: wgpu::TextureView,
+}
+
+pub struct ViewRenderer {
+    globals: wgpu::Buffer,
+    globals_bind: wgpu::BindGroup,
+    body_layout: wgpu::BindGroupLayout,
+    background: wgpu::RenderPipeline,
+    mesh: wgpu::RenderPipeline,
+    edges: wgpu::RenderPipeline,
+    grid: wgpu::RenderPipeline,
+    targets: Option<Targets>,
+    bodies: HashMap<u32, GpuBody>,
+}
+
+fn f3(p: Point3) -> [f32; 3] {
+    [p.x as f32, p.y as f32, p.z as f32]
+}
+
+impl ViewRenderer {
+    pub fn new(device: &wgpu::Device) -> ViewRenderer {
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("chamfera viewport"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders.wgsl").into()),
+        });
+        let uniform_entry = |vis| wgpu::BindGroupLayoutEntry {
+            binding: 0,
+            visibility: vis,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        };
+        let globals_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("globals"),
+            entries: &[uniform_entry(wgpu::ShaderStages::VERTEX_FRAGMENT)],
+        });
+        let body_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("body"),
+            entries: &[uniform_entry(wgpu::ShaderStages::FRAGMENT)],
+        });
+        let globals = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("globals"),
+            size: std::mem::size_of::<Globals>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let globals_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("globals"),
+            layout: &globals_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: globals.as_entire_binding(),
+            }],
+        });
+        let base_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("globals only"),
+            bind_group_layouts: &[Some(&globals_layout)],
+            immediate_size: 0,
+        });
+        let mesh_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("mesh"),
+            bind_group_layouts: &[Some(&globals_layout), Some(&body_layout)],
+            immediate_size: 0,
+        });
+
+        let mesh_attrs = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3];
+        let line_attrs = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x4];
+        let mesh_buffers = [Some(wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<MeshVertex>() as u64,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &mesh_attrs,
+        })];
+        let line_buffers = [Some(wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<LineVertex>() as u64,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &line_attrs,
+        })];
+
+        struct Spec<'a> {
+            label: &'a str,
+            layout: &'a wgpu::PipelineLayout,
+            vs: &'a str,
+            fs: &'a str,
+            buffers: &'a [Option<wgpu::VertexBufferLayout<'a>>],
+            topology: wgpu::PrimitiveTopology,
+            depth_write: bool,
+            compare: wgpu::CompareFunction,
+            bias: wgpu::DepthBiasState,
+            blend: Option<wgpu::BlendState>,
+        }
+        let make = |s: Spec| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(s.label),
+                layout: Some(s.layout),
+                vertex: wgpu::VertexState {
+                    module: &module,
+                    entry_point: Some(s.vs),
+                    buffers: s.buffers,
+                    compilation_options: Default::default(),
+                },
+                primitive: wgpu::PrimitiveState {
+                    topology: s.topology,
+                    cull_mode: None,
+                    ..Default::default()
+                },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: DEPTH_FORMAT,
+                    depth_write_enabled: Some(s.depth_write),
+                    depth_compare: Some(s.compare),
+                    stencil: Default::default(),
+                    bias: s.bias,
+                }),
+                multisample: wgpu::MultisampleState {
+                    count: SAMPLES,
+                    ..Default::default()
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &module,
+                    entry_point: Some(s.fs),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: COLOR_FORMAT,
+                        blend: s.blend,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let no_bias = wgpu::DepthBiasState::default();
+        let background = make(Spec {
+            label: "background",
+            layout: &base_layout,
+            vs: "bg_vs",
+            fs: "bg_fs",
+            buffers: &[],
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            depth_write: false,
+            compare: wgpu::CompareFunction::Always,
+            bias: no_bias,
+            blend: None,
+        });
+        // Faces are pushed slightly back so their edges draw cleanly on top.
+        let mesh = make(Spec {
+            label: "mesh",
+            layout: &mesh_layout,
+            vs: "mesh_vs",
+            fs: "mesh_fs",
+            buffers: &mesh_buffers,
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            depth_write: true,
+            compare: wgpu::CompareFunction::Less,
+            bias: wgpu::DepthBiasState {
+                constant: 2,
+                slope_scale: 1.5,
+                clamp: 0.0,
+            },
+            blend: None,
+        });
+        let edges = make(Spec {
+            label: "edges",
+            layout: &base_layout,
+            vs: "line_vs",
+            fs: "line_fs",
+            buffers: &line_buffers,
+            topology: wgpu::PrimitiveTopology::LineList,
+            depth_write: true,
+            compare: wgpu::CompareFunction::LessEqual,
+            bias: no_bias,
+            blend: None,
+        });
+        let grid = make(Spec {
+            label: "grid",
+            layout: &base_layout,
+            vs: "line_vs",
+            fs: "line_fs",
+            buffers: &line_buffers,
+            topology: wgpu::PrimitiveTopology::LineList,
+            depth_write: false,
+            compare: wgpu::CompareFunction::LessEqual,
+            bias: no_bias,
+            blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+        });
+        ViewRenderer {
+            globals,
+            globals_bind,
+            body_layout,
+            background,
+            mesh,
+            edges,
+            grid,
+            targets: None,
+            bodies: HashMap::new(),
+        }
+    }
+
+    /// The last rendered picture (single-sampled, sRGB).
+    pub fn output(&self) -> Option<(&wgpu::Texture, &wgpu::TextureView)> {
+        self.targets.as_ref().map(|t| (&t.resolve, &t.resolve_view))
+    }
+
+    /// The last picture for display by a UI. A UI that draws to an sRGB surface samples
+    /// the sRGB view (decoded to linear); one that blends in sRGB space, like egui on a
+    /// non-sRGB surface, samples the raw bytes.
+    pub fn display_view(&self, surface_is_srgb: bool) -> Option<&wgpu::TextureView> {
+        self.targets.as_ref().map(|t| {
+            if surface_is_srgb {
+                &t.resolve_view
+            } else {
+                &t.raw_view
+            }
+        })
+    }
+
+    fn ensure_targets(&mut self, device: &wgpu::Device, w: u32, h: u32) {
+        if self.targets.as_ref().is_some_and(|t| t.size == (w, h)) {
+            return;
+        }
+        let size = wgpu::Extent3d {
+            width: w,
+            height: h,
+            depth_or_array_layers: 1,
+        };
+        let tex = |label, format, samples, usage, view_formats: &[wgpu::TextureFormat]| {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(label),
+                size,
+                mip_level_count: 1,
+                sample_count: samples,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage,
+                view_formats,
+            })
+        };
+        let attach = wgpu::TextureUsages::RENDER_ATTACHMENT;
+        let msaa = tex("msaa", COLOR_FORMAT, SAMPLES, attach, &[]);
+        let depth = tex("depth", DEPTH_FORMAT, SAMPLES, attach, &[]);
+        let raw = wgpu::TextureFormat::Rgba8Unorm;
+        let resolve = tex(
+            "view",
+            COLOR_FORMAT,
+            1,
+            attach | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
+            &[raw],
+        );
+        self.targets = Some(Targets {
+            size: (w, h),
+            msaa: msaa.create_view(&Default::default()),
+            depth: depth.create_view(&Default::default()),
+            resolve_view: resolve.create_view(&Default::default()),
+            raw_view: resolve.create_view(&wgpu::TextureViewDescriptor {
+                format: Some(raw),
+                ..Default::default()
+            }),
+            resolve,
+        });
+    }
+
+    fn sync_bodies(&mut self, device: &wgpu::Device, theme: &Theme, scene: &Scene) {
+        use wgpu::util::DeviceExt;
+        self.bodies.retain(|id, _| scene.body(*id).is_some());
+        for b in &scene.bodies {
+            let key = (b.mesh.triangles.len(), b.mesh.positions.len());
+            if self.bodies.get(&b.id).is_some_and(|g| g.key == key) {
+                continue;
+            }
+            let tris = mesh_vertices(&b.mesh);
+            let edges = edge_vertices(&b.mesh, theme.edge.linear());
+            let buffer = |label, contents: &[u8]| {
+                device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some(label),
+                    contents,
+                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                })
+            };
+            let uniform = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("body colour"),
+                size: 16,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("body"),
+                layout: &self.body_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uniform.as_entire_binding(),
+                }],
+            });
+            self.bodies.insert(
+                b.id,
+                GpuBody {
+                    key,
+                    triangles: buffer("body triangles", bytemuck::cast_slice(&tris)),
+                    triangle_vertices: tris.len() as u32,
+                    edges: buffer("body edges", bytemuck::cast_slice(&edges)),
+                    edge_vertices: edges.len() as u32,
+                    uniform,
+                    bind,
+                },
+            );
+        }
+    }
+
+    /// Records the commands that draw `frame`; the caller submits them. Sizes are clamped
+    /// to 1..=[`MAX_SIZE`].
+    pub fn render(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        frame: &Frame,
+    ) -> wgpu::CommandBuffer {
+        use wgpu::util::DeviceExt;
+        let w = frame.width.clamp(1, MAX_SIZE);
+        let h = frame.height.clamp(1, MAX_SIZE);
+        self.ensure_targets(device, w, h);
+        self.sync_bodies(device, frame.theme, frame.scene);
+
+        let bounds = frame.scene.bounds();
+        let cam = frame.camera;
+        let aspect = f64::from(w) / f64::from(h);
+        let view_proj = mat_mul(
+            &cam.projection_matrix(aspect, bounds.as_ref()),
+            &cam.view_matrix(),
+        );
+        let basis = cam.basis();
+        // Key light from above, behind the viewer's right shoulder.
+        let key = basis.up * 0.8 + basis.right * 0.5 - basis.forward * 0.6;
+        let ortho = if cam.projection == Projection::Orthographic {
+            1.0
+        } else {
+            0.0
+        };
+        let e = cam.eye();
+        let globals = Globals {
+            view_proj,
+            eye: [e.x as f32, e.y as f32, e.z as f32, 1.0],
+            light: [key.x as f32, key.y as f32, key.z as f32, ortho],
+            forward: [
+                basis.forward.x as f32,
+                basis.forward.y as f32,
+                basis.forward.z as f32,
+                0.0,
+            ],
+            background_top: frame.theme.background_top.linear(),
+            background_bottom: frame.theme.background_bottom.linear(),
+        };
+        queue.write_buffer(&self.globals, 0, bytemuck::bytes_of(&globals));
+        for b in &frame.scene.bodies {
+            if let Some(g) = self.bodies.get(&b.id) {
+                let selected = frame.scene.selection.is_some_and(|s| s.body == b.id);
+                let c = if selected {
+                    frame.theme.body_selected
+                } else {
+                    frame.theme.body
+                };
+                queue.write_buffer(&g.uniform, 0, bytemuck::cast_slice(&c.linear()));
+            }
+        }
+        let grid = grid_vertices(cam, frame.theme);
+        let grid_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("grid"),
+            contents: bytemuck::cast_slice(&grid),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("viewport"),
+        });
+        if let Some(t) = &self.targets {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("viewport"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &t.msaa,
+                    depth_slice: None,
+                    resolve_target: Some(&t.resolve_view),
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Discard,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &t.depth,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Discard,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_bind_group(0, &self.globals_bind, &[]);
+            pass.set_pipeline(&self.background);
+            pass.draw(0..3, 0..1);
+
+            let visible: Vec<&GpuBody> = frame
+                .scene
+                .bodies
+                .iter()
+                .filter(|b| b.visible)
+                .filter_map(|b| self.bodies.get(&b.id))
+                .collect();
+            pass.set_pipeline(&self.mesh);
+            for g in &visible {
+                pass.set_bind_group(1, &g.bind, &[]);
+                pass.set_vertex_buffer(0, g.triangles.slice(..));
+                pass.draw(0..g.triangle_vertices, 0..1);
+            }
+            pass.set_pipeline(&self.edges);
+            for g in &visible {
+                if g.edge_vertices > 0 {
+                    pass.set_vertex_buffer(0, g.edges.slice(..));
+                    pass.draw(0..g.edge_vertices, 0..1);
+                }
+            }
+            if !grid.is_empty() {
+                pass.set_pipeline(&self.grid);
+                pass.set_vertex_buffer(0, grid_buf.slice(..));
+                pass.draw(0..grid.len() as u32, 0..1);
+            }
+        }
+        encoder.finish()
+    }
+}
+
+/// Flat-shaded triangles: each corner carries its face's normal.
+fn mesh_vertices(mesh: &TriMesh) -> Vec<MeshVertex> {
+    let mut out = Vec::with_capacity(mesh.triangles.len() * 3);
+    for i in 0..mesh.triangles.len() {
+        let (Some(corners), Some(n)) = (mesh.triangle(i), mesh.triangle_normal(i)) else {
+            continue;
+        };
+        let normal = [n.x as f32, n.y as f32, n.z as f32];
+        for p in corners {
+            out.push(MeshVertex {
+                position: f3(p),
+                normal,
+            });
+        }
+    }
+    out
+}
+
+fn edge_vertices(mesh: &TriMesh, color: [f32; 4]) -> Vec<LineVertex> {
+    mesh.feature_edges(EDGE_ANGLE)
+        .into_iter()
+        .flat_map(|[a, b]| {
+            [
+                LineVertex {
+                    position: f3(a),
+                    color,
+                },
+                LineVertex {
+                    position: f3(b),
+                    color,
+                },
+            ]
+        })
+        .collect()
+}
+
+/// Grid spacing (mm) for a camera distance: a power of ten, about 1/10 of the distance.
+pub fn grid_step(distance: f64) -> f64 {
+    let d = if distance.is_finite() {
+        distance.clamp(1e-3, 1e7)
+    } else {
+        250.0
+    };
+    10f64.powf((d / 10.0).log10().floor())
+}
+
+/// The ground grid on the XY plane around the target, fading out at its rim, plus the
+/// X (red), Y (green) and Z (blue) axes through the origin.
+fn grid_vertices(cam: &Camera, theme: &Theme) -> Vec<LineVertex> {
+    const SEGMENTS: usize = 8;
+    let minor = grid_step(cam.distance);
+    let major = minor * 10.0;
+    let extent = major * (cam.distance * 2.0 / major).ceil().max(1.0);
+    let cx = (cam.target.x / major).round() * major;
+    let cy = (cam.target.y / major).round() * major;
+    let lines = (extent / minor).round() as i64;
+    let mut out = Vec::with_capacity((4 * lines as usize + 6) * SEGMENTS * 2 + 6);
+    let fade = |x: f64, y: f64, c: [f32; 4]| {
+        let r = (((x - cx).powi(2) + (y - cy).powi(2)).sqrt() / extent).min(1.0);
+        [c[0], c[1], c[2], c[3] * (1.0 - r * r) as f32]
+    };
+    let minor_c = theme.grid_minor.linear();
+    let major_c = theme.grid_major.linear();
+    let segment = |out: &mut Vec<LineVertex>, a: (f64, f64), b: (f64, f64), c: [f32; 4]| {
+        for s in 0..SEGMENTS {
+            let t0 = s as f64 / SEGMENTS as f64;
+            let t1 = (s + 1) as f64 / SEGMENTS as f64;
+            for t in [t0, t1] {
+                let (x, y) = (a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t);
+                out.push(LineVertex {
+                    position: [x as f32, y as f32, 0.0],
+                    color: fade(x, y, c),
+                });
+            }
+        }
+    };
+    for k in -lines..=lines {
+        let off = k as f64 * minor;
+        let is_major = k.rem_euclid(10) == ((cx / minor).round() as i64).rem_euclid(10);
+        let c = if is_major { major_c } else { minor_c };
+        let x = cx + off;
+        let y = cy + off;
+        // Skip the lines the axes draw over.
+        if x.abs() > minor * 1e-6 {
+            segment(&mut out, (x, cy - extent), (x, cy + extent), c);
+        }
+        if y.abs() > minor * 1e-6 {
+            segment(&mut out, (cx - extent, y), (cx + extent, y), c);
+        }
+    }
+    segment(
+        &mut out,
+        (cx - extent, 0.0),
+        (cx + extent, 0.0),
+        theme.axis_x.linear(),
+    );
+    segment(
+        &mut out,
+        (0.0, cy - extent),
+        (0.0, cy + extent),
+        theme.axis_y.linear(),
+    );
+    let z = theme.axis_z.linear();
+    for p in [[0.0, 0.0, 0.0], [0.0, 0.0, (major * 0.5) as f32]] {
+        out.push(LineVertex {
+            position: p,
+            color: z,
+        });
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn grid_steps_are_powers_of_ten_near_a_tenth_of_the_distance() {
+        assert_eq!(grid_step(250.0), 10.0);
+        assert_eq!(grid_step(99.0), 1.0);
+        assert_eq!(grid_step(100.0), 10.0);
+        assert_eq!(grid_step(5000.0), 100.0);
+        assert_eq!(grid_step(f64::NAN), 10.0);
+    }
+
+    #[test]
+    fn mesh_vertices_carry_face_normals() {
+        let m = TriMesh::cuboid(Point3::ORIGIN, Point3::new(1.0, 1.0, 1.0));
+        let v = mesh_vertices(&m);
+        assert_eq!(v.len(), 36);
+        for tri in v.chunks(3) {
+            let n = tri[0].normal;
+            assert!((n[0].abs() + n[1].abs() + n[2].abs() - 1.0).abs() < 1e-6);
+        }
+    }
+}

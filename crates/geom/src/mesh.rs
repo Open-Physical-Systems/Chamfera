@@ -334,6 +334,39 @@ impl TriMesh {
         }
     }
 
+    /// Edges to draw: where two triangles meet at more than `min_angle` (radians), plus
+    /// open edges used by one triangle only. Display only; needs welded corners.
+    pub fn feature_edges(&self, min_angle: f64) -> Vec<[Point3; 2]> {
+        let mut faces: std::collections::HashMap<(u32, u32), Vec<usize>> =
+            std::collections::HashMap::new();
+        for (i, t) in self.triangles.iter().enumerate() {
+            for k in 0..3 {
+                let (a, b) = (t[k], t[(k + 1) % 3]);
+                faces.entry((a.min(b), a.max(b))).or_default().push(i);
+            }
+        }
+        let cos_limit = min_angle.cos();
+        let mut out = Vec::new();
+        for ((a, b), tris) in faces {
+            let sharp = match tris.as_slice() {
+                [t1, t2] => match (self.triangle_normal(*t1), self.triangle_normal(*t2)) {
+                    (Some(n1), Some(n2)) => n1.dot(n2) < cos_limit,
+                    _ => false,
+                },
+                _ => true,
+            };
+            if sharp
+                && let (Some(pa), Some(pb)) = (
+                    self.positions.get(a as usize),
+                    self.positions.get(b as usize),
+                )
+            {
+                out.push([*pa, *pb]);
+            }
+        }
+        out
+    }
+
     /// Appends another mesh (no welding).
     pub fn append(&mut self, other: &TriMesh) {
         let off = self.positions.len() as u32;
@@ -416,6 +449,16 @@ mod tests {
             m.validate(),
             Err(MeshError::BadCoordinate { vertex: 3 })
         ));
+    }
+
+    #[test]
+    fn a_box_has_twelve_feature_edges_and_a_cylinder_only_its_rims() {
+        let b = TriMesh::cuboid(Point3::ORIGIN, Point3::new(1.0, 2.0, 3.0));
+        assert_eq!(b.feature_edges(0.5).len(), 12);
+        // 32 segments: the sides meet at 2pi/32 (about 0.196 rad), below the limit, so only
+        // the two rims (32 edges each) remain.
+        let c = TriMesh::cylinder(Point3::ORIGIN, 5.0, 10.0, 32);
+        assert_eq!(c.feature_edges(0.5).len(), 64);
     }
 
     #[test]

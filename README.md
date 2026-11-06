@@ -4,11 +4,16 @@ An open-source parametric 3D CAD application, written from scratch in Rust: our 
 constraint solver, feature timeline and B-rep kernel, with a workflow familiar to Fusion users.
 CAM (toolpaths and G-code) comes after the CAD core.
 
-**Status:** M0, the foundation. There is no 3D yet; see [PLAN.md](PLAN.md).
+**Status:** M1, the viewport: a 3D view of mesh bodies (STL) with orbit, pan, zoom, standard views, picking and light/dark themes, on the desktop and in the browser. No sketches or solids yet; see [PLAN.md](PLAN.md).
+
+![Chamfera's viewport: the sample bracket in the light theme](docs/screenshots/m1-viewport-light.png)
 
 ## Build and try
 
 ```sh
+cargo run --release -p chamfera -- --sample          # the desktop app with a sample part
+cargo run -p chamfera-cli -- snapshot --sample --out shot.png
+packaging/linux/build-appimage.sh                    # target/appimage/Chamfera-*.AppImage
 cargo run -p chamfera-cli -- commands
 cargo run -p chamfera-cli -- exec param.set '{"name":"width","value":50}'
 cargo run -p chamfera-cli -- run examples/parameters.json
