@@ -400,7 +400,12 @@ pub const MAX_BODIES: usize = 10_000;
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct Scene {
     pub bodies: Vec<SceneBody>,
+    /// The last pick: where the pointer hit a selected body.
     pub selection: Option<Hit>,
+    /// Every selected body, each once, in the order they were selected. The picked body
+    /// (`selection`) is one of them.
+    #[serde(default)]
+    pub selected: Vec<u32>,
     /// Drawn over everything, in order.
     #[serde(default)]
     pub overlays: Vec<Overlay>,
@@ -447,6 +452,36 @@ impl Scene {
             .filter_map(|b| b.mesh.bounds())
             .chain(overlays)
             .reduce(Aabb::union)
+    }
+
+    /// Whether a body is selected (in the set, or the last pick).
+    pub fn is_selected(&self, id: u32) -> bool {
+        self.selected.contains(&id) || self.selection.is_some_and(|h| h.body == id)
+    }
+
+    /// Every selected body: the set, plus the picked body if it is missing from it.
+    pub fn selected_bodies(&self) -> Vec<u32> {
+        let mut ids = self.selected.clone();
+        if let Some(h) = self.selection
+            && !ids.contains(&h.body)
+        {
+            ids.push(h.body);
+        }
+        ids
+    }
+
+    /// Drops the bodies for which `gone` is true from the selection.
+    pub fn deselect(&mut self, gone: impl Fn(u32) -> bool) {
+        self.selected.retain(|id| !gone(*id));
+        if self.selection.is_some_and(|h| gone(h.body)) {
+            self.selection = None;
+        }
+    }
+
+    /// Selects nothing.
+    pub fn clear_selection(&mut self) {
+        self.selected.clear();
+        self.selection = None;
     }
 
     /// The nearest visible body the ray hits.

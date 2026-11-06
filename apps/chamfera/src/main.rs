@@ -2,8 +2,8 @@
 //!
 //! ```text
 //! chamfera [part.stl ...] [--sample] [--theme light|dark] [--script steps.json]
-//!          [--parameters] [--extrude] [--search QUERY] [--size WxH] [--zoom F]
-//!          [--screenshot shot.png]
+//!          [--parameters] [--extrude] [--box X1,Y1,X2,Y2] [--search QUERY] [--size WxH]
+//!          [--zoom F] [--screenshot shot.png]
 //! ```
 
 // Release builds on Windows open no console window; chamfera-cli stays a console app.
@@ -12,7 +12,7 @@
 use std::process::ExitCode;
 
 const USAGE: &str = "usage: chamfera [part.stl ...] [--sample] [--theme light|dark] \
-[--script steps.json] [--parameters] [--extrude] [--search QUERY] [--size WxH] [--zoom F] [--screenshot shot.png]";
+[--script steps.json] [--parameters] [--extrude] [--box X1,Y1,X2,Y2] [--search QUERY] [--size WxH] [--zoom F] [--screenshot shot.png]";
 
 fn main() -> ExitCode {
     let mut options = chamfera_ui::Options::default();
@@ -22,6 +22,10 @@ fn main() -> ExitCode {
             "--sample" => options.sample = true,
             "--parameters" => options.parameters = true,
             "--extrude" => options.extrude = true,
+            "--box" => match args.next().as_deref().and_then(parse_box) {
+                Some(b) => options.select_box = Some(b),
+                None => return fail("--box takes X1,Y1,X2,Y2: viewport pixels, finite"),
+            },
             "--search" => match args.next() {
                 Some(q) => options.search = Some(q),
                 None => return fail(USAGE),
@@ -77,6 +81,19 @@ fn parse_size(text: &str) -> Option<[f32; 2]> {
     let (w, h) = (w.trim().parse::<f32>().ok()?, h.trim().parse::<f32>().ok()?);
     let ok = |v: f32| v.is_finite() && (320.0..=8192.0).contains(&v);
     (ok(w) && ok(h)).then_some([w, h])
+}
+
+/// `100,80,600,400` → the corners of a selection box shown as if being dragged.
+fn parse_box(text: &str) -> Option<[f32; 4]> {
+    let v: Vec<f32> = text
+        .split(',')
+        .map(|s| s.trim().parse::<f32>().ok())
+        .collect::<Option<_>>()?;
+    let ok = |v: &f32| v.is_finite() && (0.0..=8192.0).contains(v);
+    match v.as_slice() {
+        [a, b, c, d] if v.iter().all(ok) => Some([*a, *b, *c, *d]),
+        _ => None,
+    }
 }
 
 /// Reads a `chamfera-cli run` style script: a JSON list of {"command", "params"}.
