@@ -1,0 +1,225 @@
+{
+  "format": "chamfera",
+  "version": 34,
+  "parameters": {
+    "w": {
+      "value": 60.0,
+      "unit": "length",
+      "expression": "60 mm"
+    }
+  },
+  "sketches": [
+    {
+      "id": 1,
+      "name": "Sketch1",
+      "plane": {
+        "origin": {
+          "x": 0.0,
+          "y": 0.0,
+          "z": 0.0
+        },
+        "normal": {
+          "x": 0.0,
+          "y": 0.0,
+          "z": 1.0
+        },
+        "x": {
+          "x": 1.0,
+          "y": 0.0,
+          "z": 0.0
+        }
+      },
+      "sketch": {
+        "next_id": 20,
+        "points": [
+          {
+            "id": 1,
+            "at": {
+              "x": -1.0407407201438721e-13,
+              "y": 3.1536546374488895e-15
+            }
+          },
+          {
+            "id": 2,
+            "at": {
+              "x": 59.99999999999983,
+              "y": 5.933300618601894e-15
+            }
+          },
+          {
+            "id": 3,
+            "at": {
+              "x": 59.999999999999794,
+              "y": 30.000000000000007
+            }
+          },
+          {
+            "id": 4,
+            "at": {
+              "x": -1.25729209169821e-13,
+              "y": 30.000000000000007
+            }
+          },
+          {
+            "id": 16,
+            "at": {
+              "x": 20.0,
+              "y": 12.0
+            }
+          }
+        ],
+        "curves": [
+          {
+            "id": 5,
+            "curve": {
+              "kind": "line",
+              "start": 1,
+              "end": 2,
+              "construction": false
+            }
+          },
+          {
+            "id": 6,
+            "curve": {
+              "kind": "line",
+              "start": 2,
+              "end": 3,
+              "construction": false
+            }
+          },
+          {
+            "id": 7,
+            "curve": {
+              "kind": "line",
+              "start": 3,
+              "end": 4,
+              "construction": false
+            }
+          },
+          {
+            "id": 8,
+            "curve": {
+              "kind": "line",
+              "start": 4,
+              "end": 1,
+              "construction": false
+            }
+          },
+          {
+            "id": 17,
+            "curve": {
+              "kind": "circle",
+              "centre": 16,
+              "radius": 4.0,
+              "construction": false
+            }
+          }
+        ],
+        "constraints": [
+          {
+            "id": 9,
+            "constraint": {
+              "kind": "horizontal",
+              "line": 5
+            }
+          },
+          {
+            "id": 10,
+            "constraint": {
+              "kind": "vertical",
+              "line": 6
+            }
+          },
+          {
+            "id": 11,
+            "constraint": {
+              "kind": "horizontal",
+              "line": 7
+            }
+          },
+          {
+            "id": 12,
+            "constraint": {
+              "kind": "vertical",
+              "line": 8
+            }
+          },
+          {
+            "id": 13,
+            "constraint": {
+              "kind": "fix",
+              "point": 1,
+              "at": {
+                "x": 0.0,
+                "y": 0.0
+              }
+            }
+          },
+          {
+            "id": 14,
+            "constraint": {
+              "kind": "length",
+              "line": 5,
+              "value": 60.0
+            }
+          },
+          {
+            "id": 15,
+            "constraint": {
+              "kind": "length",
+              "line": 6,
+              "value": 30.0
+            }
+          },
+          {
+            "id": 18,
+            "constraint": {
+              "kind": "fix",
+              "point": 16,
+              "at": {
+                "x": 20.0,
+                "y": 12.0
+              }
+            }
+          },
+          {
+            "id": 19,
+            "constraint": {
+              "kind": "diameter",
+              "curve": 17,
+              "value": 8.0
+            }
+          }
+        ]
+      },
+      "expressions": {
+        "14": "w"
+      }
+    }
+  ],
+  "features": [
+    {
+      "id": 2,
+      "name": "Extrude1",
+      "suppressed": false,
+      "kind": "extrude",
+      "sketch": 1,
+      "profiles": [
+        {
+          "x": 2.0,
+          "y": 2.0
+        }
+      ],
+      "distance": "10 mm",
+      "direction": "normal",
+      "operation": "new_body"
+    }
+  ],
+  "last_feature_id": 2,
+  "timeline": {
+    "order": [
+      1,
+      2
+    ]
+  }
+}

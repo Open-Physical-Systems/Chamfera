@@ -27,6 +27,7 @@ mod display_ui;
 mod drawing_tools_ui;
 mod drawing_ui;
 mod file_ui;
+mod history_ui;
 mod hole_ui;
 mod inspect_ui;
 
@@ -42,6 +43,7 @@ mod params_ui;
 mod prefs;
 mod prefs_ui;
 mod press_pull_ui;
+mod recovery_ui;
 mod render_ui;
 mod ribbon;
 mod search;
@@ -117,6 +119,11 @@ pub struct Options {
     /// Open the Assistant and play a recorded conversation that builds a plate, without
     /// an API key or a network call (for screenshots).
     pub assistant_demo: bool,
+    /// Open the History panel at start; a script's last `version.compare` shows in it.
+    pub history: bool,
+    /// Keep the design the script built as if a crash had left it unsaved, and start
+    /// with the question to recover it (for screenshots; a scratch recovery folder).
+    pub recovery_demo: bool,
     /// Open the RENDER workspace at start.
     pub render: bool,
     /// Open the Render window and start a render of this width, height and sample count
@@ -154,6 +161,8 @@ struct Drawn {
     grid: Option<u64>,
     /// How many times the tool preview was rebuilt, and how many shapes it shows.
     previews: (u64, usize),
+    /// The compared versions' meshes: side and triangle count.
+    compare: Vec<(chamfera_render::CompareSide, usize)>,
 }
 
 enum Shot {
@@ -236,6 +245,10 @@ pub struct ChamferaApp {
     recent_seen: Option<std::path::PathBuf>,
     /// The Assistant panel (`assistant_ui`).
     assistant: assistant_ui::AssistantUi,
+    /// The History panel and Save Version (`history_ui`).
+    history: history_ui::HistoryUi,
+    /// Autosave and the recovery question (`recovery_ui`).
+    recovery: recovery_ui::RecoveryUi,
 }
 
 /// A command's label, so menus show the same words as the command list.
@@ -259,6 +272,15 @@ impl ChamferaApp {
         });
         let mut app = ChamferaApp::with_gpu(gpu, &options, prefs::load());
         app.prefs_store = true;
+        // Autosave and the recovery question, except in screenshots, which must neither
+        // write recovery files nor show another run's work.
+        #[cfg(not(target_arch = "wasm32"))]
+        if options.recovery_demo {
+            app.recovery_demo();
+        } else if options.screenshot.is_none() {
+            app.recovery.dir = recovery_ui::default_dir();
+            app.recovery_scan();
+        }
         if app.assistant.transport.is_none() {
             app.assistant.load_key();
         }
@@ -334,7 +356,10 @@ impl ChamferaApp {
             nav_drag: None,
             recent_seen: None,
             assistant: assistant_ui::AssistantUi::default(),
+            history: history_ui::HistoryUi::default(),
+            recovery: recovery_ui::RecoveryUi::default(),
         };
+        app.session.history.limits = app.prefs.history_limits();
         if app.prefs.default_length != chamfera_doc::LengthUnit::Mm {
             let length = app.prefs.default_length.symbol();
             app.run("design.new", json!({ "length": length }));
@@ -352,6 +377,7 @@ impl ChamferaApp {
                 Ok(replies) => {
                     app.inspect_from_script(&options.script, &replies);
                     app.sheet_from_script(&options.script, &replies);
+                    app.history_from_script(&options.script, &replies);
                 }
                 Err(e) => app.message = Some((e.to_string(), true)),
             }
@@ -418,6 +444,9 @@ impl ChamferaApp {
         }
         if options.assistant_demo {
             app.assistant_demo();
+        }
+        if options.history {
+            app.open_history();
         }
         if options.render || options.render_window.is_some() {
             app.set_workspace(ribbon::Workspace::Render);
@@ -802,6 +831,13 @@ impl ChamferaApp {
             size,
             grid: self.session.scene.grid_spacing.map(f64::to_bits),
             previews: (self.preview_version, self.session.scene.previews.len()),
+            compare: self
+                .session
+                .scene
+                .compare
+                .iter()
+                .map(|c| (c.side, c.mesh.triangles.len()))
+                .collect(),
         };
         if let (Some(gpu), Some(rs)) = (self.gpu.as_mut(), frame.wgpu_render_state())
             && self.drawn.as_ref() != Some(&now)
@@ -889,9 +925,13 @@ impl ChamferaApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             return;
         }
-        // A request of the Assistant, or a render, still running is part of the picture
-        // to wait for.
-        if (self.assistant.running() || rendering) && matches!(state, Shot::Waiting(_)) {
+        // A request of the Assistant, a render, or a version thumbnail being drawn is part
+        // of the picture to wait for.
+        if (self.assistant.running()
+            || rendering
+            || self.history.thumbnails_pending(self.gpu.is_some()))
+            && matches!(state, Shot::Waiting(_))
+        {
             *state = Shot::Waiting(6);
             ctx.request_repaint();
             return;
@@ -960,6 +1000,11 @@ impl eframe::App for ChamferaApp {
     /// Runs every frame, even when the window is covered or minimised (then eframe skips
     /// `ui`). `--screenshot` lives here and asks for painting while hidden, so a covered
     /// window still draws, captures and quits instead of waiting forever.
+    /// A clean quit: this run's recovery files go (a crash never gets here).
+    fn on_exit(&mut self) {
+        self.recovery_remove_own();
+    }
+
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         if self.screenshot.is_some() {
             ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaintWhileHidden);
@@ -1070,6 +1115,7 @@ impl eframe::App for ChamferaApp {
             self.properties_window(&ctx);
             self.cam_dialogs(&ctx);
             self.appearance_window(&ctx);
+            self.history_windows(&ctx);
             self.render_windows(&ctx);
         }
         if self.frames >= 2 {
@@ -1079,6 +1125,10 @@ impl eframe::App for ChamferaApp {
         self.track_recent();
         self.rename_box(&ctx);
         self.unsaved_dialog(&ctx);
+        if self.frames >= 2 {
+            self.recovery_prompt(&ctx);
+        }
+        self.autosave_frame(&ctx);
         self.shortcuts_window(&ctx);
         self.search_window(&ctx);
         self.file_shortcuts(&ctx);

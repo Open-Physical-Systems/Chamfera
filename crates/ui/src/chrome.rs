@@ -386,6 +386,7 @@ impl ChamferaApp {
         let muted = look.c(|t| t.text_muted);
         ui.spacing_mut().item_spacing.x = S3;
         let small = |text: &str, c| egui::RichText::new(text).size(T_SMALL).color(c);
+        self.autosave_indicator(ui);
         let tris: usize = self
             .session
             .scene

@@ -908,6 +908,48 @@ impl ViewRenderer {
                 Some((buf, tris.len() as u32, bind))
             })
             .collect();
+        // Two compared versions (`version.compare`): A shaded, B see-through over it, each
+        // in its theme colour, with B's edges.
+        let compare: Vec<(bool, wgpu::Buffer, u32, wgpu::BindGroup)> = frame
+            .scene
+            .compare
+            .iter()
+            .filter_map(|cm| {
+                let tris = mesh_vertices(&cm.mesh);
+                if tris.is_empty() {
+                    return None;
+                }
+                let buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("compare triangles"),
+                    contents: bytemuck::cast_slice(&tris),
+                    usage: wgpu::BufferUsages::VERTEX,
+                });
+                let colour = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("compare colour"),
+                    contents: bytemuck::cast_slice(&cm.side.color(frame.theme).linear()),
+                    usage: wgpu::BufferUsages::UNIFORM,
+                });
+                let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("compare"),
+                    layout: &self.body_layout,
+                    entries: &[wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: colour.as_entire_binding(),
+                    }],
+                });
+                let see_through = cm.side == chamfera_render::CompareSide::B;
+                Some((see_through, buf, tris.len() as u32, bind))
+            })
+            .collect();
+        let compare_lines: Vec<LineVertex> = frame
+            .scene
+            .compare
+            .iter()
+            .filter(|cm| cm.side == chamfera_render::CompareSide::B)
+            .flat_map(|cm| mesh_edge_vertices(&cm.mesh, frame.theme.compare_b.linear()))
+            .collect();
+        let compare_edges =
+            vertex_buffer("compare edges", &compare_lines).map(|b| (b, compare_lines.len() as u32));
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("viewport"),
@@ -986,7 +1028,12 @@ impl ViewRenderer {
             pass.draw(0..3, 0..1);
 
             let plan = frame.scene.display.style.plan();
-            let (mut opaque, mut transparent) = draw_order(frame.scene, cam);
+            // A comparison stands in for the bodies.
+            let (mut opaque, mut transparent) = if frame.scene.compare.is_empty() {
+                draw_order(frame.scene, cam)
+            } else {
+                (Vec::new(), Vec::new())
+            };
             if realistic {
                 // Glass blends over what is behind it, like a see-through body.
                 let glass: Vec<u32> = opaque.iter().copied().filter(|id| is_glass(id)).collect();
@@ -1041,6 +1088,25 @@ impl ViewRenderer {
                 pass.set_pipeline(&self.mesh);
                 for (buf, n, bind) in &stock {
                     pass.set_bind_group(1, bind, &[]);
+                    pass.set_vertex_buffer(0, buf.slice(..));
+                    pass.draw(0..*n, 0..1);
+                }
+            }
+            if !compare.is_empty() {
+                pass.set_pipeline(&self.mesh);
+                for (_, buf, n, bind) in compare.iter().filter(|c| !c.0) {
+                    pass.set_bind_group(1, bind, &[]);
+                    pass.set_vertex_buffer(0, buf.slice(..));
+                    pass.draw(0..*n, 0..1);
+                }
+                pass.set_pipeline(&self.preview);
+                for (_, buf, n, bind) in compare.iter().filter(|c| c.0) {
+                    pass.set_bind_group(1, bind, &[]);
+                    pass.set_vertex_buffer(0, buf.slice(..));
+                    pass.draw(0..*n, 0..1);
+                }
+                if let Some((buf, n)) = &compare_edges {
+                    pass.set_pipeline(&self.overlay_lines_depth);
                     pass.set_vertex_buffer(0, buf.slice(..));
                     pass.draw(0..*n, 0..1);
                 }
