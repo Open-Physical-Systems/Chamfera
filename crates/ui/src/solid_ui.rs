@@ -44,6 +44,10 @@ impl Default for ExtrudeTool {
 #[derive(Default)]
 pub struct SolidUi {
     pub extrude: Option<ExtrudeTool>,
+    /// The Fillet or Chamfer tool.
+    pub blend: Option<crate::blend_ui::BlendTool>,
+    /// The Shell tool.
+    pub shell: Option<crate::shell_ui::ShellTool>,
     /// Waiting for a click on a flat face to sketch on.
     pub pick_face: bool,
     /// `--extrude`: pick the profile under the viewport's centre on the first frame.
@@ -61,7 +65,9 @@ impl ChamferaApp {
             .iter()
             .any(|s| !s.sketch.profiles().is_empty());
         let has_solids = !self.session.solids().is_empty();
-        let tool_free = self.solid.extrude.is_none();
+        let tool_free = self.solid.extrude.is_none()
+            && self.solid.blend.is_none()
+            && self.solid.shell.is_none();
         let extruding = self.solid.extrude.as_ref().is_some_and(|t| !t.revolve);
         let revolving = self.solid.extrude.as_ref().is_some_and(|t| t.revolve);
         let mut plane: Option<(&str, &str)> = None;
@@ -91,11 +97,14 @@ impl ChamferaApp {
                 extruding,
                 false,
             )
-            .on_hover_text(if has_profiles {
-                "Extrude\nPull closed sketch profiles straight out into a solid"
-            } else {
-                "Extrude\nDraw a closed profile in a sketch first"
-            })
+            .on_hover_text(crate::shortcuts::tip(
+                if has_profiles {
+                    "Extrude\nPull closed sketch profiles straight out into a solid"
+                } else {
+                    "Extrude\nDraw a closed profile in a sketch first"
+                },
+                crate::shortcuts::Action::Extrude,
+            ))
             .clicked()
                 && tool_free
             {
@@ -193,30 +202,54 @@ impl ChamferaApp {
             self.sketch_on_construct(id);
         }
         if on_face {
-            self.solid.pick_face = true;
-            self.message = Some(("Click a flat face of a solid to sketch on".into(), false));
+            self.start_sketch_on_face();
         }
-        match open_tool {
-            Some(false) => {
-                self.solid.extrude = Some(ExtrudeTool::default());
-                self.message = Some(("Click inside the profiles to extrude".into(), false));
-            }
-            Some(true) => {
-                self.solid.extrude = Some(ExtrudeTool {
-                    revolve: true,
-                    ..ExtrudeTool::default()
-                });
-                self.message = Some((
-                    "Click inside the profiles to revolve, then choose the axis line".into(),
-                    false,
-                ));
-            }
-            None => {}
+        if let Some(revolve) = open_tool {
+            self.open_extrude(revolve);
         }
         let look = self.look();
         widgets::ribbon_divider(ui, look);
         let mut parameters = false;
+        let mut open_blend: Option<bool> = None;
+        let mut open_shell = false;
+        let filleting = self.solid.blend.as_ref().is_some_and(|t| !t.chamfer);
+        let chamfering = self.solid.blend.as_ref().is_some_and(|t| t.chamfer);
         widgets::ribbon_group(ui, look, "MODIFY", false, |ui| {
+            for (chamfer, on, text, tip) in [
+                (
+                    false,
+                    filleting,
+                    label("solid.fillet"),
+                    "Fillet\nRound edges of a solid with a constant radius",
+                ),
+                (
+                    true,
+                    chamfering,
+                    label("solid.chamfer"),
+                    "Chamfer\nBevel edges of a solid by an equal distance",
+                ),
+            ] {
+                if widgets::tool_button(
+                    ui,
+                    look,
+                    if chamfer { Icon::Chamfer } else { Icon::Fillet },
+                    text,
+                    has_solids && (tool_free || on),
+                    on,
+                    false,
+                )
+                .on_hover_text(if has_solids {
+                    tip
+                } else {
+                    "Build a solid first"
+                })
+                .clicked()
+                    && tool_free
+                {
+                    open_blend = Some(chamfer);
+                }
+            }
+            open_shell = crate::shell_ui::ribbon_button(ui, look, has_solids, tool_free);
             if widgets::tool_button(
                 ui,
                 look,
@@ -236,6 +269,12 @@ impl ChamferaApp {
         });
         if parameters {
             self.params.open = !self.params.open;
+        }
+        if open_shell {
+            self.open_shell_tool();
+        }
+        if let Some(chamfer) = open_blend {
+            self.open_blend(chamfer);
         }
         let look = self.look();
         widgets::ribbon_divider(ui, look);
@@ -287,6 +326,35 @@ impl ChamferaApp {
             self.run("body.sample", json!({}));
             self.fit_pending = true;
         }
+    }
+
+    /// Waits for a click on a flat face to sketch on (Create Sketch > A flat face).
+    pub(crate) fn start_sketch_on_face(&mut self) {
+        self.solid.pick_face = true;
+        self.message = Some(("Click a flat face of a solid to sketch on".into(), false));
+    }
+
+    /// Opens the Extrude tool, or the Revolve tool, as their ribbon buttons do.
+    pub(crate) fn open_extrude(&mut self, revolve: bool) {
+        if revolve {
+            self.solid.extrude = Some(ExtrudeTool {
+                revolve: true,
+                ..ExtrudeTool::default()
+            });
+            self.message = Some((
+                "Click inside the profiles to revolve, then choose the axis line".into(),
+                false,
+            ));
+        } else {
+            self.solid.extrude = Some(ExtrudeTool::default());
+            self.message = Some(("Click inside the profiles to extrude".into(), false));
+        }
+    }
+
+    /// Opens the Fillet tool, or the Chamfer tool, as their ribbon buttons do.
+    pub(crate) fn open_blend(&mut self, chamfer: bool) {
+        self.solid.blend = Some(crate::blend_ui::BlendTool::new(chamfer));
+        self.message = Some(("Click the edges to round or bevel".into(), false));
     }
 
     /// A click while waiting for a face: creates a sketch on it and looks straight at it.

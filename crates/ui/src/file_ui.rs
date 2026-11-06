@@ -127,7 +127,7 @@ impl ChamferaApp {
     }
 
     /// Does `action` now, or first asks when there are unsaved changes.
-    fn ask_or(&mut self, action: Pending) {
+    pub(crate) fn ask_or(&mut self, action: Pending) {
         if self.session.has_unsaved_changes() {
             self.file.pending = Some(action);
         } else {
@@ -340,7 +340,7 @@ impl ChamferaApp {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn export(&mut self, kind: &str, extensions: &[&str], command: &str) {
+    pub(crate) fn export(&mut self, kind: &str, extensions: &[&str], command: &str) {
         let stem = self
             .session
             .path

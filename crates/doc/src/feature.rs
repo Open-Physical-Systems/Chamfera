@@ -128,6 +128,44 @@ pub struct Pattern {
 /// Most copies one pattern may make.
 pub const MAX_PATTERN_COUNT: f64 = 1000.0;
 
+/// Rounded (fillet) or bevelled (chamfer) edges.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BlendKind {
+    Fillet,
+    Chamfer,
+}
+
+/// A fillet or chamfer of edges of the solids built so far. Edges are named like faces
+/// (`2:top 0` is edge `top 0` of feature 2's shape), so the blend finds them again after
+/// every rebuild.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Blend {
+    pub blend: BlendKind,
+    pub edges: Vec<String>,
+    /// The radius (fillet) or distance (chamfer), an expression such as `2 mm`.
+    pub size: String,
+}
+
+/// Most edges one blend may hold.
+pub const MAX_BLEND_EDGES: usize = 10_000;
+
+/// A shell: the solids built so far hollowed to walls of `thickness`, with the named
+/// faces removed to open them. Faces are named like everywhere else (`2:top` is face
+/// `top` of feature 2's shape), so the shell finds them again after every rebuild. A
+/// negative thickness grows the walls outward.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Shell {
+    /// The faces to remove (open); may be empty for a closed, hollow body.
+    #[serde(default)]
+    pub faces: Vec<String>,
+    /// The wall thickness, an expression such as `2 mm`.
+    pub thickness: String,
+}
+
+/// Most faces one shell may open.
+pub const MAX_SHELL_FACES: usize = 10_000;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum FeatureKind {
@@ -136,6 +174,8 @@ pub enum FeatureKind {
     Pattern(Pattern),
     /// A construction plane, axis or point.
     Construct(crate::construct::Construction),
+    Blend(Blend),
+    Shell(Shell),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -155,7 +195,10 @@ impl FeatureKind {
         match self {
             FeatureKind::Extrude(e) => Some(e.sketch),
             FeatureKind::Revolve(r) => Some(r.sketch),
-            FeatureKind::Pattern(_) | FeatureKind::Construct(_) => None,
+            FeatureKind::Pattern(_)
+            | FeatureKind::Construct(_)
+            | FeatureKind::Blend(_)
+            | FeatureKind::Shell(_) => None,
         }
     }
 
@@ -164,7 +207,10 @@ impl FeatureKind {
         match self {
             FeatureKind::Extrude(e) => e.operation,
             FeatureKind::Revolve(r) => r.operation,
-            FeatureKind::Pattern(_) | FeatureKind::Construct(_) => Operation::NewBody,
+            FeatureKind::Pattern(_)
+            | FeatureKind::Construct(_)
+            | FeatureKind::Blend(_)
+            | FeatureKind::Shell(_) => Operation::NewBody,
         }
     }
 
@@ -172,7 +218,10 @@ impl FeatureKind {
         match self {
             FeatureKind::Extrude(e) => &e.profiles,
             FeatureKind::Revolve(r) => &r.profiles,
-            FeatureKind::Pattern(_) | FeatureKind::Construct(_) => &[],
+            FeatureKind::Pattern(_)
+            | FeatureKind::Construct(_)
+            | FeatureKind::Blend(_)
+            | FeatureKind::Shell(_) => &[],
         }
     }
 
@@ -182,6 +231,11 @@ impl FeatureKind {
             FeatureKind::Revolve(_) => "Revolve",
             FeatureKind::Pattern(_) => "Pattern",
             FeatureKind::Construct(c) => c.kind().label(),
+            FeatureKind::Blend(b) => match b.blend {
+                BlendKind::Fillet => "Fillet",
+                BlendKind::Chamfer => "Chamfer",
+            },
+            FeatureKind::Shell(_) => "Shell",
         }
     }
 
@@ -190,6 +244,8 @@ impl FeatureKind {
         match self {
             FeatureKind::Extrude(e) => vec![e.distance.as_str()],
             FeatureKind::Revolve(r) => vec![r.angle.as_str()],
+            FeatureKind::Blend(b) => vec![b.size.as_str()],
+            FeatureKind::Shell(s) => vec![s.thickness.as_str()],
             FeatureKind::Pattern(p) => match &p.layout {
                 PatternLayout::Linear { spacing, .. } => vec![p.count.as_str(), spacing.as_str()],
                 PatternLayout::Circular { angle, .. } => vec![p.count.as_str(), angle.as_str()],
@@ -209,6 +265,38 @@ impl Document {
         }
         if let FeatureKind::Construct(c) = kind {
             return self.check_construction(c);
+        }
+        if let FeatureKind::Blend(b) = kind {
+            if b.edges.is_empty() || b.edges.len() > MAX_BLEND_EDGES {
+                return Err(bad(format!("pick 1 to {MAX_BLEND_EDGES} edges")));
+            }
+            if b.edges
+                .iter()
+                .any(|e| e.is_empty() || e.chars().count() > 512)
+            {
+                return Err(bad("an edge name is empty or too long".into()));
+            }
+            let s = self.evaluate_feature_value(&b.size, expr::Dim::LENGTH)?;
+            if !s.is_finite() || s <= chamfera_geom::LINEAR_TOLERANCE {
+                return Err(bad("the size must be above 0".into()));
+            }
+            return Ok(());
+        }
+        if let FeatureKind::Shell(s) = kind {
+            if s.faces.len() > MAX_SHELL_FACES {
+                return Err(bad(format!("open at most {MAX_SHELL_FACES} faces")));
+            }
+            if s.faces
+                .iter()
+                .any(|f| f.is_empty() || f.chars().count() > 512)
+            {
+                return Err(bad("a face name is empty or too long".into()));
+            }
+            let t = self.evaluate_feature_value(&s.thickness, expr::Dim::LENGTH)?;
+            if !t.is_finite() || t.abs() <= chamfera_geom::LINEAR_TOLERANCE {
+                return Err(bad("the thickness must not be 0".into()));
+            }
+            return Ok(());
         }
         let Some(sketch) = kind.sketch() else {
             return Err(bad("the feature has no sketch".into()));
@@ -239,7 +327,10 @@ impl Document {
                     return Err(bad("the distance must not be 0".into()));
                 }
             }
-            FeatureKind::Pattern(_) | FeatureKind::Construct(_) => {}
+            FeatureKind::Pattern(_)
+            | FeatureKind::Construct(_)
+            | FeatureKind::Blend(_)
+            | FeatureKind::Shell(_) => {}
             FeatureKind::Revolve(r) => {
                 let a = self.evaluate_feature_value(&r.angle, expr::Dim::ANGLE)?;
                 if !a.is_finite()
@@ -430,7 +521,7 @@ impl Document {
                 }
                 FeatureKind::Revolve(r) => r.axis_feature == Some(feature),
                 FeatureKind::Construct(c) => c.features_used().contains(&feature),
-                FeatureKind::Extrude(_) => false,
+                FeatureKind::Extrude(_) | FeatureKind::Blend(_) | FeatureKind::Shell(_) => false,
             })
             .map(|f| f.name.clone());
         sketches.chain(features).collect()

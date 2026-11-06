@@ -628,7 +628,7 @@ impl ViewRenderer {
         queue.write_buffer(&self.globals, 0, bytemuck::bytes_of(&globals));
         for b in &frame.scene.bodies {
             if let Some(g) = self.bodies.get(&b.id) {
-                let selected = frame.scene.selection.is_some_and(|s| s.body == b.id);
+                let selected = frame.scene.is_selected(b.id);
                 let c = if selected {
                     frame.theme.body_selected
                 } else {

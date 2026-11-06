@@ -9,7 +9,8 @@ pub use construct::{
     AxisRef, ConstructKind, Construction, EdgeRef, OriginAxis, OriginPlane, PlaneRef, PointRef,
 };
 pub use feature::{
-    Extrude, ExtrudeDirection, Feature, FeatureKind, Operation, Pattern, PatternLayout, Revolve,
+    Blend, BlendKind, Extrude, ExtrudeDirection, Feature, FeatureKind, Operation, Pattern,
+    PatternLayout, Revolve, Shell,
 };
 pub use imported::ImportedBody;
 
@@ -27,6 +28,8 @@ use thiserror::Error;
 /// - 6: feature operations (new body, join, cut, intersect).
 /// - 7: linear and circular patterns of features.
 /// - 8: imported solid bodies.
+/// - 9: fillets and chamfers of edges.
+/// - 10: shells (hollowed solids with open faces).
 /// - 11: construction planes, axes and points as timeline features (`construct`), sketches
 ///   on a construction plane (`on_plane`), and revolves and circular patterns about a
 ///   construction axis (`axis_feature`). Older files open unchanged: every new field is

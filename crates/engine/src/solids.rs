@@ -6,9 +6,9 @@
 //! timeline) and the rest of the timeline still builds, as CAD users expect.
 
 use crate::Session;
-use chamfera_doc::{Extrude, ExtrudeDirection, FeatureKind, Operation, Revolve};
+use chamfera_doc::{Blend, BlendKind, Extrude, ExtrudeDirection, FeatureKind, Operation, Revolve};
 use chamfera_geom::{Point2, Point3};
-use chamfera_kernel::{Body, Line2, Profile, ProfileEdge, TessOptions, tessellate};
+use chamfera_kernel::{Body, EdgeId, Line2, Profile, ProfileEdge, TessOptions, tessellate};
 use chamfera_sketch::{Curve, ProfileLoop, Region, Sketch};
 use std::collections::BTreeMap;
 
@@ -22,6 +22,133 @@ pub struct Solid {
     pub scene_id: Option<u32>,
     /// The kernel face behind each displayed triangle (for picking faces).
     pub faces: Vec<chamfera_kernel::FaceId>,
+    /// Each true edge as the polyline that is drawn (for picking edges).
+    pub edges: Vec<(EdgeId, Vec<Point3>)>,
+}
+
+/// How far from an edge on screen, in pixels, a click still picks it.
+pub const EDGE_PICK_PIXELS: f64 = 8.0;
+
+/// How a fillet or chamfer refers to an edge: its name (`2:top 0`), or for an edge
+/// without one, its two faces (`between 2:side 0 and 2:top`).
+pub fn edge_ref(body: &Body, e: EdgeId) -> Option<String> {
+    if let Some(n) = body.edge_name(e).ok().flatten() {
+        return Some(n.to_owned());
+    }
+    let [a, b] = body.edge_faces(e).ok()?;
+    let mut names = [
+        body.face_name(a).ok().flatten()?.to_owned(),
+        body.face_name(b).ok().flatten()?.to_owned(),
+    ];
+    names.sort();
+    Some(format!("between {} and {}", names[0], names[1]))
+}
+
+/// Gives every edge of a feature's new body its full name, like [`name_faces`].
+fn name_edges(body: &mut Body, feature: u32) {
+    for edge in body.edges() {
+        let role = body.edge_name(edge).ok().flatten().map(str::to_owned);
+        if let Some(role) = role
+            && split_face_key(&role).is_none()
+        {
+            let _ = body.set_edge_name(edge, &face_key(feature, &role));
+        }
+    }
+}
+
+/// Fillets or chamfers the named edges of the bodies built so far. Every name must still
+/// be found; a body without any of them is left alone.
+fn build_blend(
+    doc: &chamfera_doc::Document,
+    b: &Blend,
+    feature: u32,
+    made: &[(u32, String, Body)],
+) -> Result<Vec<(u32, String, Body)>, String> {
+    let size = doc
+        .evaluate_feature_value(&b.size, chamfera_doc::expr::Dim::LENGTH)
+        .map_err(|x| x.to_string())?;
+    let word = match b.blend {
+        BlendKind::Fillet => "fillet",
+        BlendKind::Chamfer => "chamfer",
+    };
+    let mut found = vec![false; b.edges.len()];
+    let mut next = made.to_vec();
+    for (_, _, body) in &mut next {
+        let mut edges = Vec::new();
+        for e in body.edges() {
+            if let Some(r) = edge_ref(body, e)
+                && let Some(i) = b.edges.iter().position(|x| *x == r)
+            {
+                edges.push(e);
+                if let Some(f) = found.get_mut(i) {
+                    *f = true;
+                }
+            }
+        }
+        if edges.is_empty() {
+            continue;
+        }
+        let mut out = match b.blend {
+            BlendKind::Fillet => chamfera_kernel::fillet(body, &edges, size),
+            BlendKind::Chamfer => chamfera_kernel::chamfer(body, &edges, size),
+        }
+        .map_err(|x| format!("{word}: {x}"))?;
+        name_faces(&mut out, feature);
+        name_edges(&mut out, feature);
+        *body = out;
+    }
+    if let Some(i) = found.iter().position(|f| !f) {
+        let name = b.edges.get(i).map_or("", String::as_str);
+        return Err(format!("{word}: the edge {name:?} is no longer there"));
+    }
+    Ok(next)
+}
+
+/// Hollows the bodies built so far (rung K12). A body is shelled when it has one of the
+/// named open faces; with no faces named, every body is hollowed closed. Every name must
+/// still be found.
+fn build_shell(
+    doc: &chamfera_doc::Document,
+    sh: &chamfera_doc::Shell,
+    feature: u32,
+    made: &[(u32, String, Body)],
+) -> Result<Vec<(u32, String, Body)>, String> {
+    let thickness = doc
+        .evaluate_feature_value(&sh.thickness, chamfera_doc::expr::Dim::LENGTH)
+        .map_err(|x| x.to_string())?;
+    let mut found = vec![false; sh.faces.len()];
+    let mut next = made.to_vec();
+    let mut any = false;
+    for (_, _, body) in &mut next {
+        let mut open = Vec::new();
+        for f in body.faces() {
+            if let Some(n) = body.face_name(f).ok().flatten()
+                && let Some(i) = sh.faces.iter().position(|x| x == n)
+            {
+                open.push(f);
+                if let Some(seen) = found.get_mut(i) {
+                    *seen = true;
+                }
+            }
+        }
+        if open.is_empty() && !sh.faces.is_empty() {
+            continue;
+        }
+        let mut out =
+            chamfera_kernel::shell(body, &open, thickness).map_err(|x| format!("shell: {x}"))?;
+        name_faces(&mut out, feature);
+        name_edges(&mut out, feature);
+        *body = out;
+        any = true;
+    }
+    if let Some(i) = found.iter().position(|f| !f) {
+        let name = sh.faces.get(i).map_or("", String::as_str);
+        return Err(format!("shell: the face {name:?} is no longer there"));
+    }
+    if !any {
+        return Err("shell: there is no solid to shell".into());
+    }
+    Ok(next)
 }
 
 /// The plane of a flat face, with its normal pointing out of the solid.
@@ -499,10 +626,31 @@ impl Session {
                 }
                 continue;
             }
+            if let FeatureKind::Blend(b) = &feature.kind {
+                match build_blend(&self.doc, b, feature.id, &made) {
+                    Ok(next) => made = next,
+                    Err(e) => {
+                        built.errors.insert(feature.id, e);
+                    }
+                }
+                continue;
+            }
+            if let FeatureKind::Shell(sh) = &feature.kind {
+                match build_shell(&self.doc, sh, feature.id, &made) {
+                    Ok(next) => made = next,
+                    Err(e) => {
+                        built.errors.insert(feature.id, e);
+                    }
+                }
+                continue;
+            }
             let result = match &feature.kind {
                 FeatureKind::Extrude(e) => build_extrude(&self.doc, e),
                 FeatureKind::Revolve(r) => build_revolve(&self.doc, r, &built.constructs),
-                FeatureKind::Pattern(_) | FeatureKind::Construct(_) => continue,
+                FeatureKind::Pattern(_)
+                | FeatureKind::Construct(_)
+                | FeatureKind::Blend(_)
+                | FeatureKind::Shell(_) => continue,
             };
             let operation = feature.kind.operation();
             let result = result.map(|bodies| {
@@ -510,6 +658,7 @@ impl Session {
                     .into_iter()
                     .map(|mut b| {
                         name_faces(&mut b, feature.id);
+                        name_edges(&mut b, feature.id);
                         b
                     })
                     .collect::<Vec<_>>()
@@ -563,16 +712,16 @@ impl Session {
             .filter_map(|s| s.scene_id)
             .collect();
         self.scene.bodies.retain(|b| !old.contains(&b.id));
-        if self.scene.selection.is_some_and(|h| old.contains(&h.body)) {
-            self.scene.selection = None;
-        }
+        self.scene.deselect(|b| old.contains(&b));
         let options = TessOptions::default();
         for (feature, name, body) in made {
             // A solid that cannot be shown is still built: its measures and export work.
             let mut faces = Vec::new();
+            let mut edges = Vec::new();
             let scene_id = match tessellate(&body, &options) {
                 Ok(m) => {
                     faces = m.face_of_triangle;
+                    edges = m.edge_polylines;
                     let id = self.scene.add(&name, m.mesh);
                     if id.is_none() {
                         built
@@ -590,6 +739,7 @@ impl Session {
             };
             built.solids.push(Solid {
                 faces,
+                edges,
                 feature,
                 name,
                 body,
@@ -651,6 +801,110 @@ impl Session {
         let (feature, role) = split_face_key(name)?;
         let plane = face_plane(&solid.body, face)?;
         Some((feature, role.to_owned(), plane))
+    }
+
+    /// The full name (`2:top`) of the face of a built solid under pixel `(x, y)`, flat or
+    /// curved (a shell opens either).
+    pub fn face_ref_at(&self, x: f64, y: f64, w: f64, h: f64) -> Option<String> {
+        let bounds = self.scene.bounds();
+        let ray = self.camera.ray_through(x, y, w, h, bounds.as_ref())?;
+        let hit = self.scene.pick(&ray)?;
+        let solid = self
+            .built
+            .solids
+            .iter()
+            .find(|s| s.scene_id == Some(hit.body))?;
+        let face = *solid.faces.get(hit.triangle)?;
+        solid.body.face_name(face).ok().flatten().map(str::to_owned)
+    }
+
+    /// The true edge nearest pixel `(x, y)` on screen, within [`EDGE_PICK_PIXELS`], that is
+    /// not hidden behind a face: (solid index, edge, its reference name).
+    pub fn edge_at(&self, x: f64, y: f64, w: f64, h: f64) -> Option<(usize, EdgeId, String)> {
+        use chamfera_render::{mat_mul, transform_point};
+        if !(w >= 1.0 && h >= 1.0 && x.is_finite() && y.is_finite()) {
+            return None;
+        }
+        let bounds = self.scene.bounds();
+        let vp = mat_mul(
+            &self.camera.projection_matrix(w / h, bounds.as_ref()),
+            &self.camera.view_matrix(),
+        );
+        let screen = |p: Point3| -> Option<(f64, f64)> {
+            let n = transform_point(&vp, p)?;
+            if !(0.0..=1.0).contains(&n[2]) {
+                return None;
+            }
+            Some(((n[0] + 1.0) * 0.5 * w, (1.0 - n[1]) * 0.5 * h))
+        };
+        // (pixel distance, solid, edge, the nearest segment of the edge, the pixel on it)
+        type Segment = (Point3, Point3);
+        type Near = (f64, usize, EdgeId, Segment, (f64, f64));
+        let mut near: Vec<Near> = Vec::new();
+        for (si, s) in self.built.solids.iter().enumerate() {
+            let shown = s
+                .scene_id
+                .and_then(|id| self.scene.bodies.iter().find(|b| b.id == id))
+                .is_some_and(|b| b.visible);
+            if !shown {
+                continue;
+            }
+            for (e, line) in &s.edges {
+                let mut best: Option<(f64, Segment, (f64, f64))> = None;
+                for pair in line.windows(2) {
+                    let [a, b] = pair else { continue };
+                    let (Some(sa), Some(sb)) = (screen(*a), screen(*b)) else {
+                        continue;
+                    };
+                    let (dx, dy) = (sb.0 - sa.0, sb.1 - sa.1);
+                    let len2 = dx * dx + dy * dy;
+                    let t = if len2 > 1e-12 {
+                        (((x - sa.0) * dx + (y - sa.1) * dy) / len2).clamp(0.0, 1.0)
+                    } else {
+                        0.0
+                    };
+                    let px = (sa.0 + t * dx, sa.1 + t * dy);
+                    let d = ((px.0 - x).powi(2) + (px.1 - y).powi(2)).sqrt();
+                    if best.is_none_or(|b| d < b.0) {
+                        best = Some((d, (*a, *b), px));
+                    }
+                }
+                if let Some((d, p, px)) = best
+                    && d <= EDGE_PICK_PIXELS
+                {
+                    near.push((d, si, *e, p, px));
+                }
+            }
+        }
+        near.sort_by(|a, b| a.0.total_cmp(&b.0));
+        for (_, si, e, (a, b), px) in near {
+            // Hidden when a face is clearly nearer the eye along the ray through it. The
+            // edge's depth is where the ray passes closest to the segment (a point taken
+            // by its place on screen would be off under perspective).
+            let ray = self.camera.ray_through(px.0, px.1, w, h, bounds.as_ref())?;
+            let u = b - a;
+            let w0 = a - ray.origin;
+            let (uu, ud) = (u.dot(u), u.dot(ray.direction));
+            let denom = uu - ud * ud;
+            let s = if denom > 1e-12 {
+                ((ud * ray.direction.dot(w0) - u.dot(w0)) / denom).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            let along = (a + u * s - ray.origin).dot(ray.direction);
+            let hidden = self
+                .scene
+                .pick(&ray)
+                .is_some_and(|hit| hit.distance < along - (1e-3 * along.abs()).max(0.05));
+            if hidden {
+                continue;
+            }
+            let solid = self.built.solids.get(si)?;
+            if let Some(r) = edge_ref(&solid.body, e) {
+                return Some((si, e, r));
+            }
+        }
+        None
     }
 
     /// The solids of the last rebuild.

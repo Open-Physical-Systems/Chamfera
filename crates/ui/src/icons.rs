@@ -74,6 +74,7 @@ pub enum Icon {
     Revolve,
     Save,
     Select,
+    Shell,
     Sketch,
     SketchCreate,
     SketchFinish,
@@ -89,7 +90,7 @@ pub enum Icon {
 
 impl Icon {
     #[cfg(test)]
-    pub const ALL: [Icon; 66] = [
+    pub const ALL: [Icon; 67] = [
         Icon::Arc,
         Icon::ArcTangent,
         Icon::ArcThreePoint,
@@ -145,6 +146,7 @@ impl Icon {
         Icon::Revolve,
         Icon::Save,
         Icon::Select,
+        Icon::Shell,
         Icon::Sketch,
         Icon::SketchCreate,
         Icon::SketchFinish,
@@ -210,6 +212,7 @@ impl Icon {
             Icon::Revolve => master!("revolve"),
             Icon::Save => master!("save"),
             Icon::Select => master!("select"),
+            Icon::Shell => master!("shell"),
             Icon::Sketch => master!("sketch"),
             Icon::SketchCreate => master!("sketch_create"),
             Icon::SketchFinish => master!("sketch_finish"),
