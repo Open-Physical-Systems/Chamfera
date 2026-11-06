@@ -52,7 +52,7 @@ const CREATE_SHOWN: [Tool; 6] = [
     Tool::Offset,
     Tool::Mirror,
 ];
-const CREATE_ALL: [Tool; 11] = [
+pub(crate) const CREATE_ALL: [Tool; 11] = [
     Tool::Line,
     Tool::Rectangle,
     Tool::CentreRectangle,
@@ -66,7 +66,7 @@ const CREATE_ALL: [Tool; 11] = [
     Tool::CircularPattern,
 ];
 /// The MODIFY tools shown in the ribbon (Construction and Delete follow them).
-const MODIFY_TOOLS: [Tool; 5] = [
+pub(crate) const MODIFY_TOOLS: [Tool; 5] = [
     Tool::Fillet,
     Tool::Chamfer,
     Tool::Trim,
@@ -75,7 +75,7 @@ const MODIFY_TOOLS: [Tool; 5] = [
 ];
 
 impl Tool {
-    fn name(self) -> &'static str {
+    pub(crate) fn name(self) -> &'static str {
         match self {
             Tool::Select => "Select",
             Tool::Line => label("sketch.line"),
@@ -99,7 +99,7 @@ impl Tool {
         }
     }
 
-    fn icon(self) -> Icon {
+    pub(crate) fn icon(self) -> Icon {
         match self {
             Tool::Select => Icon::Select,
             Tool::Line => Icon::Line,
@@ -197,7 +197,7 @@ Click a curve to split it where other curves cross it; Split All splits every cr
     fn hint(self, clicks: usize) -> &'static str {
         match (self, clicks) {
             (Tool::Select, _) => {
-                "Click to select (Shift adds) · drag a point to move it · Del deletes"
+                "Click to select (Shift adds) · drag a point to move it · drag on empty space to box select · Del deletes"
             }
             (Tool::Line, 0) => "Click the start of the line",
             (Tool::Line, _) => {
@@ -455,7 +455,7 @@ impl SketchUi {
         self.tool.unwrap_or(Tool::Select)
     }
 
-    fn reset_tool(&mut self) {
+    pub(crate) fn reset_tool(&mut self) {
         self.clicks.clear();
         self.chain_start = None;
         self.picked_curve = None;
@@ -479,7 +479,7 @@ impl SketchUi {
 }
 
 /// The geometric constraints: command kind, name, icon and what it does.
-const CONSTRAINTS: [(&str, &str, Icon, &str); 10] = [
+pub(crate) const CONSTRAINTS: [(&str, &str, Icon, &str); 10] = [
     (
         "horizontal",
         "Horizontal",
@@ -615,7 +615,10 @@ impl ChamferaApp {
                 current == Tool::Select,
                 false,
             )
-            .on_hover_text(Tool::Select.tooltip())
+            .on_hover_text(crate::shortcuts::tip(
+                Tool::Select.tooltip(),
+                crate::shortcuts::Action::SketchTool(Tool::Select),
+            ))
             .clicked()
             {
                 pick = Some(Tool::Select);
@@ -633,7 +636,10 @@ impl ChamferaApp {
                     current == tool,
                     false,
                 )
-                .on_hover_text(tool.tooltip())
+                .on_hover_text(crate::shortcuts::tip(
+                    tool.tooltip(),
+                    crate::shortcuts::Action::SketchTool(tool),
+                ))
                 .clicked()
                 {
                     pick = Some(tool);
@@ -668,9 +674,12 @@ impl ChamferaApp {
                 false,
                 false,
             )
-            .on_hover_text(format!(
-                "{}\nSelect a line, a circle, an arc or two points, then click to give it a size",
-                label("sketch.dimension_selection")
+            .on_hover_text(crate::shortcuts::tip(
+                &format!(
+                    "{}\nSelect a line, a circle, an arc or two points, then click to give it a size",
+                    label("sketch.dimension_selection")
+                ),
+                crate::shortcuts::Action::Dimension,
             ))
             .clicked()
             {
@@ -732,15 +741,8 @@ impl ChamferaApp {
         if let Some(kind) = constrain {
             self.run_sketch("sketch.constrain_selection", json!({ "kind": kind }));
         }
-        if dimension
-            && let Some(r) = self.run_sketch("sketch.dimension_selection", json!({}))
-            && let (Some(id), Some(v), Some(kind)) = (
-                r["constraint"].as_u64(),
-                r["value"].as_f64(),
-                r["kind"].as_str(),
-            )
-        {
-            self.sketch.editing = Some((id, kind.to_owned(), display_value(kind, v)));
+        if dimension {
+            self.dimension_selected();
         }
         let look = self.look();
         widgets::ribbon_divider(ui, look);
@@ -759,7 +761,10 @@ impl ChamferaApp {
                     current == tool,
                     false,
                 )
-                .on_hover_text(tool.tooltip())
+                .on_hover_text(crate::shortcuts::tip(
+                    tool.tooltip(),
+                    crate::shortcuts::Action::SketchTool(tool),
+                ))
                 .clicked()
                 {
                     pick = Some(tool);
@@ -774,9 +779,10 @@ impl ChamferaApp {
                 false,
                 false,
             )
-            .on_hover_text(
+            .on_hover_text(crate::shortcuts::tip(
                 "Construction\nTurn the selected curves into reference geometry that profiles ignore, or back",
-            )
+                crate::shortcuts::Action::Construction,
+            ))
             .clicked()
             {
                 construction = true;
@@ -790,7 +796,10 @@ impl ChamferaApp {
                 false,
                 false,
             )
-            .on_hover_text("Delete\nRemove the selected points and curves  (Del)")
+            .on_hover_text(crate::shortcuts::tip(
+                "Delete\nRemove the selected points and curves",
+                crate::shortcuts::Action::Delete,
+            ))
             .clicked()
             {
                 remove = true;
@@ -859,7 +868,21 @@ impl ChamferaApp {
         }
     }
 
-    fn toggle_construction(&mut self) {
+    /// Dimensions the selection at its current size and starts editing the value, as the
+    /// Dimension button does.
+    pub(crate) fn dimension_selected(&mut self) {
+        if let Some(r) = self.run_sketch("sketch.dimension_selection", json!({}))
+            && let (Some(id), Some(v), Some(kind)) = (
+                r["constraint"].as_u64(),
+                r["value"].as_f64(),
+                r["kind"].as_str(),
+            )
+        {
+            self.sketch.editing = Some((id, kind.to_owned(), display_value(kind, v)));
+        }
+    }
+
+    pub(crate) fn toggle_construction(&mut self) {
         let curves: Vec<u32> = self
             .session
             .sketch_selection
@@ -1040,6 +1063,12 @@ impl ChamferaApp {
                     .ok()
                     .and_then(|r| as_id(&r["item"]["point"]));
                 self.sketch.dragging = picked;
+                if picked.is_none() {
+                    self.box_begin(ui, rect, true);
+                }
+            }
+            if self.box_input(ui, response, rect) {
+                return true;
             }
             if let Some(point) = self.sketch.dragging {
                 if response.dragged_by(egui::PointerButton::Primary)
@@ -1299,7 +1328,8 @@ impl ChamferaApp {
         if tool == Tool::Select {
             self.run_sketch(
                 "sketch.select",
-                json!({ "x": x, "y": y, "width": w, "height": h, "add": shift }),
+                json!({ "x": x, "y": y, "width": w, "height": h, "add": shift,
+                        "filter": self.filter_param() }),
             );
             return;
         }

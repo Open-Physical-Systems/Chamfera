@@ -37,6 +37,7 @@ impl ChamferaApp {
             #[cfg(target_arch = "wasm32")]
             self.web.target("File", _file.response.rect);
             ui.menu_button("View", |ui| self.view_menu(ui));
+            ui.menu_button("Help", |ui| self.help_menu(ui));
             widgets::bar_divider(ui, self.look(), 20.0);
             let look = self.look();
             if widgets::icon_button(ui, look, Icon::Save, 30.0, 20.0, true, false)
@@ -246,7 +247,9 @@ impl ChamferaApp {
         ui.horizontal_centered(|ui| {
             ui.spacing_mut().item_spacing.x = S3;
             let small = |text: &str, c| egui::RichText::new(text).size(T_SMALL).color(c);
-            if self.session.active_sketch.is_some() {
+            if let Some(hint) = self.box_hint() {
+                ui.label(small(hint, muted));
+            } else if self.session.active_sketch.is_some() {
                 if let Some(state) = self.sketch.state {
                     let (dot, text) = match state {
                         crate::sketch_ui::SketchState::Full => {
@@ -282,7 +285,7 @@ impl ChamferaApp {
                 ui.label(small("Click inside closed profiles to pick them · click again to unpick", muted));
             } else {
                 ui.label(small(
-                    "Click: select · Middle-drag: pan · Right-drag or Shift+middle: orbit · Wheel: zoom · F: fit · H: home",
+                    "Click: select · Shift/Ctrl+click: add or remove · Drag: box (right: window, left: crossing) · Middle-drag: pan · Right-drag: orbit · Wheel: zoom · F: fit",
                     muted,
                 ));
             }
@@ -309,7 +312,18 @@ impl ChamferaApp {
                 let n = self.session.scene.bodies.len();
                 let bodies = if n == 1 { "body" } else { "bodies" };
                 ui.label(small(&format!("{n} {bodies} · {tris} triangles"), muted));
-                if let Some(h) = self.session.scene.selection {
+                let selected = self.session.scene.selected_bodies();
+                if selected.len() > 1 || (selected.len() == 1 && self.session.scene.selection.is_none()) {
+                    let text = match selected.as_slice() {
+                        [one] => format!(
+                            "{} selected",
+                            self.session.scene.body(*one).map(|b| b.name.as_str()).unwrap_or("1 body")
+                        ),
+                        many => format!("{} bodies selected", many.len()),
+                    };
+                    widgets::bar_divider(ui, look, 14.0);
+                    ui.label(small(&text, look.c(|t| t.text)));
+                } else if let Some(h) = self.session.scene.selection {
                     let body = self.session.scene.body(h.body);
                     let name = body.map(|b| b.name.as_str()).unwrap_or("");
                     let n = body

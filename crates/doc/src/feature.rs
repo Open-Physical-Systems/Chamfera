@@ -79,8 +79,13 @@ pub struct Extrude {
 pub struct Revolve {
     pub sketch: u32,
     pub profiles: Vec<Point2>,
-    /// The axis: a sketch line (its curve id) the profile turns around.
+    /// The axis: a sketch line (its curve id) the profile turns around. Ignored when
+    /// `axis_feature` is set.
     pub axis: u32,
+    /// A construction axis (its feature id) to turn around instead of a sketch line. It
+    /// must lie in the sketch plane.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub axis_feature: Option<u32>,
     /// The angle, an expression such as `360 deg` or `90`.
     pub angle: String,
     #[serde(default)]
@@ -102,6 +107,10 @@ pub enum PatternLayout {
         origin: chamfera_geom::Point3,
         axis: chamfera_geom::Vec3,
         angle: String,
+        /// A construction axis (its feature id) to turn around instead of `origin` and
+        /// `axis`, followed when the design rebuilds.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        axis_feature: Option<u32>,
     },
 }
 
@@ -141,13 +150,32 @@ pub struct Blend {
 /// Most edges one blend may hold.
 pub const MAX_BLEND_EDGES: usize = 10_000;
 
+/// A shell: the solids built so far hollowed to walls of `thickness`, with the named
+/// faces removed to open them. Faces are named like everywhere else (`2:top` is face
+/// `top` of feature 2's shape), so the shell finds them again after every rebuild. A
+/// negative thickness grows the walls outward.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Shell {
+    /// The faces to remove (open); may be empty for a closed, hollow body.
+    #[serde(default)]
+    pub faces: Vec<String>,
+    /// The wall thickness, an expression such as `2 mm`.
+    pub thickness: String,
+}
+
+/// Most faces one shell may open.
+pub const MAX_SHELL_FACES: usize = 10_000;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum FeatureKind {
     Extrude(Extrude),
     Revolve(Revolve),
     Pattern(Pattern),
+    /// A construction plane, axis or point.
+    Construct(crate::construct::Construction),
     Blend(Blend),
+    Shell(Shell),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -167,7 +195,10 @@ impl FeatureKind {
         match self {
             FeatureKind::Extrude(e) => Some(e.sketch),
             FeatureKind::Revolve(r) => Some(r.sketch),
-            FeatureKind::Pattern(_) | FeatureKind::Blend(_) => None,
+            FeatureKind::Pattern(_)
+            | FeatureKind::Construct(_)
+            | FeatureKind::Blend(_)
+            | FeatureKind::Shell(_) => None,
         }
     }
 
@@ -176,7 +207,10 @@ impl FeatureKind {
         match self {
             FeatureKind::Extrude(e) => e.operation,
             FeatureKind::Revolve(r) => r.operation,
-            FeatureKind::Pattern(_) | FeatureKind::Blend(_) => Operation::NewBody,
+            FeatureKind::Pattern(_)
+            | FeatureKind::Construct(_)
+            | FeatureKind::Blend(_)
+            | FeatureKind::Shell(_) => Operation::NewBody,
         }
     }
 
@@ -184,7 +218,10 @@ impl FeatureKind {
         match self {
             FeatureKind::Extrude(e) => &e.profiles,
             FeatureKind::Revolve(r) => &r.profiles,
-            FeatureKind::Pattern(_) | FeatureKind::Blend(_) => &[],
+            FeatureKind::Pattern(_)
+            | FeatureKind::Construct(_)
+            | FeatureKind::Blend(_)
+            | FeatureKind::Shell(_) => &[],
         }
     }
 
@@ -193,10 +230,12 @@ impl FeatureKind {
             FeatureKind::Extrude(_) => "Extrude",
             FeatureKind::Revolve(_) => "Revolve",
             FeatureKind::Pattern(_) => "Pattern",
+            FeatureKind::Construct(c) => c.kind().label(),
             FeatureKind::Blend(b) => match b.blend {
                 BlendKind::Fillet => "Fillet",
                 BlendKind::Chamfer => "Chamfer",
             },
+            FeatureKind::Shell(_) => "Shell",
         }
     }
 
@@ -206,10 +245,12 @@ impl FeatureKind {
             FeatureKind::Extrude(e) => vec![e.distance.as_str()],
             FeatureKind::Revolve(r) => vec![r.angle.as_str()],
             FeatureKind::Blend(b) => vec![b.size.as_str()],
+            FeatureKind::Shell(s) => vec![s.thickness.as_str()],
             FeatureKind::Pattern(p) => match &p.layout {
                 PatternLayout::Linear { spacing, .. } => vec![p.count.as_str(), spacing.as_str()],
                 PatternLayout::Circular { angle, .. } => vec![p.count.as_str(), angle.as_str()],
             },
+            FeatureKind::Construct(c) => c.expressions(),
         }
     }
 }
@@ -221,6 +262,9 @@ impl Document {
         let bad = |reason: String| DocError::BadFeature { reason };
         if let FeatureKind::Pattern(p) = kind {
             return self.check_pattern(p);
+        }
+        if let FeatureKind::Construct(c) = kind {
+            return self.check_construction(c);
         }
         if let FeatureKind::Blend(b) = kind {
             if b.edges.is_empty() || b.edges.len() > MAX_BLEND_EDGES {
@@ -235,6 +279,22 @@ impl Document {
             let s = self.evaluate_feature_value(&b.size, expr::Dim::LENGTH)?;
             if !s.is_finite() || s <= chamfera_geom::LINEAR_TOLERANCE {
                 return Err(bad("the size must be above 0".into()));
+            }
+            return Ok(());
+        }
+        if let FeatureKind::Shell(s) = kind {
+            if s.faces.len() > MAX_SHELL_FACES {
+                return Err(bad(format!("open at most {MAX_SHELL_FACES} faces")));
+            }
+            if s.faces
+                .iter()
+                .any(|f| f.is_empty() || f.chars().count() > 512)
+            {
+                return Err(bad("a face name is empty or too long".into()));
+            }
+            let t = self.evaluate_feature_value(&s.thickness, expr::Dim::LENGTH)?;
+            if !t.is_finite() || t.abs() <= chamfera_geom::LINEAR_TOLERANCE {
+                return Err(bad("the thickness must not be 0".into()));
             }
             return Ok(());
         }
@@ -267,7 +327,10 @@ impl Document {
                     return Err(bad("the distance must not be 0".into()));
                 }
             }
-            FeatureKind::Pattern(_) | FeatureKind::Blend(_) => {}
+            FeatureKind::Pattern(_)
+            | FeatureKind::Construct(_)
+            | FeatureKind::Blend(_)
+            | FeatureKind::Shell(_) => {}
             FeatureKind::Revolve(r) => {
                 let a = self.evaluate_feature_value(&r.angle, expr::Dim::ANGLE)?;
                 if !a.is_finite()
@@ -277,6 +340,10 @@ impl Document {
                     return Err(bad(
                         "the angle must be above 0 and at most 360 degrees".into()
                     ));
+                }
+                if let Some(axis) = r.axis_feature {
+                    self.check_construct_axis(axis)?;
+                    return Ok(());
                 }
                 match f.sketch.curve(chamfera_sketch::CurveId(r.axis)) {
                     Some(c) if c.is_line() => {}
@@ -324,7 +391,11 @@ impl Document {
                 origin,
                 axis,
                 angle,
+                axis_feature,
             } => {
+                if let Some(a) = axis_feature {
+                    self.check_construct_axis(*a)?;
+                }
                 if !origin.is_valid() || axis.normalized().is_none() {
                     return Err(bad("the axis needs a point and a direction".into()));
                 }
@@ -340,6 +411,18 @@ impl Document {
             }
         }
         Ok(())
+    }
+
+    /// Checks that `id` is a construction axis.
+    fn check_construct_axis(&self, id: u32) -> Result<(), DocError> {
+        match &self.feature(id)?.kind {
+            FeatureKind::Construct(c) if c.kind() == crate::construct::ConstructKind::Axis => {
+                Ok(())
+            }
+            _ => Err(DocError::BadFeature {
+                reason: format!("feature {id} is not a construction axis"),
+            }),
+        }
     }
 
     /// Evaluates a feature's expression against the current parameters.
@@ -413,20 +496,35 @@ impl Document {
         Ok(self.features.remove(i))
     }
 
-    /// Sketches attached to a face of a feature, and patterns of it (so deleting the
-    /// feature can be refused).
+    /// Sketches attached to a face of a feature or drawn on a construction plane, patterns
+    /// of it, and constructions and revolves that use it (so deleting the feature can be
+    /// refused).
     pub fn feature_users(&self, feature: u32) -> Vec<String> {
         let sketches = self
             .sketches
             .iter()
-            .filter(|s| s.attached.as_ref().is_some_and(|a| a.feature == feature))
+            .filter(|s| {
+                s.attached.as_ref().is_some_and(|a| a.feature == feature)
+                    || s.on_plane == Some(feature)
+            })
             .map(|s| s.name.clone());
-        let patterns = self
+        let features = self
             .features
             .iter()
-            .filter(|f| matches!(&f.kind, FeatureKind::Pattern(p) if p.source == feature))
+            .filter(|f| match &f.kind {
+                FeatureKind::Pattern(p) => {
+                    p.source == feature
+                        || matches!(
+                            p.layout,
+                            PatternLayout::Circular { axis_feature: Some(a), .. } if a == feature
+                        )
+                }
+                FeatureKind::Revolve(r) => r.axis_feature == Some(feature),
+                FeatureKind::Construct(c) => c.features_used().contains(&feature),
+                FeatureKind::Extrude(_) | FeatureKind::Blend(_) | FeatureKind::Shell(_) => false,
+            })
             .map(|f| f.name.clone());
-        sketches.chain(patterns).collect()
+        sketches.chain(features).collect()
     }
 
     /// Features that use a sketch (so deleting the sketch can be refused).

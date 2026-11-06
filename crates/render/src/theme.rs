@@ -52,6 +52,21 @@ pub struct Theme {
     pub sketch_preview: Rgba,
     /// What the pointer is over, or what is picked.
     pub highlight: Rgba,
+    /// Measure results in the viewport: the dimension line between closest points.
+    pub measure: Rgba,
+    // construction geometry
+    /// Construction plane outlines, axes and points.
+    pub construct: Rgba,
+    /// The see-through fill of construction planes.
+    pub construct_fill: Rgba,
+    /// The face or edge under the pointer in the viewport, before a click picks it.
+    pub hover_highlight: Rgba,
+    /// Window box selection (dragged left to right: what is fully inside): solid outline.
+    pub select_window: Rgba,
+    pub select_window_fill: Rgba,
+    /// Crossing box selection (dragged right to left: what it touches): dashed outline.
+    pub select_crossing: Rgba,
+    pub select_crossing_fill: Rgba,
     // interface surfaces (see docs/design/ui.md)
     /// The app bar, ribbon, timeline and status bar.
     pub chrome: Rgba,
@@ -105,6 +120,14 @@ impl Theme {
             sketch_construction: Rgba(214, 120, 30, 255),
             sketch_preview: Rgba(30, 100, 220, 140),
             highlight: Rgba(240, 160, 20, 255),
+            measure: Rgba(0, 140, 112, 255),
+            construct: Rgba(176, 112, 16, 255),
+            construct_fill: Rgba(232, 168, 40, 46),
+            hover_highlight: Rgba(0, 150, 180, 255),
+            select_window: Rgba(30, 112, 214, 255),
+            select_window_fill: Rgba(30, 112, 214, 36),
+            select_crossing: Rgba(30, 135, 70, 255),
+            select_crossing_fill: Rgba(30, 135, 70, 36),
             chrome: Rgba(252, 252, 253, 255),
             panel: Rgba(246, 247, 249, 255),
             panel_alt: Rgba(236, 239, 243, 255),
@@ -144,6 +167,14 @@ impl Theme {
             sketch_construction: Rgba(240, 150, 60, 255),
             sketch_preview: Rgba(96, 170, 255, 140),
             highlight: Rgba(255, 190, 60, 255),
+            measure: Rgba(70, 216, 178, 255),
+            construct: Rgba(240, 180, 80, 255),
+            construct_fill: Rgba(240, 180, 80, 38),
+            hover_highlight: Rgba(90, 215, 235, 255),
+            select_window: Rgba(84, 160, 255, 255),
+            select_window_fill: Rgba(84, 160, 255, 40),
+            select_crossing: Rgba(88, 196, 124, 255),
+            select_crossing_fill: Rgba(88, 196, 124, 40),
             chrome: Rgba(29, 31, 35, 255),
             panel: Rgba(35, 38, 43, 255),
             panel_alt: Rgba(45, 49, 56, 255),
@@ -218,6 +249,22 @@ mod tests {
             }
             let ratio = contrast(t.on_accent, t.accent);
             assert!(ratio >= 4.5, "{:?}: on_accent: {ratio}", t.mode);
+        }
+    }
+
+    #[test]
+    fn box_selection_outlines_stand_out_from_the_viewport_and_differ() {
+        // Graphics contrast (WCAG 3:1) against both ends of the background gradient, and
+        // window and crossing boxes in different colours, not only different dashes.
+        for t in [Theme::light(), Theme::dark()] {
+            for bg in [t.background_top, t.background_bottom] {
+                for (what, fg) in [("window", t.select_window), ("crossing", t.select_crossing)] {
+                    let ratio = contrast(fg, bg);
+                    assert!(ratio >= 3.0, "{:?}: {what} box: {ratio}", t.mode);
+                }
+            }
+            assert_ne!(t.select_window, t.select_crossing);
+            assert!(t.select_window_fill.3 < 64 && t.select_crossing_fill.3 < 64);
         }
     }
 

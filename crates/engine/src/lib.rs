@@ -4,9 +4,12 @@
 //! [`Session::execute`] with a command id and JSON parameters, so they behave the same way.
 //! Read `skills/chamfera-commands/SKILL.md` before adding one.
 
+pub mod box_select;
 pub mod cmd;
+pub mod construct;
 mod imported;
 mod params;
+pub mod pick_filter;
 pub mod script;
 pub mod sketching;
 pub mod solids;
@@ -51,6 +54,8 @@ pub struct Session {
     pub active_sketch: Option<u32>,
     /// Selected points and curves of the active sketch.
     pub sketch_selection: Vec<sketching::SketchItem>,
+    /// Selected edges of solids, by name (`select.pick` with a `filter` that has edges).
+    pub selected_edges: Vec<String>,
     /// Solids built from the timeline (worked out again after every change).
     built: solids::Built,
     /// The file the design was last opened from or saved to.
@@ -96,8 +101,10 @@ impl Session {
         // Solids follow the design: rebuild after anything that may have changed it.
         // solid.* and feature.* rebuild themselves; a failed command was rolled back, so
         // the solids must follow the restored design.
-        let rebuilt_itself =
-            id.starts_with("solid.") || id.starts_with("feature.") || id == "body.import_step";
+        let rebuilt_itself = id.starts_with("solid.")
+            || id.starts_with("feature.")
+            || id.starts_with("construct.")
+            || id == "body.import_step";
         if (spec.mutates && (result.is_err() || !rebuilt_itself))
             || (id.starts_with("edit.") && result.is_ok())
             || (id.starts_with("design.") && result.is_ok() && id != "design.save")
