@@ -104,6 +104,53 @@ fn build_blend(
     Ok(next)
 }
 
+/// Hollows the bodies built so far (rung K12). A body is shelled when it has one of the
+/// named open faces; with no faces named, every body is hollowed closed. Every name must
+/// still be found.
+fn build_shell(
+    doc: &chamfera_doc::Document,
+    sh: &chamfera_doc::Shell,
+    feature: u32,
+    made: &[(u32, String, Body)],
+) -> Result<Vec<(u32, String, Body)>, String> {
+    let thickness = doc
+        .evaluate_feature_value(&sh.thickness, chamfera_doc::expr::Dim::LENGTH)
+        .map_err(|x| x.to_string())?;
+    let mut found = vec![false; sh.faces.len()];
+    let mut next = made.to_vec();
+    let mut any = false;
+    for (_, _, body) in &mut next {
+        let mut open = Vec::new();
+        for f in body.faces() {
+            if let Some(n) = body.face_name(f).ok().flatten()
+                && let Some(i) = sh.faces.iter().position(|x| x == n)
+            {
+                open.push(f);
+                if let Some(seen) = found.get_mut(i) {
+                    *seen = true;
+                }
+            }
+        }
+        if open.is_empty() && !sh.faces.is_empty() {
+            continue;
+        }
+        let mut out =
+            chamfera_kernel::shell(body, &open, thickness).map_err(|x| format!("shell: {x}"))?;
+        name_faces(&mut out, feature);
+        name_edges(&mut out, feature);
+        *body = out;
+        any = true;
+    }
+    if let Some(i) = found.iter().position(|f| !f) {
+        let name = sh.faces.get(i).map_or("", String::as_str);
+        return Err(format!("shell: the face {name:?} is no longer there"));
+    }
+    if !any {
+        return Err("shell: there is no solid to shell".into());
+    }
+    Ok(next)
+}
+
 /// The plane of a flat face, with its normal pointing out of the solid.
 pub fn face_plane(body: &Body, face: chamfera_kernel::FaceId) -> Option<chamfera_geom::Frame> {
     match body.face_surface(face).ok()?? {
@@ -527,10 +574,21 @@ impl Session {
                 }
                 continue;
             }
+            if let FeatureKind::Shell(sh) = &feature.kind {
+                match build_shell(&self.doc, sh, feature.id, &made) {
+                    Ok(next) => made = next,
+                    Err(e) => {
+                        built.errors.insert(feature.id, e);
+                    }
+                }
+                continue;
+            }
             let result = match &feature.kind {
                 FeatureKind::Extrude(e) => build_extrude(&self.doc, e),
                 FeatureKind::Revolve(r) => build_revolve(&self.doc, r),
-                FeatureKind::Pattern(_) | FeatureKind::Blend(_) => continue,
+                FeatureKind::Pattern(_) | FeatureKind::Blend(_) | FeatureKind::Shell(_) => {
+                    continue;
+                }
             };
             let operation = feature.kind.operation();
             let result = result.map(|bodies| {
@@ -671,6 +729,21 @@ impl Session {
         let (feature, role) = split_face_key(name)?;
         let plane = face_plane(&solid.body, face)?;
         Some((feature, role.to_owned(), plane))
+    }
+
+    /// The full name (`2:top`) of the face of a built solid under pixel `(x, y)`, flat or
+    /// curved (a shell opens either).
+    pub fn face_ref_at(&self, x: f64, y: f64, w: f64, h: f64) -> Option<String> {
+        let bounds = self.scene.bounds();
+        let ray = self.camera.ray_through(x, y, w, h, bounds.as_ref())?;
+        let hit = self.scene.pick(&ray)?;
+        let solid = self
+            .built
+            .solids
+            .iter()
+            .find(|s| s.scene_id == Some(hit.body))?;
+        let face = *solid.faces.get(hit.triangle)?;
+        solid.body.face_name(face).ok().flatten().map(str::to_owned)
     }
 
     /// The true edge nearest pixel `(x, y)` on screen, within [`EDGE_PICK_PIXELS`], that is

@@ -46,6 +46,8 @@ pub struct SolidUi {
     pub extrude: Option<ExtrudeTool>,
     /// The Fillet or Chamfer tool.
     pub blend: Option<crate::blend_ui::BlendTool>,
+    /// The Shell tool.
+    pub shell: Option<crate::shell_ui::ShellTool>,
     /// Waiting for a click on a flat face to sketch on.
     pub pick_face: bool,
     /// `--extrude`: pick the profile under the viewport's centre on the first frame.
@@ -63,7 +65,9 @@ impl ChamferaApp {
             .iter()
             .any(|s| !s.sketch.profiles().is_empty());
         let has_solids = !self.session.solids().is_empty();
-        let tool_free = self.solid.extrude.is_none() && self.solid.blend.is_none();
+        let tool_free = self.solid.extrude.is_none()
+            && self.solid.blend.is_none()
+            && self.solid.shell.is_none();
         let extruding = self.solid.extrude.as_ref().is_some_and(|t| !t.revolve);
         let revolving = self.solid.extrude.as_ref().is_some_and(|t| t.revolve);
         let mut plane: Option<(&str, &str)> = None;
@@ -201,6 +205,7 @@ impl ChamferaApp {
         widgets::ribbon_divider(ui, look);
         let mut parameters = false;
         let mut open_blend: Option<bool> = None;
+        let mut open_shell = false;
         let filleting = self.solid.blend.as_ref().is_some_and(|t| !t.chamfer);
         let chamfering = self.solid.blend.as_ref().is_some_and(|t| t.chamfer);
         widgets::ribbon_group(ui, look, "MODIFY", false, |ui| {
@@ -238,6 +243,7 @@ impl ChamferaApp {
                     open_blend = Some(chamfer);
                 }
             }
+            open_shell = crate::shell_ui::ribbon_button(ui, look, has_solids, tool_free);
             if widgets::tool_button(
                 ui,
                 look,
@@ -257,6 +263,9 @@ impl ChamferaApp {
         });
         if parameters {
             self.params.open = !self.params.open;
+        }
+        if open_shell {
+            self.open_shell_tool();
         }
         if let Some(chamfer) = open_blend {
             self.open_blend(chamfer);

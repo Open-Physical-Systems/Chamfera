@@ -198,6 +198,12 @@ fn hostile_params_never_panic() {
         json!({"edges": [long], "radius": -1, "distance": "0 mm", "size": "q"}),
         json!({"edges": [], "pick": {"x": 1e300, "y": "a"}, "radius": 1}),
         json!({"pick": {"x": 400, "y": 300, "width": 800, "height": 600}, "radius": 1e9}),
+        json!({"faces": ["2:top", 5, null], "thickness": "2 mm", "feature": 2}),
+        json!({"faces": [long], "thickness": -1e308, "feature": 3}),
+        json!({"faces": "2:top", "thickness": "0 mm"}),
+        json!({"faces": [], "pick": {"x": 400, "y": 300, "width": 800, "height": 600}, "thickness": 1}),
+        json!({"pick": {"x": 400, "y": 300, "width": 800, "height": 600}, "thickness": [2]}),
+        json!({"faces": [], "thickness": f64::NAN}),
         json!({"x1": 0, "y1": 0, "x2": 800, "y2": 600, "width": 800, "height": 600, "mode": "crossing", "add": true, "remove": true}),
         json!({"x1": 900, "y1": -1, "x2": f64::NAN, "y2": 1e308, "width": 800, "height": 600, "mode": "window"}),
         json!({"x1": 0, "y1": 0, "x2": 0, "y2": 0, "width": 1, "height": 1, "mode": "crossing", "add": "yes"}),
@@ -1396,6 +1402,109 @@ fn clicking_near_a_visible_edge_picks_it_and_fillets_it() {
     let v = exact_volume(&r);
     let removed = (1.0 - std::f64::consts::FRAC_PI_4) * 4.0 * 50.0;
     assert!((v - (15_000.0 - removed)).abs() < 1e-6, "{v}");
+}
+
+#[test]
+fn a_shell_hollows_the_plate_by_its_exact_volume_and_follows_edits() {
+    // 2 mm walls with the top open: the cavity is (50 - 4) x (30 - 4) x (h - 2).
+    let mut s = Session::new();
+    extruded_plate(&mut s, json!(10));
+    let r = s
+        .execute("solid.shell", &json!({"faces": ["2:top"], "thickness": 2}))
+        .unwrap();
+    assert!((exact_volume(&r) - (15_000.0 - 46.0 * 26.0 * 8.0)).abs() < 1e-6);
+    let shell = r["feature"].as_u64().unwrap();
+    // The inner walls are named after the faces they offset.
+    let names: Vec<String> = s.solids()[0]
+        .body
+        .faces()
+        .into_iter()
+        .filter_map(|f| {
+            s.solids()[0]
+                .body
+                .face_name(f)
+                .ok()
+                .flatten()
+                .map(str::to_owned)
+        })
+        .collect();
+    assert!(
+        names
+            .iter()
+            .any(|n| n == &format!("{shell}:shell of 2:bottom"))
+    );
+    // A thicker plate rebuilds with the shell in place.
+    s.execute("feature.edit", &json!({"feature": 2, "distance": 20}))
+        .unwrap();
+    let v = s.solids()[0].body.volume().unwrap();
+    assert!((v - (30_000.0 - 46.0 * 26.0 * 18.0)).abs() < 1e-6, "{v}");
+    // A new thickness, then no open face: a closed hollow box.
+    let r = s
+        .execute(
+            "feature.edit",
+            &json!({"feature": shell, "thickness": "1 mm"}),
+        )
+        .unwrap();
+    assert!((exact_volume(&r) - (30_000.0 - 48.0 * 28.0 * 19.0)).abs() < 1e-6);
+    let r = s
+        .execute("feature.edit", &json!({"feature": shell, "faces": []}))
+        .unwrap();
+    assert!((exact_volume(&r) - (30_000.0 - 48.0 * 28.0 * 18.0)).abs() < 1e-6);
+    // Undo goes back to the open top.
+    s.execute("edit.undo", &json!({})).unwrap();
+    let v = s.solids()[0].body.volume().unwrap();
+    assert!((v - (30_000.0 - 48.0 * 28.0 * 19.0)).abs() < 1e-6, "{v}");
+    // Size and thickness belong to their own features.
+    assert!(
+        s.execute("feature.edit", &json!({"feature": 2, "thickness": 1}))
+            .is_err()
+    );
+    assert!(
+        s.execute("feature.edit", &json!({"feature": shell, "size": 1}))
+            .is_err()
+    );
+}
+
+#[test]
+fn a_too_thick_or_zero_shell_is_refused_and_changes_nothing() {
+    let mut s = Session::new();
+    extruded_plate(&mut s, json!(10));
+    let before = s.doc.features.len();
+    for p in [
+        json!({"faces": ["2:top"], "thickness": 20}),
+        json!({"faces": ["2:top"], "thickness": 0}),
+        json!({"faces": ["9:nowhere"], "thickness": 1}),
+        json!({"faces": ["2:top"]}),
+    ] {
+        assert!(s.execute("solid.shell", &p).is_err(), "{p}");
+    }
+    assert_eq!(s.doc.features.len(), before);
+    assert!((s.solids()[0].body.volume().unwrap() - 15_000.0).abs() < 1e-6);
+}
+
+#[test]
+fn clicking_a_face_opens_it_in_a_shell() {
+    use chamfera_render::{mat_mul, transform_point};
+    let mut s = Session::new();
+    extruded_plate(&mut s, json!(10));
+    let (w, h) = (800.0, 600.0);
+    s.execute("view.home", &json!({"width": w, "height": h}))
+        .unwrap();
+    // Where the middle of the top face (25, 15, 10) lands on screen.
+    let vp = mat_mul(
+        &s.camera.projection_matrix(w / h, s.scene.bounds().as_ref()),
+        &s.camera.view_matrix(),
+    );
+    let n = transform_point(&vp, chamfera_geom::Point3::new(25.0, 15.0, 10.0)).unwrap();
+    let (x, y) = ((n[0] + 1.0) * 0.5 * w, (1.0 - n[1]) * 0.5 * h);
+    let r = s
+        .execute(
+            "solid.shell",
+            &json!({"pick": {"x": x, "y": y, "width": w, "height": h}, "thickness": "2 mm"}),
+        )
+        .unwrap();
+    assert_eq!(r["definition"]["faces"], json!(["2:top"]));
+    assert!((exact_volume(&r) - (15_000.0 - 46.0 * 26.0 * 8.0)).abs() < 1e-6);
 }
 
 // ----- sketch tools -----
