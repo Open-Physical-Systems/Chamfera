@@ -3,18 +3,29 @@
 //! The UI is thin: it reads the session and acts only through commands (`run`), so what a
 //! user does, a script or an agent can do the same way. Colours come from the theme tokens
 //! in `chamfera_render::Theme`. All camera input goes through `navigate`.
+//!
+//! Layout (`docs/design/ui.md`): the app bar and the ribbon on top, the Browser on the
+//! left, the viewport with its view cube in the middle, the timeline and the status bar at
+//! the bottom.
 
 use chamfera_engine::{Session, registry};
 use chamfera_render::{Camera, Hit, Overlay, Theme, ThemeMode};
-use egui::{Color32, PointerButton, Rect, Sense, UiBuilder, Vec2};
+use egui::{Color32, PointerButton, Rect, Sense, Vec2};
 use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
 
+mod browser;
+mod chrome;
 mod file_ui;
-pub mod icons;
+mod icons;
 mod params_ui;
 mod sketch_ui;
 mod solid_ui;
+mod timeline;
+mod viewcube;
+mod widgets;
+
+use widgets::Look;
 
 /// How the app starts.
 #[derive(Debug, Clone, Default)]
@@ -75,10 +86,13 @@ pub struct ChamferaApp {
     theme_choice: ThemeChoice,
     theme: Theme,
     styled_for: Option<ThemeMode>,
+    icons: icons::Icons,
     gpu: Option<ViewGpu>,
     drawn: Option<Drawn>,
     /// Viewport size in points; commands work in these units.
     viewport: Vec2,
+    /// Where the viewport is on screen, for placing dialogs beside the model.
+    viewport_rect: Rect,
     fit_pending: bool,
     message: Option<(String, bool)>,
     screenshot: Option<(std::path::PathBuf, Shot)>,
@@ -87,10 +101,15 @@ pub struct ChamferaApp {
     params: params_ui::ParamsUi,
     solid: solid_ui::SolidUi,
     file: file_ui::FileUi,
+    browser: browser::BrowserUi,
+    timeline: timeline::TimelineUi,
     /// Close the window on the next frame (Quit was confirmed).
     ctx_close: bool,
     /// `--zoom`: applied on the first frame.
     zoom: Option<f32>,
+    /// Frames drawn so far (up to a few): dialogs wait until the layout has settled, so
+    /// their first position is beside the real viewport.
+    frames: u8,
 }
 
 /// A command's label, so menus show the same words as the command list.
@@ -135,20 +154,25 @@ impl ChamferaApp {
             },
             theme: Theme::light(),
             styled_for: None,
+            icons: icons::Icons::default(),
             gpu,
             drawn: None,
             viewport: Vec2::new(1280.0, 800.0),
+            viewport_rect: Rect::from_min_size(egui::pos2(260.0, 120.0), Vec2::new(1280.0, 800.0)),
             // A start-up script sets its own view.
             fit_pending: options.script.is_empty(),
             message: None,
-            screenshot: options.screenshot.clone().map(|p| (p, Shot::Waiting(4))),
+            screenshot: options.screenshot.clone().map(|p| (p, Shot::Waiting(6))),
             shot_image: Arc::new(Mutex::new(None)),
             sketch: sketch_ui::SketchUi::default(),
             params: params_ui::ParamsUi::default(),
             solid: solid_ui::SolidUi::default(),
             file: file_ui::FileUi::default(),
+            browser: browser::BrowserUi::default(),
+            timeline: timeline::TimelineUi::default(),
             ctx_close: false,
             zoom: None,
+            frames: 0,
         };
         if options.sample {
             app.run("body.sample", json!({}));
@@ -189,6 +213,19 @@ impl ChamferaApp {
         json!({ "width": self.viewport.x.max(1.0), "height": self.viewport.y.max(1.0) })
     }
 
+    /// Looks along a standard view and fits the model in it.
+    fn standard_view(&mut self, view: &str) {
+        self.run("view.standard", json!({ "view": view }));
+        self.run("view.fit", self.viewport_params());
+    }
+
+    fn look(&self) -> Look<'_> {
+        Look {
+            theme: &self.theme,
+            icons: &self.icons,
+        }
+    }
+
     fn apply_theme(&mut self, ctx: &egui::Context) {
         let mode = match self.theme_choice {
             ThemeChoice::Light => ThemeMode::Light,
@@ -202,101 +239,11 @@ impl ChamferaApp {
             return;
         }
         self.theme = Theme::for_mode(mode);
-        let t = &self.theme;
-        let mut v = match mode {
-            ThemeMode::Light => egui::Visuals::light(),
-            ThemeMode::Dark => egui::Visuals::dark(),
-        };
-        v.panel_fill = color(t.panel);
-        v.window_fill = color(t.panel);
-        v.faint_bg_color = color(t.panel_alt);
-        v.extreme_bg_color = color(t.panel_alt);
-        v.override_text_color = Some(color(t.text));
-        v.selection.bg_fill = color(t.accent);
-        v.hyperlink_color = color(t.accent);
-        v.error_fg_color = color(t.error);
-        ctx.set_visuals(v);
+        // Both of egui's slots get our style, so its own theme switch never shows another.
+        let style = Arc::new(widgets::style_for(&self.theme, &ctx.global_style()));
+        ctx.set_style_of(egui::Theme::Light, style.clone());
+        ctx.set_style_of(egui::Theme::Dark, style);
         self.styled_for = Some(mode);
-    }
-
-    fn menu_bar(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            ui.menu_button("File", |ui| self.file_menu(ui));
-            ui.menu_button("Sketch", |ui| {
-                ui.label(label("sketch.create"));
-                for (plane, text, view) in sketch_ui::PLANES {
-                    if ui
-                        .add_enabled(
-                            self.session.active_sketch.is_none(),
-                            egui::Button::new(text),
-                        )
-                        .clicked()
-                    {
-                        ui.close();
-                        self.create_sketch(plane, view);
-                    }
-                }
-                if self.session.active_sketch.is_some() {
-                    ui.separator();
-                    if ui.button(label("sketch.finish")).clicked() {
-                        ui.close();
-                        self.finish_sketch();
-                    }
-                }
-            });
-            ui.menu_button("Modify", |ui| {
-                if ui.button("Parameters…").clicked() {
-                    ui.close();
-                    self.params.open = true;
-                }
-            });
-            ui.menu_button("View", |ui| {
-                if ui.button(format!("{}    H", label("view.home"))).clicked() {
-                    ui.close();
-                    self.run("view.home", self.viewport_params());
-                }
-                if ui.button(format!("{}    F", label("view.fit"))).clicked() {
-                    ui.close();
-                    self.run("view.fit", self.viewport_params());
-                }
-                ui.separator();
-                for (name, text) in [
-                    ("front", "Front"),
-                    ("back", "Back"),
-                    ("left", "Left"),
-                    ("right", "Right"),
-                    ("top", "Top"),
-                    ("bottom", "Bottom"),
-                    ("iso", "Isometric"),
-                ] {
-                    if ui.button(text).clicked() {
-                        ui.close();
-                        self.run("view.standard", json!({ "view": name }));
-                        self.run("view.fit", self.viewport_params());
-                    }
-                }
-                ui.separator();
-                let ortho =
-                    self.session.camera.projection == chamfera_render::Projection::Orthographic;
-                let mut o = ortho;
-                if ui.checkbox(&mut o, "Orthographic").changed() {
-                    let mode = if o { "orthographic" } else { "perspective" };
-                    self.run("view.projection", json!({ "mode": mode }));
-                }
-                ui.separator();
-                ui.label("Theme");
-                for (c, text) in [
-                    (ThemeChoice::System, "Follow system"),
-                    (ThemeChoice::Light, "Light"),
-                    (ThemeChoice::Dark, "Dark"),
-                ] {
-                    if ui.radio(self.theme_choice == c, text).clicked() {
-                        self.theme_choice = c;
-                        self.styled_for = None;
-                    }
-                }
-            });
-        });
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -323,111 +270,8 @@ impl ChamferaApp {
         self.fit_pending = true;
     }
 
-    fn browser(&mut self, ui: &mut egui::Ui) {
-        ui.strong("Browser");
-        ui.separator();
-        let selected = self.session.scene.selection.map(|h| h.body);
-        let rows: Vec<(u32, String, bool)> = self
-            .session
-            .scene
-            .bodies
-            .iter()
-            .map(|b| (b.id, b.name.clone(), b.visible))
-            .collect();
-        let sketches: Vec<(u32, String)> = self
-            .session
-            .doc
-            .sketches
-            .iter()
-            .map(|s| (s.id, s.name.clone()))
-            .collect();
-        if rows.is_empty() && sketches.is_empty() {
-            ui.weak("Empty design. Sketch → Create Sketch, File → Insert Mesh (STL), or Insert Sample Part.");
-        }
-        for (id, name) in sketches {
-            ui.horizontal(|ui| {
-                let active = self.session.active_sketch == Some(id);
-                let text = egui::RichText::new(name.as_str());
-                let text = if active {
-                    text.color(color(self.theme.accent)).strong()
-                } else {
-                    text
-                };
-                ui.label(text);
-                if !active
-                    && self.session.active_sketch.is_none()
-                    && ui.small_button(label("sketch.edit")).clicked()
-                {
-                    self.run_sketch("sketch.edit", json!({ "sketch": id }));
-                    self.sketch.tool = Some(sketch_ui::Tool::Select);
-                }
-            });
-        }
-        for (id, name, visible) in rows {
-            ui.horizontal(|ui| {
-                let mut v = visible;
-                if ui
-                    .checkbox(&mut v, "")
-                    .on_hover_text(label("body.visibility"))
-                    .changed()
-                {
-                    self.run("body.visibility", json!({ "body": id, "visible": v }));
-                }
-                let text = egui::RichText::new(&name);
-                let text = if selected == Some(id) {
-                    text.color(color(self.theme.accent)).strong()
-                } else {
-                    text
-                };
-                ui.label(text);
-            });
-        }
-        self.timeline(ui);
-    }
-
-    fn status_bar(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            if self.session.active_sketch.is_some() {
-                ui.colored_label(sketch_ui::hint_color(self), sketch_ui::tool_hint(self));
-                if let Some(s) = &self.sketch.status {
-                    ui.separator();
-                    ui.label(s);
-                }
-                ui.separator();
-            }
-            match &self.message {
-                Some((m, true)) => {
-                    ui.colored_label(color(self.theme.error), m);
-                }
-                Some((m, false)) => {
-                    ui.label(m);
-                }
-                None => {
-                    ui.weak("Left-click: select · Middle-drag: pan · Shift+middle or right-drag: orbit · Wheel: zoom");
-                }
-            }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let tris: usize = self.session.scene.bodies.iter().map(|b| b.mesh.triangles.len()).sum();
-                let n = self.session.scene.bodies.len();
-                let bodies = if n == 1 { "body" } else { "bodies" };
-                ui.weak(format!("{n} {bodies} · {tris} triangles"));
-                if let Some(h) = self.session.scene.selection {
-                    let name = self.session.scene.body(h.body).map(|b| b.name.as_str()).unwrap_or("");
-                    let n = self
-                        .session
-                        .scene
-                        .body(h.body)
-                        .and_then(|b| b.mesh.triangle_normal(h.triangle))
-                        .unwrap_or_default();
-                    ui.separator();
-                    ui.label(format!(
-                        "{name} · point ({:.2}, {:.2}, {:.2}) mm · normal ({:.2}, {:.2}, {:.2})",
-                        h.point.x, h.point.y, h.point.z, n.x, n.y, n.z
-                    ));
-                }
-            });
-        });
-    }
+    #[cfg(target_arch = "wasm32")]
+    fn import_dialog(&mut self) {}
 
     /// Mouse, touchpad and keys → view and select commands. The only camera input path.
     fn navigate(&mut self, ui: &egui::Ui, response: &egui::Response, rect: Rect) {
@@ -514,7 +358,12 @@ impl ChamferaApp {
                 self.run("view.home", self.viewport_params());
             }
             if keys.2 && self.session.active_sketch.is_none() {
-                self.run("select.clear", json!({}));
+                if self.solid.pick_face {
+                    self.solid.pick_face = false;
+                    self.message = None;
+                } else {
+                    self.run("select.clear", json!({}));
+                }
             }
         }
     }
@@ -523,6 +372,7 @@ impl ChamferaApp {
         let rect = ui.available_rect_before_wrap();
         let response = ui.allocate_rect(rect, Sense::click_and_drag());
         self.viewport = rect.size();
+        self.viewport_rect = rect;
         if self.fit_pending && rect.width() > 1.0 && rect.height() > 1.0 {
             self.fit_pending = false;
             self.run("view.home", self.viewport_params());
@@ -614,41 +464,8 @@ impl ChamferaApp {
         if self.session.active_sketch.is_some() {
             self.dimension_labels(ui, rect);
         }
-        self.view_bar(ui, rect);
-    }
-
-    /// Standard-view buttons in the viewport's top-right corner.
-    fn view_bar(&mut self, ui: &mut egui::Ui, rect: Rect) {
-        let bar = Rect::from_min_size(
-            egui::pos2(rect.max.x - 330.0, rect.min.y + 8.0),
-            Vec2::new(322.0, 28.0),
-        );
-        let mut child = ui.new_child(
-            UiBuilder::new()
-                .max_rect(bar)
-                .layout(egui::Layout::right_to_left(egui::Align::Center)),
-        );
-        egui::Frame::popup(child.style()).show(&mut child, |ui| {
-            ui.horizontal(|ui| {
-                for (name, text) in [
-                    ("iso", "Iso"),
-                    ("right", "Right"),
-                    ("top", "Top"),
-                    ("front", "Front"),
-                ] {
-                    if ui.small_button(text).clicked() {
-                        self.run("view.standard", json!({ "view": name }));
-                        self.run("view.fit", self.viewport_params());
-                    }
-                }
-                if ui.small_button(label("view.fit")).clicked() {
-                    self.run("view.fit", self.viewport_params());
-                }
-                if ui.small_button(label("view.home")).clicked() {
-                    self.run("view.home", self.viewport_params());
-                }
-            });
-        });
+        self.view_cube(ui, rect);
+        self.viewport_hint(ui, rect);
     }
 
     /// `--screenshot`: wait a few frames for the view to settle, grab the window, save, quit.
@@ -721,25 +538,52 @@ impl eframe::App for ChamferaApp {
             ctx.set_zoom_factor(z.clamp(0.5, 4.0));
         }
         self.apply_theme(&ctx);
-        egui::Panel::top("menu").show(ui, |ui| self.menu_bar(ui));
-        if self.session.active_sketch.is_some() {
-            egui::Panel::top("sketch toolbar").show(ui, |ui| self.sketch_toolbar(ui));
-        } else {
-            egui::Panel::top("solid toolbar").show(ui, |ui| self.solid_toolbar(ui));
-        }
-        egui::Panel::bottom("status").show(ui, |ui| self.status_bar(ui));
+        let chrome = egui::Frame::new()
+            .fill(color(self.theme.chrome))
+            .inner_margin(egui::Margin::symmetric(widgets::S3 as i8, 0));
+        egui::Panel::top("app bar")
+            .frame(chrome)
+            .exact_size(widgets::APP_BAR_HEIGHT)
+            .show_separator_line(true)
+            .show(ui, |ui| self.app_bar(ui));
+        egui::Panel::top("ribbon")
+            .frame(chrome)
+            .exact_size(widgets::RIBBON_HEIGHT)
+            .show(ui, |ui| self.ribbon(ui));
+        egui::Panel::bottom("status")
+            .frame(chrome)
+            .exact_size(widgets::STATUS_HEIGHT)
+            .show(ui, |ui| self.status_bar(ui));
+        egui::Panel::bottom("timeline")
+            .frame(chrome)
+            .exact_size(widgets::TIMELINE_HEIGHT)
+            .show(ui, |ui| self.timeline_bar(ui));
         egui::Panel::left("browser")
+            .frame(
+                egui::Frame::new()
+                    .fill(color(self.theme.panel))
+                    .inner_margin(egui::Margin::symmetric(
+                        widgets::S2 as i8 + 2,
+                        widgets::S3 as i8,
+                    )),
+            )
             .resizable(true)
-            .default_size(220.0)
-            .min_size(140.0)
+            .default_size(248.0)
+            .size_range(180.0..=420.0)
             .show(ui, |ui| self.browser(ui));
         egui::CentralPanel::no_frame().show(ui, |ui| self.viewport(ui, frame));
-        self.parameters_window(&ctx);
+        if self.frames < 2 {
+            self.frames += 1;
+            ctx.request_repaint();
+        } else {
+            self.parameters_window(&ctx);
+            self.extrude_dialog(&ctx);
+            self.feature_dialog(&ctx);
+        }
         self.unsaved_dialog(&ctx);
         self.file_shortcuts(&ctx);
         self.update_title(&ctx);
         self.handle_close_request(&ctx);
-        self.extrude_dialog(&ctx);
         self.screenshot_step(&ctx);
     }
 }

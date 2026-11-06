@@ -3,11 +3,13 @@
 //!
 //! Like the rest of the UI it acts only through commands (`sketch.*`).
 
+use crate::icons::Icon;
+use crate::widgets::{self, menu_item};
 use crate::{ChamferaApp, color, label};
 use chamfera_engine::sketching::SketchItem;
 use chamfera_geom::{Point2, Point3};
 use chamfera_render::{Overlay, OverlayStyle, mat_mul, transform_point};
-use egui::{Color32, Pos2, Rect, Vec2};
+use egui::{Pos2, Rect, Vec2};
 use serde_json::{Value, json};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -27,6 +29,41 @@ impl Tool {
             Tool::Rectangle => label("sketch.rectangle"),
             Tool::Circle => label("sketch.circle"),
             Tool::Arc => label("sketch.arc"),
+        }
+    }
+
+    fn icon(self) -> Icon {
+        match self {
+            Tool::Select => Icon::Select,
+            Tool::Line => Icon::Line,
+            Tool::Rectangle => Icon::Rectangle,
+            Tool::Circle => Icon::Circle,
+            Tool::Arc => Icon::Arc,
+        }
+    }
+
+    fn tooltip(self) -> &'static str {
+        match self {
+            Tool::Select => {
+                "Select
+Pick points and curves to constrain or dimension (Shift adds); drag points to move them"
+            }
+            Tool::Line => {
+                "Line
+Click point after point; click the first point again to close the shape"
+            }
+            Tool::Rectangle => {
+                "Rectangle
+Two clicks: opposite corners"
+            }
+            Tool::Circle => {
+                "Circle
+Two clicks: the centre, then a point on the circle"
+            }
+            Tool::Arc => {
+                "Arc
+Three clicks: the centre, the start, then the end (counter-clockwise)"
+            }
         }
     }
 
@@ -69,6 +106,18 @@ pub struct SketchUi {
     editing: Option<(u64, String, String)>,
     /// Remembered status line for the active sketch.
     pub status: Option<String>,
+    /// The active sketch's constraint state, for the status bar's coloured dot.
+    pub state: Option<SketchState>,
+}
+
+/// How constrained the active sketch is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SketchState {
+    Full,
+    Over,
+    /// Under-constrained, with this many degrees of freedom.
+    Free(u64),
+    Unsolved,
 }
 
 impl SketchUi {
@@ -81,6 +130,65 @@ impl SketchUi {
         self.chain_start = None;
     }
 }
+
+/// The geometric constraints: command kind, name, icon and what it does.
+const CONSTRAINTS: [(&str, &str, Icon, &str); 10] = [
+    (
+        "horizontal",
+        "Horizontal",
+        Icon::ConstraintHorizontal,
+        "Level a line, or line up two points left to right",
+    ),
+    (
+        "vertical",
+        "Vertical",
+        Icon::ConstraintVertical,
+        "Stand a line upright, or line up two points top to bottom",
+    ),
+    (
+        "coincident",
+        "Coincident",
+        Icon::ConstraintCoincident,
+        "Join two points into one place",
+    ),
+    (
+        "point_on",
+        "Point on Curve",
+        Icon::ConstraintPointOn,
+        "Keep a point on a line, circle or arc",
+    ),
+    (
+        "midpoint",
+        "Midpoint",
+        Icon::ConstraintMidpoint,
+        "Keep a point halfway along a line",
+    ),
+    (
+        "parallel",
+        "Parallel",
+        Icon::ConstraintParallel,
+        "Keep two lines pointing the same way",
+    ),
+    (
+        "perpendicular",
+        "Perpendicular",
+        Icon::ConstraintPerpendicular,
+        "Keep two lines at a right angle",
+    ),
+    (
+        "tangent",
+        "Tangent",
+        Icon::ConstraintTangent,
+        "Make a line or curve touch a circle or arc smoothly",
+    ),
+    (
+        "equal",
+        "Equal",
+        Icon::ConstraintEqual,
+        "Give two lines the same length, or two circles the same radius",
+    ),
+    ("fix", "Fix", Icon::ConstraintFix, "Pin a point where it is"),
+];
 
 /// Plane names for the Sketch menu, with the view that looks straight at each.
 pub const PLANES: [(&str, &str, &str); 3] = [
@@ -102,21 +210,30 @@ impl ChamferaApp {
     }
 
     pub(crate) fn refresh_sketch_status(&mut self) {
-        self.sketch.status = match self.session.execute("sketch.get", &json!({})) {
+        let (status, state) = match self.session.execute("sketch.get", &json!({})) {
             Ok(g) => {
                 let name = g["name"].as_str().unwrap_or("Sketch").to_owned();
-                let state = match (g["status"].as_str(), g["dof"].as_u64()) {
-                    (Some("FullyConstrained"), _) => "fully constrained".to_owned(),
-                    (Some("OverConstrained"), _) => "over-constrained".to_owned(),
-                    (_, Some(1)) => "1 degree of freedom".to_owned(),
-                    (_, Some(n)) => format!("{n} degrees of freedom"),
-                    _ => "not solved".to_owned(),
+                let (kind, state) = match (g["status"].as_str(), g["dof"].as_u64()) {
+                    (Some("FullyConstrained"), _) => {
+                        (SketchState::Full, "fully constrained".to_owned())
+                    }
+                    (Some("OverConstrained"), _) => {
+                        (SketchState::Over, "over-constrained".to_owned())
+                    }
+                    (_, Some(1)) => (SketchState::Free(1), "1 degree of freedom".to_owned()),
+                    (_, Some(n)) => (SketchState::Free(n), format!("{n} degrees of freedom")),
+                    _ => (SketchState::Unsolved, "not solved".to_owned()),
                 };
                 let regions = g["profiles"].as_array().map_or(0, Vec::len);
-                Some(format!("{name} · {state} · {regions} closed profiles"))
+                (
+                    Some(format!("{name} · {state} · {regions} closed profiles")),
+                    Some(kind),
+                )
             }
-            Err(_) => None,
+            Err(_) => (None, None),
         };
+        self.sketch.status = status;
+        self.sketch.state = state;
     }
 
     pub(crate) fn create_sketch(&mut self, plane: &str, view: &str) {
@@ -135,78 +252,213 @@ impl ChamferaApp {
         self.sketch = super::sketch_ui::SketchUi::default();
     }
 
-    /// The sketch toolbar, shown while a sketch is being edited.
+    /// The SKETCH ribbon, shown while a sketch is being edited: SELECT, CREATE,
+    /// CONSTRAINTS, MODIFY and FINISH SKETCH groups.
     pub(crate) fn sketch_toolbar(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal_wrapped(|ui| {
-            ui.strong("SKETCH");
-            ui.separator();
-            for tool in [
-                Tool::Select,
-                Tool::Line,
-                Tool::Rectangle,
-                Tool::Circle,
-                Tool::Arc,
-            ] {
-                if ui
-                    .selectable_label(self.sketch.tool() == tool, tool.name())
-                    .clicked()
-                {
-                    self.sketch.tool = Some(tool);
-                    self.sketch.reset_tool();
-                }
-            }
-            ui.separator();
-            let has_selection = !self.session.sketch_selection.is_empty();
-            for (kind, text) in [
-                ("horizontal", "Horizontal"),
-                ("vertical", "Vertical"),
-                ("coincident", "Coincident"),
-                ("point_on", "On Curve"),
-                ("midpoint", "Midpoint"),
-                ("parallel", "Parallel"),
-                ("perpendicular", "Perpendicular"),
-                ("tangent", "Tangent"),
-                ("equal", "Equal"),
-                ("fix", "Fix"),
-            ] {
-                if ui
-                    .add_enabled(has_selection, egui::Button::new(text).small())
-                    .clicked()
-                {
-                    self.run_sketch("sketch.constrain_selection", json!({ "kind": kind }));
-                }
-            }
-            ui.separator();
-            if ui
-                .add_enabled(
-                    has_selection,
-                    egui::Button::new(label("sketch.dimension_selection")),
-                )
-                .clicked()
-                && let Some(r) = self.run_sketch("sketch.dimension_selection", json!({}))
-                && let (Some(id), Some(v), Some(kind)) = (
-                    r["constraint"].as_u64(),
-                    r["value"].as_f64(),
-                    r["kind"].as_str(),
-                )
+        let look = self.look();
+        let current = self.sketch.tool();
+        let mut pick: Option<Tool> = None;
+        let (_, _) = widgets::ribbon_group(ui, look, "SELECT", false, |ui| {
+            if widgets::tool_button(
+                ui,
+                look,
+                Icon::Select,
+                "Select",
+                true,
+                current == Tool::Select,
+                false,
+            )
+            .on_hover_text(Tool::Select.tooltip())
+            .clicked()
             {
-                self.sketch.editing = Some((id, kind.to_owned(), display_value(kind, v)));
-            }
-            if ui
-                .add_enabled(
-                    has_selection,
-                    egui::Button::new(label("sketch.construction")),
-                )
-                .on_hover_text("Turn the selected curves into construction geometry, or back")
-                .clicked()
-            {
-                self.toggle_construction();
-            }
-            ui.separator();
-            if ui.button(label("sketch.finish")).clicked() {
-                self.finish_sketch();
+                pick = Some(Tool::Select);
             }
         });
+        widgets::ribbon_divider(ui, look);
+        let (_, menu) = widgets::ribbon_group(ui, look, "CREATE", true, |ui| {
+            for tool in [Tool::Line, Tool::Rectangle, Tool::Circle, Tool::Arc] {
+                if widgets::tool_button(
+                    ui,
+                    look,
+                    tool.icon(),
+                    tool.name(),
+                    true,
+                    current == tool,
+                    false,
+                )
+                .on_hover_text(tool.tooltip())
+                .clicked()
+                {
+                    pick = Some(tool);
+                }
+            }
+        });
+        egui::Popup::menu(&menu).show(|ui| {
+            for tool in [Tool::Line, Tool::Rectangle, Tool::Circle, Tool::Arc] {
+                if menu_item(ui, look, tool.icon(), tool.name(), true).clicked() {
+                    ui.close();
+                    pick = Some(tool);
+                }
+            }
+        });
+        if let Some(tool) = pick {
+            self.sketch.tool = Some(tool);
+            self.sketch.reset_tool();
+        }
+        let look = self.look();
+        widgets::ribbon_divider(ui, look);
+
+        let has_selection = !self.session.sketch_selection.is_empty();
+        let mut constrain: Option<&str> = None;
+        let mut dimension = false;
+        let (_, menu) = widgets::ribbon_group(ui, look, "CONSTRAINTS", true, |ui| {
+            if widgets::tool_button(
+                ui,
+                look,
+                Icon::Dimension,
+                "Dimension",
+                has_selection,
+                false,
+                false,
+            )
+            .on_hover_text(format!(
+                "{}\nSelect a line, a circle, an arc or two points, then click to give it a size",
+                label("sketch.dimension_selection")
+            ))
+            .clicked()
+            {
+                dimension = true;
+            }
+            ui.add_space(widgets::S2);
+            // The geometric constraints: a compact grid of two rows.
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing = egui::vec2(widgets::S1, widgets::S1);
+                ui.add_space(1.0);
+                for row in CONSTRAINTS.chunks(5) {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = widgets::S1;
+                        for (kind, text, icon, help) in row {
+                            if widgets::icon_button(
+                                ui,
+                                look,
+                                *icon,
+                                26.0,
+                                18.0,
+                                has_selection,
+                                false,
+                            )
+                            .on_hover_text(format!("{text}\n{help}"))
+                            .clicked()
+                            {
+                                constrain = Some(kind);
+                            }
+                        }
+                    });
+                }
+            });
+        });
+        egui::Popup::menu(&menu).show(|ui| {
+            if menu_item(
+                ui,
+                look,
+                Icon::Dimension,
+                label("sketch.dimension_selection"),
+                has_selection,
+            )
+            .clicked()
+            {
+                ui.close();
+                dimension = true;
+            }
+            ui.separator();
+            for (kind, text, icon, _) in CONSTRAINTS {
+                if menu_item(ui, look, icon, text, has_selection).clicked() {
+                    ui.close();
+                    constrain = Some(kind);
+                }
+            }
+            if !has_selection {
+                ui.separator();
+                widgets::caption(ui, look, "Select sketch geometry first");
+            }
+        });
+        if let Some(kind) = constrain {
+            self.run_sketch("sketch.constrain_selection", json!({ "kind": kind }));
+        }
+        if dimension
+            && let Some(r) = self.run_sketch("sketch.dimension_selection", json!({}))
+            && let (Some(id), Some(v), Some(kind)) = (
+                r["constraint"].as_u64(),
+                r["value"].as_f64(),
+                r["kind"].as_str(),
+            )
+        {
+            self.sketch.editing = Some((id, kind.to_owned(), display_value(kind, v)));
+        }
+        let look = self.look();
+        widgets::ribbon_divider(ui, look);
+        let mut construction = false;
+        let mut remove = false;
+        widgets::ribbon_group(ui, look, "MODIFY", false, |ui| {
+            if widgets::tool_button(
+                ui,
+                look,
+                Icon::Construction,
+                label("sketch.construction"),
+                has_selection,
+                false,
+                false,
+            )
+            .on_hover_text(
+                "Construction\nTurn the selected curves into reference geometry that profiles ignore, or back",
+            )
+            .clicked()
+            {
+                construction = true;
+            }
+            if widgets::tool_button(
+                ui,
+                look,
+                Icon::Delete,
+                label("sketch.remove"),
+                has_selection,
+                false,
+                false,
+            )
+            .on_hover_text("Delete\nRemove the selected points and curves  (Del)")
+            .clicked()
+            {
+                remove = true;
+            }
+        });
+        if construction {
+            self.toggle_construction();
+        }
+        if remove {
+            self.run_sketch("sketch.remove", json!({}));
+        }
+        let look = self.look();
+        widgets::ribbon_divider(ui, look);
+        let mut finish = false;
+        widgets::ribbon_group(ui, look, "FINISH SKETCH", false, |ui| {
+            if widgets::tool_button(
+                ui,
+                look,
+                Icon::SketchFinish,
+                label("sketch.finish"),
+                true,
+                false,
+                false,
+            )
+            .on_hover_text("Finish Sketch\nLeave the sketch and go back to the solid tools")
+            .clicked()
+            {
+                finish = true;
+            }
+        });
+        if finish {
+            self.finish_sketch();
+        }
     }
 
     fn toggle_construction(&mut self) {
@@ -522,9 +774,10 @@ impl ChamferaApp {
     /// Dimension labels over the viewport; click one to edit its value.
     pub(crate) fn dimension_labels(&mut self, ui: &mut egui::Ui, rect: Rect) {
         let labels = self.session.dimension_labels();
-        let font = egui::FontId::proportional(13.0);
+        let font = egui::FontId::proportional(12.5);
         let text_c = color(self.theme.text);
-        let bg = color(self.theme.panel).gamma_multiply(0.92);
+        let expr_c = color(self.theme.accent);
+        let bg = color(self.theme.panel).gamma_multiply(0.96);
         let editing_id = self.sketch.editing.as_ref().map(|e| e.0);
         for l in labels {
             let Some(pos) = self.project(rect, l.anchor) else {
@@ -537,24 +790,28 @@ impl ChamferaApp {
                 .session
                 .active_sketch()
                 .and_then(|f| f.expressions.get(&l.constraint).cloned());
-            let text = match &expression {
-                Some(e) => format!("{} = {e}", display_value(&l.kind, l.value)),
-                None => display_value(&l.kind, l.value),
-            };
-            let galley = ui
-                .painter()
-                .layout_no_wrap(text.clone(), font.clone(), text_c);
-            let r = Rect::from_center_size(pos, galley.size() + Vec2::new(10.0, 4.0));
+            // The value, and the expression it follows in the accent colour.
+            let mut job = egui::text::LayoutJob::default();
+            let format = |c| egui::TextFormat::simple(font.clone(), c);
+            job.append(&display_value(&l.kind, l.value), 0.0, format(text_c));
+            if let Some(e) = &expression {
+                job.append(&format!("= {e}"), 6.0, format(expr_c));
+            }
+            let galley = ui.painter().layout_job(job);
+            let r = Rect::from_center_size(pos, galley.size() + Vec2::new(12.0, 6.0));
             let id = ui.scope_id().with(("dimension", l.constraint));
-            let resp = ui.interact(r, id, egui::Sense::click());
+            let resp = ui
+                .interact(r, id, egui::Sense::click())
+                .on_hover_text("Click to type a value, a parameter or a formula");
             let border = if resp.hovered() {
-                color(self.theme.accent)
+                egui::Stroke::new(1.5, color(self.theme.accent))
             } else {
-                color(self.theme.text_muted)
+                egui::Stroke::new(1.0, color(self.theme.border))
             };
-            ui.painter().rect_filled(r, 3.0, bg);
+            let radius = egui::CornerRadius::same(widgets::R_SMALL);
+            ui.painter().rect_filled(r, radius, bg);
             ui.painter()
-                .rect_stroke(r, 3.0, (1.0, border), egui::StrokeKind::Inside);
+                .rect_stroke(r, radius, border, egui::StrokeKind::Inside);
             ui.painter()
                 .galley(r.center() - galley.size() * 0.5, galley, text_c);
             if resp.clicked() {
@@ -644,11 +901,6 @@ fn parse_value(kind: &str, text: &str) -> Option<f64> {
         return None;
     }
     Some(if kind == "angle" { v.to_radians() } else { v })
-}
-
-/// The muted colour for hints in the status bar.
-pub(crate) fn hint_color(app: &ChamferaApp) -> Color32 {
-    color(app.theme.text_muted)
 }
 
 pub(crate) fn tool_hint(app: &ChamferaApp) -> &'static str {
