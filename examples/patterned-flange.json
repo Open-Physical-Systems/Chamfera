@@ -1,0 +1,14 @@
+[
+  { "command": "param.set", "params": { "name": "bolts", "expression": "6", "unit": "unitless" } },
+  { "command": "sketch.create", "params": { "plane": "xy" }, "as": "base" },
+  { "command": "sketch.circle", "params": { "cx": 0, "cy": 0, "radius": 40 } },
+  { "command": "sketch.circle", "params": { "cx": 0, "cy": 0, "radius": 15 } },
+  { "command": "sketch.finish" },
+  { "command": "solid.extrude", "params": { "sketch": "$base.sketch", "profiles": [{ "x": 25, "y": 0 }], "distance": 8 }, "as": "flange" },
+  { "command": "sketch.create_on_face", "params": { "feature": "$flange.feature", "face": "top" }, "as": "bolt" },
+  { "command": "sketch.circle", "params": { "cx": 28, "cy": 0, "radius": 3.5 } },
+  { "command": "sketch.finish" },
+  { "command": "solid.extrude", "params": { "sketch": "$bolt.sketch", "profiles": [{ "x": 28, "y": 0 }], "distance": 8, "direction": "reversed", "operation": "cut" }, "as": "hole" },
+  { "command": "solid.pattern_circular", "params": { "feature": "$hole.feature", "count": "bolts", "origin": { "x": 0, "y": 0, "z": 0 }, "axis": { "x": 0, "y": 0, "z": 1 } } },
+  { "command": "view.home", "params": { "width": 1100, "height": 760 } }
+]
