@@ -46,19 +46,6 @@ impl BodyToolKind {
         }
     }
 
-    fn tip(self) -> &'static str {
-        match self {
-            BodyToolKind::Combine => {
-                "Combine\nJoin, cut or intersect bodies: click the target, then the tools"
-            }
-            BodyToolKind::SplitBody => "Split Body\nCut bodies in two with a plane",
-            BodyToolKind::SplitFace => {
-                "Split Face\nCut flat faces along a plane, keeping the shape (for draft and CAM)"
-            }
-            BodyToolKind::Thicken => "Thicken\nGive flat or cylindrical faces a thickness",
-        }
-    }
-
     fn on_bodies(self) -> bool {
         matches!(self, BodyToolKind::Combine | BodyToolKind::SplitBody)
     }
@@ -165,40 +152,6 @@ impl BodyTool {
     }
 }
 
-/// The body tool buttons of the MODIFY group; the tool clicked to open, if any.
-pub(crate) fn ribbon_buttons(
-    ui: &mut egui::Ui,
-    look: Look,
-    has_solids: bool,
-    free: bool,
-    open: Option<BodyToolKind>,
-) -> Option<BodyToolKind> {
-    let mut start = None;
-    for kind in BodyToolKind::ALL {
-        let on = open == Some(kind);
-        if widgets::tool_button(
-            ui,
-            look,
-            kind.icon(),
-            label(kind.command()),
-            has_solids && (free || on),
-            on,
-            false,
-        )
-        .on_hover_text(if has_solids {
-            kind.tip()
-        } else {
-            "Build a solid first"
-        })
-        .clicked()
-            && free
-        {
-            start = Some(kind);
-        }
-    }
-    start
-}
-
 /// The timeline's icon and one-line summary of a body tool.
 pub(crate) fn details(kind: &FeatureKind) -> (Icon, String) {
     let plane = |p: &PlaneRef| match p {
@@ -257,7 +210,7 @@ fn choice(ui: &mut egui::Ui, look: Look, name: &str, value: &mut usize, options:
     let current = options.get(*value).cloned().unwrap_or_default();
     egui::ComboBox::from_id_salt(("body tool", name))
         .selected_text(current)
-        .width(180.0)
+        .width(widgets::FIELD_WIDTH)
         .show_ui(ui, |ui| {
             for (i, o) in options.iter().enumerate() {
                 ui.selectable_value(value, i, o);
@@ -440,7 +393,7 @@ impl ChamferaApp {
                                 ui.end_row();
                                 widgets::field_label(ui, look, "Thickness");
                                 let edit = ui.add_sized(
-                                    [180.0, 26.0],
+                                    widgets::FIELD,
                                     egui::TextEdit::singleline(&mut tool.thickness)
                                         .hint_text("2 mm")
                                         .align(egui::Align2::LEFT_CENTER),

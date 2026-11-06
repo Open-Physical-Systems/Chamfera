@@ -402,161 +402,54 @@ impl ChamferaApp {
         }
     }
 
-    /// The DRAWING ribbon: SHEET, VIEWS, DIMENSIONS and EXPORT groups.
-    pub(crate) fn drawing_toolbar(&mut self, ui: &mut egui::Ui) {
-        let look = self.look();
-        let has_solids = !self.session.solids().is_empty();
-        let sheet = self.drawing_sheet();
-        let has_views = sheet
+    /// True when the shown sheet has a view to dimension or export.
+    pub(crate) fn drawing_has_views(&self) -> bool {
+        self.drawing_sheet()
             .and_then(|id| self.session.doc.drawing.sheet(id).ok())
-            .is_some_and(|s| !s.views.is_empty());
-        let mut new_sheet = false;
-        let mut projection = None;
-        widgets::ribbon_group(ui, look, "SHEET", false, |ui| {
-            new_sheet = widgets::tool_button(
-                ui,
-                look,
-                Icon::New,
-                label("drawing.new_sheet"),
-                true,
-                false,
-                false,
-            )
-            .on_hover_text("New Sheet\nAn A3 landscape sheet at 1:1 with a title block")
-            .clicked();
-            let third = sheet
-                .and_then(|id| self.session.doc.drawing.sheet(id).ok())
-                .is_none_or(|s| s.projection == ProjectionAngle::Third);
-            let text = if third { "Third angle" } else { "First angle" };
-            if widgets::tool_button(
-                ui,
-                look,
-                Icon::ViewRight,
-                text,
-                sheet.is_some(),
-                false,
-                false,
-            )
-            .on_hover_text("Projection\nSwitch between third- and first-angle projection")
-            .clicked()
-            {
-                projection = Some(if third { "first" } else { "third" });
-            }
-        });
-        widgets::ribbon_divider(ui, look);
-        let mut tool = self.drawing.tool;
-        widgets::ribbon_group(ui, look, "VIEWS", false, |ui| {
-            for (d, icon, text) in [
-                (ViewDirection::Front, Icon::ViewFront, "Front"),
-                (ViewDirection::Top, Icon::ViewTop, "Top"),
-                (ViewDirection::Right, Icon::ViewRight, "Right"),
-                (ViewDirection::Iso, Icon::ViewIso, "Isometric"),
-            ] {
-                let active = tool == Some(DrawTool::PlaceView(d));
-                if widgets::tool_button(ui, look, icon, text, has_solids, active, false)
-                    .on_hover_text(format!(
-                        "{text} view\nClick on the sheet to place it; views seen from the side \
-                         line up with the first view"
-                    ))
-                    .clicked()
-                {
-                    tool = if active {
-                        None
-                    } else {
-                        Some(DrawTool::PlaceView(d))
-                    };
-                }
-            }
-        });
-        widgets::ribbon_divider(ui, look);
-        widgets::ribbon_group(ui, look, "DIMENSIONS", false, |ui| {
-            for (k, icon, text, tip) in [
-                (
-                    DimensionKind::Horizontal,
-                    Icon::Dimension,
-                    "Horizontal",
-                    "Click two vertices or edges",
-                ),
-                (
-                    DimensionKind::Vertical,
-                    Icon::Dimension,
-                    "Vertical",
-                    "Click two vertices or edges",
-                ),
-                (
-                    DimensionKind::Aligned,
-                    Icon::Line,
-                    "Aligned",
-                    "Click two vertices or edges",
-                ),
-                (
-                    DimensionKind::Diameter,
-                    Icon::Circle,
-                    "Diameter",
-                    "Click a circle",
-                ),
-                (
-                    DimensionKind::Radius,
-                    Icon::Arc,
-                    "Radius",
-                    "Click a circle or arc",
-                ),
-                (
-                    DimensionKind::Angular,
-                    Icon::ConstraintPerpendicular,
-                    "Angle",
-                    "Click two straight edges",
-                ),
-            ] {
-                let active = tool == Some(DrawTool::Dimension(k));
-                if widgets::tool_button(ui, look, icon, text, has_views, active, false)
-                    .on_hover_text(format!("{text} dimension\n{tip}"))
-                    .clicked()
-                {
-                    tool = if active {
-                        None
-                    } else {
-                        Some(DrawTool::Dimension(k))
-                    };
-                }
-            }
-        });
-        widgets::ribbon_divider(ui, look);
-        let mut export = None;
-        widgets::ribbon_group(ui, look, "EXPORT", false, |ui| {
-            for f in ["svg", "dxf", "pdf"] {
-                if widgets::tool_button(
-                    ui,
-                    look,
-                    Icon::Export,
-                    &f.to_uppercase(),
-                    has_views,
-                    false,
-                    false,
-                )
-                .on_hover_text(format!("Export the sheet as {}", f.to_uppercase()))
-                .clicked()
-                {
-                    export = Some(f);
-                }
-            }
-        });
-        if tool != self.drawing.tool {
-            self.drawing.tool = tool;
-            self.drawing.picks.clear();
-        }
-        if new_sheet && let Some(r) = self.run("drawing.new_sheet", json!({})) {
+            .is_some_and(|s| !s.views.is_empty())
+    }
+
+    /// True when the shown sheet (or a new one) uses third-angle projection.
+    pub(crate) fn drawing_third_angle(&self) -> bool {
+        self.drawing_sheet()
+            .and_then(|id| self.session.doc.drawing.sheet(id).ok())
+            .is_none_or(|s| s.projection == ProjectionAngle::Third)
+    }
+
+    /// New Sheet: adds a sheet and shows it.
+    pub(crate) fn drawing_new_sheet(&mut self) {
+        if let Some(r) = self.run("drawing.new_sheet", json!({})) {
             self.drawing.sheet = r["sheet"].as_u64().and_then(|v| u32::try_from(v).ok());
             self.drawing.view = None;
         }
-        if let (Some(p), Some(id)) = (projection, sheet) {
+    }
+
+    /// Projection: switches the shown sheet between third- and first-angle projection.
+    pub(crate) fn drawing_toggle_projection(&mut self) {
+        let p = if self.drawing_third_angle() {
+            "first"
+        } else {
+            "third"
+        };
+        if let Some(id) = self.drawing_sheet() {
             self.run(
                 "drawing.edit_sheet",
                 json!({ "sheet": id, "projection": p }),
             );
         }
-        if let Some(f) = export {
-            self.export_drawing(f);
+    }
+
+    /// Picks a sheet tool (placing a view or a dimension), or drops it when it is the one
+    /// in use.
+    pub(crate) fn drawing_pick_tool(&mut self, tool: DrawTool) {
+        let next = if self.drawing.tool == Some(tool) {
+            None
+        } else {
+            Some(tool)
+        };
+        if next != self.drawing.tool {
+            self.drawing.tool = next;
+            self.drawing.picks.clear();
         }
     }
 

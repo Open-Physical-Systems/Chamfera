@@ -121,70 +121,6 @@ impl PressPullTool {
     }
 }
 
-/// The Press Pull, Offset Face and Delete Face buttons of the SOLID MODIFY group; the
-/// mode of the one clicked.
-pub(crate) fn ribbon_buttons(
-    ui: &mut egui::Ui,
-    look: Look,
-    has_any: bool,
-    has_solids: bool,
-    free: bool,
-    open: Option<PullMode>,
-) -> Option<PullMode> {
-    let mut out = None;
-    for (mode, icon, id, tip, enabled) in [
-        (
-            PullMode::Auto,
-            Icon::PressPull,
-            "solid.press_pull",
-            "Press Pull\nDrag a profile, face or edge: extrudes, offsets the face or fillets",
-            has_any,
-        ),
-        (
-            PullMode::Offset,
-            Icon::OffsetFace,
-            "solid.offset_face",
-            "Offset Face\nMove faces along their normals; the faces around them follow",
-            has_solids,
-        ),
-        (
-            PullMode::Delete,
-            Icon::DeleteFace,
-            "solid.delete_face",
-            "Delete Face\nRemove fillets, chamfers or holes and heal the solid",
-            has_solids,
-        ),
-    ] {
-        let on = open == Some(mode);
-        let tip = if mode == PullMode::Auto {
-            crate::shortcuts::tip(tip, crate::shortcuts::Action::PressPull)
-        } else {
-            tip.to_owned()
-        };
-        if widgets::tool_button(
-            ui,
-            look,
-            icon,
-            label(id),
-            enabled && (free || on),
-            on,
-            false,
-        )
-        .on_hover_text(if enabled {
-            tip
-        } else {
-            "Build a solid or draw a profile first".to_owned()
-        })
-        .clicked()
-            && free
-            && enabled
-        {
-            out = Some(mode);
-        }
-    }
-    out
-}
-
 /// The timeline's icon and line for a face edit.
 pub(crate) fn timeline_entry(kind: &chamfera_doc::FeatureKind) -> (Icon, String) {
     use chamfera_doc::FeatureKind as K;
@@ -582,7 +518,7 @@ impl ChamferaApp {
                             ui.end_row();
                             widgets::field_label(ui, look, tool.value_label());
                             let edit = ui.add_sized(
-                                [180.0, 26.0],
+                                widgets::FIELD,
                                 egui::TextEdit::singleline(&mut tool.value)
                                     .hint_text("5 mm")
                                     .align(egui::Align2::LEFT_CENTER),

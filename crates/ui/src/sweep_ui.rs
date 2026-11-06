@@ -86,54 +86,6 @@ impl SweepTool {
     }
 }
 
-/// The Sweep and Loft buttons of the SOLID ribbon's CREATE group: `Some(false)` when
-/// Sweep is clicked, `Some(true)` for Loft.
-pub(crate) fn ribbon_buttons(
-    ui: &mut egui::Ui,
-    look: Look,
-    has_profiles: bool,
-    free: bool,
-    open: Option<bool>,
-) -> Option<bool> {
-    let mut clicked = None;
-    for (loft, icon, id, tip) in [
-        (
-            false,
-            Icon::Sweep,
-            "solid.sweep",
-            "Sweep\nMove a closed profile along a path of lines and arcs that meet smoothly",
-        ),
-        (
-            true,
-            Icon::Loft,
-            "solid.loft",
-            "Loft\nJoin closed profiles on parallel planes into one solid, in order",
-        ),
-    ] {
-        let on = open == Some(loft);
-        if widgets::tool_button(
-            ui,
-            look,
-            icon,
-            label(id),
-            has_profiles && (free || on),
-            on,
-            false,
-        )
-        .on_hover_text(if has_profiles {
-            tip
-        } else {
-            "Draw a closed profile in a sketch first"
-        })
-        .clicked()
-            && free
-        {
-            clicked = Some(loft);
-        }
-    }
-    clicked
-}
-
 impl ChamferaApp {
     /// Opens the Sweep tool, or the Loft tool.
     pub(crate) fn open_sweep(&mut self, loft: bool) {
@@ -397,7 +349,7 @@ impl ChamferaApp {
                             widgets::field_label(ui, look, "Operation");
                             egui::ComboBox::from_id_salt("sweep operation")
                                 .selected_text(operation_name(tool.operation))
-                                .width(180.0)
+                                .width(widgets::FIELD_WIDTH)
                                 .show_ui(ui, |ui| {
                                     for o in [
                                         Operation::NewBody,

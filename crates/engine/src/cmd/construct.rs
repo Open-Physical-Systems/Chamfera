@@ -274,7 +274,11 @@ pub(crate) fn construct_reply(s: &Session, id: u32) -> Value {
 }
 
 fn add(s: &mut Session, c: Construction) -> CmdResult {
+    let faces = c.face_refs();
     let id = s.doc.add_feature(FeatureKind::Construct(c))?;
+    for r in &faces {
+        s.record_face_signature(id, r, None);
+    }
     s.rebuild();
     if let Some(e) = s.feature_errors().get(&id) {
         return Err(CommandError::Unavailable(e.clone()));

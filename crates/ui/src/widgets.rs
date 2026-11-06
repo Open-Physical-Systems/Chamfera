@@ -38,6 +38,10 @@ pub const RIBBON_HEIGHT: f32 = TAB_HEIGHT + TOOL_HEIGHT + GROUP_LABEL_HEIGHT + 1
 pub const TIMELINE_HEIGHT: f32 = 42.0;
 pub const STATUS_HEIGHT: f32 = 26.0;
 pub const ROW_HEIGHT: f32 = 26.0;
+/// The width of a field (text box, list, button) in a tool dialog's value column.
+pub const FIELD_WIDTH: f32 = 180.0;
+/// A tool dialog's field: `FIELD_WIDTH` wide, one row high.
+pub const FIELD: [f32; 2] = [FIELD_WIDTH, ROW_HEIGHT];
 
 /// What widgets draw with: the theme and the icons.
 #[derive(Clone, Copy)]
@@ -254,7 +258,7 @@ pub fn tool_button(
         .painter()
         .layout_no_wrap(text.to_owned(), font, text_colour);
     let extra = if menu { 10.0 } else { 0.0 };
-    let width = (galley.size().x + extra + 14.0).max(54.0);
+    let width = tool_width_for(galley.size().x, menu);
     let (rect, response) = ui.allocate_exact_size(vec2(width, TOOL_HEIGHT), sense(enabled));
     if ui.is_rect_visible(rect) {
         flat_background(ui, look, &response, active, R_MEDIUM);
@@ -281,6 +285,37 @@ pub fn tool_button(
         }
     }
     response
+}
+
+/// The width of a big ribbon tool whose label is `text_width` wide.
+fn tool_width_for(text_width: f32, menu: bool) -> f32 {
+    let extra = if menu { 10.0 } else { 0.0 };
+    (text_width + extra + 14.0).max(TOOL_MIN_WIDTH)
+}
+
+/// The narrowest big ribbon tool.
+pub const TOOL_MIN_WIDTH: f32 = 54.0;
+
+/// The width `tool_button` takes for this label, for planning the ribbon's layout.
+pub fn tool_width(ui: &Ui, text: &str, menu: bool) -> f32 {
+    let galley = ui.painter().layout_no_wrap(
+        text.to_owned(),
+        FontId::proportional(T_SMALL),
+        Color32::WHITE,
+    );
+    tool_width_for(galley.size().x, menu)
+}
+
+/// The width of a ribbon group's caption (text, chevron and some air), the least a
+/// group takes.
+pub fn caption_width(ui: &Ui, caption: &str, menu: bool) -> f32 {
+    let galley = ui.painter().layout_no_wrap(
+        caption.to_owned(),
+        FontId::proportional(T_CAPTION),
+        Color32::WHITE,
+    );
+    let extra = if menu { 12.0 } else { 0.0 };
+    (galley.size().x + extra + 12.0).max(40.0)
 }
 
 /// A square icon-only button (`side` points), with an icon of `icon_size` points.
@@ -323,7 +358,7 @@ pub fn ribbon_group<R>(
                 add(ui)
             })
             .inner;
-        let width = ui.min_rect().width().max(40.0);
+        let width = ui.min_rect().width().max(caption_width(ui, caption, menu));
         let (rect, response) = ui.allocate_exact_size(
             vec2(width, GROUP_LABEL_HEIGHT),
             if menu { Sense::click() } else { Sense::hover() },
@@ -572,4 +607,26 @@ pub fn menu_item(ui: &mut Ui, look: Look, icon: Icon, text: &str, enabled: bool)
         );
     }
     response
+}
+
+/// Marks a menu row as the item in use: an accent bar at its left, as the Browser marks
+/// the active row.
+pub fn menu_check(ui: &Ui, look: Look, row: &Response) {
+    let bar = Rect::from_min_size(
+        egui::pos2(row.rect.min.x, row.rect.min.y + 5.0),
+        vec2(2.5, row.rect.height() - 10.0),
+    );
+    ui.painter()
+        .rect_filled(bar, CornerRadius::same(1), look.c(|t| t.accent));
+}
+
+/// A shortcut at the right of a menu row, muted.
+pub fn menu_keys(ui: &Ui, look: Look, row: &Response, keys: &str) {
+    ui.painter().text(
+        egui::pos2(row.rect.max.x - 8.0, row.rect.center().y),
+        Align2::RIGHT_CENTER,
+        keys,
+        FontId::proportional(T_SMALL),
+        look.c(|t| t.text_muted),
+    );
 }

@@ -35,17 +35,10 @@ pub const EDGE_PICK_PIXELS: f64 = 8.0;
 
 /// How a fillet or chamfer refers to an edge: its name (`2:top 0`), or for an edge
 /// without one, its two faces (`between 2:side 0 and 2:top`).
+/// This is the inherited name, shared by every piece of a split edge; references go
+/// through [`crate::naming`], which tells the pieces apart (`2:top 0#2`).
 pub fn edge_ref(body: &Body, e: EdgeId) -> Option<String> {
-    if let Some(n) = body.edge_name(e).ok().flatten() {
-        return Some(n.to_owned());
-    }
-    let [a, b] = body.edge_faces(e).ok()?;
-    let mut names = [
-        body.face_name(a).ok().flatten()?.to_owned(),
-        body.face_name(b).ok().flatten()?.to_owned(),
-    ];
-    names.sort();
-    Some(format!("between {} and {}", names[0], names[1]))
+    chamfera_doc::naming::edge_ref(body, e)
 }
 
 /// Gives every edge of a feature's new body its full name, like [`name_faces`].
@@ -75,23 +68,36 @@ fn build_blend(
         BlendKind::Fillet => "fillet",
         BlendKind::Chamfer => "chamfer",
     };
-    let mut found = vec![false; b.edges.len()];
-    let mut next = made.to_vec();
-    for (_, _, body) in &mut next {
-        let mut edges = Vec::new();
-        for e in body.edges() {
-            if let Some(r) = edge_ref(body, e)
-                && let Some(i) = b.edges.iter().position(|x| *x == r)
-            {
-                edges.push(e);
-                if let Some(f) = found.get_mut(i) {
-                    *f = true;
+    // Every named edge, through the resolver: all pieces of a split edge, or the piece
+    // a `#k` reference or its signature picks.
+    let mut per_body: BTreeMap<usize, Vec<EdgeId>> = BTreeMap::new();
+    {
+        let bodies = crate::naming::bodies(made);
+        for r in &b.edges {
+            let found = crate::naming::resolve(
+                doc,
+                feature,
+                &bodies,
+                crate::naming::Kind::Edge,
+                r,
+                crate::naming::Want::All,
+            )
+            .map_err(|x| format!("{word}: {x}"))?;
+            for f in found {
+                if let Some(e) = f.edge() {
+                    let list = per_body.entry(f.body).or_default();
+                    if !list.contains(&e) {
+                        list.push(e);
+                    }
                 }
             }
         }
-        if edges.is_empty() {
+    }
+    let mut next = made.to_vec();
+    for (i, (_, _, body)) in next.iter_mut().enumerate() {
+        let Some(edges) = per_body.remove(&i) else {
             continue;
-        }
+        };
         let mut out = match b.blend {
             BlendKind::Fillet => chamfera_kernel::fillet(body, &edges, size),
             BlendKind::Chamfer => chamfera_kernel::chamfer(body, &edges, size),
@@ -101,10 +107,6 @@ fn build_blend(
         name_edges(&mut out, feature);
         *body = out;
     }
-    if let Some(i) = found.iter().position(|f| !f) {
-        let name = b.edges.get(i).map_or("", String::as_str);
-        return Err(format!("{word}: the edge {name:?} is no longer there"));
-    }
     Ok(next)
 }
 
@@ -113,13 +115,21 @@ fn build_blend(
 fn missing_edge(
     doc: &chamfera_doc::Document,
     b: &Blend,
+    feature: u32,
     made: &[(u32, String, Body)],
 ) -> Option<String> {
-    let have: std::collections::BTreeSet<String> = made
-        .iter()
-        .flat_map(|(_, _, body)| body.edges().into_iter().filter_map(|e| edge_ref(body, e)))
-        .collect();
-    let gone = b.edges.iter().find(|e| !have.contains(*e))?;
+    let bodies = crate::naming::bodies(made);
+    let gone = b.edges.iter().find(|e| {
+        crate::naming::resolve(
+            doc,
+            feature,
+            &bodies,
+            crate::naming::Kind::Edge,
+            e,
+            crate::naming::Want::All,
+        )
+        .is_err()
+    })?;
     let owner = gone
         .split_whitespace()
         .find_map(|w| w.split_once(':'))
@@ -142,21 +152,35 @@ fn build_shell(
     let thickness = doc
         .evaluate_feature_value(&sh.thickness, chamfera_doc::expr::Dim::LENGTH)
         .map_err(|x| x.to_string())?;
-    let mut found = vec![false; sh.faces.len()];
-    let mut next = made.to_vec();
-    let mut any = false;
-    for (_, _, body) in &mut next {
-        let mut open = Vec::new();
-        for f in body.faces() {
-            if let Some(n) = body.face_name(f).ok().flatten()
-                && let Some(i) = sh.faces.iter().position(|x| x == n)
-            {
-                open.push(f);
-                if let Some(seen) = found.get_mut(i) {
-                    *seen = true;
+    // The open faces, through the resolver: every piece of a split face, or the piece
+    // a `#k` reference or its signature picks.
+    let mut per_body: BTreeMap<usize, Vec<chamfera_kernel::FaceId>> = BTreeMap::new();
+    {
+        let bodies = crate::naming::bodies(made);
+        for r in &sh.faces {
+            let found = crate::naming::resolve(
+                doc,
+                feature,
+                &bodies,
+                crate::naming::Kind::Face,
+                r,
+                crate::naming::Want::All,
+            )
+            .map_err(|x| format!("shell: {x}"))?;
+            for f in found {
+                if let Some(face) = f.face() {
+                    let list = per_body.entry(f.body).or_default();
+                    if !list.contains(&face) {
+                        list.push(face);
+                    }
                 }
             }
         }
+    }
+    let mut next = made.to_vec();
+    let mut any = false;
+    for (i, (_, _, body)) in next.iter_mut().enumerate() {
+        let open = per_body.remove(&i).unwrap_or_default();
         if open.is_empty() && !sh.faces.is_empty() {
             continue;
         }
@@ -166,10 +190,6 @@ fn build_shell(
         name_edges(&mut out, feature);
         *body = out;
         any = true;
-    }
-    if let Some(i) = found.iter().position(|f| !f) {
-        let name = sh.faces.get(i).map_or("", String::as_str);
-        return Err(format!("shell: the face {name:?} is no longer there"));
     }
     if !any {
         return Err("shell: there is no solid to shell".into());
@@ -225,25 +245,25 @@ pub fn body_has_feature(body: &Body, feature: u32) -> bool {
 
 /// The plane of the face `r.face` of feature `r.feature`, from bodies built so far in this
 /// rebuild (whichever body it ended up in after joins and cuts).
+/// Item `owner` holds the reference; its signature picks the piece of a split face.
 fn attached_plane(
     doc: &chamfera_doc::Document,
+    owner: u32,
     made: &[(u32, String, Body)],
     r: &chamfera_doc::FaceRef,
 ) -> Result<chamfera_geom::Frame, String> {
-    let wanted = face_key(r.feature, &r.face);
-    for (_, _, body) in made {
-        for face in body.faces() {
-            if body.face_name(face).ok().flatten() == Some(wanted.as_str()) {
-                return face_plane(body, face)
-                    .ok_or_else(|| format!("the face {:?} is not flat", r.face));
-            }
+    let bodies = crate::naming::bodies(made);
+    match crate::naming::one_face(doc, owner, &bodies, r, crate::naming::Want::Surface) {
+        Ok((_, body, face)) => {
+            face_plane(body, face).ok_or_else(|| format!("the face {:?} is not flat", r.face))
         }
+        Err(crate::naming::NameError::Gone { .. }) => Err(format!(
+            "the face {:?} it is drawn on is gone ({} changed, failed or is not built)",
+            r.face,
+            feature_name(doc, r.feature)
+        )),
+        Err(e) => Err(e.to_string()),
     }
-    Err(format!(
-        "the face {:?} it is drawn on is gone ({} changed, failed or is not built)",
-        r.face,
-        feature_name(doc, r.feature)
-    ))
 }
 
 /// A feature's name, for messages.
@@ -536,19 +556,10 @@ fn pattern_copies(
         .ok_or("the pattern's move leaves the working range")?;
         for body in source {
             let mut copy = body.transformed(&t).map_err(|e| format!("pattern: {e}"))?;
-            // Copy k's faces are named `<pattern>:<k> <role>` so each copy is its own.
-            for face in copy.faces() {
-                let role = copy
-                    .face_name(face)
-                    .ok()
-                    .flatten()
-                    .and_then(split_face_key)
-                    .map(|(_, r)| r.to_owned());
-                if let Some(role) = role {
-                    let _ = copy
-                        .set_face_name(face, &face_key(pattern_id, &format!("{} {role}", k + 1)));
-                }
-            }
+            // Copy k's faces, edges and vertices are named `<pattern>:<k> <role>` so each
+            // copy is its own: a fillet on an edge of copy 3 rounds that copy only, and
+            // the source's own edges keep their names (rung K8).
+            rename_copy(&mut copy, pattern_id, k + 1);
             out.push(copy);
         }
     }
@@ -567,6 +578,8 @@ const BACK_SIDE: &str = "back ";
 /// Where an extrude reaches, as signed distances along the sketch plane's normal from
 /// its start plane: `(back, front)` with `back <= 0 <= front`, one of them non-zero.
 fn extrude_span(
+    doc: &chamfera_doc::Document,
+    owner: u32,
     e: &Extrude,
     values: &chamfera_doc::ExtrudeValues,
     start: &chamfera_geom::Frame,
@@ -631,25 +644,29 @@ fn extrude_span(
             let (plane, what) = match &e.to {
                 Some(ExtrudeTo::Face(r)) => {
                     let wanted = face_key(r.feature, &r.face);
-                    let found = bodies.iter().find_map(|b| {
-                        b.faces()
-                            .into_iter()
-                            .find(|f| b.face_name(*f).ok().flatten() == Some(wanted.as_str()))
-                            .map(|f| face_plane(b, f))
-                    });
+                    let found = crate::naming::one_face(
+                        doc,
+                        owner,
+                        bodies,
+                        r,
+                        crate::naming::Want::Surface,
+                    );
                     match found {
-                        Some(Some(p)) => (p, format!("the face {wanted}")),
-                        Some(None) => {
-                            return Err(format!(
-                                "to object: the face {wanted} is not flat; pick a flat face or a plane"
-                            ));
-                        }
-                        None => {
+                        Ok((_, b, f)) => match face_plane(b, f) {
+                            Some(p) => (p, format!("the face {wanted}")),
+                            None => {
+                                return Err(format!(
+                                    "to object: the face {wanted} is not flat; pick a flat face or a plane"
+                                ));
+                            }
+                        },
+                        Err(crate::naming::NameError::Gone { .. }) => {
                             return Err(format!(
                                 "to object: the face {wanted} is gone (feature {} changed, failed or comes later)",
                                 r.feature
                             ));
                         }
+                        Err(x) => return Err(format!("to object: {x}")),
                     }
                 }
                 Some(ExtrudeTo::Plane(p)) => (*p, "the plane".to_owned()),
@@ -709,6 +726,11 @@ fn rename_copy(body: &mut Body, feature: u32, k: usize) {
             let _ = body.set_edge_name(edge, &n);
         }
     }
+    for v in body.vertices() {
+        if let Some(n) = renamed(body.vertex_name(v).ok().flatten()) {
+            let _ = body.set_vertex_name(v, &n);
+        }
+    }
 }
 
 /// The body built so far with this name.
@@ -722,6 +744,7 @@ fn named_body<'a>(made: &'a [(u32, String, Body)], name: &str) -> Result<&'a Bod
 /// The mirror plane as a point and a normal.
 fn mirror_plane(
     doc: &chamfera_doc::Document,
+    owner: u32,
     plane: &chamfera_doc::MirrorPlane,
     made: &[(u32, String, Body)],
 ) -> Result<(Point3, chamfera_geom::Vec3), String> {
@@ -733,6 +756,7 @@ fn mirror_plane(
         MirrorPlane::Yz => Frame::YZ,
         MirrorPlane::Face { feature, face } => attached_plane(
             doc,
+            owner,
             made,
             &chamfera_doc::FaceRef {
                 feature: *feature,
@@ -753,7 +777,7 @@ fn mirror_bodies(
     made: &[(u32, String, Body)],
     tools: &BTreeMap<u32, (Vec<Body>, Operation)>,
 ) -> Result<Vec<Body>, String> {
-    let (point, normal) = mirror_plane(doc, &m.plane, made)?;
+    let (point, normal) = mirror_plane(doc, mirror_id, &m.plane, made)?;
     let mut sources: Vec<&Body> = Vec::new();
     for name in &m.bodies {
         sources.push(named_body(made, name)?);
@@ -812,6 +836,7 @@ fn move_bodies(
 /// it, for through all and to object.
 fn build_extrude(
     doc: &chamfera_doc::Document,
+    owner: u32,
     e: &Extrude,
     bodies: &[&Body],
 ) -> Result<Vec<Body>, String> {
@@ -821,7 +846,7 @@ fn build_extrude(
         .plane
         .with_origin(f.plane.origin() + f.plane.z() * values.start_offset)
         .ok_or("extrude: the start offset leaves the working range")?;
-    let (back, front) = extrude_span(e, &values, &start, bodies)?;
+    let (back, front) = extrude_span(doc, owner, e, &values, &start, bodies)?;
     let tol = chamfera_geom::LINEAR_TOLERANCE;
     let taper = values.taper;
     let tapered = taper.abs() > chamfera_geom::ANGULAR_TOLERANCE;
@@ -864,7 +889,8 @@ impl Session {
             .check_feature(&FeatureKind::Extrude(e.clone()))
             .map_err(|x| x.to_string())?;
         let bodies: Vec<&Body> = self.built.solids.iter().map(|s| &s.body).collect();
-        build_extrude(&self.doc, e, &bodies)
+        // A preview is not on the timeline yet: its face references resolve by name.
+        build_extrude(&self.doc, 0, e, &bodies)
     }
 }
 
@@ -1118,7 +1144,7 @@ impl Session {
                 continue;
             }
             if let FeatureKind::Construct(c) = &feature.kind {
-                match crate::construct::build(&self.doc, c, &made, &built.constructs) {
+                match crate::construct::build(&self.doc, feature.id, c, &made, &built.constructs) {
                     Ok(g) => {
                         built.constructs.insert(feature.id, g);
                     }
@@ -1197,7 +1223,7 @@ impl Session {
                 match build_blend(&self.doc, b, feature.id, &made) {
                     Ok(next) => made = next,
                     Err(e) => {
-                        if let Some(r) = missing_edge(&self.doc, b, &made) {
+                        if let Some(r) = missing_edge(&self.doc, b, feature.id, &made) {
                             built.broken.insert(feature.id, r);
                         }
                         built.errors.insert(feature.id, e);
@@ -1221,9 +1247,9 @@ impl Session {
                 FeatureKind::OffsetFace(o) => Some(crate::face_edit::build_offset_face(
                     &self.doc, o, feature.id, &made,
                 )),
-                FeatureKind::DeleteFace(d) => {
-                    Some(crate::face_edit::build_delete_face(d, feature.id, &made))
-                }
+                FeatureKind::DeleteFace(d) => Some(crate::face_edit::build_delete_face(
+                    &self.doc, d, feature.id, &made,
+                )),
                 FeatureKind::MoveFace(m) => Some(crate::face_edit::build_move_face(
                     &self.doc, m, feature.id, &made,
                 )),
@@ -1272,7 +1298,7 @@ impl Session {
             let result = match &feature.kind {
                 FeatureKind::Extrude(e) => {
                     let bodies: Vec<&Body> = made.iter().map(|m| &m.2).collect();
-                    build_extrude(&self.doc, e, &bodies)
+                    build_extrude(&self.doc, feature.id, e, &bodies)
                 }
                 FeatureKind::Sweep(s) => build_sweep(&self.doc, s),
                 FeatureKind::Loft(l) => build_loft(&self.doc, l),
@@ -1429,7 +1455,7 @@ impl Session {
             return Ok(());
         };
         let plane = match (f.attached.clone(), f.on_plane) {
-            (Some(r), _) => Some(attached_plane(&self.doc, made, &r)?),
+            (Some(r), _) => Some(attached_plane(&self.doc, sketch, made, &r)?),
             (None, Some(id)) => match constructs.get(&id) {
                 Some(crate::construct::Constructed::Plane { frame, .. }) => Some(*frame),
                 _ => {
@@ -1448,8 +1474,31 @@ impl Session {
         self.follow_projections(sketch, made.iter().map(|m| &m.2))
     }
 
-    /// The solid face under pixel `(x, y)`: (feature, face name, plane), for flat faces
-    /// with a name.
+    /// The solid face under pixel `(x, y)`: (solid index, face, the point hit on the
+    /// display mesh).
+    pub fn face_hit_at(
+        &self,
+        x: f64,
+        y: f64,
+        w: f64,
+        h: f64,
+    ) -> Option<(usize, chamfera_kernel::FaceId, Point3)> {
+        let bounds = self.scene.bounds();
+        let ray = self.camera.ray_through(x, y, w, h, bounds.as_ref())?;
+        let hit = self.scene.pick(&ray)?;
+        let (si, solid) = self
+            .built
+            .solids
+            .iter()
+            .enumerate()
+            .find(|(_, s)| s.scene_id == Some(hit.body))?;
+        let face = *solid.faces.get(hit.triangle)?;
+        let p = ray.at(hit.distance);
+        Some((si, face, p))
+    }
+
+    /// The solid face under pixel `(x, y)`: (feature, face role, plane), for flat faces
+    /// with a name. The role is unique: `top#2` for a piece of a split `top`.
     pub fn face_at(
         &self,
         x: f64,
@@ -1457,34 +1506,19 @@ impl Session {
         w: f64,
         h: f64,
     ) -> Option<(u32, String, chamfera_geom::Frame)> {
-        let bounds = self.scene.bounds();
-        let ray = self.camera.ray_through(x, y, w, h, bounds.as_ref())?;
-        let hit = self.scene.pick(&ray)?;
-        let solid = self
-            .built
-            .solids
-            .iter()
-            .find(|s| s.scene_id == Some(hit.body))?;
-        let face = *solid.faces.get(hit.triangle)?;
-        let name = solid.body.face_name(face).ok().flatten()?;
-        let (feature, role) = split_face_key(name)?;
+        let (si, face, _) = self.face_hit_at(x, y, w, h)?;
+        let solid = self.built.solids.get(si)?;
+        let name = self.reference_name(si, chamfera_kernel::Entity::Face(face))?;
+        let (feature, role) = split_face_key(&name)?;
         let plane = face_plane(&solid.body, face)?;
         Some((feature, role.to_owned(), plane))
     }
 
-    /// The full name (`2:top`) of the face of a built solid under pixel `(x, y)`, flat or
-    /// curved (a shell opens either).
+    /// The full name (`2:top`, `2:top#2` for a piece) of the face of a built solid under
+    /// pixel `(x, y)`, flat or curved (a shell opens either).
     pub fn face_ref_at(&self, x: f64, y: f64, w: f64, h: f64) -> Option<String> {
-        let bounds = self.scene.bounds();
-        let ray = self.camera.ray_through(x, y, w, h, bounds.as_ref())?;
-        let hit = self.scene.pick(&ray)?;
-        let solid = self
-            .built
-            .solids
-            .iter()
-            .find(|s| s.scene_id == Some(hit.body))?;
-        let face = *solid.faces.get(hit.triangle)?;
-        solid.body.face_name(face).ok().flatten().map(str::to_owned)
+        let (si, face, _) = self.face_hit_at(x, y, w, h)?;
+        self.reference_name(si, chamfera_kernel::Entity::Face(face))
     }
 
     /// The true edge nearest pixel `(x, y)` on screen, within [`EDGE_PICK_PIXELS`], that is
@@ -1568,8 +1602,7 @@ impl Session {
             if hidden {
                 continue;
             }
-            let solid = self.built.solids.get(si)?;
-            if let Some(r) = edge_ref(&solid.body, e) {
+            if let Some(r) = self.reference_name(si, chamfera_kernel::Entity::Edge(e)) {
                 return Some((si, e, r));
             }
         }

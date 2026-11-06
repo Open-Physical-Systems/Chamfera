@@ -132,7 +132,7 @@ fn row(
 
 impl ChamferaApp {
     /// The component the user means: the selected body's, else the active one.
-    fn chosen_component(&self) -> u32 {
+    pub(crate) fn chosen_component(&self) -> u32 {
         self.session
             .scene
             .selection
@@ -140,12 +140,8 @@ impl ChamferaApp {
             .unwrap_or(self.session.doc.assembly.active)
     }
 
-    /// The ASSEMBLE ribbon group, after the SOLID groups.
-    pub(crate) fn assemble_group(&mut self, ui: &mut Ui) {
-        let look = self.look();
-        widgets::ribbon_divider(ui, look);
-        let has_solids = !self.session.solids().is_empty();
-        let joining = self.assembly.joint.is_some();
+    /// The chosen component and whether it is grounded, for the Ground tool.
+    pub(crate) fn ground_state(&self) -> (u32, bool) {
         let chosen = self.chosen_component();
         let grounded = chosen != ROOT
             && self
@@ -154,81 +150,26 @@ impl ChamferaApp {
                 .assembly
                 .component(chosen)
                 .is_ok_and(|c| c.grounded);
-        let mut new = false;
-        let mut joint = false;
-        let mut ground = false;
-        widgets::ribbon_group(ui, look, "ASSEMBLE", false, |ui| {
-            if widgets::tool_button(
-                ui,
-                look,
-                Icon::Component,
-                label("component.new"),
-                !joining,
+        (chosen, grounded)
+    }
+
+    /// Joint: opens the tool, or closes it when it is open.
+    pub(crate) fn toggle_joint(&mut self) {
+        if self.assembly.joint.is_some() {
+            self.assembly.joint = None;
+        } else {
+            self.assembly.joint = Some(JointTool::default());
+            self.message = Some((
+                "Joint: click a face or edge on the part that moves, then where it goes".into(),
                 false,
-                false,
-            )
-            .on_hover_text(
-                "New Component\nGroup the selected body into a component of its own, or \
-                 start an empty one that new features go into",
-            )
-            .clicked()
-            {
-                new = true;
-            }
-            if widgets::tool_button(
-                ui,
-                look,
-                Icon::Joint,
-                label("joint.create"),
-                has_solids,
-                joining,
-                false,
-            )
-            .on_hover_text(if has_solids {
-                "Joint\nConnect two components at a face, edge or point, and say how they move"
-            } else {
-                "Joint\nBuild bodies in two components first"
-            })
-            .clicked()
-            {
-                joint = true;
-            }
-            if widgets::tool_button(
-                ui,
-                look,
-                Icon::Ground,
-                label("component.ground"),
-                chosen != ROOT,
-                grounded,
-                false,
-            )
-            .on_hover_text(if chosen == ROOT {
-                "Ground\nSelect a body of a component (or activate one) to fix it in place"
-            } else if grounded {
-                "Unground\nLet joints move this component again"
-            } else {
-                "Ground\nFix the selected body's component in place: joints move the other side"
-            })
-            .clicked()
-            {
-                ground = true;
-            }
-        });
-        if new {
-            self.new_component();
+            ));
         }
-        if joint {
-            if joining {
-                self.assembly.joint = None;
-            } else {
-                self.assembly.joint = Some(JointTool::default());
-                self.message = Some((
-                    "Joint: click a face or edge on the part that moves, then where it goes".into(),
-                    false,
-                ));
-            }
-        }
-        if ground {
+    }
+
+    /// Ground: fixes the chosen component in place, or lets it move again.
+    pub(crate) fn toggle_ground(&mut self) {
+        let (chosen, grounded) = self.ground_state();
+        if chosen != ROOT {
             self.run(
                 "component.ground",
                 json!({ "component": chosen, "grounded": !grounded }),
@@ -237,7 +178,7 @@ impl ChamferaApp {
     }
 
     /// New Component: from the selected body, or an empty active one.
-    fn new_component(&mut self) {
+    pub(crate) fn new_component(&mut self) {
         let feature = self.session.scene.selection.and_then(|h| {
             self.session
                 .solids()
@@ -382,7 +323,7 @@ impl ChamferaApp {
                             widgets::field_label(ui, look, "Type");
                             egui::ComboBox::from_id_salt("joint type")
                                 .selected_text(kind_text(tool.kind))
-                                .width(190.0)
+                                .width(widgets::FIELD_WIDTH)
                                 .show_ui(ui, |ui| {
                                     for k in JointKind::ALL {
                                         ui.selectable_value(&mut tool.kind, k, kind_text(k));
@@ -397,7 +338,7 @@ impl ChamferaApp {
                                     if angle { "Angle" } else { "Distance" },
                                 );
                                 let edit = ui.add_sized(
-                                    [190.0, 26.0],
+                                    widgets::FIELD,
                                     egui::TextEdit::singleline(&mut tool.value)
                                         .hint_text(if angle { "90 deg" } else { "10 mm" })
                                         .align(egui::Align2::LEFT_CENTER),

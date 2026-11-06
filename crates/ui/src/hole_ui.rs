@@ -118,33 +118,6 @@ fn kind_name(k: HoleKind) -> &'static str {
     }
 }
 
-/// The Hole button of the SOLID ribbon's CREATE group; true when it was clicked to open
-/// the tool.
-pub(crate) fn hole_button(
-    ui: &mut egui::Ui,
-    look: Look,
-    has_solids: bool,
-    tool_free: bool,
-    on: bool,
-) -> bool {
-    widgets::tool_button(
-        ui,
-        look,
-        Icon::Hole,
-        label("solid.hole"),
-        has_solids && (tool_free || on),
-        on,
-        false,
-    )
-    .on_hover_text(if has_solids {
-        "Hole\nDrill simple, counterbored or countersunk holes at points on a flat face"
-    } else {
-        "Hole\nBuild a solid first"
-    })
-    .clicked()
-        && tool_free
-}
-
 /// The timeline's one-line summary of a hole feature.
 pub(crate) fn hole_details(h: &Hole) -> String {
     let n = h.points.len();
@@ -390,7 +363,7 @@ impl ChamferaApp {
                                 |ui: &mut egui::Ui, name: &str, v: &mut String, hint: &str| {
                                     widgets::field_label(ui, look, name);
                                     let r = ui.add_sized(
-                                        [180.0, 26.0],
+                                        widgets::FIELD,
                                         egui::TextEdit::singleline(v)
                                             .hint_text(hint)
                                             .align(egui::Align2::LEFT_CENTER),
@@ -419,7 +392,7 @@ impl ChamferaApp {
                             widgets::field_label(ui, look, "Type");
                             egui::ComboBox::from_id_salt("hole kind")
                                 .selected_text(kind_name(tool.kind))
-                                .width(180.0)
+                                .width(widgets::FIELD_WIDTH)
                                 .show_ui(ui, |ui| {
                                     for k in [
                                         HoleKind::Simple,
@@ -438,7 +411,7 @@ impl ChamferaApp {
                                 } else {
                                     "Distance"
                                 })
-                                .width(180.0)
+                                .width(widgets::FIELD_WIDTH)
                                 .show_ui(ui, |ui| {
                                     ui.selectable_value(&mut tool.through, false, "Distance");
                                     ui.selectable_value(&mut tool.through, true, "Through all");

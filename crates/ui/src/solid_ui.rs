@@ -41,7 +41,7 @@ impl Default for ExtrudeForm {
     }
 }
 
-const FIELD: [f32; 2] = [180.0, 26.0];
+use widgets::FIELD;
 
 impl ExtrudeForm {
     /// The form for an extrude on the timeline.
@@ -387,327 +387,6 @@ pub struct SolidUi {
 }
 
 impl ChamferaApp {
-    /// The SOLID ribbon: CREATE (sketch, extrude, revolve), MODIFY and INSERT groups.
-    pub(crate) fn solid_toolbar(&mut self, ui: &mut egui::Ui) {
-        let look = self.look();
-        let has_profiles = self
-            .session
-            .doc
-            .sketches
-            .iter()
-            .any(|s| !s.sketch.profiles().is_empty());
-        let has_solids = !self.session.solids().is_empty();
-        let tool_free = self.solid.extrude.is_none()
-            && self.solid.blend.is_none()
-            && self.solid.hole.is_none()
-            && self.solid.transform.is_none()
-            && self.solid.inspect.is_none()
-            && self.solid.shell.is_none()
-            && self.solid.press_pull.is_none()
-            && self.solid.body_tool.is_none()
-            && self.solid.sweep.is_none();
-        let sweep_open = self.solid.sweep.as_ref().map(|t| t.loft);
-        let mut open_sweep: Option<bool> = None;
-        let extruding = self.solid.extrude.as_ref().is_some_and(|t| !t.revolve);
-        let revolving = self.solid.extrude.as_ref().is_some_and(|t| t.revolve);
-        let mut plane: Option<(&str, &str)> = None;
-        let mut on_face = false;
-        let construct_planes = self.construct_planes();
-        let mut on_construct: Option<u32> = None;
-        let mut open_tool: Option<bool> = None;
-        let mut sketch_button: Option<egui::Response> = None;
-        let (mut open_hole, holing) = (false, self.solid.hole.is_some());
-        let (_, menu) = widgets::ribbon_group(ui, look, "CREATE", true, |ui| {
-            let r = widgets::tool_button(
-                ui,
-                look,
-                Icon::SketchCreate,
-                label("sketch.create"),
-                true,
-                false,
-                true,
-            )
-            .on_hover_text("Create Sketch\nStart a 2D sketch on an origin plane or a flat face");
-            sketch_button = Some(r);
-            if widgets::tool_button(
-                ui,
-                look,
-                Icon::Extrude,
-                label("solid.extrude"),
-                has_profiles && (tool_free || extruding),
-                extruding,
-                false,
-            )
-            .on_hover_text(crate::shortcuts::tip(
-                if has_profiles {
-                    "Extrude\nPull closed sketch profiles straight out into a solid"
-                } else {
-                    "Extrude\nDraw a closed profile in a sketch first"
-                },
-                crate::shortcuts::Action::Extrude,
-            ))
-            .clicked()
-                && tool_free
-            {
-                open_tool = Some(false);
-            }
-            if widgets::tool_button(
-                ui,
-                look,
-                Icon::Revolve,
-                label("solid.revolve"),
-                has_profiles && (tool_free || revolving),
-                revolving,
-                false,
-            )
-            .on_hover_text(if has_profiles {
-                "Revolve\nTurn closed sketch profiles around a line of the same sketch"
-            } else {
-                "Revolve\nDraw a closed profile and a line to turn it around first"
-            })
-            .clicked()
-                && tool_free
-            {
-                open_tool = Some(true);
-            }
-            open_sweep =
-                crate::sweep_ui::ribbon_buttons(ui, look, has_profiles, tool_free, sweep_open);
-            open_hole = crate::hole_ui::hole_button(ui, look, has_solids, tool_free, holing);
-        });
-        // Create Sketch opens the list of planes under its button.
-        if let Some(r) = &sketch_button {
-            egui::Popup::menu(r).show(|ui| {
-                widgets::caption(ui, look, "SKETCH ON");
-                for (p, text, view) in crate::sketch_ui::PLANES {
-                    if widgets::menu_item(ui, look, Icon::Plane, text, true).clicked() {
-                        ui.close();
-                        plane = Some((p, view));
-                    }
-                }
-                on_construct = crate::construct_ui::plane_menu(ui, look, &construct_planes);
-                ui.separator();
-                if widgets::menu_item(ui, look, Icon::Body, "A flat face…", has_solids).clicked()
-                {
-                    ui.close();
-                    on_face = true;
-                }
-            });
-        }
-        egui::Popup::menu(&menu).show(|ui| {
-            for (p, text, view) in crate::sketch_ui::PLANES {
-                let item = format!("{} on {text}", label("sketch.create"));
-                if widgets::menu_item(ui, look, Icon::SketchCreate, &item, true).clicked() {
-                    ui.close();
-                    plane = Some((p, view));
-                }
-            }
-            if widgets::menu_item(
-                ui,
-                look,
-                Icon::SketchCreate,
-                label("sketch.create_on_face"),
-                has_solids,
-            )
-            .clicked()
-            {
-                ui.close();
-                on_face = true;
-            }
-            ui.separator();
-            if widgets::menu_item(
-                ui,
-                look,
-                Icon::Extrude,
-                label("solid.extrude"),
-                has_profiles && tool_free,
-            )
-            .clicked()
-            {
-                ui.close();
-                open_tool = Some(false);
-            }
-            if widgets::menu_item(
-                ui,
-                look,
-                Icon::Revolve,
-                label("solid.revolve"),
-                has_profiles && tool_free,
-            )
-            .clicked()
-            {
-                ui.close();
-                open_tool = Some(true);
-            }
-        });
-        if let Some((p, view)) = plane {
-            self.create_sketch(p, view);
-        }
-        if let Some(id) = on_construct {
-            self.sketch_on_construct(id);
-        }
-        if open_hole {
-            self.open_hole_tool();
-        }
-        if on_face {
-            self.start_sketch_on_face();
-        }
-        if let Some(revolve) = open_tool {
-            self.open_extrude(revolve);
-        }
-        if let Some(loft) = open_sweep {
-            self.open_sweep(loft);
-        }
-        let look = self.look();
-        widgets::ribbon_divider(ui, look);
-        let mut parameters = false;
-        let mut open_blend: Option<bool> = None;
-        let mut open_shell = false;
-        let mut open_pull = None;
-        let body_tool_open = self.solid.body_tool.as_ref().map(|t| t.kind);
-        let mut open_body_tool = None;
-        let filleting = self.solid.blend.as_ref().is_some_and(|t| !t.chamfer);
-        let chamfering = self.solid.blend.as_ref().is_some_and(|t| t.chamfer);
-        widgets::ribbon_group(ui, look, "MODIFY", false, |ui| {
-            for (chamfer, on, text, tip) in [
-                (
-                    false,
-                    filleting,
-                    label("solid.fillet"),
-                    "Fillet\nRound edges of a solid with a constant radius",
-                ),
-                (
-                    true,
-                    chamfering,
-                    label("solid.chamfer"),
-                    "Chamfer\nBevel edges of a solid by an equal distance",
-                ),
-            ] {
-                if widgets::tool_button(
-                    ui,
-                    look,
-                    if chamfer { Icon::Chamfer } else { Icon::Fillet },
-                    text,
-                    has_solids && (tool_free || on),
-                    on,
-                    false,
-                )
-                .on_hover_text(if has_solids {
-                    tip
-                } else {
-                    "Build a solid first"
-                })
-                .clicked()
-                    && tool_free
-                {
-                    open_blend = Some(chamfer);
-                }
-            }
-            open_shell = crate::shell_ui::ribbon_button(ui, look, has_solids, tool_free);
-            open_pull = crate::press_pull_ui::ribbon_buttons(
-                ui,
-                look,
-                has_solids || has_profiles,
-                has_solids,
-                tool_free,
-                self.solid.press_pull.as_ref().map(|t| t.mode),
-            );
-            open_body_tool = crate::body_tools_ui::ribbon_buttons(
-                ui,
-                look,
-                has_solids,
-                tool_free,
-                body_tool_open,
-            );
-            if widgets::tool_button(
-                ui,
-                look,
-                Icon::Parameters,
-                "Parameters",
-                true,
-                self.params.open,
-                false,
-            )
-            .on_hover_text(
-                "Parameters\nNamed values and formulas that dimensions and features follow",
-            )
-            .clicked()
-            {
-                parameters = true;
-            }
-        });
-        if parameters {
-            self.params.open = !self.params.open;
-        }
-        if open_shell {
-            self.open_shell_tool();
-        }
-        if let Some(mode) = open_pull {
-            self.open_press_pull(mode);
-        }
-        if let Some(kind) = open_body_tool {
-            self.open_body_tool(kind);
-        }
-        if let Some(chamfer) = open_blend {
-            self.open_blend(chamfer);
-        }
-        self.transform_group(ui, has_solids && tool_free);
-        let look = self.look();
-        widgets::ribbon_divider(ui, look);
-        self.construct_group(ui);
-        let look = self.look();
-        widgets::ribbon_divider(ui, look);
-        let modelling_free = self.solid.extrude.is_none() && self.solid.blend.is_none();
-        self.inspect_group(ui, has_solids, modelling_free);
-        let look = self.look();
-        widgets::ribbon_divider(ui, look);
-        let mut import = false;
-        let mut sample = false;
-        widgets::ribbon_group(ui, look, "INSERT", false, |ui| {
-            if widgets::tool_button(
-                ui,
-                look,
-                Icon::ImportMesh,
-                label("body.import_stl"),
-                true,
-                false,
-                false,
-            )
-            .on_hover_text(format!(
-                "{}\nAdd a triangle mesh from an STL file, for reference",
-                label("body.import_stl")
-            ))
-            .clicked()
-            {
-                import = true;
-            }
-            if widgets::tool_button(
-                ui,
-                look,
-                Icon::Body,
-                label("body.sample"),
-                true,
-                false,
-                false,
-            )
-            .on_hover_text(format!(
-                "{}\nA small bracket mesh to try the viewer on",
-                label("body.sample")
-            ))
-            .clicked()
-            {
-                sample = true;
-            }
-        });
-        if import {
-            self.import_dialog();
-        }
-        if sample {
-            self.run("body.sample", json!({}));
-            self.fit_pending = true;
-        }
-        self.assemble_group(ui);
-    }
-
     /// Waits for a click on a flat face to sketch on (Create Sketch > A flat face).
     pub(crate) fn start_sketch_on_face(&mut self) {
         self.solid.pick_face = true;
@@ -936,7 +615,7 @@ impl ChamferaApp {
                             widgets::field_label(ui, look, "Operation");
                             egui::ComboBox::from_id_salt("feature operation")
                                 .selected_text(operation_name(tool.operation))
-                                .width(180.0)
+                                .width(widgets::FIELD_WIDTH)
                                 .show_ui(ui, |ui| {
                                     for o in [
                                         Operation::NewBody,
@@ -960,7 +639,7 @@ impl ChamferaApp {
                                     .map_or("Choose a line", |(_, n)| n.as_str());
                                 egui::ComboBox::from_id_salt("revolve axis")
                                     .selected_text(current)
-                                    .width(180.0)
+                                    .width(widgets::FIELD_WIDTH)
                                     .show_ui(ui, |ui| {
                                         for (id, name) in &lines {
                                             ui.selectable_value(&mut tool.axis, Some(*id), name);
@@ -969,7 +648,7 @@ impl ChamferaApp {
                                 ui.end_row();
                                 widgets::field_label(ui, look, "Angle");
                                 ui.add_sized(
-                                    [180.0, 26.0],
+                                    widgets::FIELD,
                                     egui::TextEdit::singleline(&mut tool.angle)
                                         .hint_text("360 deg")
                                         .align(egui::Align2::LEFT_CENTER),

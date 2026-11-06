@@ -51,6 +51,9 @@ pub enum Action {
     Preferences,
     /// A registry command with no tool of its own.
     Command(&'static str),
+    /// A ribbon tool with no action above, by its id in `ribbon::TOOLS` (a command id
+    /// such as `solid.shell`, or the ribbon's own such as `drawing.view.front`).
+    Tool(&'static str),
 }
 
 /// How a shortcut is typed.
@@ -300,14 +303,14 @@ pub fn keys_for(action: Action) -> Option<String> {
         .map(|s| s.keys.text())
 }
 
-/// A tooltip with the action's shortcut after its first line: "Line  (L)\nDraw ...".
+/// A tooltip with the action's shortcut after its first line: "Line (L)\nDraw ...".
 pub fn tip(text: &str, action: Action) -> String {
     let Some(keys) = keys_for(action) else {
         return text.to_owned();
     };
     match text.split_once('\n') {
-        Some((title, rest)) => format!("{title}  ({keys})\n{rest}"),
-        None => format!("{text}  ({keys})"),
+        Some((title, rest)) => format!("{title} ({keys})\n{rest}"),
+        None => format!("{text} ({keys})"),
     }
 }
 
@@ -350,12 +353,15 @@ pub fn action_label(action: Action) -> String {
         Action::SaveAs => "Save Design As…".into(),
         Action::ExportStep => format!("{}…", label("design.export_step")),
         Action::ExportStl => format!("{}…", label("design.export_stl")),
-        Action::ImportStl => format!("{}…", label("body.import_stl")),
+        Action::ImportStl => "Insert Mesh (STL, OBJ, 3MF)…".into(),
         Action::Sample => label("body.sample").into(),
         Action::ShowShortcuts => "Keyboard Shortcuts".into(),
         Action::Preferences => "Preferences".into(),
         Action::Search => "Search Tools and Commands".into(),
         Action::Command(id) => label(id).into(),
+        Action::Tool(id) => {
+            crate::ribbon::by_id(id).map_or_else(|| label(id).into(), |t| t.name.into())
+        }
     }
 }
 
@@ -466,7 +472,7 @@ mod tests {
     fn a_tooltip_gets_the_shortcut_after_its_title() {
         assert_eq!(
             tip("Extrude\nPull profiles out", Action::Extrude),
-            "Extrude  (E)\nPull profiles out"
+            "Extrude (E)\nPull profiles out"
         );
         assert_eq!(tip("Revolve", Action::Revolve), "Revolve");
     }

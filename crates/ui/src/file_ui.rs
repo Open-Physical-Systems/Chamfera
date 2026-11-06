@@ -484,7 +484,7 @@ impl ChamferaApp {
 
     /// Downloads a STEP or STL export.
     #[cfg(target_arch = "wasm32")]
-    fn export(&mut self, _kind: &str, extensions: &[&str], command: &str) {
+    pub(crate) fn export(&mut self, _kind: &str, extensions: &[&str], command: &str) {
         let ext = extensions.first().copied().unwrap_or("out");
         let format = command
             .strip_prefix("design.export_")

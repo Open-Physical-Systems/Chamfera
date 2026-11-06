@@ -4,7 +4,7 @@
 use crate::icons::Icon;
 use crate::widgets::{self, Look};
 use crate::{ChamferaApp, label};
-use chamfera_engine::solids::edge_ref;
+use chamfera_engine::naming::{Kind, Want};
 use chamfera_render::{Overlay, OverlayStyle};
 use serde_json::json;
 
@@ -68,13 +68,19 @@ impl ChamferaApp {
         &self,
         names: impl Iterator<Item = &'a String> + Clone,
     ) -> Vec<[chamfera_geom::Point3; 2]> {
+        // Each name through the engine's resolver: every piece of a split edge.
+        let wanted: Vec<(usize, _)> = names
+            .flat_map(|n| {
+                self.session
+                    .resolve_reference(None, Kind::Edge, n, Want::All)
+                    .unwrap_or_default()
+            })
+            .filter_map(|f| Some((f.body, f.edge()?)))
+            .collect();
         let mut lines = Vec::new();
-        for s in self.session.solids() {
+        for (si, s) in self.session.solids().iter().enumerate() {
             for (e, line) in &s.edges {
-                let Some(r) = edge_ref(&s.body, *e) else {
-                    continue;
-                };
-                if names.clone().any(|n| *n == r) {
+                if wanted.contains(&(si, *e)) {
                     lines.extend(line.windows(2).filter_map(|p| match p {
                         [a, b] => Some([*a, *b]),
                         _ => None,
@@ -169,7 +175,7 @@ impl ChamferaApp {
                                 if tool.chamfer { "Distance" } else { "Radius" },
                             );
                             let edit = ui.add_sized(
-                                [180.0, 26.0],
+                                widgets::FIELD,
                                 egui::TextEdit::singleline(&mut tool.size)
                                     .hint_text("2 mm")
                                     .align(egui::Align2::LEFT_CENTER),

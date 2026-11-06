@@ -10,7 +10,7 @@
 //! places), and the typed values become dimensions.
 
 use crate::icons::Icon;
-use crate::widgets::{self, menu_item};
+use crate::widgets;
 use crate::{ChamferaApp, color, label};
 use chamfera_engine::sketching::{PICK_CURVE_PX, PICK_POINT_PX, SketchItem, curve_polyline};
 use chamfera_geom::{Point2, Point3};
@@ -49,19 +49,6 @@ pub enum Tool {
     Project,
 }
 
-/// The CREATE tools shown in the ribbon; the group's list has all of `CREATE_ALL`.
-const CREATE_SHOWN: [Tool; 10] = [
-    Tool::Line,
-    Tool::Rectangle,
-    Tool::Circle,
-    Tool::Arc,
-    Tool::Polygon,
-    Tool::Slot,
-    Tool::Ellipse,
-    Tool::Spline,
-    Tool::Offset,
-    Tool::Mirror,
-];
 pub(crate) const CREATE_ALL: [Tool; 16] = [
     Tool::Line,
     Tool::Rectangle,
@@ -144,7 +131,7 @@ impl Tool {
         }
     }
 
-    fn tooltip(self) -> &'static str {
+    pub(crate) fn tooltip(self) -> &'static str {
         match self {
             Tool::Spline => crate::spline_ui::TOOLTIP,
             t @ (Tool::Polygon | Tool::Slot | Tool::Ellipse | Tool::Project) => {
@@ -630,275 +617,6 @@ impl ChamferaApp {
     pub(crate) fn finish_sketch(&mut self) {
         self.run("sketch.finish", json!({}));
         self.sketch = super::sketch_ui::SketchUi::default();
-    }
-
-    /// The SKETCH ribbon, shown while a sketch is being edited: SELECT, CREATE,
-    /// CONSTRAINTS, MODIFY and FINISH SKETCH groups.
-    pub(crate) fn sketch_toolbar(&mut self, ui: &mut egui::Ui) {
-        let look = self.look();
-        let current = self.sketch.tool();
-        let mut pick: Option<Tool> = None;
-        let (_, _) = widgets::ribbon_group(ui, look, "SELECT", false, |ui| {
-            if widgets::tool_button(
-                ui,
-                look,
-                Icon::Select,
-                "Select",
-                true,
-                current == Tool::Select,
-                false,
-            )
-            .on_hover_text(crate::shortcuts::tip(
-                Tool::Select.tooltip(),
-                crate::shortcuts::Action::SketchTool(Tool::Select),
-            ))
-            .clicked()
-            {
-                pick = Some(Tool::Select);
-            }
-        });
-        widgets::ribbon_divider(ui, look);
-        let (_, menu) = widgets::ribbon_group(ui, look, "CREATE", true, |ui| {
-            for tool in CREATE_SHOWN {
-                if widgets::tool_button(
-                    ui,
-                    look,
-                    tool.icon(),
-                    tool.name(),
-                    true,
-                    current == tool,
-                    false,
-                )
-                .on_hover_text(crate::shortcuts::tip(
-                    tool.tooltip(),
-                    crate::shortcuts::Action::SketchTool(tool),
-                ))
-                .clicked()
-                {
-                    pick = Some(tool);
-                }
-            }
-        });
-        egui::Popup::menu(&menu).show(|ui| {
-            for tool in CREATE_ALL {
-                if menu_item(ui, look, tool.icon(), tool.name(), true).clicked() {
-                    ui.close();
-                    pick = Some(tool);
-                }
-            }
-        });
-        if let Some(tool) = pick {
-            self.sketch.tool = Some(tool);
-            self.sketch.reset_tool();
-        }
-        let look = self.look();
-        widgets::ribbon_divider(ui, look);
-
-        let has_selection = !self.session.sketch_selection.is_empty();
-        let mut constrain: Option<&str> = None;
-        let mut dimension = false;
-        let (_, menu) = widgets::ribbon_group(ui, look, "CONSTRAINTS", true, |ui| {
-            if widgets::tool_button(
-                ui,
-                look,
-                Icon::Dimension,
-                "Dimension",
-                has_selection,
-                false,
-                false,
-            )
-            .on_hover_text(crate::shortcuts::tip(
-                &format!(
-                    "{}\nSelect a line, a circle, an arc or two points, then click to give it a size",
-                    label("sketch.dimension_selection")
-                ),
-                crate::shortcuts::Action::Dimension,
-            ))
-            .clicked()
-            {
-                dimension = true;
-            }
-            ui.add_space(widgets::S2);
-            // The geometric constraints: a compact grid of two rows.
-            ui.vertical(|ui| {
-                ui.spacing_mut().item_spacing = egui::vec2(widgets::S1, widgets::S1);
-                ui.add_space(1.0);
-                for row in CONSTRAINTS.chunks(5) {
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = widgets::S1;
-                        for (kind, text, icon, help) in row {
-                            if widgets::icon_button(
-                                ui,
-                                look,
-                                *icon,
-                                26.0,
-                                18.0,
-                                has_selection,
-                                false,
-                            )
-                            .on_hover_text(format!("{text}\n{help}"))
-                            .clicked()
-                            {
-                                constrain = Some(kind);
-                            }
-                        }
-                    });
-                }
-            });
-        });
-        egui::Popup::menu(&menu).show(|ui| {
-            if menu_item(
-                ui,
-                look,
-                Icon::Dimension,
-                label("sketch.dimension_selection"),
-                has_selection,
-            )
-            .clicked()
-            {
-                ui.close();
-                dimension = true;
-            }
-            ui.separator();
-            for (kind, text, icon, _) in CONSTRAINTS {
-                if menu_item(ui, look, icon, text, has_selection).clicked() {
-                    ui.close();
-                    constrain = Some(kind);
-                }
-            }
-            if !has_selection {
-                ui.separator();
-                widgets::caption(ui, look, "Select sketch geometry first");
-            }
-        });
-        if let Some(kind) = constrain {
-            self.run_sketch("sketch.constrain_selection", json!({ "kind": kind }));
-        }
-        if dimension {
-            self.dimension_selected();
-        }
-        let look = self.look();
-        widgets::ribbon_divider(ui, look);
-        let mut construction = false;
-        let mut remove = false;
-        let mut split_all = false;
-        let mut pick: Option<Tool> = None;
-        let (_, menu) = widgets::ribbon_group(ui, look, "MODIFY", true, |ui| {
-            for tool in MODIFY_TOOLS {
-                if widgets::tool_button(
-                    ui,
-                    look,
-                    tool.icon(),
-                    tool.name(),
-                    true,
-                    current == tool,
-                    false,
-                )
-                .on_hover_text(crate::shortcuts::tip(
-                    tool.tooltip(),
-                    crate::shortcuts::Action::SketchTool(tool),
-                ))
-                .clicked()
-                {
-                    pick = Some(tool);
-                }
-            }
-            if widgets::tool_button(
-                ui,
-                look,
-                Icon::Construction,
-                label("sketch.construction"),
-                has_selection,
-                false,
-                false,
-            )
-            .on_hover_text(crate::shortcuts::tip(
-                "Construction\nTurn the selected curves into reference geometry that profiles ignore, or back",
-                crate::shortcuts::Action::Construction,
-            ))
-            .clicked()
-            {
-                construction = true;
-            }
-            if widgets::tool_button(
-                ui,
-                look,
-                Icon::Delete,
-                label("sketch.remove"),
-                has_selection,
-                false,
-                false,
-            )
-            .on_hover_text(crate::shortcuts::tip(
-                "Delete\nRemove the selected points and curves",
-                crate::shortcuts::Action::Delete,
-            ))
-            .clicked()
-            {
-                remove = true;
-            }
-        });
-        egui::Popup::menu(&menu).show(|ui| {
-            for tool in MODIFY_TOOLS {
-                if menu_item(ui, look, tool.icon(), tool.name(), true).clicked() {
-                    ui.close();
-                    pick = Some(tool);
-                }
-            }
-            if menu_item(ui, look, Icon::Split, "Split All Crossings", true)
-                .on_hover_text("Split every curve where another crosses it, so overlapping shapes give their regions")
-                .clicked()
-            {
-                ui.close();
-                split_all = true;
-            }
-            ui.separator();
-            if menu_item(ui, look, Icon::Construction, label("sketch.construction"), has_selection)
-                .clicked()
-            {
-                ui.close();
-                construction = true;
-            }
-            if menu_item(ui, look, Icon::Delete, label("sketch.remove"), has_selection).clicked() {
-                ui.close();
-                remove = true;
-            }
-        });
-        if let Some(tool) = pick {
-            self.sketch.tool = Some(tool);
-            self.sketch.reset_tool();
-        }
-        if split_all {
-            self.run_sketch("sketch.split", json!({}));
-        }
-        if construction {
-            self.toggle_construction();
-        }
-        if remove {
-            self.run_sketch("sketch.remove", json!({}));
-        }
-        let look = self.look();
-        widgets::ribbon_divider(ui, look);
-        let mut finish = false;
-        widgets::ribbon_group(ui, look, "FINISH SKETCH", false, |ui| {
-            if widgets::tool_button(
-                ui,
-                look,
-                Icon::SketchFinish,
-                label("sketch.finish"),
-                true,
-                false,
-                false,
-            )
-            .on_hover_text("Finish Sketch\nLeave the sketch and go back to the solid tools")
-            .clicked()
-            {
-                finish = true;
-            }
-        });
-        if finish {
-            self.finish_sketch();
-        }
     }
 
     /// Dimensions the selection at its current size and starts editing the value, as the
@@ -2863,9 +2581,6 @@ mod tests {
             assert!(tool.tooltip().starts_with(tool.name()), "{tool:?}");
             assert!(!tool.hint(0).is_empty() && !tool.hint(1).is_empty());
             let _ = tool.icon();
-        }
-        for tool in CREATE_SHOWN {
-            assert!(CREATE_ALL.contains(&tool));
         }
     }
 }

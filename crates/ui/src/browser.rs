@@ -355,7 +355,7 @@ impl ChamferaApp {
                 if let Some(eye) = r.eye {
                     let tip = if visible { "Hide" } else { "Show" };
                     if eye
-                        .on_hover_text(format!("{tip}  ({})", label("body.visibility")))
+                        .on_hover_text(format!("{tip}\n{}", label("body.visibility")))
                         .clicked()
                     {
                         self.run(

@@ -422,9 +422,17 @@ fn extrude_preview(s: &mut Session, p: &Value) -> CmdResult {
 }
 
 fn extrude(s: &mut Session, p: &Value) -> CmdResult {
-    let kind = FeatureKind::Extrude(new_extrude(s, p)?);
+    let e = new_extrude(s, p)?;
+    let to = match &e.to {
+        Some(ExtrudeTo::Face(r)) => Some(r.clone()),
+        _ => None,
+    };
+    let kind = FeatureKind::Extrude(e);
     s.scene.previews.clear();
     let id = s.doc.add_feature(kind)?;
+    if let Some(r) = to {
+        s.record_face_signature(id, &r, None);
+    }
     s.rebuild();
     if let Some(e) = s.feature_errors().get(&id) {
         return Err(CommandError::Unavailable(e.clone()));
@@ -565,9 +573,14 @@ fn blend(s: &mut Session, p: &Value, kind: BlendKind, key: &str) -> CmdResult {
     let size = expression(p, key, "mm")?.ok_or_else(|| bad(format!("`{key}` is required")))?;
     let id = s.doc.add_feature(FeatureKind::Blend(Blend {
         blend: kind,
-        edges,
+        edges: edges.clone(),
         size,
     }))?;
+    // What each edge is now, so that the fillet keeps to the piece it names when the
+    // edge splits, and finds the edge again if a boolean renames it (rung K8).
+    for e in &edges {
+        s.record_signature(id, crate::naming::Kind::Edge, e, None);
+    }
     s.rebuild();
     if let Some(e) = s.feature_errors().get(&id) {
         return Err(CommandError::Unavailable(e.clone()));
@@ -614,9 +627,13 @@ fn shell(s: &mut Session, p: &Value) -> CmdResult {
     let faces = shell_faces(s, p)?;
     let thickness =
         expression(p, "thickness", "mm")?.ok_or_else(|| bad("`thickness` is required"))?;
-    let id = s
-        .doc
-        .add_feature(FeatureKind::Shell(chamfera_doc::Shell { faces, thickness }))?;
+    let id = s.doc.add_feature(FeatureKind::Shell(chamfera_doc::Shell {
+        faces: faces.clone(),
+        thickness,
+    }))?;
+    for f in &faces {
+        s.record_signature(id, crate::naming::Kind::Face, f, None);
+    }
     s.rebuild();
     if let Some(e) = s.feature_errors().get(&id) {
         return Err(CommandError::Unavailable(e.clone()));
@@ -637,19 +654,26 @@ fn edge_at(s: &mut Session, p: &Value) -> CmdResult {
     })
 }
 
-/// Every edge of every solid, by name, with its end points.
+/// Every edge of every solid, by its unique name (`2:top 0`, `2:top 0#2` for a piece of
+/// a split edge), with its end points.
 fn edges(s: &mut Session, _p: &Value) -> CmdResult {
     let pt = |q: chamfera_geom::Point3| json!([q.x, q.y, q.z]);
+    let names: std::collections::BTreeMap<(usize, usize), String> = s
+        .reference_names(crate::naming::Kind::Edge)
+        .into_iter()
+        .filter_map(|(f, n)| Some(((f.body, f.edge()?.index()), n)))
+        .collect();
     let solids: Vec<Value> = s
         .solids()
         .iter()
-        .map(|x| {
+        .enumerate()
+        .map(|(si, x)| {
             let edges: Vec<Value> = x
                 .body
                 .edges()
                 .into_iter()
                 .filter_map(|e| {
-                    let name = crate::solids::edge_ref(&x.body, e)?;
+                    let name = names.get(&(si, e.index()))?.clone();
                     let [a, b] = x.body.edge_vertices(e).ok()?;
                     Some(json!({
                         "edge": name,
@@ -830,6 +854,20 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
         Some(_) => Some(shell_faces(s, &json!({ "faces": p.get("faces") }))?),
     };
     if new_thickness.is_some() || new_faces.is_some() {
+        // Faces new to the feature get a signature; removed ones lose theirs (rung K8).
+        let old: Vec<String> = match &kind {
+            FeatureKind::Shell(sh) => sh.faces.clone(),
+            FeatureKind::Thicken(th) => th.faces.clone(),
+            FeatureKind::SplitFace(sf) => sf.faces.clone(),
+            _ => Vec::new(),
+        };
+        if let Some(f) = new_faces.as_ref() {
+            for name in f.iter().filter(|n| !old.contains(n)) {
+                s.record_signature(id, crate::naming::Kind::Face, name, None);
+            }
+            let keep: Vec<&str> = f.iter().map(String::as_str).collect();
+            s.doc.retain_signatures(id, &keep);
+        }
         match &mut kind {
             FeatureKind::Shell(sh) => {
                 if let Some(t) = new_thickness {
