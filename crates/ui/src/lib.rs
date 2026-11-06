@@ -31,6 +31,7 @@ mod inspect_ui;
 const SHOT_TIMEOUT_SECS: f64 = 30.0;
 /// Set when `--screenshot` gave up, so the app exits with an error.
 static SHOT_FAILED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+mod body_tools_ui;
 mod icons;
 mod navigation;
 mod params_ui;
@@ -566,6 +567,14 @@ impl ChamferaApp {
                 return;
             }
         }
+        if self.solid.body_tool.is_some()
+            && response.clicked()
+            && let Some(pos) = response.interact_pointer_pos()
+        {
+            let (x, y) = local(pos);
+            self.body_tool_click(x, y, w, h);
+            return;
+        }
         if self.solid.extrude.is_some()
             && response.clicked()
             && let Some(pos) = response.interact_pointer_pos()
@@ -927,6 +936,7 @@ impl eframe::App for ChamferaApp {
             self.shell_dialog(&ctx);
             self.sheet_dialogs(&ctx);
             self.press_pull_dialog(&ctx);
+            self.body_tool_dialog(&ctx);
             self.sweep_dialog(&ctx);
             self.feature_dialog(&ctx);
             self.timeline_error_window(&ctx);

@@ -138,7 +138,7 @@ Close runners-up: selection filters and box selection (UI and NAV), splines (nee
 | Thin extrude | Extrude an open or closed profile as a wall of given thickness | missing | P1 | M | kernel, engine |
 | Revolve | Profile around an axis, partial or full | done | P0 | M | kernel, engine |
 | Boolean operation choice | New body, join, cut, intersect for each feature | done | P0 | M | kernel (K7), engine |
-| Combine bodies | Boolean between existing bodies, keep tools option | missing | P0 | S | engine |
+| Combine bodies | Boolean between existing bodies, keep tools option | branch `solid/body-tools` (`solid.combine`: join, cut, intersect, keep tools; `solid.remove` takes bodies out of the result) | P0 | S | engine |
 | Fillet (constant radius) | Round straight edges between planes, and hole/boss rims | branch (`engine/blends`) | P0 | L | kernel (K11), engine, ui |
 | Chamfer (equal distance) | Bevel the same edges | branch (`engine/blends`) | P0 | M | kernel (K11), engine |
 | Chamfer: two distances, distance and angle | Unequal bevels | missing | P1 | M | kernel |
@@ -163,7 +163,7 @@ Close runners-up: selection filters and box selection (UI and NAV), splines (nee
 | Draft | Tilt faces by an angle from a pull direction | missing | P1 | L | kernel (K12) |
 | Push/pull a face | Move or offset a face directly; the model follows. Press Pull (Q): profile → extrude, face → offset, fillet face → its radius, edge → fillet, by dragging an arrow or typing; Move Face for planar faces | branch (solid/direct-edit) | P1 | M | kernel, engine |
 | Replace face, offset face, delete face | Direct edits of faces: offset and delete done (`solid.offset_face`, `solid.delete_face`); replace face missing | branch (solid/direct-edit) | P2 | L | kernel |
-| Split body / split face | Cut a body or face with a plane, surface or sketch | missing | P1 | M | kernel |
+| Split body / split face | Cut a body or face with a plane, surface or sketch | branch `solid/body-tools` (`solid.split_body` by an origin, construction or face plane; `solid.split_face` of flat faces by a plane or a sketch line; surfaces and curved faces refused) | P1 | M | kernel |
 | Scale body | Uniform and non-uniform scale | missing | P2 | S | kernel |
 | Coil / helix | Spring and thread shapes | missing | P2 | L | kernel (K10) |
 | Primitives | Box, cylinder, sphere, torus, cone made in one step | missing | P1 | S | engine (kernel already makes them) |
@@ -178,7 +178,7 @@ Close runners-up: selection filters and box selection (UI and NAV), splines (nee
 | Surface extrude, revolve, sweep, loft | Open curves swept into surfaces | missing | P1 | M | kernel |
 | Patch | Fill a closed boundary with a surface | missing | P1 | L | kernel (K10) |
 | Offset surface | Surface at a distance from faces | missing | P1 | L | kernel |
-| Thicken | Give a surface a thickness to make a solid | missing | P1 | L | kernel |
+| Thicken | Give a surface a thickness to make a solid | branch `solid/body-tools` (`solid.thicken` of faces of solids: flat faces extruded, full cylindrical faces as rings; one side, symmetric, both sides; open surfaces wait for surface bodies) | P1 | L | kernel |
 | Trim, untrim, extend surface | Edit surface boundaries | missing | P2 | L | kernel |
 | Stitch / unstitch | Sew surfaces into a solid, or take a solid apart | missing | P1 | M | kernel |
 | Ruled surface | Surface between an edge and a direction | missing | P2 | M | kernel |

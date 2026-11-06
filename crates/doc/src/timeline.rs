@@ -115,6 +115,13 @@ pub fn kind_dependencies(kind: &FeatureKind) -> Vec<u32> {
         // Bodies are named, not numbered: a move (or a mirror of bodies) finds them by
         // name when it is built, and reports a missing one there.
         FeatureKind::Move(_) => {}
+        // Combine, split, thicken and remove name bodies (found when built); a split's
+        // plane and the faces they name are features they use.
+        FeatureKind::Combine(_)
+        | FeatureKind::SplitBody(_)
+        | FeatureKind::SplitFace(_)
+        | FeatureKind::Thicken(_)
+        | FeatureKind::Remove(_) => deps.extend(kind.body_tool_features()),
         // Their sketches (profile, path, sections) are listed above.
         FeatureKind::Sweep(_) | FeatureKind::Loft(_) => {}
         // A base flange's sketch is listed above; a flange names its sheet's edge.

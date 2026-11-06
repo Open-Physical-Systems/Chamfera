@@ -54,6 +54,7 @@ It uses the GPU if there is one, else a software Vulkan driver (lavapipe, `mesa-
 - `chamfera-cli commands` lists every command; `chamfera-cli exec <id> '<json>'` runs one.
 - `chamfera-cli run script.json` runs a list of `{"command", "params"}` steps and prints one reply per line (`examples/parameters.json`).
 - Measure: `inspect.measure {"a": {"solid": "Extrude1", "face": "2:top"}, "b": {"point": [x, y, z]}}` gives the distance, both closest points and the angle; entities are `{solid}`, `{solid, face}`, `{solid, edge}` (names from `solid.edges`), `{solid, vertex}` or `{point}`; `inspect.measure_at {x, y, width, height, from?}` picks by pixel; `inspect.mass {"body": "Extrude1", "density": 1}` gives volume, mass, centre of mass and inertia. A `--script` whose last inspect step is `inspect.measure` or `inspect.mass` opens that tool with its result, so a screenshot shows it (`examples/measure-block-and-pin.json`).
+- Body tools (timeline features; bodies by name, default the selection): `solid.combine {target, tools, operation: join|cut|intersect, keep_tools}`, `solid.split_body {bodies, plane: "yz" | plane id | {feature, face}}`, `solid.split_face {faces, plane}` or `{faces, sketch, line}`, `solid.thicken {faces, thickness, sides: one_side|symmetric|both_sides, operation}`, `solid.remove {bodies}` (`examples/split-body.json`).
 - Check results with the numbers in the replies (volume, bounds, pick point and normal) against values you worked out, not only with pictures.
 
 ## Evidence

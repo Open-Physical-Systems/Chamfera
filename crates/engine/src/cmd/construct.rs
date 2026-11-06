@@ -164,7 +164,7 @@ fn edge_ref(v: &Value) -> Result<EdgeRef, CommandError> {
     }
 }
 
-fn plane_ref(v: &Value) -> Result<PlaneRef, CommandError> {
+pub(super) fn plane_ref(v: &Value) -> Result<PlaneRef, CommandError> {
     match v {
         Value::String(s) => OriginPlane::parse(s)
             .map(|plane| PlaneRef::Origin { plane })
