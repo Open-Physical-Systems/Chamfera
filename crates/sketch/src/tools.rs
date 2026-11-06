@@ -1100,7 +1100,8 @@ impl Sketch {
             }
         }
         let mut lines = Vec::new();
-        for (id, c) in self.curves() {
+        // Construction lines at the corner (a diagonal) stay on the kept corner point.
+        for (id, c) in self.curves().filter(|(_, c)| !c.is_construction()) {
             match c {
                 Curve::Line { start, end, .. } => {
                     if group.contains(start) {
@@ -1151,11 +1152,25 @@ impl Sketch {
         at: [Point2; 2],
     ) -> Result<[PointId; 2], ToolError> {
         let mut new = [PointId(0); 2];
-        for (k, (line, v, _, v_is_start)) in lines.iter().enumerate() {
+        for (k, (line, v, far, v_is_start)) in lines.iter().enumerate() {
             let p = self.add_point(at[k])?;
             let curve = self.curve_of(*line)?;
             self.replace_curve(*line, with_end(&curve, *v_is_start, p))?;
-            self.drop_extent(*line);
+            // The line's length dimension still measures to the sharp corner, which stays:
+            // it becomes a distance from the far end to the corner, with the same id (so an
+            // expression driving it keeps working).
+            let (line, v, far) = (*line, *v, *far);
+            self.rewrite_constraints(|c| match c {
+                Constraint::Length { line: l, value } if *l == line => Some(Constraint::Distance {
+                    a: far,
+                    b: v,
+                    value: *value,
+                }),
+                _ => None,
+            });
+            self.drop_extent(line);
+            let line = &line;
+            let v = &v;
             self.add_constraint(Constraint::PointOnLine {
                 point: *v,
                 line: *line,

@@ -385,6 +385,19 @@ impl Sketch {
         Ok(())
     }
 
+    /// Rewrites constraints in place, keeping their ids: `f` returns the new form, or
+    /// `None` to leave one as it is. The tools validate the sketch afterwards.
+    pub(crate) fn rewrite_constraints(
+        &mut self,
+        mut f: impl FnMut(&Constraint) -> Option<Constraint>,
+    ) {
+        for c in self.constraints.values_mut() {
+            if let Some(new) = f(c) {
+                *c = new;
+            }
+        }
+    }
+
     /// Keeps only the constraints `keep` says yes to.
     pub(crate) fn retain_constraints(&mut self, mut keep: impl FnMut(&Constraint) -> bool) {
         self.constraints.retain(|_, c| keep(c));
