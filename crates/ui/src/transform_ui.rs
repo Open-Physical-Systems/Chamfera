@@ -21,7 +21,7 @@ pub enum TransformKind {
 }
 
 impl TransformKind {
-    fn command(self) -> &'static str {
+    pub(crate) fn command(self) -> &'static str {
         match self {
             TransformKind::Mirror => "solid.mirror",
             TransformKind::Move => "solid.move",
@@ -233,7 +233,7 @@ fn pattern_sources(app: &ChamferaApp) -> Vec<(u32, String)> {
 fn field(ui: &mut egui::Ui, look: Look, name: &str, value: &mut String, hint: &str) -> bool {
     widgets::field_label(ui, look, name);
     let r = ui.add_sized(
-        [180.0, 26.0],
+        widgets::FIELD,
         egui::TextEdit::singleline(value)
             .hint_text(hint)
             .align(egui::Align2::LEFT_CENTER),
@@ -248,7 +248,7 @@ fn choice(ui: &mut egui::Ui, look: Look, name: &str, value: &mut usize, options:
     let current = options.get(*value).copied().unwrap_or("");
     egui::ComboBox::from_id_salt(("transform", name))
         .selected_text(current)
-        .width(180.0)
+        .width(widgets::FIELD_WIDTH)
         .show_ui(ui, |ui| {
             for (i, o) in options.iter().enumerate() {
                 ui.selectable_value(value, i, *o);
@@ -258,49 +258,6 @@ fn choice(ui: &mut egui::Ui, look: Look, name: &str, value: &mut usize, options:
 }
 
 impl ChamferaApp {
-    /// The TRANSFORM group of the SOLID ribbon: Mirror, Move and the two patterns.
-    pub(crate) fn transform_group(&mut self, ui: &mut egui::Ui, enabled: bool) {
-        let look = self.look();
-        widgets::ribbon_divider(ui, look);
-        let open = self.solid.transform.as_ref().map(|t| t.kind);
-        let mut start: Option<TransformKind> = None;
-        widgets::ribbon_group(ui, look, "TRANSFORM", false, |ui| {
-            for (kind, tip) in [
-                (
-                    TransformKind::Mirror,
-                    "Mirror bodies across an origin plane, as new bodies or joined",
-                ),
-                (
-                    TransformKind::Move,
-                    "Move or rotate bodies by typed values, or copy them",
-                ),
-                (
-                    TransformKind::PatternLinear,
-                    "Repeat a feature in a row along an axis",
-                ),
-                (
-                    TransformKind::PatternCircular,
-                    "Repeat a feature around an axis",
-                ),
-            ] {
-                let on = open == Some(kind);
-                let text = label(kind.command());
-                let r = widgets::tool_button(ui, look, kind.icon(), text, enabled || on, on, false)
-                    .on_hover_text(if enabled || on {
-                        format!("{text}\n{tip}")
-                    } else {
-                        "Build a solid first".to_owned()
-                    });
-                if r.clicked() && enabled {
-                    start = Some(kind);
-                }
-            }
-        });
-        if let Some(kind) = start {
-            self.open_transform(kind);
-        }
-    }
-
     /// Opens a tool, with the selected body or the last feature already picked.
     pub(crate) fn open_transform(&mut self, kind: TransformKind) {
         let bodies = if kind.on_bodies() {
@@ -451,7 +408,7 @@ fn transform_fields(
             .map_or("Choose a feature", |s| s.1.as_str());
         egui::ComboBox::from_id_salt("pattern feature")
             .selected_text(current)
-            .width(180.0)
+            .width(widgets::FIELD_WIDTH)
             .show_ui(ui, |ui| {
                 for (id, name) in sources {
                     ui.selectable_value(&mut tool.feature, Some(*id), name);

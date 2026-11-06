@@ -169,7 +169,7 @@ impl ChamferaApp {
                                 if tool.chamfer { "Distance" } else { "Radius" },
                             );
                             let edit = ui.add_sized(
-                                [180.0, 26.0],
+                                widgets::FIELD,
                                 egui::TextEdit::singleline(&mut tool.size)
                                     .hint_text("2 mm")
                                     .align(egui::Align2::LEFT_CENTER),

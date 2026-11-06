@@ -1,4 +1,4 @@
-//! Surface features (format 27): surface bodies (open shells) made by sweeping sketch
+//! Surface features (format 28): surface bodies (open shells) made by sweeping sketch
 //! profiles or open sketch curves without caps, planar patches, stitching and trimming.
 //!
 //! A swept surface takes closed profiles (a point inside each, as an extrude does) and

@@ -38,6 +38,7 @@ mod params_ui;
 mod prefs;
 mod prefs_ui;
 mod press_pull_ui;
+mod ribbon;
 mod search;
 mod sheet_ui;
 mod shell_ui;
@@ -104,6 +105,8 @@ pub struct Options {
     /// Open the Preferences window at start on this page (general, navigation, units,
     /// grid).
     pub preferences: Option<String>,
+    /// Open the dropdown of this ribbon group (by caption, such as `MODIFY`) at start.
+    pub ribbon_menu: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -177,6 +180,8 @@ pub struct ChamferaApp {
     browser: browser::BrowserUi,
     timeline: timeline::TimelineUi,
     search: search::SearchUi,
+    /// The ribbon's menus and last layout.
+    ribbon: ribbon::RibbonUi,
     /// Right-click menus, the selection filter and hover pre-highlight.
     ctx_menu: context_menu::ContextMenuUi,
     /// The Manufacture workspace.
@@ -276,6 +281,7 @@ impl ChamferaApp {
             browser: browser::BrowserUi::default(),
             timeline: timeline::TimelineUi::default(),
             search: search::SearchUi::default(),
+            ribbon: ribbon::RibbonUi::default(),
             ctx_menu: context_menu::ContextMenuUi::default(),
             cam: cam_ui::CamUi::default(),
             display: display_ui::DisplayUi::default(),
@@ -356,6 +362,12 @@ impl ChamferaApp {
         if let Some(q) = &options.search {
             app.run_action(shortcuts::Action::Search);
             app.search.query = q.chars().take(120).collect();
+        }
+        if let Some(caption) = &options.ribbon_menu {
+            let tab = app.ribbon_tab();
+            app.ribbon.request = ribbon::groups(tab)
+                .find(|g| g.caption.eq_ignore_ascii_case(caption))
+                .map(|g| ribbon::MenuRequest::Group(g.caption));
         }
         app
     }

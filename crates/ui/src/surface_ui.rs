@@ -1,5 +1,5 @@
-//! The SURFACE group of the SOLID ribbon: Surface Extrude, Surface Revolve, Surface
-//! Sweep, Patch, Stitch and Trim, one small dialog each. Clicks in the viewport pick what
+//! The surface tools of the SOLID tab's SURFACE group (rows in `ribbon.rs`): Surface
+//! Extrude, Surface Revolve, Surface Sweep, Patch, Stitch and Trim, one small dialog each. Clicks in the viewport pick what
 //! the tool works on: sketch profiles (`solid.profile_at`) and open curves
 //! (`solid.path_at`), a revolve's axis line and a sweep's path, model edges
 //! (`solid.edge_at`) and bodies (`select.pick`). Acts only through `surface.*` commands.
@@ -55,26 +55,7 @@ impl SurfaceKind {
         }
     }
 
-    fn tip(self) -> &'static str {
-        match self {
-            SurfaceKind::Extrude => {
-                "Surface Extrude\nPull profiles or open curves straight out into open sheets, without caps"
-            }
-            SurfaceKind::Revolve => {
-                "Surface Revolve\nTurn profiles or open curves about a sketch line into open sheets"
-            }
-            SurfaceKind::Sweep => "Surface Sweep\nSweep profiles or open curves along a path",
-            SurfaceKind::Patch => {
-                "Patch\nFill a closed sketch profile, or a closed flat loop of edges, with a flat face"
-            }
-            SurfaceKind::Stitch => {
-                "Stitch\nJoin surfaces along their shared edges; a closed result becomes a solid"
-            }
-            SurfaceKind::Trim => "Trim\nCut a surface with a plane or a body and keep one side",
-        }
-    }
-
-    fn needs_sketch(self) -> bool {
+    pub(crate) fn needs_sketch(self) -> bool {
         matches!(
             self,
             SurfaceKind::Extrude | SurfaceKind::Revolve | SurfaceKind::Sweep
@@ -92,13 +73,6 @@ impl SurfaceKind {
         }
     }
 }
-
-/// The tools shown as buttons; the group's menu lists them all.
-const BUTTONS: [SurfaceKind; 3] = [
-    SurfaceKind::Extrude,
-    SurfaceKind::Patch,
-    SurfaceKind::Stitch,
-];
 
 /// What the next viewport click picks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -323,69 +297,13 @@ fn id_of(v: &Value) -> Option<u32> {
 }
 
 impl ChamferaApp {
-    /// The SURFACE ribbon group: the three tools used most as buttons, every surface
-    /// tool in its caption's menu (so the ribbon still fits a laptop screen).
-    pub(crate) fn surface_group(&mut self, ui: &mut egui::Ui, has_sketch: bool, free: bool) {
-        let look = self.look();
-        let has_bodies = !self.session.solids().is_empty();
-        let open = self.solid.surface.as_ref().map(|t| t.kind);
-        let possible_for = |kind: SurfaceKind| {
-            if kind.needs_sketch() {
-                has_sketch
-            } else if kind == SurfaceKind::Patch {
-                has_sketch || has_bodies
-            } else {
-                has_bodies
-            }
-        };
-        let mut start = None;
-        let (_, menu) = widgets::ribbon_group(ui, look, "SURFACE", true, |ui| {
-            for kind in BUTTONS {
-                let on = open == Some(kind);
-                let possible = possible_for(kind);
-                if widgets::tool_button(
-                    ui,
-                    look,
-                    kind.icon(),
-                    label(kind.command()),
-                    possible && (free || on),
-                    on,
-                    false,
-                )
-                .on_hover_text(if possible {
-                    kind.tip()
-                } else if kind.needs_sketch() {
-                    "Draw a sketch first"
-                } else {
-                    "Build a body first"
-                })
-                .clicked()
-                    && free
-                {
-                    start = Some(kind);
-                }
-            }
-        });
-        egui::Popup::menu(&menu).show(|ui| {
-            for kind in SurfaceKind::ALL {
-                if widgets::menu_item(
-                    ui,
-                    look,
-                    kind.icon(),
-                    label(kind.command()),
-                    possible_for(kind) && free,
-                )
-                .on_hover_text(kind.tip())
-                .clicked()
-                {
-                    ui.close();
-                    start = Some(kind);
-                }
-            }
-        });
-        if let Some(kind) = start {
-            self.open_surface_tool(kind);
-        }
+    /// True when some sketch has curves (to sweep or patch).
+    pub(crate) fn has_sketch_curves(&self) -> bool {
+        self.session
+            .doc
+            .sketches
+            .iter()
+            .any(|f| f.sketch.curves().next().is_some())
     }
 
     /// Opens a surface tool, starting from the selected bodies for stitch and trim.

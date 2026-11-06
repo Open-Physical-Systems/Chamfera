@@ -63,7 +63,7 @@ pub static COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         id: "surface.trim",
-        label: "Trim",
+        label: "Trim Surface",
         params: "body: string (optional) - the surface body; default the selected body\n\
                  plane: string, integer or object (optional) - xy, xz, yz, a construction plane id or {feature, face}\n\
                  tool: string (optional) - a body to trim with instead: a closed solid or a flat one-face surface\n\

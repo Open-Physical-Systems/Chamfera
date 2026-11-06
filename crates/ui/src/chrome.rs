@@ -41,7 +41,10 @@ impl ChamferaApp {
             widgets::bar_divider(ui, self.look(), 20.0);
             let look = self.look();
             if widgets::icon_button(ui, look, Icon::Save, 30.0, 20.0, true, false)
-                .on_hover_text("Save the design  (Ctrl+S)")
+                .on_hover_text(crate::shortcuts::tip(
+                    "Save Design\nWrite the design to its .chamfera file",
+                    crate::shortcuts::Action::Save,
+                ))
                 .clicked()
             {
                 self.save(false);
@@ -49,7 +52,10 @@ impl ChamferaApp {
             let look = self.look();
             let can_undo = self.session.can_undo();
             if widgets::icon_button(ui, look, Icon::Undo, 30.0, 20.0, can_undo, false)
-                .on_hover_text(format!("{}  (Ctrl+Z)", label("edit.undo")))
+                .on_hover_text(crate::shortcuts::tip(
+                    &format!("{}\nTake back the last change", label("edit.undo")),
+                    crate::shortcuts::Action::Undo,
+                ))
                 .clicked()
             {
                 self.run("edit.undo", json!({}));
@@ -58,7 +64,10 @@ impl ChamferaApp {
             let look = self.look();
             let can_redo = self.session.can_redo();
             if widgets::icon_button(ui, look, Icon::Redo, 30.0, 20.0, can_redo, false)
-                .on_hover_text(format!("{}  (Ctrl+Shift+Z)", label("edit.redo")))
+                .on_hover_text(crate::shortcuts::tip(
+                    &format!("{}\nMake the change taken back again", label("edit.redo")),
+                    crate::shortcuts::Action::Redo,
+                ))
                 .clicked()
             {
                 self.run("edit.redo", json!({}));
@@ -162,101 +171,59 @@ impl ChamferaApp {
         }
     }
 
-    /// The ribbon: workspace tabs, then the tools of the active one.
+    /// The ribbon: the workspace switcher at the left; beside it the workspace's tabs over
+    /// the tools of the shown tab (`ribbon.rs`).
     pub(crate) fn ribbon(&mut self, ui: &mut egui::Ui) {
-        let sketching = self.session.active_sketch.is_some();
-        let drawing = self.drawing.active && !sketching;
         ui.add_space(2.0);
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = S2;
-            let manufacture = self.cam.active && !sketching && !drawing;
-            let sheet = self.sheet_metal.active && !sketching && !drawing && !manufacture;
-            let solid = self.tab(
-                ui,
-                "SOLID",
-                !sketching && !drawing && !manufacture && !sheet,
-                !sketching,
-            );
-            if solid.clicked() {
-                self.drawing.active = false;
-                self.sheet_metal.active = false;
-                if manufacture {
-                    self.set_manufacture(false);
-                }
-            }
-            solid.on_hover_text(if sketching {
-                "Finish the sketch to use the solid tools"
-            } else {
-                "Solid modelling: sketches, extrudes and revolves"
-            });
-            if !sketching
-                && self
-                    .tab(ui, "SHEET METAL", sheet, true)
-                    .on_hover_text("Sheet metal: base flanges, flanges, flat patterns and rules")
-                    .clicked()
-            {
-                self.drawing.active = false;
-                self.sheet_metal.active = true;
-                if manufacture {
-                    self.set_manufacture(false);
-                }
-            }
-            if !sketching
-                && self
-                    .tab(ui, "MANUFACTURE", manufacture, true)
-                    .on_hover_text("Manufacture: setups, 2D milling toolpaths and G-code")
-                    .clicked()
-                && !manufacture
-            {
-                self.drawing.active = false;
-                self.sheet_metal.active = false;
-                self.set_manufacture(true);
-            }
-            if sketching {
-                self.tab(ui, "SKETCH", true, true)
-                    .on_hover_text("Editing a sketch: draw, constrain and dimension");
-            } else if self
-                .tab(ui, "DRAWING", drawing, true)
-                .on_hover_text("2D drawing sheets: views of the model, dimensions, export")
-                .clicked()
-            {
-                self.drawing.active = true;
-                if self.cam.active {
-                    self.set_manufacture(false);
-                }
-            }
-        });
-        let look = self.look();
-        let r = ui.min_rect();
-        ui.painter().hline(
-            r.x_range(),
-            r.max.y.round() + 0.5,
-            Stroke::new(1.0, look.c(|t| t.border)),
-        );
-        ui.add_space(4.0);
-        egui::ScrollArea::horizontal()
-            .id_salt("ribbon tools")
-            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
-            .show(ui, |ui| {
-                ui.horizontal_top(|ui| {
-                    ui.spacing_mut().item_spacing.x = 0.0;
-                    if sketching {
-                        self.sketch_toolbar(ui);
-                    } else if drawing {
-                        self.drawing_toolbar(ui);
-                    } else if self.cam.active {
-                        self.cam_toolbar(ui);
-                    } else if self.sheet_metal.active {
-                        self.sheet_toolbar(ui);
-                    } else {
-                        self.solid_toolbar(ui);
-                    }
+        let height = widgets::TAB_HEIGHT + 4.0 + widgets::TOOL_HEIGHT + widgets::GROUP_LABEL_HEIGHT;
+        ui.horizontal_top(|ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            self.workspace_switcher(ui, height);
+            ui.add_space(S3);
+            ui.vertical(|ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = S2;
+                    self.workspace_tabs(ui);
                 });
+                let look = self.look();
+                let full = ui.max_rect();
+                let r = ui.min_rect();
+                ui.painter().hline(
+                    full.x_range(),
+                    r.max.y.round() + 0.5,
+                    Stroke::new(1.0, look.c(|t| t.border)),
+                );
+                ui.add_space(4.0);
+                let available = ui.available_width();
+                self.ribbon.area = Some(Rect::from_min_size(
+                    ui.cursor().min,
+                    vec2(
+                        available,
+                        widgets::TOOL_HEIGHT + widgets::GROUP_LABEL_HEIGHT,
+                    ),
+                ));
+                // Groups collapse to fit; scrolling is only a last resort for tiny windows.
+                egui::ScrollArea::horizontal()
+                    .id_salt("ribbon tools")
+                    .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+                    .show(ui, |ui| {
+                        ui.horizontal_top(|ui| {
+                            ui.spacing_mut().item_spacing.x = 0.0;
+                            self.ribbon_tools(ui, available);
+                        });
+                    });
             });
+        });
     }
 
     /// A workspace tab: caps text, the accent underline when active.
-    fn tab(&self, ui: &mut egui::Ui, text: &str, active: bool, enabled: bool) -> egui::Response {
+    pub(crate) fn tab(
+        &self,
+        ui: &mut egui::Ui,
+        text: &str,
+        active: bool,
+        enabled: bool,
+    ) -> egui::Response {
         let look = self.look();
         let colour = if active {
             look.c(|t| t.text)

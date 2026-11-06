@@ -519,7 +519,7 @@ pub enum FeatureKind {
     SplitFace(crate::body_tools::SplitFace),
     Thicken(crate::body_tools::Thicken),
     Remove(crate::body_tools::RemoveBodies),
-    /// A surface body feature: swept surfaces, patch, stitch, trim (format 27).
+    /// A surface body feature: swept surfaces, patch, stitch, trim (format 28).
     Surface(crate::surface::SurfaceFeature),
 }
 

@@ -92,10 +92,11 @@ use thiserror::Error;
 /// - 26: body tools: combine, split body, split face, thicken and remove bodies
 ///   (`combine`, `split_body`, `split_face`, `thicken`, `remove`). Older files open
 ///   unchanged: they hold none.
-/// - 27: surface features (`kind: surface`, with `surface`: `extrude`, `revolve`,
+/// - 27: reserved for persistent naming (K8), landing separately.
+/// - 28: surface features (`kind: surface`, with `surface`: `extrude`, `revolve`,
 ///   `sweep`, `patch`, `stitch` or `trim`), making surface bodies (open shells). Older
 ///   files open unchanged: they hold none.
-pub const FORMAT_VERSION: u32 = 27;
+pub const FORMAT_VERSION: u32 = 28;
 /// The tag every design file starts with, so other JSON is not mistaken for a design.
 pub const FORMAT_TAG: &str = "chamfera";
 /// Longest parameter name.

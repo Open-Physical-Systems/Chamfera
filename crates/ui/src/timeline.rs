@@ -1163,7 +1163,7 @@ impl ChamferaApp {
                             } else if blend {
                                 widgets::field_label(ui, look, value_label);
                                 let r = ui.add_sized(
-                                    [180.0, 26.0],
+                                    widgets::FIELD,
                                     egui::TextEdit::singleline(&mut edit.distance)
                                         .hint_text("2 mm")
                                         .align(egui::Align2::LEFT_CENTER),
