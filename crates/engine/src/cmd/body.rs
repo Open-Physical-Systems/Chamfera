@@ -14,6 +14,14 @@ pub static COMMANDS: &[CommandSpec] = &[
         run: import_stl,
     },
     CommandSpec {
+        id: "body.import_stl_bytes",
+        label: "Insert Mesh (STL)",
+        params: "data: string (required) - the .stl file's contents (binary or ASCII, in mm), \
+                 base64\nname: string (optional) - the body's name; default \"Mesh\"",
+        mutates: false,
+        run: import_stl_bytes,
+    },
+    CommandSpec {
         id: "body.list",
         label: "List Bodies",
         params: "(none)",
@@ -81,6 +89,18 @@ fn import_stl(s: &mut Session, p: &Value) -> CmdResult {
         .chars()
         .take(64)
         .collect::<String>();
+    add(s, &name, mesh)
+}
+
+fn import_stl_bytes(s: &mut Session, p: &Value) -> CmdResult {
+    let bytes =
+        super::design::decode_base64(params::req_str(p, "data")?, chamfera_io::stl::MAX_STL_BYTES)?;
+    let mesh = chamfera_io::stl::read(&bytes)?;
+    let name = params::opt_str(p, "name")?
+        .map(|n| n.trim().trim_end_matches(".stl").trim_end_matches(".STL"))
+        .filter(|n| !n.is_empty())
+        .unwrap_or("Mesh");
+    let name: String = name.chars().filter(|c| !c.is_control()).take(64).collect();
     add(s, &name, mesh)
 }
 
