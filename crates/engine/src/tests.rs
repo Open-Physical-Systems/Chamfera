@@ -180,6 +180,8 @@ fn hostile_params_never_panic() {
         json!({"feature": 99, "face": "nowhere", "x": 1e300, "y": 0, "z": f64::NAN}),
         json!({"sketch": 1, "profiles": [{"x": 10, "y": 10}], "distance": 5, "operation": "cut"}),
         json!({"sketch": 1, "profiles": [{"x": 10, "y": 10}], "distance": 5, "operation": "smash"}),
+        json!({"feature": 2, "count": 1e9, "direction": {"x": 0, "y": 0, "z": 0}, "spacing": 0}),
+        json!({"feature": 2, "count": "3", "origin": {"x": f64::NAN, "y": 0}, "axis": "z", "angle": 9999}),
     ];
     for c in registry() {
         for p in &hostile {
@@ -1143,6 +1145,92 @@ fn a_boss_joined_on_top_makes_one_solid_and_a_cut_drills_a_hole() {
     let v = s.solids()[0].body.volume().unwrap();
     let expected = 30_000.0 + 500.0 - 16.0 * std::f64::consts::PI * 15.0;
     assert!((v - expected).abs() < 1e-6, "{v} vs {expected}");
+}
+
+#[test]
+fn a_linear_pattern_of_a_cut_drills_a_row_of_holes() {
+    // Plate 50 x 30 x 10; one hole r = 3 at (10, 15) cut through; a pattern of 4 along +X,
+    // 10 apart: holes at x = 10, 20, 30, 40. Volume 15000 - 4 * 9π * 10.
+    let mut s = Session::new();
+    s.execute(
+        "param.set",
+        &json!({"name": "holes", "expression": "4", "unit": "unitless"}),
+    )
+    .unwrap();
+    extruded_plate(&mut s, json!(10));
+    s.execute("sketch.create", &json!({"plane": "xy"})).unwrap();
+    s.execute("sketch.circle", &json!({"cx": 10, "cy": 15, "radius": 3}))
+        .unwrap();
+    s.execute("sketch.finish", &json!({})).unwrap();
+    let cut = s
+        .execute(
+            "solid.extrude",
+            &json!({"sketch": 3, "profiles": [{"x": 10, "y": 15}], "distance": 10, "operation": "cut"}),
+        )
+        .unwrap();
+    let cut_id = cut["feature"].as_u64().unwrap();
+    let r = s
+        .execute(
+            "solid.pattern_linear",
+            &json!({"feature": cut_id, "count": "holes", "direction": {"x": 1, "y": 0, "z": 0}, "spacing": 10}),
+        )
+        .unwrap();
+    let pi = std::f64::consts::PI;
+    let v = r["solids"][0]["volume"].as_f64().unwrap();
+    assert!((v - (15_000.0 - 4.0 * 9.0 * pi * 10.0)).abs() < 1e-6, "{v}");
+    // The parameter drives the count: 2 holes.
+    s.execute(
+        "param.set",
+        &json!({"name": "holes", "expression": "2", "unit": "unitless"}),
+    )
+    .unwrap();
+    let v = s.solids()[0].body.volume().unwrap();
+    assert!((v - (15_000.0 - 2.0 * 9.0 * pi * 10.0)).abs() < 1e-6, "{v}");
+    // The cut it repeats cannot be deleted while the pattern uses it.
+    assert!(
+        s.execute("feature.delete", &json!({"feature": cut_id}))
+            .is_err()
+    );
+}
+
+#[test]
+fn a_circular_pattern_of_new_bodies_makes_copies_around_an_axis() {
+    // A 4 x 4 x 4 cube at (20..24, -2..2) patterned 6 times around Z: 6 bodies of 64.
+    let mut s = Session::new();
+    s.execute("sketch.create", &json!({"plane": "xy"})).unwrap();
+    s.execute(
+        "sketch.rectangle",
+        &json!({"x1": 20, "y1": -2, "x2": 24, "y2": 2}),
+    )
+    .unwrap();
+    s.execute("sketch.finish", &json!({})).unwrap();
+    s.execute(
+        "solid.extrude",
+        &json!({"sketch": 1, "profiles": [{"x": 22, "y": 0}], "distance": 4}),
+    )
+    .unwrap();
+    s.execute(
+        "solid.pattern_circular",
+        &json!({"feature": 2, "count": 6, "origin": {"x": 0, "y": 0, "z": 0}, "axis": {"x": 0, "y": 0, "z": 1}}),
+    )
+    .unwrap();
+    assert_eq!(s.solids().len(), 6);
+    for solid in s.solids() {
+        assert!((solid.body.volume().unwrap() - 64.0).abs() < 1e-9);
+    }
+    // Copy 4 (180 degrees) sits at x -24..-20.
+    let b = s.solids()[3].body.bounding_box().unwrap();
+    assert!(
+        (b.min.x + 24.0).abs() < 1e-9 && (b.max.x + 20.0).abs() < 1e-9,
+        "{b:?}"
+    );
+    // Bad counts are refused.
+    assert!(s
+        .execute(
+            "solid.pattern_circular",
+            &json!({"feature": 2, "count": 1, "origin": {"x": 0, "y": 0, "z": 0}, "axis": {"x": 0, "y": 0, "z": 1}}),
+        )
+        .is_err());
 }
 
 #[test]

@@ -4,7 +4,9 @@ pub mod expr;
 pub mod feature;
 pub mod imported;
 
-pub use feature::{Extrude, ExtrudeDirection, Feature, FeatureKind, Operation, Revolve};
+pub use feature::{
+    Extrude, ExtrudeDirection, Feature, FeatureKind, Operation, Pattern, PatternLayout, Revolve,
+};
 pub use imported::ImportedBody;
 
 use serde::{Deserialize, Serialize};
@@ -19,7 +21,8 @@ use thiserror::Error;
 /// - 4: the feature timeline (extrude, revolve).
 /// - 5: sketches attached to a face of a feature's solid.
 /// - 6: feature operations (new body, join, cut, intersect).
-/// - 8: imported solid bodies
+/// - 7: linear and circular patterns of features.
+/// - 8: imported solid bodies.
 pub const FORMAT_VERSION: u32 = 8;
 /// The tag every design file starts with, so other JSON is not mistaken for a design.
 pub const FORMAT_TAG: &str = "chamfera";

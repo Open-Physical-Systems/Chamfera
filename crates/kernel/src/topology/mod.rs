@@ -43,6 +43,7 @@ mod euler;
 mod geometry;
 mod import;
 mod measure;
+mod transform;
 mod uv;
 mod validate;
 

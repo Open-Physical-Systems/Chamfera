@@ -277,6 +277,77 @@ fn apply_operation(
     Ok(())
 }
 
+/// The moved copies a pattern makes of its source's shapes (copy 1 is the source itself,
+/// so copies 2..=count are returned), and the operation they do.
+fn pattern_copies(
+    doc: &chamfera_doc::Document,
+    p: &chamfera_doc::Pattern,
+    pattern_id: u32,
+    tools: &BTreeMap<u32, (Vec<Body>, Operation)>,
+) -> Result<(Vec<Body>, Operation), String> {
+    use chamfera_doc::PatternLayout;
+    use chamfera_geom::Transform;
+    let (source, op) = tools.get(&p.source).ok_or_else(|| {
+        format!(
+            "feature {} it repeats is suppressed or could not be built",
+            p.source
+        )
+    })?;
+    let count = doc.pattern_count(p).map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    for k in 1..count {
+        let t = match &p.layout {
+            PatternLayout::Linear { direction, spacing } => {
+                let s = doc
+                    .evaluate_feature_value(spacing, chamfera_doc::expr::Dim::LENGTH)
+                    .map_err(|e| e.to_string())?;
+                let d = direction
+                    .normalized()
+                    .ok_or("the direction has no length")?;
+                Transform::translation(d * (s * k as f64))
+            }
+            PatternLayout::Circular {
+                origin,
+                axis,
+                angle,
+            } => {
+                let a = doc
+                    .evaluate_feature_value(angle, chamfera_doc::expr::Dim::ANGLE)
+                    .map_err(|e| e.to_string())?;
+                // A full circle spreads `count` copies with none on top of the first;
+                // a partial one puts the last copy at the end of the angle.
+                let full =
+                    (a.abs() - std::f64::consts::TAU).abs() < chamfera_geom::ANGULAR_TOLERANCE;
+                let step = if full {
+                    a / count as f64
+                } else {
+                    a / (count - 1) as f64
+                };
+                Transform::rotation_about(*origin, *axis, step * k as f64)
+            }
+        }
+        .ok_or("the pattern's move leaves the working range")?;
+        for body in source {
+            let mut copy = body.transformed(&t).map_err(|e| format!("pattern: {e}"))?;
+            // Copy k's faces are named `<pattern>:<k> <role>` so each copy is its own.
+            for face in copy.faces() {
+                let role = copy
+                    .face_name(face)
+                    .ok()
+                    .flatten()
+                    .and_then(split_face_key)
+                    .map(|(_, r)| r.to_owned());
+                if let Some(role) = role {
+                    let _ = copy
+                        .set_face_name(face, &face_key(pattern_id, &format!("{} {role}", k + 1)));
+                }
+            }
+            out.push(copy);
+        }
+    }
+    Ok((out, *op))
+}
+
 /// The bodies one extrude makes: one per profile.
 fn build_extrude(doc: &chamfera_doc::Document, e: &Extrude) -> Result<Vec<Body>, String> {
     let f = doc.sketch(e.sketch).map_err(|x| x.to_string())?;
@@ -330,19 +401,47 @@ impl Session {
     pub fn rebuild(&mut self) {
         let mut built = Built::default();
         let mut made: Vec<(u32, String, Body)> = Vec::new();
+        // Each built feature's own shapes (before they were combined), for patterns.
+        let mut tools: BTreeMap<u32, (Vec<Body>, Operation)> = BTreeMap::new();
         let features = self.doc.features.clone();
         for feature in &features {
             if feature.suppressed {
                 continue;
             }
             // A sketch drawn on a face follows that face (built earlier in the timeline).
-            if let Err(e) = self.follow_attached_sketch(feature.kind.sketch(), &made) {
+            if let Some(sketch) = feature.kind.sketch()
+                && let Err(e) = self.follow_attached_sketch(sketch, &made)
+            {
                 built.errors.insert(feature.id, e);
+                continue;
+            }
+            if let FeatureKind::Pattern(p) = &feature.kind {
+                let copies = pattern_copies(&self.doc, p, feature.id, &tools);
+                match copies {
+                    Ok((bodies, Operation::NewBody)) => {
+                        for (k, b) in bodies.into_iter().enumerate() {
+                            made.push((feature.id, format!("{} ({})", feature.name, k + 2), b));
+                        }
+                    }
+                    Ok((bodies, op)) => {
+                        let mut next = made.clone();
+                        match apply_operation(&mut next, &bodies, op) {
+                            Ok(()) => made = next,
+                            Err(e) => {
+                                built.errors.insert(feature.id, e);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        built.errors.insert(feature.id, e);
+                    }
+                }
                 continue;
             }
             let result = match &feature.kind {
                 FeatureKind::Extrude(e) => build_extrude(&self.doc, e),
                 FeatureKind::Revolve(r) => build_revolve(&self.doc, r),
+                FeatureKind::Pattern(_) => continue,
             };
             let operation = feature.kind.operation();
             let result = result.map(|bodies| {
@@ -354,6 +453,9 @@ impl Session {
                     })
                     .collect::<Vec<_>>()
             });
+            if let Ok(bodies) = &result {
+                tools.insert(feature.id, (bodies.clone(), operation));
+            }
             match result {
                 Ok(bodies) if operation == Operation::NewBody => {
                     let n = bodies.len();
