@@ -17,7 +17,11 @@ use std::sync::{Arc, Mutex};
 mod blend_ui;
 mod browser;
 mod chrome;
+mod construct_ui;
+mod context_menu;
 mod file_ui;
+mod hole_ui;
+mod inspect_ui;
 
 /// `--screenshot` gives up after this long without a drawn frame.
 const SHOT_TIMEOUT_SECS: f64 = 30.0;
@@ -29,9 +33,11 @@ mod search;
 mod shell_ui;
 mod shortcuts;
 mod sketch_select;
+mod sketch_shapes;
 mod sketch_ui;
 mod solid_ui;
 mod timeline;
+mod transform_ui;
 mod viewcube;
 #[cfg(target_arch = "wasm32")]
 mod web;
@@ -57,15 +63,26 @@ pub struct Options {
     /// Open the Extrude tool at start and pick the profile under the viewport's centre,
     /// as a click there would.
     pub extrude: bool,
+    /// Extrude options for the tool `extrude` opens, as `solid.extrude` parameters (such as
+    /// `{"taper": 5, "direction": "two_sides", "distance2": 4}`).
+    pub extrude_with: Option<Value>,
+    /// Open the Hole tool at start, on the design's last hole feature if it has one.
+    pub hole: bool,
     /// The window's inner size in points, instead of the default 1400 x 900.
     pub window_size: Option<[f32; 2]>,
     /// Interface zoom (pixels per point multiplier), for checking crispness at 2x.
     pub zoom: Option<f32>,
+    /// Drawing-tool steps to run in the active sketch at start, for screenshots of snaps
+    /// and typed values: `tool line; click 0,0; hover 30,12; type 25` (see
+    /// `sketch_ui::parse_demo`).
+    pub sketch_input: Option<String>,
     /// Show a selection box with these viewport corners (x1, y1, x2, y2) as if it were
     /// being dragged, for screenshots of the window and crossing styles.
     pub select_box: Option<[f32; 4]>,
     /// Open the search palette at start with this query typed.
     pub search: Option<String>,
+    /// Open the viewport's right-click menu at this viewport point once it has drawn.
+    pub context_menu: Option<[f32; 2]>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -89,8 +106,11 @@ struct Drawn {
     selection: Option<Hit>,
     selected: Vec<u32>,
     overlays: Vec<chamfera_render::Overlay>,
+    fills: Vec<chamfera_render::Fill>,
     theme: ThemeMode,
     size: (u32, u32),
+    /// How many times the tool preview was rebuilt, and how many shapes it shows.
+    previews: (u64, usize),
 }
 
 enum Shot {
@@ -107,6 +127,8 @@ pub struct ChamferaApp {
     icons: icons::Icons,
     gpu: Option<ViewGpu>,
     drawn: Option<Drawn>,
+    /// Counts rebuilds of the extrude preview, so a changed preview is drawn again.
+    preview_version: u64,
     /// Viewport size in points; commands work in these units.
     viewport: Vec2,
     /// Where the viewport is on screen, for placing dialogs beside the model.
@@ -121,10 +143,13 @@ pub struct ChamferaApp {
     sketch: sketch_ui::SketchUi,
     params: params_ui::ParamsUi,
     solid: solid_ui::SolidUi,
+    construct: construct_ui::ConstructUi,
     file: file_ui::FileUi,
     browser: browser::BrowserUi,
     timeline: timeline::TimelineUi,
     search: search::SearchUi,
+    /// Right-click menus, the selection filter and hover pre-highlight.
+    ctx_menu: context_menu::ContextMenuUi,
     /// The browser's file picker, downloads and local storage.
     #[cfg(target_arch = "wasm32")]
     web: web::WebFiles,
@@ -188,6 +213,7 @@ impl ChamferaApp {
             icons: icons::Icons::default(),
             gpu,
             drawn: None,
+            preview_version: 0,
             viewport: Vec2::new(1280.0, 800.0),
             viewport_rect: Rect::from_min_size(egui::pos2(260.0, 120.0), Vec2::new(1280.0, 800.0)),
             // A start-up script sets its own view.
@@ -199,10 +225,12 @@ impl ChamferaApp {
             sketch: sketch_ui::SketchUi::default(),
             params: params_ui::ParamsUi::default(),
             solid: solid_ui::SolidUi::default(),
+            construct: construct_ui::ConstructUi::default(),
             file: file_ui::FileUi::default(),
             browser: browser::BrowserUi::default(),
             timeline: timeline::TimelineUi::default(),
             search: search::SearchUi::default(),
+            ctx_menu: context_menu::ContextMenuUi::default(),
             #[cfg(target_arch = "wasm32")]
             web: web::WebFiles::default(),
             ctx_close: false,
@@ -217,10 +245,11 @@ impl ChamferaApp {
         for f in &options.files {
             app.run("body.import_stl", json!({ "path": f.to_string_lossy() }));
         }
-        if !options.script.is_empty()
-            && let Err(e) = chamfera_engine::script::run_steps(&mut app.session, &options.script)
-        {
-            app.message = Some((e.to_string(), true));
+        if !options.script.is_empty() {
+            match chamfera_engine::script::run_steps(&mut app.session, &options.script) {
+                Ok(replies) => app.inspect_from_script(&options.script, &replies),
+                Err(e) => app.message = Some((e.to_string(), true)),
+            }
         }
         if app.session.active_sketch.is_some() {
             app.sketch.tool = Some(sketch_ui::Tool::Select);
@@ -228,10 +257,24 @@ impl ChamferaApp {
         }
         app.params.open = options.parameters;
         if options.extrude {
-            app.solid.extrude = Some(solid_ui::ExtrudeTool::default());
+            let mut tool = solid_ui::ExtrudeTool::default();
+            if let Some(p) = &options.extrude_with {
+                tool.apply(p);
+            }
+            app.solid.extrude = Some(tool);
             app.solid.pick_centre = true;
         }
+        if options.hole {
+            app.open_hole_on_last();
+        }
         app.zoom = options.zoom;
+        if let Some(text) = &options.sketch_input {
+            match sketch_ui::parse_demo(text) {
+                Ok(steps) => app.sketch.demo = steps,
+                Err(e) => app.message = Some((e, true)),
+            }
+        }
+        app.ctx_menu.open_at = options.context_menu;
         app.box_preview = options.select_box;
         if let Some(q) = &options.search {
             app.run_action(shortcuts::Action::Search);
@@ -328,6 +371,12 @@ impl ChamferaApp {
                 ),
             )
         });
+        let pressed = ui.input(|i| i.pointer.any_down());
+        let hover = response
+            .hover_pos()
+            .filter(|_| !pressed)
+            .map(|p| (local(p).0, local(p).1, w, h));
+        self.hover_update(hover);
         let delta = response.drag_delta();
         if delta != Vec2::ZERO {
             let (dx, dy) = (f64::from(delta.x), f64::from(delta.y));
@@ -359,6 +408,22 @@ impl ChamferaApp {
                 self.run("view.zoom", p);
             }
         }
+        if self.picking_extrude_target()
+            && response.clicked()
+            && let Some(pos) = response.interact_pointer_pos()
+        {
+            let (x, y) = local(pos);
+            self.extrude_target_click(x, y, w, h);
+            return;
+        }
+        if self.construct.tool.is_some()
+            && response.clicked()
+            && let Some(pos) = response.interact_pointer_pos()
+        {
+            let (x, y) = local(pos);
+            self.construct_click(x, y, w, h);
+            return;
+        }
         if self.solid.pick_face
             && response.clicked()
             && let Some(pos) = response.interact_pointer_pos()
@@ -366,6 +431,17 @@ impl ChamferaApp {
             let (x, y) = local(pos);
             self.face_click(x, y, w, h);
             return;
+        }
+        if self.solid.hole.is_some() {
+            let at = response.hover_pos().map(local);
+            self.hole_hover(at, w, h);
+            if response.clicked()
+                && let Some(pos) = response.interact_pointer_pos()
+            {
+                let (x, y) = local(pos);
+                self.hole_click(x, y, w, h);
+                return;
+            }
         }
         if self.solid.blend.is_some() {
             let at = response.hover_pos().map(local);
@@ -377,6 +453,22 @@ impl ChamferaApp {
                 self.blend_click(x, y, w, h);
                 return;
             }
+        }
+        if self.solid.transform.is_some()
+            && response.clicked()
+            && let Some(pos) = response.interact_pointer_pos()
+        {
+            let (x, y) = local(pos);
+            self.transform_click(x, y, w, h);
+            return;
+        }
+        if self.solid.inspect.is_some()
+            && response.clicked()
+            && let Some(pos) = response.interact_pointer_pos()
+        {
+            let (x, y) = local(pos);
+            self.inspect_click(x, y, w, h);
+            return;
         }
         if self.solid.shell.is_some()
             && response.clicked()
@@ -396,6 +488,9 @@ impl ChamferaApp {
         }
         let used_by_sketch =
             self.session.active_sketch.is_some() && self.sketch_input(ui, response, rect);
+        if !used_by_sketch {
+            self.context_click(response, rect);
+        }
         if self.session.active_sketch.is_none() {
             // A left drag from anywhere draws a selection box (`sketch_select`).
             if response.drag_started_by(PointerButton::Primary) && self.select_box.is_none() {
@@ -414,7 +509,8 @@ impl ChamferaApp {
             let mode = sketch_select::pick_mode(ui.input(|i| i.modifiers));
             self.run(
                 "select.pick",
-                json!({ "x": x, "y": y, "width": w, "height": h, "mode": mode }),
+                json!({ "x": x, "y": y, "width": w, "height": h, "mode": mode,
+                        "filter": self.filter_param() }),
             );
         }
         let typing = ui.ctx().egui_wants_keyboard_input();
@@ -457,17 +553,24 @@ impl ChamferaApp {
             .scene
             .overlays
             .retain(|o| o.style != chamfera_render::OverlayStyle::Preview);
+        // Tool and hover overlays are added for this frame's picture only.
+        let base_overlays = self.session.scene.overlays.len();
         if let Some(preview) = self.sketch_preview() {
             self.session.scene.overlays.push(preview);
         }
         let blends = self.blend_overlays();
         self.session.scene.overlays.extend(blends);
+        let holes = self.hole_overlays();
+        self.session.scene.overlays.extend(holes);
+        self.inspect_overlays();
         if let Some(picked) = self.extrude_overlay() {
             self.session.scene.overlays.push(Overlay {
                 style: chamfera_render::OverlayStyle::Highlight,
                 ..picked
             });
         }
+        let picks = self.pick_overlays();
+        self.session.scene.overlays.extend(picks);
         let ppp = ui.ctx().pixels_per_point();
         let size = (
             (rect.width() * ppp).round().max(1.0) as u32,
@@ -485,8 +588,10 @@ impl ChamferaApp {
             selection: self.session.scene.selection,
             selected: self.session.scene.selected.clone(),
             overlays: self.session.scene.overlays.clone(),
+            fills: self.session.scene.fills.clone(),
             theme: self.theme.mode,
             size,
+            previews: (self.preview_version, self.session.scene.previews.len()),
         };
         if let (Some(gpu), Some(rs)) = (self.gpu.as_mut(), frame.wgpu_render_state())
             && self.drawn.as_ref() != Some(&now)
@@ -524,6 +629,7 @@ impl ChamferaApp {
             }
             self.drawn = Some(now);
         }
+        self.session.scene.overlays.truncate(base_overlays);
         if let Some(Some(id)) = self.gpu.as_ref().map(|g| g.texture) {
             ui.painter().image(
                 id,
@@ -535,9 +641,17 @@ impl ChamferaApp {
         if self.session.active_sketch.is_some() {
             self.dimension_labels(ui, rect);
         }
+        self.inspect_labels(ui, rect);
         self.paint_box(ui, rect);
         self.view_cube(ui, rect);
         self.viewport_hint(ui, rect);
+        self.selection_filter_bar(ui.ctx(), rect);
+        if self.frames >= 2
+            && let Some([x, y]) = self.ctx_menu.open_at.take()
+        {
+            self.open_context_menu(rect.min + Vec2::new(x, y), rect);
+        }
+        self.context_menu_window(ui.ctx());
     }
 
     /// `--screenshot`: wait a few frames for the view to settle, grab the window, save, quit.
@@ -615,6 +729,10 @@ fn save_png(_: &std::path::Path, _: &egui::ColorImage) -> Result<(), String> {
 }
 
 impl eframe::App for ChamferaApp {
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        self.sketch_raw_input(ctx, raw_input);
+    }
+
     /// Runs every frame, even when the window is covered or minimised (then eframe skips
     /// `ui`). `--screenshot` lives here and asks for painting while hidden, so a covered
     /// window still draws, captures and quits instead of waiting forever.
@@ -634,6 +752,7 @@ impl eframe::App for ChamferaApp {
             ctx.set_zoom_factor(z.clamp(0.5, 4.0));
         }
         self.apply_theme(&ctx);
+        self.track_last_used();
         // Keys first, so the palette and the shortcuts take theirs before anything else.
         self.search_keys(&ctx);
         self.shortcut_keys(&ctx);
@@ -678,9 +797,15 @@ impl eframe::App for ChamferaApp {
             self.parameters_window(&ctx);
             self.extrude_dialog(&ctx);
             self.blend_dialog(&ctx);
+            self.hole_dialog(&ctx);
+            self.transform_dialog(&ctx);
+            self.inspect_dialog(&ctx);
             self.shell_dialog(&ctx);
             self.feature_dialog(&ctx);
             self.timeline_error_window(&ctx);
+            self.construct_dialog(&ctx);
+            self.rename_dialog(&ctx);
+            self.properties_window(&ctx);
         }
         self.rename_box(&ctx);
         self.unsaved_dialog(&ctx);

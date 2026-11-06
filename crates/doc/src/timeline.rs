@@ -83,11 +83,36 @@ pub fn kind_dependencies(kind: &FeatureKind) -> Vec<u32> {
         deps.push(s);
     }
     match kind {
-        FeatureKind::Pattern(p) => deps.push(p.source),
+        FeatureKind::Pattern(p) => {
+            deps.push(p.source);
+            if let crate::PatternLayout::Circular {
+                axis_feature: Some(a),
+                ..
+            } = p.layout
+            {
+                deps.push(a);
+            }
+        }
         FeatureKind::Blend(b) => deps.extend(b.edges.iter().flat_map(|e| edge_features(e))),
         // Open faces are named like edges: `2:top`.
         FeatureKind::Shell(sh) => deps.extend(sh.faces.iter().flat_map(|f| edge_features(f))),
-        FeatureKind::Extrude(_) | FeatureKind::Revolve(_) => {}
+        FeatureKind::Extrude(e) => {
+            if let Some(crate::ExtrudeTo::Face(r)) = &e.to {
+                deps.push(r.feature);
+            }
+        }
+        FeatureKind::Revolve(r) => deps.extend(r.axis_feature),
+        FeatureKind::Construct(c) => deps.extend(c.features_used()),
+        FeatureKind::Hole(h) => deps.push(h.face.feature),
+        FeatureKind::Mirror(m) => {
+            deps.extend(m.features.iter().copied());
+            if let crate::MirrorPlane::Face { feature, .. } = &m.plane {
+                deps.push(*feature);
+            }
+        }
+        // Bodies are named, not numbered: a move (or a mirror of bodies) finds them by
+        // name when it is built, and reports a missing one there.
+        FeatureKind::Move(_) => {}
     }
     deps.sort_unstable();
     deps.dedup();
@@ -232,13 +257,25 @@ impl Document {
     }
 
     /// What an item needs built before it: a feature's sketch, a pattern's source, the
-    /// features whose edges a fillet rounds, the feature whose face a sketch is drawn on.
+    /// features whose edges a fillet rounds, the feature whose face or construction plane
+    /// a sketch is drawn on, the features whose edges it projects.
     pub fn item_dependencies(&self, id: u32) -> Vec<u32> {
         let mut deps = Vec::new();
-        if let Ok(s) = self.sketch(id)
-            && let Some(a) = &s.attached
-        {
-            deps.push(a.feature);
+        if let Ok(s) = self.sketch(id) {
+            if let Some(a) = &s.attached {
+                deps.push(a.feature);
+            }
+            // A sketch on a construction plane, and the edges it projects (linked ones
+            // follow their edges).
+            deps.extend(s.on_plane);
+            deps.extend(
+                s.projections
+                    .iter()
+                    .filter(|p| p.linked)
+                    .flat_map(|p| edge_features(&p.edge)),
+            );
+            deps.sort_unstable();
+            deps.dedup();
         }
         if let Ok(f) = self.feature(id) {
             deps = kind_dependencies(&f.kind);
@@ -547,6 +584,7 @@ mod tests {
             distance: "1".into(),
             direction: ExtrudeDirection::Normal,
             operation: Operation::NewBody,
+            ..Extrude::default()
         }))
         .unwrap();
         doc.add_sketch(chamfera_geom::Frame::XZ).unwrap();

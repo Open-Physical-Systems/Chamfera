@@ -73,6 +73,10 @@ pub fn curve_polyline(sketch: &Sketch, curve: &Curve) -> Vec<Point2> {
                 })
                 .collect()
         }
+        Curve::Ellipse { .. } | Curve::EllipticalArc { .. } => sketch
+            .ellipse_arc_of(curve)
+            .map(|e| e.polyline(CIRCLE_SEGMENTS))
+            .unwrap_or_default(),
     }
 }
 
@@ -143,6 +147,8 @@ impl Session {
                     OverlayStyle::Highlight
                 } else if curve.is_construction() {
                     OverlayStyle::Construction
+                } else if f.projection_of(id.0).is_some() {
+                    OverlayStyle::Projected
                 } else if dof.as_ref().is_some_and(|d| d.is_curve_determined(id)) || !active {
                     OverlayStyle::Constrained
                 } else {
@@ -167,7 +173,11 @@ impl Session {
             by_style.sort_by_key(|(s, _)| *s == OverlayStyle::Highlight);
             overlays.extend(by_style.into_iter().map(|(_, o)| o));
         }
-        self.scene.overlays = overlays;
+        // Construction geometry goes first, so sketches draw over it.
+        let (mut construct, fills) = self.construct_overlays();
+        construct.append(&mut overlays);
+        self.scene.overlays = construct;
+        self.scene.fills = fills;
     }
 
     /// Projects a point of the active sketch's plane to a pixel of a `w` x `h` viewport.
@@ -187,10 +197,23 @@ impl Session {
     /// The point or curve of the active sketch nearest pixel `(x, y)`: points first
     /// (within [`PICK_POINT_PX`]), then curves (within [`PICK_CURVE_PX`]).
     pub fn pick_sketch_item(&self, x: f64, y: f64, w: f64, h: f64) -> Option<SketchItem> {
+        self.pick_sketch_item_filtered(x, y, w, h, &crate::pick_filter::PickFilter::ALL)
+    }
+
+    /// [`Session::pick_sketch_item`], skipping what the selection filter leaves out.
+    pub fn pick_sketch_item_filtered(
+        &self,
+        x: f64,
+        y: f64,
+        w: f64,
+        h: f64,
+        filter: &crate::pick_filter::PickFilter,
+    ) -> Option<SketchItem> {
         let f = self.active_sketch()?;
         let near_point = f
             .sketch
             .points()
+            .filter(|_| filter.vertices)
             .filter_map(|(id, p)| {
                 let (sx, sy) = self.to_screen(&f.plane, p, w, h)?;
                 Some((id, (sx - x).hypot(sy - y)))
@@ -202,6 +225,14 @@ impl Session {
         }
         let mut best: Option<(CurveId, f64)> = None;
         for (id, curve) in f.sketch.curves() {
+            let allowed = if curve.is_construction() {
+                filter.construction
+            } else {
+                filter.sketch
+            };
+            if !allowed {
+                continue;
+            }
             let screen: Vec<(f64, f64)> = curve_polyline(&f.sketch, curve)
                 .into_iter()
                 .filter_map(|p| self.to_screen(&f.plane, p, w, h))
@@ -246,7 +277,7 @@ impl Session {
         let circle_label = |c: CurveId| {
             let centre = match s.curve(c)? {
                 Curve::Circle { centre, .. } | Curve::Arc { centre, .. } => s.point(*centre)?,
-                Curve::Line { .. } => return None,
+                _ => return None,
             };
             let r = s.radius(c)?;
             // Up and to the right of the centre, on the circle.
@@ -254,6 +285,12 @@ impl Session {
             Some(Point2::new(centre.x + d, centre.y + d))
         };
         s.constraints()
+            // A projected curve's own radius is not a dimension the user set.
+            .filter(|(_, c)| {
+                !c.curve_refs()
+                    .iter()
+                    .any(|k| f.projection_of(k.0).is_some())
+            })
             .filter_map(|(id, c)| {
                 use chamfera_sketch::Constraint as C;
                 let value = c.value()?;

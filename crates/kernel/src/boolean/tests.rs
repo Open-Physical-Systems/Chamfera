@@ -242,6 +242,36 @@ fn a_blind_hole_has_a_floor() {
 }
 
 #[test]
+fn a_countersink_near_the_plate_sides_cuts_without_meeting_them() {
+    // A countersunk through hole at (25, 15) in the 50 x 30 x 10 plate: a cone from
+    // r = 6 at the top down to r = 3 at depth 3 (90°), then r = 3 to below the plate. The
+    // cone's surface would cut the side planes y = 0 and y = 30 in hyperbolas, but its
+    // face (r <= 6) ends 9 mm from them, so those pairs must not be intersected.
+    let (x, y) = (chamfera_geom::Vec3::X, chamfera_geom::Vec3::Y);
+    let frame = Frame::from_normal_and_x(Point3::new(25.0, 15.0, 10.0), y, x).unwrap();
+    let section = [(0.0, 0.0), (6.0, 0.0), (3.0, 3.0), (3.0, 11.0), (0.0, 11.0)];
+    let p = Profile::new(
+        polygon_edges(&section.map(|(x, y)| Point2::new(x, y))),
+        vec![],
+    );
+    let axis = Line2::new(Point2::ORIGIN, Vec2::Y).unwrap();
+    let tool = tagged(revolve(&frame, &p, &axis, TAU).unwrap(), "B");
+    let d = subtract(&plate(), &tool).unwrap();
+    // Frustum π h (R² + R r + r²) / 3 = π (36 + 18 + 9) = 63π, and 9π · 7 below it.
+    assert_close(
+        "volume",
+        d.volume().unwrap(),
+        15_000.0 - 63.0 * PI - 63.0 * PI,
+    );
+    let cone = named(&d, "B:side 1");
+    assert_eq!(cone.len(), 1);
+    assert!(matches!(
+        d.face_surface(cone[0]).unwrap(),
+        Some((Surface::Cone(_), _))
+    ));
+}
+
+#[test]
 fn a_pocket_flush_with_the_top_and_a_cut_flush_with_the_bottom() {
     // A 10 × 10 pocket, 5 deep, whose tool's top is the plate's top.
     let pocket = cuboid("B", [20.0, 10.0, 5.0], [10.0, 10.0, 5.0]);

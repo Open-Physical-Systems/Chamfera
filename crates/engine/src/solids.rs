@@ -45,7 +45,7 @@ pub fn edge_ref(body: &Body, e: EdgeId) -> Option<String> {
 }
 
 /// Gives every edge of a feature's new body its full name, like [`name_faces`].
-fn name_edges(body: &mut Body, feature: u32) {
+pub(crate) fn name_edges(body: &mut Body, feature: u32) {
     for edge in body.edges() {
         let role = body.edge_name(edge).ok().flatten().map(str::to_owned);
         if let Some(role) = role
@@ -197,7 +197,7 @@ pub fn split_face_key(name: &str) -> Option<(u32, &str)> {
 }
 
 /// Gives every face of a feature's new body its full name (see [`face_key`]).
-fn name_faces(body: &mut Body, feature: u32) {
+pub(crate) fn name_faces(body: &mut Body, feature: u32) {
     for face in body.faces() {
         let role = body.face_name(face).ok().flatten().map(str::to_owned);
         if let Some(role) = role
@@ -260,6 +260,8 @@ pub struct Built {
     pub broken: BTreeMap<u32, String>,
     /// Sketches on a face that could not follow it, and why.
     pub sketch_errors: BTreeMap<u32, String>,
+    /// Construction planes, axes and points, by feature id.
+    pub constructs: BTreeMap<u32, crate::construct::Constructed>,
 }
 
 /// A sketch loop as exact kernel profile edges: lines stay lines, arcs and circles stay
@@ -289,6 +291,9 @@ fn loop_edges(sketch: &Sketch, l: &ProfileLoop) -> Result<Vec<ProfileEdge>, Stri
                     sketch.point(*end).ok_or_else(gone)?,
                 )
                 .map_err(|e| format!("an arc of the profile: {e}"))?,
+                Curve::Ellipse { .. } | Curve::EllipticalArc { .. } => {
+                    return Err("ellipses in a profile cannot be swept into solids yet".into());
+                }
             };
             Ok(if seg.reversed { edge.reversed() } else { edge })
         })
@@ -445,6 +450,7 @@ fn pattern_copies(
     p: &chamfera_doc::Pattern,
     pattern_id: u32,
     tools: &BTreeMap<u32, (Vec<Body>, Operation)>,
+    constructs: &BTreeMap<u32, crate::construct::Constructed>,
 ) -> Result<(Vec<Body>, Operation), String> {
     use chamfera_doc::PatternLayout;
     use chamfera_geom::Transform;
@@ -471,7 +477,12 @@ fn pattern_copies(
                 origin,
                 axis,
                 angle,
+                axis_feature,
             } => {
+                let (origin, axis) = match axis_feature {
+                    Some(id) => construct_axis(constructs, *id)?,
+                    None => (*origin, *axis),
+                };
                 let a = doc
                     .evaluate_feature_value(angle, chamfera_doc::expr::Dim::ANGLE)
                     .map_err(|e| e.to_string())?;
@@ -484,7 +495,7 @@ fn pattern_copies(
                 } else {
                     a / (count - 1) as f64
                 };
-                Transform::rotation_about(*origin, *axis, step * k as f64)
+                Transform::rotation_about(origin, axis, step * k as f64)
             }
         }
         .ok_or("the pattern's move leaves the working range")?;
@@ -509,37 +520,369 @@ fn pattern_copies(
     Ok((out, *op))
 }
 
-/// The bodies one extrude makes: one per profile.
-fn build_extrude(doc: &chamfera_doc::Document, e: &Extrude) -> Result<Vec<Body>, String> {
-    let f = doc.sketch(e.sketch).map_err(|x| x.to_string())?;
-    let distance = doc
-        .evaluate_feature_value(&e.distance, chamfera_doc::expr::Dim::LENGTH)
-        .map_err(|x| x.to_string())?;
-    feature_profiles(f, &e.profiles)?
-        .iter()
-        .map(|profile| {
+/// How far past the farthest body a through-all extrude goes, so that its far cap lies
+/// clear of every face instead of on one (a coplanar cap would make the boolean decide
+/// touching faces).
+pub const THROUGH_ALL_MARGIN: f64 = 1.0;
+
+/// The prefix of the face and edge roles of a tapered two-sided extrude's second side
+/// (`back top`, `back side 0`), so they differ from the first side's.
+const BACK_SIDE: &str = "back ";
+
+/// Where an extrude reaches, as signed distances along the sketch plane's normal from
+/// its start plane: `(back, front)` with `back <= 0 <= front`, one of them non-zero.
+fn extrude_span(
+    e: &Extrude,
+    values: &chamfera_doc::ExtrudeValues,
+    start: &chamfera_geom::Frame,
+    bodies: &[&Body],
+) -> Result<(f64, f64), String> {
+    use chamfera_doc::{ExtrudeExtent, ExtrudeTo};
+    let tol = chamfera_geom::LINEAR_TOLERANCE;
+    let n = start.z();
+    let (back, front) = match e.extent {
+        ExtrudeExtent::Distance => {
+            let d = values.distance;
             match e.direction {
-                ExtrudeDirection::Normal => chamfera_kernel::extrude(&f.plane, profile, distance),
-                ExtrudeDirection::Reversed => {
-                    chamfera_kernel::extrude(&f.plane, profile, -distance)
-                }
-                ExtrudeDirection::Symmetric => {
-                    chamfera_kernel::extrude_symmetric(&f.plane, profile, distance)
-                }
+                ExtrudeDirection::Normal => (d.min(0.0), d.max(0.0)),
+                ExtrudeDirection::Reversed => ((-d).min(0.0), (-d).max(0.0)),
+                ExtrudeDirection::Symmetric => (-d.abs() * 0.5, d.abs() * 0.5),
+                ExtrudeDirection::TwoSides => (-values.distance2, d),
             }
-            .map_err(|x| format!("extrude: {x}"))
+        }
+        ExtrudeExtent::ThroughAll => {
+            // The corners of every body's box, measured along the normal: the extrude
+            // reaches past the farthest one.
+            let along: Vec<f64> = bodies
+                .iter()
+                .filter_map(|b| b.bounding_box())
+                .flat_map(|bb| {
+                    let (a, b) = (bb.min, bb.max);
+                    [
+                        (a.x, a.y, a.z),
+                        (b.x, a.y, a.z),
+                        (a.x, b.y, a.z),
+                        (b.x, b.y, a.z),
+                        (a.x, a.y, b.z),
+                        (b.x, a.y, b.z),
+                        (a.x, b.y, b.z),
+                        (b.x, b.y, b.z),
+                    ]
+                })
+                .map(|(x, y, z)| (chamfera_geom::Point3::new(x, y, z) - start.origin()).dot(n))
+                .collect();
+            if along.is_empty() {
+                return Err("through all: there is no body to go through yet".into());
+            }
+            let ahead = along.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+            let behind = along.iter().copied().fold(f64::INFINITY, f64::min);
+            let fwd = if ahead > tol {
+                ahead + THROUGH_ALL_MARGIN
+            } else {
+                0.0
+            };
+            let bwd = if behind < -tol {
+                behind - THROUGH_ALL_MARGIN
+            } else {
+                0.0
+            };
+            match e.direction {
+                ExtrudeDirection::Normal => (0.0, fwd),
+                ExtrudeDirection::Reversed => (bwd, 0.0),
+                ExtrudeDirection::Symmetric | ExtrudeDirection::TwoSides => (bwd, fwd),
+            }
+        }
+        ExtrudeExtent::ToObject => {
+            let (plane, what) = match &e.to {
+                Some(ExtrudeTo::Face(r)) => {
+                    let wanted = face_key(r.feature, &r.face);
+                    let found = bodies.iter().find_map(|b| {
+                        b.faces()
+                            .into_iter()
+                            .find(|f| b.face_name(*f).ok().flatten() == Some(wanted.as_str()))
+                            .map(|f| face_plane(b, f))
+                    });
+                    match found {
+                        Some(Some(p)) => (p, format!("the face {wanted}")),
+                        Some(None) => {
+                            return Err(format!(
+                                "to object: the face {wanted} is not flat; pick a flat face or a plane"
+                            ));
+                        }
+                        None => {
+                            return Err(format!(
+                                "to object: the face {wanted} is gone (feature {} changed, failed or comes later)",
+                                r.feature
+                            ));
+                        }
+                    }
+                }
+                Some(ExtrudeTo::Plane(p)) => (*p, "the plane".to_owned()),
+                None => return Err("to object: pick the face or plane to extrude up to".into()),
+            };
+            if plane.z().cross(n).length() > chamfera_geom::ANGULAR_TOLERANCE {
+                return Err(format!(
+                    "to object: {what} is not parallel to the profile's plane; only parallel faces and planes are supported"
+                ));
+            }
+            let t = (plane.origin() - start.origin()).dot(n);
+            (t.min(0.0), t.max(0.0))
+        }
+    };
+    if !(back.is_finite() && front.is_finite()) || front - back <= tol {
+        return Err(match e.extent {
+            ExtrudeExtent::ThroughAll => {
+                "through all: no body lies that way from the profile".to_owned()
+            }
+            ExtrudeExtent::ToObject => {
+                "to object: the face or plane lies on the start plane".to_owned()
+            }
+            ExtrudeExtent::Distance => "the extrude has no length".to_owned(),
+        });
+    }
+    Ok((back, front))
+}
+
+/// Puts `prefix` in front of every face and edge role of `body`.
+fn prefix_names(body: &mut Body, prefix: &str) {
+    for f in body.faces() {
+        if let Some(n) = body.face_name(f).ok().flatten().map(str::to_owned) {
+            let _ = body.set_face_name(f, &format!("{prefix}{n}"));
+        }
+    }
+    for e in body.edges() {
+        if let Some(n) = body.edge_name(e).ok().flatten().map(str::to_owned) {
+            let _ = body.set_edge_name(e, &format!("{prefix}{n}"));
+        }
+    }
+}
+
+/// Renames a copy's faces and edges `<feature>:<k> <role>` (from `<source>:<role>`), so
+/// each copy's names are its own and a fillet or sketch finds the one it means.
+fn rename_copy(body: &mut Body, feature: u32, k: usize) {
+    let renamed = |name: Option<&str>| {
+        name.and_then(split_face_key)
+            .map(|(_, role)| face_key(feature, &format!("{k} {role}")))
+    };
+    for face in body.faces() {
+        if let Some(n) = renamed(body.face_name(face).ok().flatten()) {
+            let _ = body.set_face_name(face, &n);
+        }
+    }
+    for edge in body.edges() {
+        if let Some(n) = renamed(body.edge_name(edge).ok().flatten()) {
+            let _ = body.set_edge_name(edge, &n);
+        }
+    }
+}
+
+/// The body built so far with this name.
+fn named_body<'a>(made: &'a [(u32, String, Body)], name: &str) -> Result<&'a Body, String> {
+    made.iter()
+        .find(|m| m.1 == name)
+        .map(|m| &m.2)
+        .ok_or_else(|| format!("there is no body named {name:?} at this point"))
+}
+
+/// The mirror plane as a point and a normal.
+fn mirror_plane(
+    doc: &chamfera_doc::Document,
+    plane: &chamfera_doc::MirrorPlane,
+    made: &[(u32, String, Body)],
+) -> Result<(Point3, chamfera_geom::Vec3), String> {
+    use chamfera_doc::MirrorPlane;
+    use chamfera_geom::Frame;
+    let frame = match plane {
+        MirrorPlane::Xy => Frame::XY,
+        MirrorPlane::Xz => Frame::XZ,
+        MirrorPlane::Yz => Frame::YZ,
+        MirrorPlane::Face { feature, face } => attached_plane(
+            doc,
+            made,
+            &chamfera_doc::FaceRef {
+                feature: *feature,
+                face: face.clone(),
+            },
+        )?,
+        MirrorPlane::Plane { origin, normal } => return Ok((*origin, *normal)),
+    };
+    Ok((frame.origin(), frame.z()))
+}
+
+/// The mirror images a mirror makes: of the named bodies as built so far, then of the
+/// listed features' own shapes. Each is renamed as copy `k` of the mirror.
+fn mirror_bodies(
+    doc: &chamfera_doc::Document,
+    m: &chamfera_doc::Mirror,
+    mirror_id: u32,
+    made: &[(u32, String, Body)],
+    tools: &BTreeMap<u32, (Vec<Body>, Operation)>,
+) -> Result<Vec<Body>, String> {
+    let (point, normal) = mirror_plane(doc, &m.plane, made)?;
+    let mut sources: Vec<&Body> = Vec::new();
+    for name in &m.bodies {
+        sources.push(named_body(made, name)?);
+    }
+    for id in &m.features {
+        let (shapes, _) = tools.get(id).ok_or_else(|| {
+            format!("feature {id} it mirrors is suppressed, later or could not be built")
+        })?;
+        sources.extend(shapes.iter());
+    }
+    sources
+        .into_iter()
+        .enumerate()
+        .map(|(i, b)| {
+            let mut copy = b
+                .mirrored(point, normal)
+                .map_err(|e| format!("mirror: {e}"))?;
+            rename_copy(&mut copy, mirror_id, i + 1);
+            Ok(copy)
         })
         .collect()
 }
 
-/// The bodies one revolve makes: one per profile, about a line of the same sketch.
-fn build_revolve(doc: &chamfera_doc::Document, r: &Revolve) -> Result<Vec<Body>, String> {
+/// The bodies after a move: each named body moved in place (keeping its names, so faces
+/// that sketches are drawn on follow it), or with `copy`, a moved copy added after it.
+fn move_bodies(
+    doc: &chamfera_doc::Document,
+    m: &chamfera_doc::Move,
+    feature: &chamfera_doc::Feature,
+    made: &[(u32, String, Body)],
+) -> Result<Vec<(u32, String, Body)>, String> {
+    let t = doc.move_transform(m).map_err(|e| e.to_string())?;
+    let mut next = made.to_vec();
+    for (k, name) in m.bodies.iter().enumerate() {
+        let moved = named_body(made, name)?
+            .transformed(&t)
+            .map_err(|e| format!("move: {e}"))?;
+        if m.copy {
+            let mut copy = moved;
+            rename_copy(&mut copy, feature.id, k + 1);
+            let label = if m.bodies.len() == 1 {
+                feature.name.clone()
+            } else {
+                format!("{} ({})", feature.name, k + 1)
+            };
+            next.push((feature.id, label, copy));
+        } else if let Some(slot) = next.iter_mut().find(|x| x.1 == *name) {
+            slot.0 = feature.id;
+            slot.2 = moved;
+        }
+    }
+    Ok(next)
+}
+
+/// The bodies one extrude makes: one per profile. `bodies` are the solids built before
+/// it, for through all and to object.
+fn build_extrude(
+    doc: &chamfera_doc::Document,
+    e: &Extrude,
+    bodies: &[&Body],
+) -> Result<Vec<Body>, String> {
+    let f = doc.sketch(e.sketch).map_err(|x| x.to_string())?;
+    let values = doc.extrude_values(e).map_err(|x| x.to_string())?;
+    let start = f
+        .plane
+        .with_origin(f.plane.origin() + f.plane.z() * values.start_offset)
+        .ok_or("extrude: the start offset leaves the working range")?;
+    let (back, front) = extrude_span(e, &values, &start, bodies)?;
+    let tol = chamfera_geom::LINEAR_TOLERANCE;
+    let taper = values.taper;
+    let tapered = taper.abs() > chamfera_geom::ANGULAR_TOLERANCE;
+    feature_profiles(f, &e.profiles)?
+        .iter()
+        .map(|profile| {
+            let k = |x: chamfera_kernel::KernelError| format!("extrude: {x}");
+            // One side: from the start plane (its `bottom`), tapering away from it.
+            if back.abs() <= tol {
+                return chamfera_kernel::extrude_tapered(&start, profile, front, taper).map_err(k);
+            }
+            if front.abs() <= tol {
+                return chamfera_kernel::extrude_tapered(&start, profile, back, taper).map_err(k);
+            }
+            if !tapered {
+                // Both ways without a taper: one prism from the back (`bottom`) to the
+                // front, as symmetric extrudes always were.
+                let from = start
+                    .with_origin(start.origin() + start.z() * back)
+                    .ok_or("extrude: the extrude leaves the working range")?;
+                return chamfera_kernel::extrude(&from, profile, front - back).map_err(k);
+            }
+            // Tapered both ways: each side narrows away from the start plane; the two
+            // halves meet in the profile and are joined.
+            let one = chamfera_kernel::extrude_tapered(&start, profile, front, taper).map_err(k)?;
+            let mut two =
+                chamfera_kernel::extrude_tapered(&start, profile, back, taper).map_err(k)?;
+            prefix_names(&mut two, BACK_SIDE);
+            chamfera_kernel::union(&one, &two)
+                .map_err(|x| format!("extrude: joining the two tapered sides: {x}"))
+        })
+        .collect()
+}
+
+impl Session {
+    /// The shapes an extrude would make now, after every built solid, without changing
+    /// anything (for a preview while its options change).
+    pub fn extrude_shapes(&self, e: &Extrude) -> Result<Vec<Body>, String> {
+        self.doc
+            .check_feature(&FeatureKind::Extrude(e.clone()))
+            .map_err(|x| x.to_string())?;
+        let bodies: Vec<&Body> = self.built.solids.iter().map(|s| &s.body).collect();
+        build_extrude(&self.doc, e, &bodies)
+    }
+}
+
+/// A built construction axis: a point on it and its direction.
+fn construct_axis(
+    constructs: &BTreeMap<u32, crate::construct::Constructed>,
+    id: u32,
+) -> Result<(Point3, chamfera_geom::Vec3), String> {
+    match constructs.get(&id) {
+        Some(crate::construct::Constructed::Axis {
+            origin, direction, ..
+        }) => Ok((*origin, *direction)),
+        _ => Err(format!(
+            "axis {id} it turns around is suppressed or could not be built"
+        )),
+    }
+}
+
+/// The bodies one revolve makes: one per profile, about a line of the same sketch or a
+/// construction axis in the sketch plane.
+fn build_revolve(
+    doc: &chamfera_doc::Document,
+    r: &Revolve,
+    constructs: &BTreeMap<u32, crate::construct::Constructed>,
+) -> Result<Vec<Body>, String> {
     let f = doc.sketch(r.sketch).map_err(|x| x.to_string())?;
     let angle = doc
         .evaluate_feature_value(&r.angle, chamfera_doc::expr::Dim::ANGLE)
         .map_err(|x| x.to_string())?;
-    let axis = match f.sketch.curve(chamfera_sketch::CurveId(r.axis)) {
-        Some(Curve::Line { start, end, .. }) => {
+    let sketch_line = match r.axis_feature {
+        Some(id) => {
+            let (o, d) = construct_axis(constructs, id)?;
+            // The axis must lie in the sketch plane: its direction has no normal part and
+            // its point is on the plane.
+            let n = f.plane.z();
+            let off = n.dot(o - f.plane.origin());
+            if d.dot(n).abs() > crate::construct::PARALLEL_SIN
+                || off.abs() > chamfera_geom::LINEAR_TOLERANCE
+            {
+                return Err(format!("axis {id} does not lie in the plane of {}", f.name));
+            }
+            let a = f.plane.to_plane(o);
+            let v = chamfera_geom::Vec2::new(d.dot(f.plane.x()), d.dot(f.plane.y()));
+            Some(Line2::new(a, v).map_err(|e| format!("the axis: {e}"))?)
+        }
+        None => None,
+    };
+    let axis = match (
+        sketch_line,
+        f.sketch.curve(chamfera_sketch::CurveId(r.axis)),
+    ) {
+        (Some(line), _) => line,
+        (None, Some(Curve::Line { start, end, .. })) => {
             let (Some(a), Some(b)) = (f.sketch.point(*start), f.sketch.point(*end)) else {
                 return Err("the axis line has lost a point".into());
             };
@@ -560,6 +903,8 @@ impl Session {
     /// Rebuilds every feature, in timeline order, and replaces the solid bodies in the
     /// scene. Meshes and other bodies (imported STL) are left alone.
     pub fn rebuild(&mut self) {
+        // A preview shows what a tool would make of the design as it was.
+        self.scene.previews.clear();
         let mut built = Built::default();
         let mut made: Vec<(u32, String, Body)> = Vec::new();
         // Each built feature's own shapes (before they were combined), for patterns.
@@ -570,7 +915,7 @@ impl Session {
         for id in order.into_iter().take(marker) {
             // A sketch drawn on a face follows that face, as built at this point.
             if self.doc.sketch(id).is_ok() {
-                if let Err(e) = self.follow_attached_sketch(id, &made) {
+                if let Err(e) = self.follow_attached_sketch(id, &made, &built.constructs) {
                     built.sketch_errors.insert(id, e);
                 }
                 continue;
@@ -604,13 +949,24 @@ impl Session {
                 }
                 continue;
             }
+            if let FeatureKind::Construct(c) = &feature.kind {
+                match crate::construct::build(&self.doc, c, &made, &built.constructs) {
+                    Ok(g) => {
+                        built.constructs.insert(feature.id, g);
+                    }
+                    Err(e) => {
+                        built.errors.insert(feature.id, e);
+                    }
+                }
+                continue;
+            }
             if let FeatureKind::Pattern(p) = &feature.kind {
                 if !tools.contains_key(&p.source) {
                     built
                         .broken
                         .insert(feature.id, feature_name(&self.doc, p.source));
                 }
-                let copies = pattern_copies(&self.doc, p, feature.id, &tools);
+                let copies = pattern_copies(&self.doc, p, feature.id, &tools, &built.constructs);
                 match copies {
                     Ok((bodies, Operation::NewBody)) => {
                         for (k, b) in bodies.into_iter().enumerate() {
@@ -632,6 +988,43 @@ impl Session {
                 }
                 continue;
             }
+            if let FeatureKind::Mirror(m) = &feature.kind {
+                let result =
+                    mirror_bodies(&self.doc, m, feature.id, &made, &tools).and_then(|bodies| {
+                        tools.insert(feature.id, (bodies.clone(), m.operation));
+                        let mut next = made.clone();
+                        if m.operation == Operation::NewBody {
+                            let n = bodies.len();
+                            for (k, b) in bodies.into_iter().enumerate() {
+                                let name = if n == 1 {
+                                    feature.name.clone()
+                                } else {
+                                    format!("{} ({})", feature.name, k + 1)
+                                };
+                                next.push((feature.id, name, b));
+                            }
+                        } else {
+                            apply_operation(&mut next, &bodies, m.operation)?;
+                        }
+                        Ok(next)
+                    });
+                match result {
+                    Ok(next) => made = next,
+                    Err(e) => {
+                        built.errors.insert(feature.id, e);
+                    }
+                }
+                continue;
+            }
+            if let FeatureKind::Move(m) = &feature.kind {
+                match move_bodies(&self.doc, m, feature, &made) {
+                    Ok(next) => made = next,
+                    Err(e) => {
+                        built.errors.insert(feature.id, e);
+                    }
+                }
+                continue;
+            }
             if let FeatureKind::Blend(b) = &feature.kind {
                 match build_blend(&self.doc, b, feature.id, &made) {
                     Ok(next) => made = next,
@@ -639,6 +1032,18 @@ impl Session {
                         if let Some(r) = missing_edge(&self.doc, b, &made) {
                             built.broken.insert(feature.id, r);
                         }
+                        built.errors.insert(feature.id, e);
+                    }
+                }
+                continue;
+            }
+            if let FeatureKind::Hole(h) = &feature.kind {
+                match crate::hole::build_hole(&self.doc, h, feature.id, &made) {
+                    Ok((next, cuts)) => {
+                        made = next;
+                        tools.insert(feature.id, (cuts, Operation::Cut));
+                    }
+                    Err(e) => {
                         built.errors.insert(feature.id, e);
                     }
                 }
@@ -654,11 +1059,18 @@ impl Session {
                 continue;
             }
             let result = match &feature.kind {
-                FeatureKind::Extrude(e) => build_extrude(&self.doc, e),
-                FeatureKind::Revolve(r) => build_revolve(&self.doc, r),
-                FeatureKind::Pattern(_) | FeatureKind::Blend(_) | FeatureKind::Shell(_) => {
-                    continue;
+                FeatureKind::Extrude(e) => {
+                    let bodies: Vec<&Body> = made.iter().map(|m| &m.2).collect();
+                    build_extrude(&self.doc, e, &bodies)
                 }
+                FeatureKind::Revolve(r) => build_revolve(&self.doc, r, &built.constructs),
+                FeatureKind::Pattern(_)
+                | FeatureKind::Construct(_)
+                | FeatureKind::Blend(_)
+                | FeatureKind::Shell(_)
+                | FeatureKind::Mirror(_)
+                | FeatureKind::Move(_)
+                | FeatureKind::Hole(_) => continue,
             };
             let operation = feature.kind.operation();
             let result = result.map(|bodies| {
@@ -755,23 +1167,35 @@ impl Session {
         self.built = built;
     }
 
-    /// Moves an attached sketch's plane onto its face, as built so far.
+    /// Moves an attached sketch's plane onto its face or construction plane, and its
+    /// projected edges onto their edges, as built so far.
     fn follow_attached_sketch(
         &mut self,
         sketch: u32,
         made: &[(u32, String, Body)],
+        constructs: &BTreeMap<u32, crate::construct::Constructed>,
     ) -> Result<(), String> {
         let Ok(f) = self.doc.sketch(sketch) else {
             return Ok(());
         };
-        let Some(r) = f.attached.clone() else {
-            return Ok(());
+        let plane = match (f.attached.clone(), f.on_plane) {
+            (Some(r), _) => Some(attached_plane(&self.doc, made, &r)?),
+            (None, Some(id)) => match constructs.get(&id) {
+                Some(crate::construct::Constructed::Plane { frame, .. }) => Some(*frame),
+                _ => {
+                    return Err(format!(
+                        "the plane {id} it is drawn on is suppressed or could not be built"
+                    ));
+                }
+            },
+            (None, None) => None,
         };
-        let plane = attached_plane(&self.doc, made, &r)?;
-        if let Ok(f) = self.doc.sketch_mut(sketch) {
+        if let Some(plane) = plane
+            && let Ok(f) = self.doc.sketch_mut(sketch)
+        {
             f.plane = plane;
         }
-        Ok(())
+        self.follow_projections(sketch, made.iter().map(|m| &m.2))
     }
 
     /// The solid face under pixel `(x, y)`: (feature, face name, plane), for flat faces
@@ -905,6 +1329,20 @@ impl Session {
     /// The solids of the last rebuild.
     pub fn solids(&self) -> &[Solid] {
         &self.built.solids
+    }
+
+    /// The names of the selected solid bodies (what `solid.mirror` and `solid.move` act
+    /// on when no `bodies` are given).
+    pub fn selected_body_names(&self) -> Vec<String> {
+        let Some(hit) = self.scene.selection else {
+            return Vec::new();
+        };
+        self.built
+            .solids
+            .iter()
+            .filter(|x| x.scene_id == Some(hit.body))
+            .map(|x| x.name.clone())
+            .collect()
     }
 
     /// Features that failed in the last rebuild.

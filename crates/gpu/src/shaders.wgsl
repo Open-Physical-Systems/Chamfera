@@ -58,6 +58,22 @@ fn mesh_fs(in: MeshOut, @builtin(front_facing) front: bool) -> @location(0) vec4
     return vec4<f32>(body.color.rgb * shade + vec3<f32>(spec), 1.0);
 }
 
+// A tool's preview: lit like a body, but see-through by the colour's alpha.
+@fragment
+fn preview_fs(in: MeshOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    var n = normalize(in.normal);
+    if (!front) {
+        n = -n;
+    }
+    var v = normalize(g.eye.xyz - in.world);
+    if (g.light.w > 0.5) {
+        v = -g.forward.xyz;
+    }
+    let key = normalize(g.light.xyz);
+    let shade = 0.55 + 0.3 * max(dot(n, v), 0.0) + 0.2 * max(dot(n, key), 0.0);
+    return vec4<f32>(body.color.rgb * shade, body.color.a);
+}
+
 // ---- lines ----
 
 struct LineOut {

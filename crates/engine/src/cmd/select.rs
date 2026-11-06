@@ -4,6 +4,7 @@
 
 use super::CommandSpec;
 use crate::box_select::{BoxMode, ScreenBox, bodies_in_box, sketch_items_in_box};
+use crate::pick_filter::{PickFilter, Picked};
 use crate::{CmdResult, CommandError, Session, params};
 use serde_json::{Value, json};
 
@@ -42,7 +43,9 @@ pub static COMMANDS: &[CommandSpec] = &[
                  width, height: number (required) - viewport size in pixels\n\
                  mode: string (optional) - replace (default: select only what is hit, nothing \
                  on a miss), add, toggle (add, or remove if selected) or remove; a miss \
-                 changes nothing unless replacing",
+                 changes nothing unless replacing\n\
+                 filter: list of strings (optional) - what may be picked: bodies, faces, \
+                 edges (an edge near the pixel comes first); without it, the body hit",
         mutates: false,
         run: pick,
     },
@@ -58,6 +61,15 @@ enum Combine {
 }
 
 fn reply(s: &Session) -> Value {
+    let mut r = body_reply(s);
+    r["edges"] = json!(s.selected_edges);
+    if let Some(face) = s.selected_face() {
+        r["face"] = json!(face);
+    }
+    r
+}
+
+fn body_reply(s: &Session) -> Value {
     let bodies = s.scene.selected_bodies();
     let mut r = match s.scene.selection {
         Some(h) => json!({
@@ -102,7 +114,32 @@ fn pick(s: &mut Session, p: &Value) -> CmdResult {
         .camera
         .ray_through(x, y, w, h, bounds.as_ref())
         .ok_or_else(|| CommandError::BadParams("no ray through that pixel".into()))?;
-    let hit = s.scene.pick(&ray);
+    let (hit, edge) = match PickFilter::from_params(p)? {
+        None => (s.scene.pick(&ray), None),
+        Some(filter) => match s.pick_filtered(x, y, w, h, &filter) {
+            Picked::Edge { name, .. } => (None, Some(name)),
+            Picked::Face { hit, .. } | Picked::Body(hit) => (Some(hit), None),
+            Picked::Nothing => (None, None),
+        },
+    };
+    if let Some(e) = edge {
+        // An edge: replacing selects only it; the other modes change the edge list.
+        let had = s.selected_edges.contains(&e);
+        match how {
+            Combine::Replace => {
+                s.scene.clear_selection();
+                s.selected_edges = vec![e];
+            }
+            Combine::Add if !had => s.selected_edges.push(e),
+            Combine::Toggle if !had => s.selected_edges.push(e),
+            Combine::Toggle | Combine::Remove => s.selected_edges.retain(|x| *x != e),
+            Combine::Add => {}
+        }
+        return Ok(reply(s));
+    }
+    if how == Combine::Replace {
+        s.selected_edges.clear();
+    }
     // Keep the set complete before changing it: the picked body belongs to it.
     s.scene.selected = s.scene.selected_bodies();
     match (how, hit) {
@@ -201,6 +238,7 @@ fn select_box(s: &mut Session, p: &Value) -> CmdResult {
 fn clear(s: &mut Session, p: &Value) -> CmdResult {
     params::none(p)?;
     s.scene.clear_selection();
+    s.selected_edges.clear();
     Ok(reply(s))
 }
 
