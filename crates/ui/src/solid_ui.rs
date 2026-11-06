@@ -337,6 +337,8 @@ impl ChamferaApp {
                 let resp = ui.label(text);
                 if let Some(e) = &error {
                     resp.on_hover_text(e);
+                } else if let Some(d) = self.session.display_errors().get(&id) {
+                    ui.weak("(not shown)").on_hover_text(d);
                 }
                 let mut on = !suppressed;
                 if ui

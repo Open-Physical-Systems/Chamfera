@@ -884,3 +884,49 @@ fn a_revolve_that_crosses_its_axis_is_refused() {
     );
     assert_eq!(s.doc, before);
 }
+
+#[test]
+fn saving_tracks_the_file_and_unsaved_changes_and_exports_write_files() {
+    let dir = std::env::temp_dir().join(format!("chamfera-export-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let design = dir.join("box.chamfera");
+    let mut s = Session::new();
+    assert!(!s.has_unsaved_changes());
+    extruded_plate(&mut s, json!(10));
+    assert!(s.has_unsaved_changes());
+    // No file yet: a save needs a path.
+    assert!(s.execute("design.save", &json!({})).is_err());
+    s.execute("design.save", &json!({"path": design.to_str().unwrap()}))
+        .unwrap();
+    assert!(!s.has_unsaved_changes());
+    s.execute("param.set", &json!({"name": "x", "value": 1}))
+        .unwrap();
+    assert!(s.has_unsaved_changes());
+    s.execute("design.save", &json!({})).unwrap();
+    assert!(!s.has_unsaved_changes(), "saved again to the same file");
+    // STEP: one solid, a valid Part 21 file that our reader counts as a 6-face box.
+    let step = dir.join("box.step");
+    s.execute(
+        "design.export_step",
+        &json!({"path": step.to_str().unwrap()}),
+    )
+    .unwrap();
+    let text = std::fs::read_to_string(&step).unwrap();
+    assert!(text.starts_with("ISO-10303-21;"));
+    assert_eq!(text.matches("ADVANCED_FACE(").count(), 6);
+    // STL: the 12 triangles of the box, volume 15000 when read back.
+    let stl = dir.join("box.stl");
+    let r = s
+        .execute("design.export_stl", &json!({"path": stl.to_str().unwrap()}))
+        .unwrap();
+    assert_eq!(r["triangles"], 12);
+    let mesh = chamfera_io::stl::read(&std::fs::read(&stl).unwrap()).unwrap();
+    assert!((mesh.signed_volume() - 15_000.0).abs() < 1e-3);
+    // Opening it back gives the same design and nothing unsaved.
+    let mut t = Session::new();
+    t.execute("design.open", &json!({"path": design.to_str().unwrap()}))
+        .unwrap();
+    assert!(!t.has_unsaved_changes());
+    assert_eq!(t.solids().len(), 1, "opening rebuilds the solids");
+    std::fs::remove_dir_all(&dir).unwrap();
+}

@@ -24,6 +24,8 @@ pub enum Access {
 pub const PATH_COMMANDS: &[(&str, Access)] = &[
     ("body.import_stl", Access::Read),
     ("design.open", Access::Read),
+    ("design.export_step", Access::Write),
+    ("design.export_stl", Access::Write),
     ("design.save", Access::Write),
 ];
 
