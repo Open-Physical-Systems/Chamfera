@@ -68,6 +68,10 @@ fn command_of(action: Action) -> Option<&'static str> {
             Tool::ThreePointArc => "sketch.arc.three_point",
             Tool::TangentArc => "sketch.arc.tangent",
             Tool::Spline => "sketch.spline",
+            Tool::Polygon => "sketch.polygon",
+            Tool::Slot => "sketch.slot",
+            Tool::Ellipse => "sketch.ellipse",
+            Tool::Project => "sketch.project",
             Tool::Offset => "sketch.offset",
             Tool::Mirror => "sketch.mirror",
             Tool::RectangularPattern => "sketch.pattern.rectangular",
@@ -201,7 +205,7 @@ fn context_of(action: Action) -> &'static str {
     }
 }
 
-fn icon_of(action: Action) -> Icon {
+pub(crate) fn icon_of(action: Action) -> Icon {
     match action {
         Action::SketchTool(t) => t.icon(),
         Action::CreateSketch(_) | Action::SketchOnFace => Icon::SketchCreate,
@@ -326,12 +330,16 @@ impl ChamferaApp {
     }
 
     /// Why `action` cannot run now, in words, or `None` when it can.
-    fn unavailable(&self, action: Action) -> Option<String> {
+    pub(crate) fn unavailable(&self, action: Action) -> Option<String> {
         let sketching = self.session.active_sketch.is_some();
         let tool_free = self.solid.extrude.is_none() && self.solid.blend.is_none();
         let has_solids = !self.session.solids().is_empty();
         let name = shortcuts::action_label(action);
         let desktop = cfg!(not(target_arch = "wasm32"));
+        // The extrude preview needs what the Extrude tool needs (a profile, no open tool).
+        if matches!(action, Action::Command("solid.extrude_preview")) {
+            return self.unavailable(Action::Extrude);
+        }
         let why = match action {
             Action::SketchTool(_) | Action::FinishSketch if !sketching => {
                 format!("{name} works in a sketch: start one with Create Sketch first")

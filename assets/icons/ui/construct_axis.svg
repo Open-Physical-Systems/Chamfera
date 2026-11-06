@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+  <!-- Chamfera interface icon: construction axis. Original artwork, MIT OR Apache-2.0. -->
+  <ellipse cx="12" cy="7.5" rx="5.75" ry="2.25" stroke="#2B313B"/>
+  <path stroke="#2B313B" d="M6.25 7.5v9M17.75 7.5v9"/>
+  <path stroke="#2B313B" d="M6.25 16.5a5.75 2.25 0 0 0 11.5 0"/>
+  <path stroke="#E8770E" stroke-dasharray="3 2.25" d="M12 2v20"/>
+</svg>

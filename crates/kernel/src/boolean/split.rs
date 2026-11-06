@@ -120,8 +120,17 @@ fn face_box(body: &Body, f: FaceId, surface: &Surface) -> KernelResult<Aabb> {
     match surface {
         // Booleans refuse spline faces before they get here.
         Surface::Plane(_) | Surface::Extrusion(_) => {}
-        Surface::Cylinder(c) => b = grow(b, 2.0 * c.radius()),
-        Surface::Cone(_) => b = grow(b, 2.0 * rho_max),
+        Surface::Cylinder(c) => {
+            let r = c.radius();
+            b = meet(grow(b, 2.0 * r), frustum_box(surface, &b, |_| r));
+        }
+        Surface::Cone(c) => {
+            let (r0, k) = (c.radius(), c.half_angle().tan());
+            b = meet(
+                grow(b, 2.0 * rho_max),
+                frustum_box(surface, &b, |z| r0 + z * k),
+            );
+        }
         Surface::Sphere(s) => {
             let r = s.radius();
             let o = s.frame().origin();
@@ -140,6 +149,59 @@ fn face_box(body: &Body, f: FaceId, surface: &Surface) -> KernelResult<Aabb> {
         }
     }
     Ok(grow(b, LINEAR_TOLERANCE))
+}
+
+/// The box of the whole surface of revolution between the lowest and highest heights
+/// (along its axis) of the box `edges` of a face's boundary: a face of a cylinder or cone
+/// lies between its boundary's heights, and that full frustum is the convex hull of its
+/// two end circles (the radius `rho(z)` is linear in the height), so its box is the box of
+/// those circles. A circle of radius `r` about axis `a` reaches `r √(1 - a_i²)` along world
+/// axis `i`. This is much tighter than growing the edge box for a hole's full-turn faces.
+fn frustum_box(surface: &Surface, edges: &Aabb, rho: impl Fn(f64) -> f64) -> Aabb {
+    let f = surface.frame();
+    let a = f.z();
+    let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
+    for i in 0..8 {
+        let pick = |bit: usize, min: f64, max: f64| if i & bit == 0 { min } else { max };
+        let corner = Point3::new(
+            pick(1, edges.min.x, edges.max.x),
+            pick(2, edges.min.y, edges.max.y),
+            pick(4, edges.min.z, edges.max.z),
+        );
+        let z = f.to_local(corner).z;
+        lo = lo.min(z);
+        hi = hi.max(z);
+    }
+    let reach = Vec3::new(
+        (1.0 - a.x * a.x).max(0.0).sqrt(),
+        (1.0 - a.y * a.y).max(0.0).sqrt(),
+        (1.0 - a.z * a.z).max(0.0).sqrt(),
+    );
+    let circle = |z: f64| {
+        let c = f.to_world(Point3::new(0.0, 0.0, z));
+        let r = rho(z).abs();
+        Aabb {
+            min: c + reach * -r,
+            max: c + reach * r,
+        }
+    };
+    circle(lo).union(circle(hi))
+}
+
+/// The overlap of two boxes that both hold the same face (so they do overlap).
+fn meet(a: Aabb, b: Aabb) -> Aabb {
+    Aabb {
+        min: Point3::new(
+            a.min.x.max(b.min.x),
+            a.min.y.max(b.min.y),
+            a.min.z.max(b.min.z),
+        ),
+        max: Point3::new(
+            a.max.x.min(b.max.x),
+            a.max.y.min(b.max.y),
+            a.max.z.min(b.max.z),
+        ),
+    }
 }
 
 fn boxes_meet(a: &Aabb, b: &Aabb) -> bool {

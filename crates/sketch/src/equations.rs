@@ -28,7 +28,10 @@ const MIN_LENGTH: f64 = LINEAR_TOLERANCE;
 fn shared_end(sketch: &Sketch, a: CurveId, b: CurveId) -> Option<PointId> {
     let ends = |c: CurveId| match sketch.curve(c)? {
         Curve::Line { start, end, .. } | Curve::Arc { start, end, .. } => Some([*start, *end]),
-        Curve::Circle { .. } | Curve::Spline { .. } => None,
+        Curve::Circle { .. }
+        | Curve::Spline { .. }
+        | Curve::Ellipse { .. }
+        | Curve::EllipticalArc { .. } => None,
     };
     let (ea, eb) = (ends(a)?, ends(b)?);
     let arcs = [a, b]
@@ -144,6 +147,17 @@ pub(crate) enum Residual {
         a: usize,
         b: usize,
     },
+    /// `b · (√Q - 1)`: zero when `p` is on the ellipse about `centre` with semi-axes to
+    /// `major` (length `a`) and `minor` (length `b`), where `Q = (u/a)² + (v/b)²` and `u`,
+    /// `v` are `p - centre` along and across the major axis. Scaled by `b` it is a length:
+    /// the distance to the ellipse to first order at the minor vertices, `b/a` of it at the
+    /// major ones.
+    OnEllipse {
+        p: usize,
+        centre: usize,
+        major: usize,
+        minor: usize,
+    },
 }
 
 /// A residual and the constraint it comes from (`None` for an arc's own equal-radius
@@ -207,6 +221,48 @@ fn radius_value(x: &[f64], r: Radius, k: f64, g: &mut dyn FnMut(usize, f64)) -> 
     }
 }
 
+/// The [`Residual::OnEllipse`] residual and its gradient.
+///
+/// With `d = p - c`, `e = m - c`, `A = e·e` (= a²), `s = d·e`, `t = e × d` and
+/// `b = |n - c|`: `Q = s²/A² + t²/(A b²)` and `f = b (√Q - 1)`. Then
+/// `∂Q/∂d = 2s e/A² + 2t perp(e)/(A b²)`,
+/// `∂Q/∂e = 2s d/A² - 2t perp(d)/(A b²) + 2e (-2s²/A³ - t²/(A² b²))`,
+/// `∂Q/∂b = -2t²/(A b³)`; `∂f/∂Q = b / (2√Q)` and `∂f/∂b = √Q - 1 + b/(2√Q) ∂Q/∂b`, with
+/// `∂b/∂n = (n - c)/b`. The centre takes minus the sum of the other three.
+fn on_ellipse(
+    x: &[f64],
+    p: usize,
+    c: usize,
+    m: usize,
+    n: usize,
+    g: &mut dyn FnMut(usize, f64),
+) -> f64 {
+    let cc = pt(x, c);
+    let d = pt(x, p) - cc;
+    let e = pt(x, m) - cc;
+    let (b, w) = length_dir(pt(x, n) - cc);
+    let b = b.max(MIN_LENGTH);
+    let aa = e.dot(e).max(MIN_LENGTH * MIN_LENGTH);
+    let s = d.dot(e);
+    let t = e.cross(d);
+    let bb = b * b;
+    let q = s * s / (aa * aa) + t * t / (aa * bb);
+    let root = q.sqrt().max(1e-9);
+    let k = b / (2.0 * root);
+    let dq_dd = e * (2.0 * s / (aa * aa)) + e.perp() * (2.0 * t / (aa * bb));
+    let dq_da = -2.0 * s * s / (aa * aa * aa) - t * t / (aa * aa * bb);
+    let dq_de = d * (2.0 * s / (aa * aa)) - d.perp() * (2.0 * t / (aa * bb)) + e * (2.0 * dq_da);
+    let dq_db = -2.0 * t * t / (aa * bb * b);
+    let gd = dq_dd * k;
+    let ge = dq_de * k;
+    let gb = w * (q.sqrt() - 1.0 + k * dq_db);
+    push(g, p, gd);
+    push(g, m, ge);
+    push(g, n, gb);
+    push(g, c, -(gd + ge + gb));
+    b * (q.sqrt() - 1.0)
+}
+
 /// Wraps an angle to (-π, π].
 fn wrap(a: f64) -> f64 {
     let w = a - TAU * (a / TAU).round();
@@ -266,6 +322,12 @@ impl Residual {
             Residual::SymmetricMid { p, q, a, b } | Residual::SymmetricPerp { p, q, a, b } => {
                 pts(&[*p, *q, *a, *b], out)
             }
+            Residual::OnEllipse {
+                p,
+                centre,
+                major,
+                minor,
+            } => pts(&[*p, *centre, *major, *minor], out),
         }
     }
 
@@ -434,6 +496,12 @@ impl Residual {
                 push(g, *a, -gd);
                 f
             }
+            Residual::OnEllipse {
+                p,
+                centre,
+                major,
+                minor,
+            } => on_ellipse(x, *p, *centre, *major, *minor, g),
         }
     }
 
@@ -466,6 +534,13 @@ impl Residual {
             Residual::RadiusValue { radius, .. } | Residual::LineTangent { radius, .. } => {
                 rad(radius)
             }
+            // A semi-axis passing through the centre turns the ellipse inside out.
+            Residual::OnEllipse {
+                centre,
+                major,
+                minor,
+                ..
+            } => dir(*major, *centre) || dir(*minor, *centre),
             _ => false,
         }
     }
@@ -585,7 +660,8 @@ fn sign_of(v: f64) -> f64 {
 }
 
 /// Compiles the sketch into equations: every constraint in id order, then each arc's
-/// equal-radius equation (curve id order). The arcs come last so that when constraints
+/// equal-radius equation and each ellipse's own equations (curve id order): the minor
+/// point square to the major axis, and an elliptical arc's ends on its ellipse. The arcs come last so that when constraints
 /// already imply an arc's equal radii (an arc tangent to two placed lines at its ends), it
 /// is the arc's own equation that counts as dependent, not a constraint the user added. Branch choices (sides, inside or outside
 /// tangency) are taken from the current geometry in `layout.x`.
@@ -833,6 +909,43 @@ pub(crate) fn compile(sketch: &Sketch, layout: &Layout) -> Result<Vec<Equation>,
                 owner: None,
             });
         }
+        if let Curve::Ellipse {
+            centre,
+            major,
+            minor,
+            ..
+        }
+        | Curve::EllipticalArc {
+            centre,
+            major,
+            minor,
+            ..
+        } = c
+        {
+            let (c0, m, n) = (layout.p(*centre)?, layout.p(*major)?, layout.p(*minor)?);
+            eqs.push(Equation {
+                residual: Residual::SymmetricPerp {
+                    p: c0,
+                    q: n,
+                    a: c0,
+                    b: m,
+                },
+                owner: None,
+            });
+            if let Curve::EllipticalArc { start, end, .. } = c {
+                for q in [*start, *end] {
+                    eqs.push(Equation {
+                        residual: Residual::OnEllipse {
+                            p: layout.p(q)?,
+                            centre: c0,
+                            major: m,
+                            minor: n,
+                        },
+                        owner: None,
+                    });
+                }
+            }
+        }
     }
     Ok(eqs)
 }
@@ -938,6 +1051,18 @@ mod tests {
                 a: 0,
                 b: 2,
             },
+            Residual::OnEllipse {
+                p: 8,
+                centre: 0,
+                major: 2,
+                minor: 6,
+            },
+            Residual::OnEllipse {
+                p: 4,
+                centre: 6,
+                major: 8,
+                minor: 0,
+            },
         ];
         let h = 1e-6;
         for res in &residuals {
@@ -997,6 +1122,12 @@ mod tests {
                 b2: 6,
                 value: 1.0,
                 scale: 1.0,
+            },
+            Residual::OnEllipse {
+                p: 0,
+                centre: 2,
+                major: 4,
+                minor: 6,
             },
         ];
         for res in &residuals {

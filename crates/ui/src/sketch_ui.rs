@@ -2,14 +2,23 @@
 //! dimension buttons, dimension labels with inline editing, and point dragging.
 //!
 //! Like the rest of the UI it acts only through commands (`sketch.*`).
+//!
+//! Precise input while drawing: clicks snap to nearby geometry (`chamfera_sketch::snap`)
+//! with a marker and its name shown, and the snap's constraint is added with the new
+//! geometry; Shift holds a segment horizontal or vertical (Shift+Alt: 15 degree steps);
+//! typing a number fills the heads-up fields beside the cursor (Tab moves on, Enter
+//! places), and the typed values become dimensions.
 
 use crate::icons::Icon;
 use crate::widgets::{self, menu_item};
 use crate::{ChamferaApp, color, label};
-use chamfera_engine::sketching::{SketchItem, curve_polyline};
+use chamfera_engine::sketching::{PICK_CURVE_PX, PICK_POINT_PX, SketchItem, curve_polyline};
 use chamfera_geom::{Point2, Point3};
 use chamfera_render::{Overlay, OverlayStyle, mat_mul, transform_point};
-use chamfera_sketch::{CurveId, OffsetCorners, PointId, ToolOp};
+use chamfera_sketch::{
+    Constraint, CurveId, OffsetCorners, PointId, Snap, SnapKind, SnapQuery, ToolOp,
+    exact_direction, lock_angle, lock_straight,
+};
 use egui::{Pos2, Rect, Vec2};
 use serde_json::{Value, json};
 
@@ -33,19 +42,27 @@ pub enum Tool {
     Trim,
     Extend,
     Split,
+    // The shape tools and Project live in `sketch_shapes.rs`.
+    Polygon,
+    Slot,
+    Ellipse,
+    Project,
 }
 
 /// The CREATE tools shown in the ribbon; the group's list has all of `CREATE_ALL`.
-const CREATE_SHOWN: [Tool; 7] = [
+const CREATE_SHOWN: [Tool; 10] = [
     Tool::Line,
     Tool::Rectangle,
     Tool::Circle,
     Tool::Arc,
+    Tool::Polygon,
+    Tool::Slot,
+    Tool::Ellipse,
     Tool::Spline,
     Tool::Offset,
     Tool::Mirror,
 ];
-pub(crate) const CREATE_ALL: [Tool; 12] = [
+pub(crate) const CREATE_ALL: [Tool; 16] = [
     Tool::Line,
     Tool::Rectangle,
     Tool::CentreRectangle,
@@ -53,6 +70,10 @@ pub(crate) const CREATE_ALL: [Tool; 12] = [
     Tool::Arc,
     Tool::ThreePointArc,
     Tool::TangentArc,
+    Tool::Polygon,
+    Tool::Slot,
+    Tool::Ellipse,
+    Tool::Project,
     Tool::Spline,
     Tool::Offset,
     Tool::Mirror,
@@ -91,6 +112,9 @@ impl Tool {
             Tool::Trim => label("sketch.trim"),
             Tool::Extend => label("sketch.extend"),
             Tool::Split => label("sketch.split"),
+            t @ (Tool::Polygon | Tool::Slot | Tool::Ellipse | Tool::Project) => {
+                crate::sketch_shapes::name(t)
+            }
         }
     }
 
@@ -114,19 +138,25 @@ impl Tool {
             Tool::Trim => Icon::Trim,
             Tool::Extend => Icon::Extend,
             Tool::Split => Icon::Split,
+            t @ (Tool::Polygon | Tool::Slot | Tool::Ellipse | Tool::Project) => {
+                crate::sketch_shapes::icon(t)
+            }
         }
     }
 
     fn tooltip(self) -> &'static str {
         match self {
             Tool::Spline => crate::spline_ui::TOOLTIP,
+            t @ (Tool::Polygon | Tool::Slot | Tool::Ellipse | Tool::Project) => {
+                crate::sketch_shapes::tooltip(t)
+            }
             Tool::Select => {
                 "Select
 Pick points and curves to constrain or dimension (Shift adds); drag points to move them"
             }
             Tool::Line => {
                 "Line
-Click point after point; click the first point again to close the shape"
+Click point after point; click the first point again to close the shape. Clicks snap to ends, midpoints, centres and crossings; Shift keeps a line horizontal or vertical; type a length to give it one"
             }
             Tool::Rectangle => {
                 "Rectangle
@@ -194,19 +224,26 @@ Click a curve to split it where other curves cross it; Split All splits every cr
     fn hint(self, clicks: usize) -> &'static str {
         match (self, clicks) {
             (Tool::Spline, n) => crate::spline_ui::hint(n),
+            (t @ (Tool::Polygon | Tool::Slot | Tool::Ellipse | Tool::Project), n) => {
+                crate::sketch_shapes::hint(t, n)
+            }
             (Tool::Select, _) => {
-                "Click to select (Shift adds) · drag a point to move it · Del deletes"
+                "Click to select (Shift adds) · drag a point to move it · drag on empty space to box select · Del deletes"
             }
             (Tool::Line, 0) => "Click the start of the line",
             (Tool::Line, _) => {
-                "Click the next point · click the first point to close · Esc or right-click ends"
+                "Click the next point · type a length, Tab for the angle, Enter · Shift: straight · Esc ends"
             }
             (Tool::Rectangle, 0) => "Click the first corner",
-            (Tool::Rectangle, _) => "Click the opposite corner",
+            (Tool::Rectangle, _) => {
+                "Click the opposite corner · or type the width, Tab, the height, Enter"
+            }
             (Tool::CentreRectangle, 0) => "Click the centre of the rectangle",
-            (Tool::CentreRectangle, _) => "Click a corner",
+            (Tool::CentreRectangle, _) => {
+                "Click a corner · or type the width, Tab, the height, Enter"
+            }
             (Tool::Circle, 0) => "Click the centre",
-            (Tool::Circle, _) => "Click to set the radius",
+            (Tool::Circle, _) => "Click to set the radius · or type the diameter and Enter",
             (Tool::Arc, 0) => "Click the centre",
             (Tool::Arc, 1) => "Click the start (sets the radius)",
             (Tool::Arc, _) => "Click the end (counter-clockwise from the start)",
@@ -232,6 +269,16 @@ Click a curve to split it where other curves cross it; Split All splits every cr
         }
     }
 
+    /// The heads-up value fields while the tool waits for its second click.
+    fn value_fields(self) -> &'static [&'static str] {
+        match self {
+            Tool::Line => &["Length", "Angle"],
+            Tool::Circle => &["Diameter"],
+            Tool::Rectangle | Tool::CentreRectangle => &["Width", "Height"],
+            _ => &[],
+        }
+    }
+
     /// Tools that act on existing geometry instead of placing points.
     fn edits(self) -> bool {
         matches!(
@@ -249,11 +296,116 @@ Click a curve to split it where other curves cross it; Split All splits every cr
     }
 }
 
-/// A placed click: where it is, and the existing point it snapped to.
+/// A placed click: where it is, the existing point it snapped to, and the snap.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Click {
     pub(crate) at: Point2,
     pub(crate) point: Option<u32>,
+    pub(crate) snap: Option<Snap>,
+}
+
+/// The direction lock the modifier keys hold while drawing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum Lock {
+    #[default]
+    Off,
+    /// Shift: horizontal or vertical, whichever is nearer.
+    Straight,
+    /// Shift+Alt: whole steps of [`LOCK_STEP_DEGREES`].
+    Steps,
+}
+
+/// The angle step of the Shift+Alt lock.
+const LOCK_STEP_DEGREES: f64 = 15.0;
+
+/// What was typed into the heads-up fields, and which field takes the next key.
+#[derive(Debug, Default, Clone)]
+struct Typed {
+    fields: [String; 2],
+    active: usize,
+}
+
+impl Typed {
+    fn any(&self) -> bool {
+        self.fields.iter().any(|f| !f.is_empty())
+    }
+}
+
+/// The values typed for the geometry being placed (mm), each becoming a dimension.
+#[derive(Debug, Default, Clone, Copy)]
+struct TypedDims {
+    length: Option<f64>,
+    diameter: Option<f64>,
+    width: Option<f64>,
+    height: Option<f64>,
+}
+
+/// One step of `--sketch-input`, which drives the drawing tools for screenshots.
+#[derive(Debug, Clone, PartialEq)]
+pub enum DemoStep {
+    Tool(Tool),
+    /// A click at this sketch point.
+    Click(Point2),
+    /// Keep the cursor at this sketch point.
+    Hover(Point2),
+    /// Hold Shift from here on.
+    Shift,
+    /// Type these characters.
+    Type(String),
+    Tab,
+}
+
+/// Parses `--sketch-input`: steps separated by `;`, such as
+/// `tool line; click 0,0; hover 30,12; type 25; tab`.
+pub fn parse_demo(text: &str) -> Result<Vec<DemoStep>, String> {
+    let point = |args: &str| -> Option<Point2> {
+        let (x, y) = args.split_once(',')?;
+        let p = Point2::new(x.trim().parse().ok()?, y.trim().parse().ok()?);
+        p.is_valid().then_some(p)
+    };
+    let mut steps = Vec::new();
+    for raw in text
+        .split(';')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .take(64)
+    {
+        let (word, args) = raw.split_once(' ').unwrap_or((raw, ""));
+        let step = match word {
+            "tool" => DemoStep::Tool(match args.trim() {
+                "line" => Tool::Line,
+                "rectangle" => Tool::Rectangle,
+                "centre_rectangle" => Tool::CentreRectangle,
+                "circle" => Tool::Circle,
+                "arc" => Tool::Arc,
+                other => return Err(format!("--sketch-input: no drawing tool `{other}`")),
+            }),
+            "click" | "hover" => {
+                let p = point(args)
+                    .ok_or_else(|| format!("--sketch-input: `{raw}` needs a point X,Y"))?;
+                if word == "click" {
+                    DemoStep::Click(p)
+                } else {
+                    DemoStep::Hover(p)
+                }
+            }
+            "shift" => DemoStep::Shift,
+            "tab" => DemoStep::Tab,
+            "type" => DemoStep::Type(args.chars().take(32).collect()),
+            _ => {
+                return Err(format!(
+                    "--sketch-input: unknown step `{raw}` (tool, click, hover, shift, type, tab)"
+                ));
+            }
+        };
+        steps.push(step);
+    }
+    Ok(steps)
+}
+
+/// Characters a typed value may hold.
+fn numeric(ch: char) -> bool {
+    ch.is_ascii_digit() || matches!(ch, '.' | ',' | '-')
 }
 
 /// The values the editing tools use, as typed in the tool box.
@@ -299,9 +451,22 @@ pub struct SketchUi {
     /// The curve the Offset tool picked with its first click.
     picked_curve: Option<u32>,
     pub options: ToolOptions,
+    /// The values of the shape tools (`sketch_shapes.rs`).
+    pub shapes: crate::sketch_shapes::ShapeOptions,
     dragging: Option<u32>,
     /// A dimension being edited: its constraint id, kind and the text typed so far.
     editing: Option<(u64, String, String)>,
+    /// The snap under the cursor, for its marker.
+    snap: Option<Snap>,
+    /// The direction lock held now.
+    lock: Lock,
+    /// The heads-up fields.
+    typed: Typed,
+    /// Tab presses taken for the heads-up fields before egui saw them (true: Shift+Tab).
+    tabs: Vec<bool>,
+    /// `--sketch-input` steps still to run, and the cursor they pinned.
+    pub demo: Vec<DemoStep>,
+    pinned_hover: Option<Point2>,
     /// Remembered status line for the active sketch.
     pub status: Option<String>,
     /// The active sketch's constraint state, for the status bar's coloured dot.
@@ -327,11 +492,27 @@ impl SketchUi {
         self.clicks.clear();
         self.chain_start = None;
         self.picked_curve = None;
+        self.typed = Typed::default();
+        self.snap = None;
+    }
+
+    /// The point a direction lock measures from: the line's previous point, an arc's
+    /// centre, a three-point arc's start.
+    fn lock_anchor(&self) -> Option<Point2> {
+        match (self.tool(), self.clicks.as_slice()) {
+            (Tool::Line | Tool::Arc | Tool::ThreePointArc, [a]) => Some(a.at),
+            _ => None,
+        }
+    }
+
+    /// True while the heads-up fields are shown.
+    fn fields_shown(&self) -> bool {
+        !self.tool().value_fields().is_empty() && self.clicks.len() == 1
     }
 }
 
 /// The geometric constraints: command kind, name, icon and what it does.
-const CONSTRAINTS: [(&str, &str, Icon, &str); 10] = [
+pub(crate) const CONSTRAINTS: [(&str, &str, Icon, &str); 10] = [
     (
         "horizontal",
         "Horizontal",
@@ -763,9 +944,61 @@ impl ChamferaApp {
         }
     }
 
-    /// The point a click lands on: an existing sketch point under the cursor, else the
-    /// plane point.
+    /// The point a click lands on. Drawing tools: the locked direction while Shift is held,
+    /// else the best snap near the cursor, else the plane point. Select and the editing
+    /// tools: an existing sketch point under the cursor, else the plane point.
     fn click_at(&mut self, x: f64, y: f64, w: f64, h: f64) -> Option<Click> {
+        let tool = self.sketch.tool();
+        if tool == Tool::Select || tool.edits() {
+            return self.point_click_at(x, y, w, h);
+        }
+        let cursor = self.session.sketch_plane_point(x, y, w, h)?;
+        if let Some(from) = self.sketch.lock_anchor() {
+            let locked = match self.sketch.lock {
+                Lock::Off => None,
+                Lock::Straight => Some(lock_straight(from, cursor)),
+                Lock::Steps => lock_angle(from, cursor, LOCK_STEP_DEGREES.to_radians()),
+            };
+            if let Some(at) = locked {
+                return Some(Click {
+                    at,
+                    point: None,
+                    snap: None,
+                });
+            }
+        }
+        // Millimetres per pixel here, so the snap radii are the pick radii on screen.
+        let per_px = [(10.0, 0.0), (0.0, 10.0)]
+            .into_iter()
+            .find_map(|(dx, dy)| self.session.sketch_plane_point(x + dx, y + dy, w, h))
+            .map_or(0.0, |p| p.distance(cursor) / 10.0);
+        let from = match (tool, self.sketch.clicks.as_slice()) {
+            (Tool::Line, [a]) => Some(a.at),
+            _ => None,
+        };
+        let query = SnapQuery {
+            cursor,
+            radius: PICK_POINT_PX * per_px,
+            curve_radius: PICK_CURVE_PX * per_px,
+            from,
+        };
+        let snap = self.session.active_sketch()?.sketch.snap(&query);
+        Some(match snap {
+            Some(snap) => Click {
+                at: snap.at,
+                point: snap.point.map(|p| p.0),
+                snap: Some(snap),
+            },
+            None => Click {
+                at: cursor,
+                point: None,
+                snap: None,
+            },
+        })
+    }
+
+    /// An existing sketch point under the cursor, else the plane point.
+    fn point_click_at(&mut self, x: f64, y: f64, w: f64, h: f64) -> Option<Click> {
         let px = json!({ "x": x, "y": y, "width": w, "height": h });
         if let Ok(r) = self.session.execute("sketch.pick", &px)
             && let Some(id) = as_id(&r["item"]["point"])
@@ -777,12 +1010,14 @@ impl ChamferaApp {
             return Some(Click {
                 at,
                 point: Some(id),
+                snap: None,
             });
         }
         let r = self.session.execute("sketch.plane_point", &px).ok()?;
         Some(Click {
             at: Point2::new(r["x"].as_f64()?, r["y"].as_f64()?),
             point: None,
+            snap: None,
         })
     }
 
@@ -796,42 +1031,60 @@ impl ChamferaApp {
     ) -> bool {
         let (w, h) = (f64::from(rect.width()), f64::from(rect.height()));
         let local = |p: Pos2| (f64::from(p.x - rect.min.x), f64::from(p.y - rect.min.y));
-        let (shift, esc, delete) = ui.input(|i| {
+        let (shift, alt, esc, delete) = ui.input(|i| {
             (
                 i.modifiers.shift,
+                i.modifiers.alt,
                 i.key_pressed(egui::Key::Escape),
                 i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace),
             )
         });
+        self.run_demo(rect);
+        // Keyboard focus on a widget (a text box) means the keys are not for the sketch.
         let typing = ui.ctx().egui_wants_keyboard_input();
+        if self.sketch.pinned_hover.is_none() {
+            self.sketch.lock = match (shift, alt) {
+                (false, _) => Lock::Off,
+                (true, false) => Lock::Straight,
+                (true, true) => Lock::Steps,
+            };
+        }
+        let (esc_used, backspace_used) = if typing {
+            (false, false)
+        } else {
+            self.heads_up_keys(ui)
+        };
         if self.sketch.tool() == Tool::Spline
             && !typing
             && ui.input(|i| i.key_pressed(egui::Key::Enter))
         {
             self.spline_finish(false);
         }
-        if esc && !typing {
+        if esc && !typing && !esc_used {
             if self.sketch.clicks.is_empty() {
                 self.sketch.tool = Some(Tool::Select);
                 self.run_sketch("sketch.select_clear", json!({}));
             }
             self.sketch.reset_tool();
         }
-        if delete && !typing && !self.session.sketch_selection.is_empty() {
+        if delete
+            && !typing
+            && !backspace_used
+            && !self.sketch.typed.any()
+            && !self.session.sketch_selection.is_empty()
+        {
             self.run_sketch("sketch.remove", json!({}));
         }
-        // Hover: where the next click would land (for previews).
-        self.sketch.hover_px = response.hover_pos().map(|p| {
-            let (x, y) = local(p);
-            (x, y, w, h)
-        });
-        self.sketch.hover = response
-            .hover_pos()
-            .and_then(|p| {
-                let (x, y) = local(p);
-                self.click_at(x, y, w, h)
-            })
-            .map(|c| c.at);
+
+        // Hover: where the next click would land (for previews), and its snap.
+        let hover_px = match self.sketch.pinned_hover {
+            Some(p) => self.pixel_of(rect, p),
+            None => response.hover_pos().map(local),
+        };
+        self.sketch.hover_px = hover_px.map(|(x, y)| (x, y, w, h));
+        let hovered = hover_px.and_then(|(x, y)| self.click_at(x, y, w, h));
+        self.sketch.hover = hovered.map(|c| c.at);
+        self.sketch.snap = hovered.and_then(|c| c.snap);
 
         let tool = self.sketch.tool();
         // Dragging a point with the Select tool.
@@ -849,6 +1102,12 @@ impl ChamferaApp {
                     .ok()
                     .and_then(|r| as_id(&r["item"]["point"]));
                 self.sketch.dragging = picked;
+                if picked.is_none() {
+                    self.box_begin(ui, rect, true);
+                }
+            }
+            if self.box_input(ui, response, rect) {
+                return true;
             }
             if let Some(point) = self.sketch.dragging {
                 if response.dragged_by(egui::PointerButton::Primary)
@@ -880,17 +1139,244 @@ impl ChamferaApp {
         true
     }
 
+    /// The keys for the heads-up fields: digits fill the active field, Tab moves to the
+    /// next, Backspace deletes, Enter places, Esc clears what was typed. Returns whether
+    /// Esc and Backspace were used here.
+    fn heads_up_keys(&mut self, ui: &egui::Ui) -> (bool, bool) {
+        let n = self.sketch.tool().value_fields().len().min(2);
+        if n == 0 || self.sketch.clicks.len() != 1 {
+            return (false, false);
+        }
+        let events = ui.input(|i| i.events.clone());
+        let (mut esc_used, mut backspace_used, mut enter) = (false, false, false);
+        let tabs = std::mem::take(&mut self.sketch.tabs);
+        let typed = &mut self.sketch.typed;
+        for back in tabs {
+            let step = if back { n - 1 } else { 1 };
+            typed.active = (typed.active + step) % n;
+        }
+        for e in events {
+            match e {
+                egui::Event::Text(t) => {
+                    let field = &mut typed.fields[typed.active.min(n - 1)];
+                    for ch in t.chars().filter(|c| numeric(*c)) {
+                        if field.len() < 24 {
+                            field.push(ch);
+                        }
+                    }
+                }
+                egui::Event::Key {
+                    key, pressed: true, ..
+                } => match key {
+                    egui::Key::Backspace if typed.any() => {
+                        typed.fields[typed.active.min(n - 1)].pop();
+                        backspace_used = true;
+                    }
+                    egui::Key::Enter => enter = true,
+                    egui::Key::Escape if typed.any() => {
+                        *typed = Typed::default();
+                        esc_used = true;
+                    }
+                    _ => {}
+                },
+                _ => {}
+            }
+        }
+        if enter && self.sketch.typed.any() {
+            self.place_typed();
+        }
+        (esc_used, backspace_used)
+    }
+
+    /// The typed value of field `k`: a length above 0 (mm), or for the line's angle field
+    /// any angle (radians).
+    fn typed_value(&self, k: usize) -> Option<f64> {
+        let text = self.sketch.typed.fields.get(k)?;
+        if text.is_empty() {
+            return None;
+        }
+        if self.sketch.tool() == Tool::Line && k == 1 {
+            parse_value("angle", text)
+        } else {
+            option_length(text)
+        }
+    }
+
+    /// Where the typed values put the second point, given the cursor for the direction
+    /// (or the quadrant, for rectangles). `None` until something valid is typed.
+    fn typed_point(&self) -> Option<Point2> {
+        if !self.sketch.fields_shown() || !self.sketch.typed.any() {
+            return None;
+        }
+        let a = self.sketch.clicks.first()?.at;
+        let hover = self.sketch.hover.unwrap_or(Point2::new(a.x + 1.0, a.y));
+        let d = hover - a;
+        let sign = |v: f64| if v < 0.0 { -1.0 } else { 1.0 };
+        match self.sketch.tool() {
+            Tool::Line => {
+                let length = self.typed_value(0).unwrap_or(d.length());
+                let angle = self.typed_value(1).unwrap_or(d.angle());
+                (length > chamfera_geom::LINEAR_TOLERANCE)
+                    .then(|| a + exact_direction(angle) * length)
+            }
+            Tool::Circle => {
+                let dia = self.typed_value(0)?;
+                let dir = d.normalized().unwrap_or(chamfera_geom::Vec2::X);
+                Some(a + dir * (dia * 0.5))
+            }
+            Tool::Rectangle | Tool::CentreRectangle => {
+                let half = if self.sketch.tool() == Tool::CentreRectangle {
+                    0.5
+                } else {
+                    1.0
+                };
+                let width = self.typed_value(0).unwrap_or(d.x.abs() / half);
+                let height = self.typed_value(1).unwrap_or(d.y.abs() / half);
+                Some(Point2::new(
+                    a.x + sign(d.x) * width * half,
+                    a.y + sign(d.y) * height * half,
+                ))
+            }
+            _ => None,
+        }
+    }
+
+    /// The typed values that become dimensions.
+    fn typed_dims(&self) -> TypedDims {
+        match self.sketch.tool() {
+            Tool::Line => TypedDims {
+                length: self.typed_value(0),
+                ..TypedDims::default()
+            },
+            Tool::Circle => TypedDims {
+                diameter: self.typed_value(0),
+                ..TypedDims::default()
+            },
+            Tool::Rectangle | Tool::CentreRectangle => TypedDims {
+                width: self.typed_value(0),
+                height: self.typed_value(1),
+                ..TypedDims::default()
+            },
+            _ => TypedDims::default(),
+        }
+    }
+
+    /// Enter in the heads-up fields: places the geometry at the typed values.
+    fn place_typed(&mut self) {
+        let tool = self.sketch.tool();
+        let Some(at) = self.typed_point() else {
+            self.message = Some((format!("{}: type a size above 0", tool.name()), true));
+            return;
+        };
+        let dims = self.typed_dims();
+        self.sketch.typed = Typed::default();
+        self.sketch.clicks.push(Click {
+            at,
+            point: None,
+            snap: None,
+        });
+        self.place(tool, dims);
+    }
+
+    /// The viewport pixel of a sketch point.
+    fn pixel_of(&self, rect: Rect, p: Point2) -> Option<(f64, f64)> {
+        let f = self.session.active_sketch()?;
+        let pos = self.project(rect, f.plane.from_plane(p))?;
+        Some((f64::from(pos.x - rect.min.x), f64::from(pos.y - rect.min.y)))
+    }
+
+    /// Before egui sees the input: while the heads-up fields show, Tab moves between them
+    /// instead of moving the keyboard focus, so it is taken out here.
+    pub(crate) fn sketch_raw_input(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        if self.session.active_sketch.is_none()
+            || !self.sketch.fields_shown()
+            || ctx.egui_wants_keyboard_input()
+        {
+            return;
+        }
+        let tabs = &mut self.sketch.tabs;
+        raw.events.retain(|e| match e {
+            egui::Event::Key {
+                key: egui::Key::Tab,
+                pressed,
+                modifiers,
+                ..
+            } => {
+                if *pressed && tabs.len() < 16 {
+                    tabs.push(modifiers.shift);
+                }
+                false
+            }
+            _ => true,
+        });
+    }
+
+    /// Runs the `--sketch-input` steps once the viewport has its size.
+    fn run_demo(&mut self, rect: Rect) {
+        if self.sketch.demo.is_empty() || self.frames < 2 || rect.width() < 2.0 {
+            return;
+        }
+        let (w, h) = (f64::from(rect.width()), f64::from(rect.height()));
+        let steps = std::mem::take(&mut self.sketch.demo);
+        let mut shift = false;
+        for step in steps {
+            match step {
+                DemoStep::Tool(t) => {
+                    self.sketch.tool = Some(t);
+                    self.sketch.reset_tool();
+                }
+                DemoStep::Click(p) => {
+                    if let Some((x, y)) = self.pixel_of(rect, p) {
+                        self.sketch_click(x, y, w, h, shift);
+                    }
+                }
+                DemoStep::Hover(p) => {
+                    self.sketch.pinned_hover = Some(p);
+                    if let Some((x, y)) = self.pixel_of(rect, p) {
+                        self.sketch.hover = self.click_at(x, y, w, h).map(|c| c.at);
+                    }
+                }
+                DemoStep::Shift => {
+                    shift = true;
+                    self.sketch.lock = Lock::Straight;
+                    // Keep the lock for the pinned cursor too.
+                    if self.sketch.pinned_hover.is_none() {
+                        self.sketch.pinned_hover = self.sketch.hover;
+                    }
+                }
+                DemoStep::Type(text) => {
+                    let n = self.sketch.tool().value_fields().len();
+                    if n > 0 {
+                        let k = self.sketch.typed.active.min(n - 1);
+                        self.sketch.typed.fields[k].extend(text.chars().filter(|c| numeric(*c)));
+                    }
+                }
+                DemoStep::Tab => {
+                    let n = self.sketch.tool().value_fields().len().max(1);
+                    self.sketch.typed.active = (self.sketch.typed.active + 1) % n;
+                }
+            }
+        }
+    }
+
     /// A left click at pixel `(x, y)` of a `w` x `h` viewport in sketch mode: selects
-    /// with the Select tool, else places the next point of the current tool.
+    /// with the Select tool (Shift adds), else places the next point of the current tool
+    /// (Shift locks the segment horizontal or vertical).
     pub(crate) fn sketch_click(&mut self, x: f64, y: f64, w: f64, h: f64, shift: bool) {
         let tool = self.sketch.tool();
         if tool == Tool::Select {
             self.run_sketch(
                 "sketch.select",
-                json!({ "x": x, "y": y, "width": w, "height": h, "add": shift }),
+                json!({ "x": x, "y": y, "width": w, "height": h, "add": shift,
+                        "filter": self.filter_param() }),
             );
             return;
         }
+        self.sketch.lock = match (shift, self.sketch.lock) {
+            (false, _) => Lock::Off,
+            (true, Lock::Steps) => Lock::Steps,
+            (true, _) => Lock::Straight,
+        };
         let Some(click) = self.click_at(x, y, w, h) else {
             self.message = Some(("The sketch plane is edge-on: turn the view".into(), true));
             return;
@@ -903,13 +1389,100 @@ impl ChamferaApp {
             self.spline_click(click, (x, y, w, h));
             return;
         }
+        if tool == Tool::Project {
+            self.project_click(x, y, w, h);
+            return;
+        }
+        // A click places at the typed values when something was typed.
+        if self.sketch.fields_shown()
+            && self.sketch.typed.any()
+            && let Some(at) = self.typed_point()
+        {
+            let dims = self.typed_dims();
+            self.sketch.typed = Typed::default();
+            self.sketch.clicks.push(Click {
+                at,
+                point: None,
+                snap: None,
+            });
+            self.place(tool, dims);
+            return;
+        }
         self.sketch.clicks.push(click);
-        self.place(tool);
+        self.place(tool, TypedDims::default());
     }
 
-    /// Creates geometry once a tool has all its clicks.
-    fn place(&mut self, tool: Tool) {
+    /// The constraints that keep a snapped click's new point where it snapped.
+    fn snap_constraints(
+        &self,
+        click: &Click,
+        point: Option<u32>,
+        line: Option<u32>,
+    ) -> Vec<Constraint> {
+        let (Some(snap), Some(point)) = (click.snap, point) else {
+            return Vec::new();
+        };
+        let Some(f) = self.session.active_sketch() else {
+            return Vec::new();
+        };
+        f.sketch
+            .snap_constraints(&snap, PointId(point), line.map(CurveId))
+    }
+
+    /// The first level and the first upright line among `curves`, for width and height.
+    fn level_and_upright(&self, curves: &[u32]) -> (Option<u32>, Option<u32>) {
+        let Some(f) = self.session.active_sketch() else {
+            return (None, None);
+        };
+        let dir = |c: u32| match f.sketch.curve(CurveId(c)) {
+            Some(chamfera_sketch::Curve::Line { start, end, .. }) => {
+                Some(f.sketch.point(*end)? - f.sketch.point(*start)?)
+            }
+            _ => None,
+        };
+        let tol = chamfera_geom::LINEAR_TOLERANCE;
+        let level = curves
+            .iter()
+            .copied()
+            .find(|c| dir(*c).is_some_and(|d| d.y.abs() < tol && d.x.abs() > tol));
+        let upright = curves
+            .iter()
+            .copied()
+            .find(|c| dir(*c).is_some_and(|d| d.x.abs() < tol && d.y.abs() > tol));
+        (level, upright)
+    }
+
+    /// Adds the snap and typed-value constraints of a placement, as one step. Ones that
+    /// are already implied or would conflict are left out by the command.
+    fn add_constraints(&mut self, list: Vec<Constraint>) {
+        if list.is_empty() {
+            return;
+        }
+        let items: Vec<Value> = list
+            .iter()
+            .filter_map(|c| serde_json::to_value(c).ok())
+            .collect();
+        self.run_sketch("sketch.constrain", json!({ "constraints": items }));
+    }
+
+    /// Creates geometry once a tool has all its clicks, with the constraints its snaps and
+    /// typed values ask for.
+    fn place(&mut self, tool: Tool, dims: TypedDims) {
         let c = self.sketch.clicks.clone();
+        if crate::sketch_shapes::is_shape(tool) {
+            let pts: Vec<Point2> = c.iter().map(|k| k.at).collect();
+            if self.place_shape(tool, &pts) {
+                self.sketch.clicks.clear();
+            }
+            return;
+        }
+        let mut extra: Vec<Constraint> = Vec::new();
+        let ids = |r: &Value, key: &str| -> Vec<u32> {
+            r[key]
+                .as_array()
+                .map(|a| a.iter().filter_map(as_id).collect())
+                .unwrap_or_default()
+        };
         match (tool, c.as_slice()) {
             (Tool::Line, [a, b]) => {
                 if a.at.coincident(b.at) {
@@ -929,6 +1502,15 @@ impl ChamferaApp {
                     Some(r) => {
                         let start = as_id(&r["start"]);
                         let end = as_id(&r["end"]);
+                        let line = as_id(&r["curve"]);
+                        extra.extend(self.snap_constraints(a, start, None));
+                        extra.extend(self.snap_constraints(b, end, line));
+                        if let (Some(l), Some(value)) = (line, dims.length) {
+                            extra.push(Constraint::Length {
+                                line: CurveId(l),
+                                value,
+                            });
+                        }
                         if self.sketch.chain_start.is_none() {
                             self.sketch.chain_start = start;
                         }
@@ -940,6 +1522,7 @@ impl ChamferaApp {
                             self.sketch.clicks.push(Click {
                                 at: b.at,
                                 point: end,
+                                snap: None,
                             });
                         }
                     }
@@ -949,35 +1532,55 @@ impl ChamferaApp {
                 }
             }
             (Tool::Rectangle, [a, b]) => {
-                self.run_sketch(
+                if let Some(r) = self.run_sketch(
                     "sketch.rectangle",
                     json!({ "x1": a.at.x, "y1": a.at.y, "x2": b.at.x, "y2": b.at.y }),
-                );
+                ) {
+                    let points = ids(&r, "points");
+                    extra.extend(self.snap_constraints(a, points.first().copied(), None));
+                    extra.extend(self.snap_constraints(b, points.get(2).copied(), None));
+                    let (level, upright) = self.level_and_upright(&ids(&r, "curves"));
+                    extra.extend(side_lengths(level, upright, dims));
+                }
                 self.sketch.clicks.clear();
             }
             (Tool::Circle, [a, b]) => {
-                let r = a.at.distance(b.at);
-                self.run_sketch(
+                let radius = a.at.distance(b.at);
+                if let Some(r) = self.run_sketch(
                     "sketch.circle",
-                    json!({ "cx": a.at.x, "cy": a.at.y, "radius": r }),
-                );
+                    json!({ "cx": a.at.x, "cy": a.at.y, "radius": radius }),
+                ) {
+                    extra.extend(self.snap_constraints(a, as_id(&r["centre"]), None));
+                    if let (Some(curve), Some(value)) = (as_id(&r["curve"]), dims.diameter) {
+                        extra.push(Constraint::Diameter {
+                            curve: CurveId(curve),
+                            value,
+                        });
+                    }
+                }
                 self.sketch.clicks.clear();
             }
             (Tool::Arc, [c0, s, e]) => {
-                self.run_sketch(
+                if let Some(r) = self.run_sketch(
                     "sketch.arc",
                     json!({
                         "cx": c0.at.x, "cy": c0.at.y,
                         "x1": s.at.x, "y1": s.at.y, "x2": e.at.x, "y2": e.at.y,
                     }),
-                );
+                ) {
+                    extra.extend(self.snap_constraints(c0, as_id(&r["centre"]), None));
+                    extra.extend(self.snap_constraints(s, as_id(&r["start"]), None));
+                }
                 self.sketch.clicks.clear();
             }
             (Tool::CentreRectangle, [c0, k]) => {
-                self.run_sketch(
+                if let Some(r) = self.run_sketch(
                     "sketch.rectangle.centre",
                     json!({ "cx": c0.at.x, "cy": c0.at.y, "x": k.at.x, "y": k.at.y }),
-                );
+                ) {
+                    let (level, upright) = self.level_and_upright(&ids(&r, "created_curves"));
+                    extra.extend(side_lengths(level, upright, dims));
+                }
                 self.sketch.clicks.clear();
             }
             (Tool::ThreePointArc, [a, b, m]) => {
@@ -1010,11 +1613,13 @@ impl ChamferaApp {
                     self.sketch.clicks.push(Click {
                         at: q.at,
                         point: Some(end),
+                        snap: None,
                     });
                 }
             }
             _ => {}
         }
+        self.add_constraints(extra);
     }
 
     /// The point at `at` among the points a command created.
@@ -1037,7 +1642,7 @@ impl ChamferaApp {
             return None;
         }
         let f = self.session.active_sketch()?;
-        let hover = self.sketch.hover?;
+        let hover = self.typed_point().or(self.sketch.hover)?;
         let c = &self.sketch.clicks;
         let w = |p: Point2| f.plane.from_plane(p);
         let mut lines: Vec<[Point3; 2]> = Vec::new();
@@ -1113,6 +1718,10 @@ impl ChamferaApp {
             }
             (Tool::Spline, _) => polylines.extend(self.spline_preview(hover)),
             (tool, _) if tool.edits() => polylines.extend(self.edit_preview(tool, hover)),
+            (tool, _) if crate::sketch_shapes::is_shape(tool) => {
+                let pts: Vec<Point2> = c.iter().map(|k| k.at).collect();
+                polylines.extend(self.shape_preview(tool, &pts, hover));
+            }
             _ => {}
         }
         for poly in polylines {
@@ -1195,8 +1804,11 @@ impl ChamferaApp {
                 self.sketch.editing = Some((u64::from(l.constraint), l.kind.clone(), start));
             }
         }
+        self.snap_marker(ui, rect);
+        self.heads_up(ui, rect);
         self.dimension_editor(ui, rect);
         self.sketch_tool_box(ui, rect);
+        self.shape_tool_box(ui, rect);
     }
 
     /// The inline value box for the dimension being edited. Enter applies, Esc cancels.
@@ -1245,6 +1857,233 @@ impl ChamferaApp {
         });
         if keep {
             self.sketch.editing = Some((id, kind, text));
+        }
+    }
+}
+
+// ----- precise input: the snap marker and the heads-up value fields -----
+
+/// Length dimensions for a rectangle's typed width (on its level side) and height (on
+/// its upright side).
+fn side_lengths(level: Option<u32>, upright: Option<u32>, dims: TypedDims) -> Vec<Constraint> {
+    let mut out = Vec::new();
+    if let (Some(l), Some(value)) = (level, dims.width) {
+        out.push(Constraint::Length {
+            line: CurveId(l),
+            value,
+        });
+    }
+    if let (Some(l), Some(value)) = (upright, dims.height) {
+        out.push(Constraint::Length {
+            line: CurveId(l),
+            value,
+        });
+    }
+    out
+}
+
+/// The label of a direction lock from `a` to `b`: Horizontal, Vertical or the angle.
+fn lock_label(a: Point2, b: Point2) -> String {
+    let d = b - a;
+    let tol = chamfera_geom::LINEAR_TOLERANCE;
+    if d.y.abs() < tol {
+        "Horizontal".into()
+    } else if d.x.abs() < tol {
+        "Vertical".into()
+    } else {
+        display_value("angle", d.angle())
+    }
+}
+
+impl ChamferaApp {
+    /// The snap marker and its name at the snapped point, or the lock's name while Shift
+    /// holds a direction.
+    pub(crate) fn snap_marker(&self, ui: &egui::Ui, rect: Rect) {
+        let tool = self.sketch.tool();
+        if tool == Tool::Select || tool.edits() {
+            return;
+        }
+        let Some(f) = self.session.active_sketch() else {
+            return;
+        };
+        let (at, text, kind) = match (self.sketch.snap, self.sketch.hover) {
+            (Some(snap), _) => (snap.at, snap.kind.label().to_owned(), Some(snap.kind)),
+            (None, Some(hover)) if self.sketch.lock != Lock::Off => {
+                let Some(a) = self.sketch.lock_anchor() else {
+                    return;
+                };
+                (hover, lock_label(a, hover), None)
+            }
+            _ => return,
+        };
+        let Some(p) = self.project(rect, f.plane.from_plane(at)) else {
+            return;
+        };
+        let painter = ui.painter_at(rect);
+        let accent = color(self.theme.accent);
+        let stroke = egui::Stroke::new(1.6, accent);
+        let s = 5.0;
+        let v = |x: f32, y: f32| p + Vec2::new(x, y);
+        match kind {
+            Some(SnapKind::Endpoint) => {
+                painter.rect_stroke(
+                    Rect::from_center_size(p, Vec2::splat(2.0 * s)),
+                    0.0,
+                    stroke,
+                    egui::StrokeKind::Middle,
+                );
+            }
+            Some(SnapKind::Centre) => {
+                painter.circle_stroke(p, s, stroke);
+                painter.circle_filled(p, 1.6, accent);
+            }
+            Some(SnapKind::Origin) => {
+                painter.circle_stroke(p, s, stroke);
+                painter.line_segment([v(-s - 2.0, 0.0), v(s + 2.0, 0.0)], stroke);
+                painter.line_segment([v(0.0, -s - 2.0), v(0.0, s + 2.0)], stroke);
+            }
+            Some(SnapKind::Midpoint) => {
+                painter.add(egui::Shape::closed_line(
+                    vec![v(0.0, -s - 1.0), v(s + 1.0, s), v(-s - 1.0, s)],
+                    stroke,
+                ));
+            }
+            Some(SnapKind::Intersection) => {
+                painter.line_segment([v(-s, -s), v(s, s)], stroke);
+                painter.line_segment([v(-s, s), v(s, -s)], stroke);
+            }
+            Some(SnapKind::Quadrant) => {
+                painter.add(egui::Shape::closed_line(
+                    vec![
+                        v(0.0, -s - 1.0),
+                        v(s + 1.0, 0.0),
+                        v(0.0, s + 1.0),
+                        v(-s - 1.0, 0.0),
+                    ],
+                    stroke,
+                ));
+            }
+            Some(SnapKind::Perpendicular) => {
+                painter.line_segment([v(-s, s), v(s, s)], stroke);
+                painter.line_segment([v(0.0, s), v(0.0, -s)], stroke);
+            }
+            Some(SnapKind::Tangent) => {
+                painter.circle_stroke(v(0.0, 2.0), s - 1.0, stroke);
+                painter.line_segment([v(-s - 2.0, -s + 1.0), v(s + 2.0, -s + 1.0)], stroke);
+            }
+            Some(SnapKind::OnCurve) => {
+                painter.add(egui::Shape::closed_line(
+                    vec![v(-s, -s), v(s, -s), v(-s, s), v(s, s)],
+                    stroke,
+                ));
+            }
+            None => {}
+        }
+        // The name, in a small box up and to the right, like a tooltip.
+        let font = egui::FontId::proportional(11.5);
+        let galley = painter.layout_no_wrap(text, font, color(self.theme.text));
+        let size = galley.size() + Vec2::new(10.0, 4.0);
+        let mut min = p + Vec2::new(10.0, -10.0 - size.y);
+        min.x = min.x.min(rect.max.x - size.x - 2.0);
+        min.y = min.y.max(rect.min.y + 2.0);
+        let r = Rect::from_min_size(min, size);
+        let radius = egui::CornerRadius::same(widgets::R_SMALL);
+        painter.rect_filled(r, radius, color(self.theme.panel).gamma_multiply(0.96));
+        painter.rect_stroke(
+            r,
+            radius,
+            egui::Stroke::new(1.0, color(self.theme.border)),
+            egui::StrokeKind::Inside,
+        );
+        painter.galley(r.min + Vec2::new(5.0, 2.0), galley, color(self.theme.text));
+    }
+
+    /// The heads-up value fields beside the cursor while a tool waits for its second click:
+    /// the live value, or what was typed, with the active field outlined.
+    pub(crate) fn heads_up(&self, ui: &egui::Ui, rect: Rect) {
+        if !self.sketch.fields_shown() {
+            return;
+        }
+        let tool = self.sketch.tool();
+        let names = tool.value_fields();
+        let (Some(f), Some(a)) = (
+            self.session.active_sketch(),
+            self.sketch.clicks.first().map(|c| c.at),
+        ) else {
+            return;
+        };
+        let Some(hover) = self.typed_point().or(self.sketch.hover) else {
+            return;
+        };
+        let Some(pos) = self.project(rect, f.plane.from_plane(hover)) else {
+            return;
+        };
+        let d = hover - a;
+        let live = match tool {
+            Tool::Line => [
+                display_value("length", d.length()),
+                display_value("angle", d.angle()),
+            ],
+            Tool::Circle => [display_value("length", 2.0 * d.length()), String::new()],
+            Tool::CentreRectangle => [
+                display_value("length", 2.0 * d.x.abs()),
+                display_value("length", 2.0 * d.y.abs()),
+            ],
+            _ => [
+                display_value("length", d.x.abs()),
+                display_value("length", d.y.abs()),
+            ],
+        };
+        let painter = ui.painter_at(rect);
+        let font = egui::FontId::proportional(12.5);
+        let small = egui::FontId::proportional(10.5);
+        let (w, h, gap) = (104.0, 22.0, 4.0);
+        let total = names.len() as f32 * (w + gap);
+        let x0 = (pos.x + 18.0)
+            .min(rect.max.x - total - 4.0)
+            .max(rect.min.x + 4.0);
+        let y0 = (pos.y + 16.0)
+            .min(rect.max.y - h - 4.0)
+            .max(rect.min.y + 4.0);
+        let radius = egui::CornerRadius::same(widgets::R_SMALL);
+        for (k, name) in names.iter().enumerate() {
+            let r = Rect::from_min_size(egui::pos2(x0 + k as f32 * (w + gap), y0), Vec2::new(w, h));
+            let active = k == self.sketch.typed.active;
+            let typed = self.sketch.typed.fields.get(k).map_or("", String::as_str);
+            let border = if active {
+                egui::Stroke::new(1.5, color(self.theme.accent))
+            } else {
+                egui::Stroke::new(1.0, color(self.theme.border))
+            };
+            painter.rect_filled(r, radius, color(self.theme.panel));
+            painter.rect_stroke(r, radius, border, egui::StrokeKind::Inside);
+            painter.text(
+                r.left_center() + Vec2::new(6.0, 0.0),
+                egui::Align2::LEFT_CENTER,
+                name,
+                small.clone(),
+                color(self.theme.text_muted),
+            );
+            let angle = tool == Tool::Line && k == 1;
+            let (value, c) = if typed.is_empty() {
+                (
+                    live.get(k).cloned().unwrap_or_default(),
+                    self.theme.text_muted,
+                )
+            } else {
+                (
+                    format!("{typed}{}", if angle { "°" } else { "" }),
+                    self.theme.text,
+                )
+            };
+            let unit = if angle { "" } else { " mm" };
+            painter.text(
+                r.right_center() - Vec2::new(6.0, 0.0),
+                egui::Align2::RIGHT_CENTER,
+                format!("{value}{unit}"),
+                font.clone(),
+                color(c),
+            );
         }
     }
 }
@@ -1729,9 +2568,17 @@ mod tests {
         // Clicks land on pixel centres of an orthographic view, so allow 0.5 px of error
         // per side: the rectangle is 80 x 50 to within that.
         assert!((area - 4000.0).abs() < 4000.0 * 0.02, "{area}");
-        // Snapping made the four sides horizontal and vertical.
-        let snaps = g["constraints"].as_array().unwrap().len();
-        assert_eq!(snaps, 4);
+        // Snapping made the four sides horizontal and vertical, and the first click on
+        // the origin fixed that corner there.
+        let snaps = g["constraints"].as_array().unwrap();
+        assert_eq!(snaps.len(), 5);
+        assert_eq!(
+            snaps
+                .iter()
+                .filter(|c| c["definition"]["kind"] == "fix")
+                .count(),
+            1
+        );
     }
 
     #[test]
@@ -1777,12 +2624,14 @@ mod tests {
         let width = xs.iter().cloned().fold(f64::MIN, f64::max)
             - xs.iter().cloned().fold(f64::MAX, f64::min);
         assert!((width - 100.0).abs() < 1e-6, "{width}");
+        // A free rectangle has 4 degrees of freedom; the corner snapped to the origin is
+        // fixed (2) and the width is set (1): one is left, the height.
         assert!(
             app.sketch
                 .status
                 .as_deref()
                 .unwrap_or("")
-                .contains("degrees of freedom")
+                .contains("1 degree of freedom")
         );
     }
 
@@ -1972,3 +2821,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "sketch_input_tests.rs"]
+mod input_tests;

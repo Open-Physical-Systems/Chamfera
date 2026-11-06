@@ -42,16 +42,36 @@ pub struct Theme {
     pub body: Rgba,
     pub body_selected: Rgba,
     pub edge: Rgba,
+    /// The shape a tool would make (the extrude preview), drawn translucent over the
+    /// model: its alpha is how much of the model shows through.
+    pub preview_body: Rgba,
     // sketches
     /// Sketch geometry that can still move (under-constrained).
     pub sketch: Rgba,
     /// Sketch geometry fixed by its constraints.
     pub sketch_constrained: Rgba,
     pub sketch_construction: Rgba,
+    /// Model edges projected into a sketch (fixed, linked to their source).
+    pub sketch_projected: Rgba,
     /// Geometry being drawn, before it is created.
     pub sketch_preview: Rgba,
     /// What the pointer is over, or what is picked.
     pub highlight: Rgba,
+    /// Measure results in the viewport: the dimension line between closest points.
+    pub measure: Rgba,
+    // construction geometry
+    /// Construction plane outlines, axes and points.
+    pub construct: Rgba,
+    /// The see-through fill of construction planes.
+    pub construct_fill: Rgba,
+    /// The face or edge under the pointer in the viewport, before a click picks it.
+    pub hover_highlight: Rgba,
+    /// Window box selection (dragged left to right: what is fully inside): solid outline.
+    pub select_window: Rgba,
+    pub select_window_fill: Rgba,
+    /// Crossing box selection (dragged right to left: what it touches): dashed outline.
+    pub select_crossing: Rgba,
+    pub select_crossing_fill: Rgba,
     // interface surfaces (see docs/design/ui.md)
     /// The app bar, ribbon, timeline and status bar.
     pub chrome: Rgba,
@@ -84,9 +104,28 @@ pub struct Theme {
     // the view cube
     pub cube_face: Rgba,
     pub cube_edge: Rgba,
+    // assemblies
+    /// Component tints, mixed lightly into the body colour (`body_colour`).
+    pub component_tints: [Rgba; 6],
 }
 
 impl Theme {
+    /// The colour of a body: the plain body colour, or with a component tint mixed in
+    /// (a quarter of the tint, so shading and edges still read as one material).
+    pub fn body_colour(&self, tint: Option<u8>) -> Rgba {
+        let Some(i) = tint else {
+            return self.body;
+        };
+        let t = self.component_tints[usize::from(i) % self.component_tints.len()];
+        let mix = |a: u8, b: u8| ((u16::from(a) * 3 + u16::from(b)) / 4) as u8;
+        Rgba(
+            mix(self.body.0, t.0),
+            mix(self.body.1, t.1),
+            mix(self.body.2, t.2),
+            self.body.3,
+        )
+    }
+
     pub fn light() -> Theme {
         Theme {
             mode: ThemeMode::Light,
@@ -100,11 +139,21 @@ impl Theme {
             body: Rgba(176, 184, 196, 255),
             body_selected: Rgba(64, 140, 230, 255),
             edge: Rgba(40, 46, 56, 255),
+            preview_body: Rgba(30, 112, 214, 110),
             sketch: Rgba(30, 100, 220, 255),
             sketch_constrained: Rgba(20, 24, 30, 255),
             sketch_construction: Rgba(214, 120, 30, 255),
+            sketch_projected: Rgba(150, 60, 200, 255),
             sketch_preview: Rgba(30, 100, 220, 140),
             highlight: Rgba(240, 160, 20, 255),
+            measure: Rgba(0, 140, 112, 255),
+            construct: Rgba(176, 112, 16, 255),
+            construct_fill: Rgba(232, 168, 40, 46),
+            hover_highlight: Rgba(0, 150, 180, 255),
+            select_window: Rgba(30, 112, 214, 255),
+            select_window_fill: Rgba(30, 112, 214, 36),
+            select_crossing: Rgba(30, 135, 70, 255),
+            select_crossing_fill: Rgba(30, 135, 70, 36),
             chrome: Rgba(252, 252, 253, 255),
             panel: Rgba(246, 247, 249, 255),
             panel_alt: Rgba(236, 239, 243, 255),
@@ -123,6 +172,14 @@ impl Theme {
             error: Rgba(196, 44, 44, 255),
             cube_face: Rgba(236, 240, 245, 240),
             cube_edge: Rgba(128, 137, 150, 255),
+            component_tints: [
+                Rgba(70, 130, 220, 255),
+                Rgba(226, 132, 40, 255),
+                Rgba(60, 170, 110, 255),
+                Rgba(196, 80, 160, 255),
+                Rgba(200, 176, 50, 255),
+                Rgba(60, 170, 190, 255),
+            ],
         }
     }
 
@@ -139,11 +196,21 @@ impl Theme {
             body: Rgba(150, 158, 170, 255),
             body_selected: Rgba(84, 160, 255, 255),
             edge: Rgba(18, 20, 24, 255),
+            preview_body: Rgba(84, 160, 255, 110),
             sketch: Rgba(96, 170, 255, 255),
             sketch_constrained: Rgba(236, 240, 246, 255),
             sketch_construction: Rgba(240, 150, 60, 255),
+            sketch_projected: Rgba(200, 140, 255, 255),
             sketch_preview: Rgba(96, 170, 255, 140),
             highlight: Rgba(255, 190, 60, 255),
+            measure: Rgba(70, 216, 178, 255),
+            construct: Rgba(240, 180, 80, 255),
+            construct_fill: Rgba(240, 180, 80, 38),
+            hover_highlight: Rgba(90, 215, 235, 255),
+            select_window: Rgba(84, 160, 255, 255),
+            select_window_fill: Rgba(84, 160, 255, 40),
+            select_crossing: Rgba(88, 196, 124, 255),
+            select_crossing_fill: Rgba(88, 196, 124, 40),
             chrome: Rgba(29, 31, 35, 255),
             panel: Rgba(35, 38, 43, 255),
             panel_alt: Rgba(45, 49, 56, 255),
@@ -162,6 +229,14 @@ impl Theme {
             error: Rgba(240, 100, 100, 255),
             cube_face: Rgba(54, 58, 66, 235),
             cube_edge: Rgba(112, 120, 132, 255),
+            component_tints: [
+                Rgba(90, 150, 240, 255),
+                Rgba(240, 150, 60, 255),
+                Rgba(80, 190, 130, 255),
+                Rgba(210, 100, 180, 255),
+                Rgba(220, 196, 70, 255),
+                Rgba(80, 190, 210, 255),
+            ],
         }
     }
 
@@ -218,6 +293,22 @@ mod tests {
             }
             let ratio = contrast(t.on_accent, t.accent);
             assert!(ratio >= 4.5, "{:?}: on_accent: {ratio}", t.mode);
+        }
+    }
+
+    #[test]
+    fn box_selection_outlines_stand_out_from_the_viewport_and_differ() {
+        // Graphics contrast (WCAG 3:1) against both ends of the background gradient, and
+        // window and crossing boxes in different colours, not only different dashes.
+        for t in [Theme::light(), Theme::dark()] {
+            for bg in [t.background_top, t.background_bottom] {
+                for (what, fg) in [("window", t.select_window), ("crossing", t.select_crossing)] {
+                    let ratio = contrast(fg, bg);
+                    assert!(ratio >= 3.0, "{:?}: {what} box: {ratio}", t.mode);
+                }
+            }
+            assert_ne!(t.select_window, t.select_crossing);
+            assert!(t.select_window_fill.3 < 64 && t.select_crossing_fill.3 < 64);
         }
     }
 

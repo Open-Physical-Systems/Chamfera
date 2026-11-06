@@ -2,6 +2,7 @@
 //! eye toggles for bodies and the active sketch highlighted. Acts through `sketch.*` and
 //! `body.*` commands.
 
+use crate::context_menu::{Act, Entry, RenameTarget, show_entries};
 use crate::icons::Icon;
 use crate::widgets::{self, Look, ROW_HEIGHT, T_BODY};
 use crate::{ChamferaApp, label};
@@ -25,29 +26,29 @@ impl Default for BrowserUi {
 
 /// How a tree row looks.
 #[derive(Default)]
-struct Row<'a> {
-    depth: usize,
+pub(crate) struct Row<'a> {
+    pub(crate) depth: usize,
     /// `Some(open)` for a section that folds.
-    fold: Option<bool>,
-    icon: Option<Icon>,
-    brand: bool,
-    text: &'a str,
+    pub(crate) fold: Option<bool>,
+    pub(crate) icon: Option<Icon>,
+    pub(crate) brand: bool,
+    pub(crate) text: &'a str,
     /// Small muted text after the name (a count, a state).
-    note: Option<&'a str>,
-    active: bool,
-    selected: bool,
-    dimmed: bool,
-    error: bool,
+    pub(crate) note: Option<&'a str>,
+    pub(crate) active: bool,
+    pub(crate) selected: bool,
+    pub(crate) dimmed: bool,
+    pub(crate) error: bool,
     /// An eye toggle on the right: `Some(visible)`.
-    eye: Option<bool>,
+    pub(crate) eye: Option<bool>,
 }
 
-struct RowResponse {
-    row: egui::Response,
-    eye: Option<egui::Response>,
+pub(crate) struct RowResponse {
+    pub(crate) row: egui::Response,
+    pub(crate) eye: Option<egui::Response>,
 }
 
-fn tree_row(ui: &mut Ui, look: Look, id: egui::Id, row: &Row) -> RowResponse {
+pub(crate) fn tree_row(ui: &mut Ui, look: Look, id: egui::Id, row: &Row) -> RowResponse {
     let width = ui.available_width();
     let (rect, _) = ui.allocate_exact_size(vec2(width, ROW_HEIGHT), Sense::hover());
     let response = ui.interact(rect, id, Sense::click());
@@ -145,7 +146,7 @@ fn tree_row(ui: &mut Ui, look: Look, id: egui::Id, row: &Row) -> RowResponse {
 }
 
 impl ChamferaApp {
-    fn section(
+    pub(crate) fn section(
         &mut self,
         ui: &mut Ui,
         key: &'static str,
@@ -243,6 +244,8 @@ impl ChamferaApp {
             }
         }
 
+        self.browser_construction(ui);
+
         let sketches: Vec<(u32, String, bool)> = self
             .session
             .doc
@@ -286,17 +289,39 @@ impl ChamferaApp {
                 if can_edit && row.double_clicked() {
                     self.edit_sketch(id);
                 }
-                row.context_menu(|ui| {
-                    let look = self.look();
-                    if widgets::menu_item(ui, look, Icon::Edit, label("sketch.edit"), can_edit)
-                        .clicked()
-                    {
-                        ui.close();
-                        self.edit_sketch(id);
-                    }
-                });
+                // F2 on the row renames the sketch (in a box over the row).
+                if row.hovered()
+                    && !ui.ctx().egui_wants_keyboard_input()
+                    && ui.input(|i| i.key_pressed(egui::Key::F2))
+                {
+                    self.start_rename(id, row.rect, false);
+                }
+                let entries = vec![
+                    Entry::Item {
+                        text: label("sketch.edit").into(),
+                        icon: Icon::Edit,
+                        why_not: (!can_edit).then(|| "Finish the active sketch first".into()),
+                        act: Act::EditSketch(id),
+                    },
+                    Entry::Item {
+                        text: label("sketch.rename").into(),
+                        icon: Icon::Edit,
+                        why_not: None,
+                        act: Act::Rename(RenameTarget::Sketch(id)),
+                    },
+                    Entry::Separator,
+                    Entry::Item {
+                        text: label("sketch.delete").into(),
+                        icon: Icon::Delete,
+                        why_not: active.then(|| "Finish the sketch first".into()),
+                        act: Act::DeleteSketch(id),
+                    },
+                ];
+                self.row_menu(&row, &entries);
             }
         }
+
+        self.browser_components(ui);
 
         let bodies: Vec<(u32, String, bool)> = self
             .session
@@ -305,7 +330,7 @@ impl ChamferaApp {
             .iter()
             .map(|b| (b.id, b.name.clone(), b.visible))
             .collect();
-        let selected = self.session.scene.selection.map(|h| h.body);
+        let selected = self.session.scene.selected_bodies();
         if self.section(ui, "bodies", Icon::Body, "Bodies", bodies.len()) {
             if bodies.is_empty() {
                 self.empty_note(ui, "Extrude a closed profile to make one");
@@ -319,12 +344,14 @@ impl ChamferaApp {
                         depth: 2,
                         icon: Some(Icon::Body),
                         text: &name,
-                        selected: selected == Some(id),
+                        selected: selected.contains(&id),
                         dimmed: !visible,
                         eye: Some(visible),
                         ..Row::default()
                     },
                 );
+                let entries = self.body_entries(id, None, true);
+                self.row_menu(&r.row, &entries);
                 if let Some(eye) = r.eye {
                     let tip = if visible { "Hide" } else { "Show" };
                     if eye
@@ -338,6 +365,21 @@ impl ChamferaApp {
                     }
                 }
             }
+        }
+    }
+
+    /// A right-click menu on a tree row, with the same items as the viewport's.
+    fn row_menu(&mut self, row: &egui::Response, entries: &[Entry]) {
+        let look = self.look();
+        let mut chosen = None;
+        row.context_menu(|ui| {
+            chosen = show_entries(ui, look, entries, &mut Vec::new());
+            if chosen.is_some() {
+                ui.close();
+            }
+        });
+        if let Some(act) = chosen {
+            self.menu_act(act);
         }
     }
 

@@ -15,7 +15,17 @@ impl Session {
     pub(crate) fn show_imported(&mut self, built: &mut Built) {
         let options = TessOptions::default();
         for imported in &self.doc.imported {
-            let mut body = imported.body.clone();
+            let component = self.doc.assembly.owner_of(imported.id);
+            let place = built.placements.of(component);
+            let mut body = match imported.body.transformed(&place) {
+                Ok(b) => b,
+                Err(e) => {
+                    built
+                        .errors
+                        .insert(imported.id, format!("the component cannot be placed: {e}"));
+                    continue;
+                }
+            };
             for (k, face) in body.faces().into_iter().enumerate() {
                 let role = body
                     .face_name(face)
@@ -29,6 +39,7 @@ impl Session {
                 Ok(m) => {
                     faces = m.face_of_triangle;
                     let id = self.scene.add(&imported.name, m.mesh);
+                    Session::tint_body(&self.doc.assembly, &mut self.scene, id, component);
                     if id.is_none() {
                         built
                             .display_errors
@@ -46,6 +57,7 @@ impl Session {
             };
             built.solids.push(Solid {
                 feature: imported.id,
+                component,
                 name: imported.name.clone(),
                 body,
                 scene_id,

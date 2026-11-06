@@ -2,13 +2,20 @@
 
 mod app;
 mod body;
+mod component;
+mod construct;
 mod design;
 mod edit;
 mod feature;
+mod hole;
+mod inspect;
+mod joint;
 mod param;
 mod select;
 mod sketch;
 mod spline;
+mod timeline;
+mod transform;
 mod view;
 
 use crate::{CmdResult, Session};
@@ -33,13 +40,20 @@ pub fn registry() -> Vec<&'static CommandSpec> {
     for area in [
         app::COMMANDS,
         body::COMMANDS,
+        component::COMMANDS,
+        construct::COMMANDS,
         design::COMMANDS,
         edit::COMMANDS,
         feature::COMMANDS,
+        hole::COMMANDS,
+        inspect::COMMANDS,
+        joint::COMMANDS,
         param::COMMANDS,
         select::COMMANDS,
         sketch::COMMANDS,
         spline::COMMANDS,
+        timeline::COMMANDS,
+        transform::COMMANDS,
         view::COMMANDS,
     ] {
         all.extend(area.iter());

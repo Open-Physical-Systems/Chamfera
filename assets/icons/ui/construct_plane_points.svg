@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+  <!-- Chamfera interface icon: plane through three points. Original artwork, MIT OR Apache-2.0. -->
+  <polygon points="3.25,18 7.75,6 20.75,6 16.25,18" stroke="#2B313B"/>
+  <circle cx="7.75" cy="6" r="2.1" fill="#E8770E" stroke="none"/>
+  <circle cx="20.75" cy="6" r="2.1" fill="#E8770E" stroke="none"/>
+  <circle cx="3.25" cy="18" r="2.1" fill="#E8770E" stroke="none"/>
+</svg>

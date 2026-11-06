@@ -58,6 +58,7 @@ pub use euler::Mvfs;
 pub use geometry::Curve;
 pub use measure::SURFACE_QUADRATURE_TOLERANCE;
 pub use uv::PointOnFace;
+pub(crate) use uv::{EdgeImage, LoopImage};
 pub use validate::{ShellReport, TopologyError, TopologyReport};
 
 use crate::{KernelError, KernelResult, Segment3};

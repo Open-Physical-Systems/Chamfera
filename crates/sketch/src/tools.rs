@@ -1,6 +1,6 @@
 //! Sketch tools: trim, extend, split, fillet, chamfer, offset, mirror, rectangular and
-//! circular patterns, and three drawing helpers (centre rectangle, three-point arc,
-//! tangent arc).
+//! circular patterns, and drawing helpers (centre rectangle, three-point arc, tangent arc,
+//! and the shapes in `shapes.rs`: polygon, slot, ellipse, elliptical arc).
 //!
 //! Each tool is a [`ToolOp`]. [`Sketch::apply_tool`] applies it, checks the sketch and
 //! solves; if anything fails the sketch is left exactly as it was. [`Sketch::preview_tool`]
@@ -59,7 +59,7 @@ pub enum ToolError {
     Refused(String),
 }
 
-fn refuse<T>(msg: impl Into<String>) -> Result<T, ToolError> {
+pub(crate) fn refuse<T>(msg: impl Into<String>) -> Result<T, ToolError> {
     Err(ToolError::Refused(msg.into()))
 }
 
@@ -153,6 +153,39 @@ pub enum ToolOp {
     /// An arc that leaves the free end `from` of a line or arc tangentially and ends at
     /// `to`.
     TangentArc { from: PointId, to: Point2 },
+    /// A regular polygon of `sides` (3 to [`crate::MAX_POLYGON_SIDES`]) about `centre`:
+    /// inscribed in the construction circle through `corner` (a vertex there), or
+    /// circumscribed about the circle through `corner` (the middle of a side there).
+    Polygon {
+        centre: Point2,
+        corner: Point2,
+        sides: u32,
+        inscribed: bool,
+    },
+    /// A straight slot `width` wide: from centre `start` to centre `end` of its round
+    /// ends, or with `overall`, from tip to tip.
+    Slot {
+        start: Point2,
+        end: Point2,
+        width: f64,
+        overall: bool,
+    },
+    /// An ellipse about `centre` with a semi-axis to `major` and the other semi-axis
+    /// `minor` mm long.
+    Ellipse {
+        centre: Point2,
+        major: Point2,
+        minor: f64,
+    },
+    /// An arc of that ellipse, counter-clockwise from the direction of `start` to the
+    /// direction of `end` (seen from the centre, on the ellipse scaled to a circle).
+    EllipticalArc {
+        centre: Point2,
+        major: Point2,
+        minor: f64,
+        start: Point2,
+        end: Point2,
+    },
 }
 
 /// A curve that can cut others: its id, geometry and ends.
@@ -318,7 +351,7 @@ struct Chain {
     closed: bool,
 }
 
-fn check_length(what: &str, v: f64) -> Result<(), ToolError> {
+pub(crate) fn check_length(what: &str, v: f64) -> Result<(), ToolError> {
     if v.is_finite() && v > LINEAR_TOLERANCE && v <= MAX_COORDINATE {
         Ok(())
     } else {
@@ -328,7 +361,7 @@ fn check_length(what: &str, v: f64) -> Result<(), ToolError> {
     }
 }
 
-fn check_point(what: &str, p: Point2) -> Result<(), ToolError> {
+pub(crate) fn check_point(what: &str, p: Point2) -> Result<(), ToolError> {
     if p.is_valid() {
         Ok(())
     } else {
@@ -340,8 +373,12 @@ fn check_point(what: &str, p: Point2) -> Result<(), ToolError> {
 fn ends(curve: &Curve) -> Option<(PointId, PointId)> {
     match curve {
         Curve::Line { start, end, .. } | Curve::Arc { start, end, .. } => Some((*start, *end)),
+        // Ellipses are not cut, extended or offset (yet): they have no ends here.
         // The tools that need ends (trim, extend, fillet, ...) do not cut splines yet.
-        Curve::Circle { .. } | Curve::Spline { .. } => None,
+        Curve::Circle { .. }
+        | Curve::Ellipse { .. }
+        | Curve::EllipticalArc { .. }
+        | Curve::Spline { .. } => None,
     }
 }
 
@@ -356,7 +393,10 @@ fn with_end(curve: &Curve, at_start: bool, p: PointId) -> Curve {
                 *end = p;
             }
         }
-        Curve::Circle { .. } | Curve::Spline { .. } => {}
+        Curve::Circle { .. }
+        | Curve::Ellipse { .. }
+        | Curve::EllipticalArc { .. }
+        | Curve::Spline { .. } => {}
     }
     c
 }
@@ -508,7 +548,10 @@ impl Sketch {
                 }
                 Some(circle.polyline(t0, t1))
             }
-            Curve::Circle { .. } | Curve::Spline { .. } => None,
+            Curve::Circle { .. }
+            | Curve::Ellipse { .. }
+            | Curve::EllipticalArc { .. }
+            | Curve::Spline { .. } => None,
         }
     }
 
@@ -557,6 +600,30 @@ impl Sketch {
                 end,
             } => self.three_point_arc(*start, *through, *end),
             ToolOp::TangentArc { from, to } => self.tangent_arc(*from, *to),
+            ToolOp::Polygon {
+                centre,
+                corner,
+                sides,
+                inscribed,
+            } => self.polygon(*centre, *corner, *sides, *inscribed),
+            ToolOp::Slot {
+                start,
+                end,
+                width,
+                overall,
+            } => self.slot(*start, *end, *width, *overall),
+            ToolOp::Ellipse {
+                centre,
+                major,
+                minor,
+            } => self.ellipse(*centre, *major, *minor, None),
+            ToolOp::EllipticalArc {
+                centre,
+                major,
+                minor,
+                start,
+                end,
+            } => self.ellipse(*centre, *major, *minor, Some((*start, *end))),
         }
     }
 
@@ -574,7 +641,7 @@ impl Sketch {
     }
 
     /// The geometry of a curve.
-    fn shape_of(&self, curve: &Curve) -> Option<Shape> {
+    pub(crate) fn shape_of(&self, curve: &Curve) -> Option<Shape> {
         match curve {
             Curve::Line { start, end, .. } => Some(Shape::Segment {
                 a: self.point(*start)?,
@@ -587,13 +654,20 @@ impl Sketch {
             Curve::Arc {
                 centre, start, end, ..
             } => Shape::arc(self.point(*centre)?, self.point(*start)?, self.point(*end)?),
+            // Ellipses neither cut nor are cut by the tools (yet).
             // Splines take no part in the cutting tools yet.
-            Curve::Spline { .. } => None,
+            Curve::Ellipse { .. } | Curve::EllipticalArc { .. } | Curve::Spline { .. } => None,
         }
     }
 
     fn shape(&self, id: CurveId) -> Result<Shape, ToolError> {
         let c = self.curve_of(id)?;
+        if c.is_elliptical() {
+            return refuse(format!(
+                "{id} is an {}: this tool works on lines, arcs and circles",
+                c.kind_name()
+            ));
+        }
         match self.shape_of(&c) {
             Some(s) => Ok(s),
             None => refuse(format!("{id} has no length")),
@@ -701,6 +775,9 @@ impl Sketch {
             Curve::Arc { centre, .. } => (false, Some(*centre)),
             Curve::Circle { centre, .. } => (true, Some(*centre)),
             Curve::Spline { .. } => return refuse("splines cannot be cut yet"),
+            Curve::Ellipse { .. } | Curve::EllipticalArc { .. } => {
+                return refuse("ellipses cannot be cut");
+            }
         };
         let n = if cyclic {
             chain.len()
@@ -902,6 +979,9 @@ impl Sketch {
                 self.rebuild(id, &[lo, hi], &[false, true])
             }
             Curve::Spline { .. } => refuse("splines cannot be trimmed yet"),
+            Curve::Ellipse { .. } | Curve::EllipticalArc { .. } => {
+                refuse("ellipses cannot be trimmed")
+            }
         }
     }
 
@@ -1009,7 +1089,7 @@ impl Sketch {
                     v.push(end);
                     v
                 }
-                Curve::Circle { .. } => inner,
+                Curve::Circle { .. } | Curve::Ellipse { .. } | Curve::EllipticalArc { .. } => inner,
                 Curve::Spline { .. } => continue,
             };
             let pieces = match c {
@@ -1143,7 +1223,7 @@ impl Sketch {
                         lines.push((id, *end, *start, false));
                     }
                 }
-                Curve::Arc { start, end, .. } => {
+                Curve::Arc { start, end, .. } | Curve::EllipticalArc { start, end, .. } => {
                     if group.contains(start) || group.contains(end) {
                         return refuse("fillets and chamfers join two lines; an arc ends here");
                     }
@@ -1153,7 +1233,7 @@ impl Sketch {
                         return refuse("fillets and chamfers join two lines; a spline ends here");
                     }
                 }
-                Curve::Circle { .. } => {}
+                Curve::Circle { .. } | Curve::Ellipse { .. } => {}
             }
         }
         match lines.as_slice() {
@@ -1432,6 +1512,9 @@ impl Sketch {
                 }
                 Curve::Circle { .. } => return refuse("a circle is offset on its own"),
                 Curve::Spline { .. } => return refuse("splines cannot be offset yet"),
+                Curve::Ellipse { .. } | Curve::EllipticalArc { .. } => {
+                    return refuse("ellipses cannot be offset");
+                }
             };
             let Some((s, e)) = ends(&c) else {
                 return refuse("a circle is offset on its own");
@@ -1793,6 +1876,32 @@ impl Sketch {
                     closed,
                     construction,
                 },
+                Curve::Ellipse {
+                    centre,
+                    major,
+                    minor,
+                    construction,
+                } => Curve::Ellipse {
+                    centre: m(&centre),
+                    major: m(&major),
+                    minor: m(&minor),
+                    construction,
+                },
+                Curve::EllipticalArc {
+                    centre,
+                    major,
+                    minor,
+                    start,
+                    end,
+                    construction,
+                } => Curve::EllipticalArc {
+                    centre: m(&centre),
+                    major: m(&major),
+                    minor: m(&minor),
+                    start: if mirrored { m(&end) } else { m(&start) },
+                    end: if mirrored { m(&start) } else { m(&end) },
+                    construction,
+                },
             };
             if copy != curve {
                 out.insert(*c, self.add_curve(copy)?);
@@ -2138,6 +2247,9 @@ impl Sketch {
             Curve::Circle { .. } => return refuse("a circle has no end"),
             Curve::Spline { .. } => {
                 return refuse("a tangent arc from a spline is not supported yet");
+            }
+            Curve::Ellipse { .. } | Curve::EllipticalArc { .. } => {
+                return refuse("a tangent arc continues a line or a circular arc");
             }
         };
         let Some(t) = t.normalized() else {
