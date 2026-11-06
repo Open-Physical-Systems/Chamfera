@@ -55,6 +55,27 @@ pub static COMMANDS: &[CommandSpec] = &[
         run: revolve,
     },
     CommandSpec {
+        id: "solid.pattern_circular",
+        label: "Circular Pattern",
+        params: "feature: integer (required) - the feature to repeat\n\
+                 count: string or number (required) - copies including the original, 2 to 1000\n\
+                 origin: {x, y, z} (required) - a point on the axis\n\
+                 axis: {x, y, z} (required) - the axis direction\n\
+                 angle: string or number (optional) - spread, default 360 deg (plain = degrees)",
+        mutates: true,
+        run: pattern_circular,
+    },
+    CommandSpec {
+        id: "solid.pattern_linear",
+        label: "Rectangular Pattern",
+        params: "feature: integer (required) - the feature to repeat\n\
+                 count: string or number (required) - copies including the original, 2 to 1000\n\
+                 direction: {x, y, z} (required) - which way the copies go\n\
+                 spacing: string or number (required) - distance between copies",
+        mutates: true,
+        run: pattern_linear,
+    },
+    CommandSpec {
         id: "solid.profile_at",
         label: "Profile Under Cursor",
         params: "x, y, width, height: number (required) - pixel and viewport size",
@@ -192,6 +213,77 @@ fn revolve(s: &mut Session, p: &Value) -> CmdResult {
     Ok(feature_reply(s, id))
 }
 
+fn expression(p: &Value, key: &str, unit: &str) -> Result<Option<String>, CommandError> {
+    match p.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(s)) => Ok(Some(s.clone())),
+        Some(Value::Number(_)) => {
+            let v = params::req_f64(p, key)?;
+            Ok(Some(if unit.is_empty() {
+                format!("{v}")
+            } else {
+                format!("{v} {unit}")
+            }))
+        }
+        Some(_) => Err(bad(format!("`{key}` must be a number or an expression"))),
+    }
+}
+
+fn vec3(p: &Value, key: &str) -> Result<chamfera_geom::Vec3, CommandError> {
+    let v = p
+        .get(key)
+        .ok_or_else(|| bad(format!("`{key}` is required")))?;
+    Ok(chamfera_geom::Vec3::new(
+        params::req_f64(v, "x")?,
+        params::req_f64(v, "y")?,
+        params::req_f64(v, "z")?,
+    ))
+}
+
+fn add_pattern(s: &mut Session, pattern: chamfera_doc::Pattern) -> CmdResult {
+    let id = s.doc.add_feature(FeatureKind::Pattern(pattern))?;
+    s.rebuild();
+    if let Some(e) = s.feature_errors().get(&id) {
+        return Err(CommandError::Unavailable(e.clone()));
+    }
+    Ok(feature_reply(s, id))
+}
+
+fn pattern_linear(s: &mut Session, p: &Value) -> CmdResult {
+    let source = params::req_id(p, "feature")?;
+    let count = expression(p, "count", "")?.ok_or_else(|| bad("`count` is required"))?;
+    let spacing = expression(p, "spacing", "mm")?.ok_or_else(|| bad("`spacing` is required"))?;
+    let direction = vec3(p, "direction")?;
+    add_pattern(
+        s,
+        chamfera_doc::Pattern {
+            source,
+            count,
+            layout: chamfera_doc::PatternLayout::Linear { direction, spacing },
+        },
+    )
+}
+
+fn pattern_circular(s: &mut Session, p: &Value) -> CmdResult {
+    let source = params::req_id(p, "feature")?;
+    let count = expression(p, "count", "")?.ok_or_else(|| bad("`count` is required"))?;
+    let angle = expression(p, "angle", "deg")?.unwrap_or_else(|| "360 deg".to_owned());
+    let o = vec3(p, "origin")?;
+    let axis = vec3(p, "axis")?;
+    add_pattern(
+        s,
+        chamfera_doc::Pattern {
+            source,
+            count,
+            layout: chamfera_doc::PatternLayout::Circular {
+                origin: chamfera_geom::Point3::new(o.x, o.y, o.z),
+                axis,
+                angle,
+            },
+        },
+    )
+}
+
 fn edit(s: &mut Session, p: &Value) -> CmdResult {
     let id = params::req_id(p, "feature")?;
     let new_distance = distance(p)?;
@@ -206,6 +298,9 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
         match &mut kind {
             FeatureKind::Extrude(e) => e.operation = o,
             FeatureKind::Revolve(r) => r.operation = o,
+            FeatureKind::Pattern(_) => {
+                return Err(bad("a pattern does what the feature it repeats does"));
+            }
         }
     }
     if let FeatureKind::Extrude(e) = &mut kind {
