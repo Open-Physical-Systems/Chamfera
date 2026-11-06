@@ -144,6 +144,16 @@ pub(crate) fn encode_png(w: u32, h: u32, rgba: &[u8]) -> Result<Vec<u8>, Snapsho
     Ok(out)
 }
 
+/// GPU tests skip on machines without any adapter, unless `CHAMFERA_REQUIRE_GPU=1`
+/// (set in CI, which installs a software adapter), where a missing GPU is a failure.
+#[cfg(test)]
+pub(crate) fn skip_without_gpu(reason: &str) {
+    if std::env::var("CHAMFERA_REQUIRE_GPU").is_ok_and(|v| v == "1") {
+        panic!("CHAMFERA_REQUIRE_GPU=1 but no GPU: {reason}");
+    }
+    eprintln!("skipped (no GPU): {reason}");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -178,7 +188,7 @@ mod tests {
         let rgba = match snapshot_rgba(&frame) {
             Ok(p) => p,
             Err(SnapshotError::NoAdapter(e)) | Err(SnapshotError::Device(e)) => {
-                eprintln!("skipped: {e}");
+                skip_without_gpu(&e);
                 return;
             }
             Err(e) => panic!("{e}"),
@@ -243,7 +253,7 @@ mod overlay_tests {
         let rgba = match snapshot_rgba(&frame) {
             Ok(p) => p,
             Err(SnapshotError::NoAdapter(e)) | Err(SnapshotError::Device(e)) => {
-                eprintln!("skipped: {e}");
+                skip_without_gpu(&e);
                 return;
             }
             Err(e) => panic!("{e}"),

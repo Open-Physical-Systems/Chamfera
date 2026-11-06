@@ -27,6 +27,9 @@ jobs:
         with:
           tool: cargo-deny
       - run: cargo xtask ci
+        env:
+          # GPU tests must really render (on lavapipe here), not skip.
+          CHAMFERA_REQUIRE_GPU: "1"
 
   appimage:
     needs: ci

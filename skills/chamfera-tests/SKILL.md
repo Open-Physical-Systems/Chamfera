@@ -20,6 +20,10 @@ description: "Use when writing, placing or running tests in Chamfera, or when ch
 - Check topology validity (Euler-Poincare: V - E + F = 2(S - H) for closed shells) as well as measures.
 - Test near-degenerate cases: tangent faces, coincident edges, zero-length input, values at tolerance +/- epsilon.
 
+## GPU tests
+- Tests that render (in `crates/gpu`) skip on machines without any graphics adapter. CI sets `CHAMFERA_REQUIRE_GPU=1` and installs lavapipe, so there they must render; call `skip_without_gpu` in `crates/gpu/src/snapshot.rs` instead of skipping silently.
+- Check pixels at positions derived from the camera (write the derivation), with a tight colour tolerance, away from edges and pixel-row boundaries.
+
 ## Running
 - `cargo test --workspace` for everything, `cargo test -p chamfera-kernel` for one crate.
 - `cargo xtask ci` before every commit.
