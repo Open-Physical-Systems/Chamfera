@@ -327,6 +327,16 @@ fn hostile_params_never_panic() {
         json!({"sections": [{"sketch": 1, "x": 5, "y": 5}, {"sketch": 99, "x": 0}], "feature": 1}),
         json!({"sections": "two", "path_curves": null, "operation": "join", "plane": "xy", "offset": 1e300}),
         json!({"plane": "xz", "offset": f64::NAN, "feature": 1, "path_curves": [1]}),
+        // Body tools: combine, split, thicken, remove.
+        json!({"target": "Sample bracket", "tools": ["Sample bracket", 5], "operation": "cut", "keep_tools": "yes"}),
+        json!({"target": long, "tools": [long], "operation": "new_body", "keep_tools": true, "feature": 2}),
+        json!({"target": 5, "tools": "all", "bodies": [null], "sides": "up", "line": -1, "sketch": "x"}),
+        json!({"bodies": ["Sample bracket"], "plane": 4294967296u64, "faces": ["1:top"], "sides": 5}),
+        json!({"bodies": ["Extrude1"], "plane": {"feature": 99, "face": long}, "line": 1, "sketch": 1}),
+        json!({"faces": ["2:top"], "plane": "yz", "line": 1, "sketch": 1, "thickness": 1e300, "sides": "both_sides"}),
+        json!({"faces": [long, ""], "thickness": "3 mm", "sides": "symmetric", "operation": "smash"}),
+        json!({"faces": ["2:side 0"], "thickness": -1e-300, "operation": "join", "feature": 2, "tools": []}),
+        json!({"bodies": vec!["x"; 1001], "faces": vec!["y"; 1001], "tools": vec!["z"; 1001], "target": ""}),
     ];
     for c in registry() {
         for p in &hostile {

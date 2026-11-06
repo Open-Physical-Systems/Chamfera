@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+  <!-- Chamfera interface icon: split body. Original artwork, MIT OR Apache-2.0. -->
+  <path stroke="#2B313B" d="M9.5 6H3.5v12h6"/>
+  <path stroke="#2B313B" d="M14.5 6h6v12h-6"/>
+  <path stroke="#E8770E" d="M12 3v18"/>
+</svg>

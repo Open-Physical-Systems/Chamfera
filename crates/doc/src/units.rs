@@ -222,6 +222,11 @@ impl FeatureKind {
             FeatureKind::DeleteFace(_) => Vec::new(),
             // A move's turn is an angle; its distance is a length.
             FeatureKind::MoveFace(m) => vec![&mut m.distance],
+            FeatureKind::Thicken(t) => vec![&mut t.thickness],
+            FeatureKind::Combine(_)
+            | FeatureKind::SplitBody(_)
+            | FeatureKind::SplitFace(_)
+            | FeatureKind::Remove(_) => Vec::new(),
             FeatureKind::Pattern(p) => match &mut p.layout {
                 crate::PatternLayout::Linear { spacing, .. } => vec![spacing],
                 crate::PatternLayout::Circular { .. } => Vec::new(),

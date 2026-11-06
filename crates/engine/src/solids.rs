@@ -413,7 +413,7 @@ fn boxes_overlap(a: &Body, b: &Body) -> bool {
 /// tool with every body it overlaps, Cut removes it from them, Intersect keeps only the
 /// overlap. The targets are the bodies whose bounds meet the tool, like Fusion users
 /// expect, so nothing has to be referenced by name.
-fn apply_operation(
+pub(crate) fn apply_operation(
     made: &mut Vec<(u32, String, Body)>,
     tools: &[Body],
     operation: Operation,
@@ -1241,6 +1241,15 @@ impl Session {
                 }
                 continue;
             }
+            if feature.kind.is_body_tool() {
+                match crate::body_tools::build(&self.doc, feature, &made, &built.constructs) {
+                    Ok(next) => made = next,
+                    Err(e) => {
+                        built.errors.insert(feature.id, e);
+                    }
+                }
+                continue;
+            }
             if let FeatureKind::Shell(sh) = &feature.kind {
                 match build_shell(&self.doc, sh, feature.id, &made) {
                     Ok(next) => made = next,
@@ -1274,6 +1283,11 @@ impl Session {
                 | FeatureKind::Shell(_)
                 | FeatureKind::Mirror(_)
                 | FeatureKind::Move(_)
+                | FeatureKind::Combine(_)
+                | FeatureKind::SplitBody(_)
+                | FeatureKind::SplitFace(_)
+                | FeatureKind::Thicken(_)
+                | FeatureKind::Remove(_)
                 | FeatureKind::Hole(_)
                 | FeatureKind::SheetBase(_)
                 | FeatureKind::SheetFlange(_)

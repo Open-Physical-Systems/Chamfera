@@ -195,11 +195,14 @@ pub(super) fn edit_transform(kind: &mut FeatureKind, p: &Value) -> Result<(), Co
         let given = |k: &str| p.get(k).is_some_and(|v| !v.is_null());
         // So is `to`, which an extrude's options use.
         let extrude = matches!(kind, FeatureKind::Extrude(_));
+        // And `plane`, which splits use (body_tools handles it).
+        let split = matches!(kind, FeatureKind::SplitBody(_) | FeatureKind::SplitFace(_));
         if [
             "plane", "dx", "dy", "dz", "axis", "origin", "from", "to", "copy",
         ]
         .into_iter()
         .filter(|k| !(extrude && *k == "to"))
+        .filter(|k| !(split && *k == "plane"))
         .any(given)
         {
             return Err(bad(

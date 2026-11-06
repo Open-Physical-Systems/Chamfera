@@ -1,6 +1,7 @@
 //! Layer 2: the design document: parameters and sketches now, the feature timeline from M4.
 
 pub mod appearance;
+pub mod body_tools;
 pub mod cam;
 pub mod component;
 pub mod construct;
@@ -15,6 +16,9 @@ pub mod timeline;
 pub mod units;
 
 pub use appearance::Appearance;
+pub use body_tools::{
+    Combine, RemoveBodies, SplitBody, SplitFace, SplitFaceTool, Thicken, ThickenDirection,
+};
 pub use component::{Assembly, Component, ROOT};
 pub use construct::{
     AxisRef, ConstructKind, Construction, EdgeRef, OriginAxis, OriginPlane, PlaneRef, PointRef,
@@ -80,7 +84,10 @@ use thiserror::Error;
 /// - 25: sheet metal: named rules (`sheet_rules`: thickness, bend radius, K-factor,
 ///   relief) and the `sheet_base`, `sheet_flange` and `sheet_unfold` features. Older
 ///   files open with no rules.
-pub const FORMAT_VERSION: u32 = 25;
+/// - 26: body tools: combine, split body, split face, thicken and remove bodies
+///   (`combine`, `split_body`, `split_face`, `thicken`, `remove`). Older files open
+///   unchanged: they hold none.
+pub const FORMAT_VERSION: u32 = 26;
 /// The tag every design file starts with, so other JSON is not mistaken for a design.
 pub const FORMAT_TAG: &str = "chamfera";
 /// Longest parameter name.

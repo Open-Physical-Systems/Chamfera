@@ -2,6 +2,7 @@
 
 mod app;
 mod body;
+mod body_tools;
 mod cam;
 mod component;
 mod construct;
@@ -46,6 +47,7 @@ pub fn registry() -> Vec<&'static CommandSpec> {
         app::COMMANDS,
         body::COMMANDS,
         cam::COMMANDS,
+        body_tools::COMMANDS,
         component::COMMANDS,
         construct::COMMANDS,
         design::COMMANDS,

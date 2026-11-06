@@ -222,6 +222,11 @@ impl ChamferaApp {
                     Icon::Loft,
                     format!("Loft · through {} profiles", l.sections.len()),
                 ),
+                k @ (FeatureKind::Combine(_)
+                | FeatureKind::SplitBody(_)
+                | FeatureKind::SplitFace(_)
+                | FeatureKind::Thicken(_)
+                | FeatureKind::Remove(_)) => crate::body_tools_ui::details(k),
             };
             items.push(Item {
                 id: f.id,
@@ -1050,6 +1055,11 @@ impl ChamferaApp {
             FeatureKind::MoveFace(m) => (m.distance.clone(), None),
             FeatureKind::Sweep(w) => (format!("{} curves", w.path.len()), None),
             FeatureKind::Loft(l) => (format!("{} profiles", l.sections.len()), None),
+            FeatureKind::Thicken(t) => (t.thickness.clone(), None),
+            k @ (FeatureKind::Combine(_)
+            | FeatureKind::SplitBody(_)
+            | FeatureKind::SplitFace(_)
+            | FeatureKind::Remove(_)) => (crate::body_tools_ui::details(k).1, None),
         };
         self.timeline.editing = Some(FeatureEdit {
             feature: id,
@@ -1072,7 +1082,10 @@ impl ChamferaApp {
         // Extrudes edit distance and direction, fillets and chamfers their size; the
         // others show their value only.
         let extrude = matches!(feature.kind, FeatureKind::Extrude(_));
-        let shell = matches!(feature.kind, FeatureKind::Shell(_));
+        let shell = matches!(
+            feature.kind,
+            FeatureKind::Shell(_) | FeatureKind::Thicken(_)
+        );
         // Offset and move face edit their distance in the same field.
         let face_edit = matches!(
             feature.kind,
@@ -1084,9 +1097,13 @@ impl ChamferaApp {
             FeatureKind::Revolve(_) => "Angle",
             FeatureKind::Pattern(_) => "Count",
             FeatureKind::Mirror(_) | FeatureKind::Move(_) => "Definition",
-            FeatureKind::Shell(_) => "Thickness",
+            FeatureKind::Shell(_) | FeatureKind::Thicken(_) => "Thickness",
             FeatureKind::OffsetFace(_) | FeatureKind::MoveFace(_) => "Distance",
             FeatureKind::DeleteFace(_) => "Faces",
+            FeatureKind::Combine(_)
+            | FeatureKind::SplitBody(_)
+            | FeatureKind::SplitFace(_)
+            | FeatureKind::Remove(_) => "Definition",
             FeatureKind::Sweep(_) => "Path",
             FeatureKind::Loft(_) => "Profiles",
             _ => "Size",
@@ -1105,6 +1122,7 @@ impl ChamferaApp {
         let icon = match feature.kind {
             FeatureKind::Sweep(_) => Icon::Sweep,
             FeatureKind::Loft(_) => Icon::Loft,
+            ref k if k.is_body_tool() => crate::body_tools_ui::details(k).0,
             _ if revolve => Icon::Revolve,
             _ => Icon::Extrude,
         };

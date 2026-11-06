@@ -5,6 +5,7 @@
 //! Read `skills/chamfera-commands/SKILL.md` before adding one.
 
 pub mod assembly;
+mod body_tools;
 pub mod box_select;
 pub mod cam;
 #[cfg(test)]
@@ -192,5 +193,7 @@ impl Session {
     }
 }
 
+#[cfg(test)]
+mod body_tools_tests;
 #[cfg(test)]
 mod tests;
