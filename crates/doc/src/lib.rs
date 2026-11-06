@@ -1,11 +1,14 @@
 //! Layer 2: the design document: parameters and sketches now, the feature timeline from M4.
 
+pub mod component;
 pub mod construct;
 pub mod expr;
 pub mod feature;
 pub mod imported;
+pub mod joint;
 pub mod timeline;
 
+pub use component::{Assembly, Component, ROOT};
 pub use construct::{
     AxisRef, ConstructKind, Construction, EdgeRef, OriginAxis, OriginPlane, PlaneRef, PointRef,
 };
@@ -15,6 +18,7 @@ pub use feature::{
     Pattern, PatternLayout, Revolve, Shell,
 };
 pub use imported::ImportedBody;
+pub use joint::{EdgeEnd, Joint, JointKind, JointOrigin, OriginAt};
 pub use timeline::{Group, ItemKind, Timeline};
 
 use serde::{Deserialize, Serialize};
@@ -42,6 +46,8 @@ use thiserror::Error;
 ///   their own distances, a start offset and a taper angle. Older extrudes read as by
 ///   distance from the sketch plane without a taper.
 /// - 14: mirror and move/copy of bodies and features.
+/// - 15: components (bodies grouped, each with a placement) and joints between them.
+///   Older files open as a single root component.
 /// - 16: the timeline: an explicit build order of sketches and features, the rollback
 ///   marker and groups (`timeline`). Older files open in id order with the marker at
 ///   the end, as their timeline showed them.
@@ -217,6 +223,9 @@ pub struct Document {
     /// Build order, rollback marker and groups of the sketches and features.
     #[serde(default)]
     pub timeline: Timeline,
+    /// Components and joints (format 15). A design without them is one root component.
+    #[serde(default, skip_serializing_if = "Assembly::is_empty")]
+    pub assembly: Assembly,
 }
 
 impl Default for Document {
@@ -230,6 +239,7 @@ impl Default for Document {
             last_feature_id: 0,
             imported: Vec::new(),
             timeline: Timeline::default(),
+            assembly: Assembly::default(),
         }
     }
 }
@@ -494,6 +504,7 @@ impl Document {
             on_plane: None,
         });
         self.timeline_insert(id);
+        self.assembly.adopt(id);
         Ok(id)
     }
 
@@ -628,6 +639,8 @@ impl Document {
         checked.features = doc.features;
         imported::check(&doc.imported, &mut seen, checked.last_feature_id)?;
         checked.imported = doc.imported;
+        doc.assembly.check(checked.last_feature_id)?;
+        checked.assembly = doc.assembly;
         checked.timeline = doc.timeline;
         checked.check_timeline(&mut seen)?;
         // Values in the file must agree with their expressions.

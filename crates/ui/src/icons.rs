@@ -28,6 +28,7 @@ pub enum Icon {
     ChevronRight,
     Circle,
     Close,
+    Component,
     ConstraintCoincident,
     ConstraintEqual,
     ConstraintFix,
@@ -57,9 +58,11 @@ pub enum Icon {
     EyeOff,
     Fillet,
     Fit,
+    Ground,
     Hole,
     Home,
     ImportMesh,
+    Joint,
     Line,
     Mass,
     Measure,
@@ -99,7 +102,7 @@ pub enum Icon {
 
 impl Icon {
     #[cfg(test)]
-    pub const ALL: [Icon; 76] = [
+    pub const ALL: [Icon; 79] = [
         Icon::Arc,
         Icon::ArcTangent,
         Icon::ArcThreePoint,
@@ -109,6 +112,7 @@ impl Icon {
         Icon::ChevronRight,
         Icon::Circle,
         Icon::Close,
+        Icon::Component,
         Icon::ConstraintCoincident,
         Icon::ConstraintEqual,
         Icon::ConstraintFix,
@@ -138,9 +142,11 @@ impl Icon {
         Icon::EyeOff,
         Icon::Fillet,
         Icon::Fit,
+        Icon::Ground,
         Icon::Hole,
         Icon::Home,
         Icon::ImportMesh,
+        Icon::Joint,
         Icon::Line,
         Icon::Mass,
         Icon::Measure,
@@ -261,6 +267,9 @@ impl Icon {
             Icon::Split => master!("split"),
             Icon::Trim => master!("trim"),
             Icon::Warning => master!("warning"),
+            Icon::Component => master!("component"),
+            Icon::Ground => master!("ground"),
+            Icon::Joint => master!("joint"),
         }
     }
 }

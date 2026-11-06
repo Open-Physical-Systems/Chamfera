@@ -104,9 +104,28 @@ pub struct Theme {
     // the view cube
     pub cube_face: Rgba,
     pub cube_edge: Rgba,
+    // assemblies
+    /// Component tints, mixed lightly into the body colour (`body_colour`).
+    pub component_tints: [Rgba; 6],
 }
 
 impl Theme {
+    /// The colour of a body: the plain body colour, or with a component tint mixed in
+    /// (a quarter of the tint, so shading and edges still read as one material).
+    pub fn body_colour(&self, tint: Option<u8>) -> Rgba {
+        let Some(i) = tint else {
+            return self.body;
+        };
+        let t = self.component_tints[usize::from(i) % self.component_tints.len()];
+        let mix = |a: u8, b: u8| ((u16::from(a) * 3 + u16::from(b)) / 4) as u8;
+        Rgba(
+            mix(self.body.0, t.0),
+            mix(self.body.1, t.1),
+            mix(self.body.2, t.2),
+            self.body.3,
+        )
+    }
+
     pub fn light() -> Theme {
         Theme {
             mode: ThemeMode::Light,
@@ -153,6 +172,14 @@ impl Theme {
             error: Rgba(196, 44, 44, 255),
             cube_face: Rgba(236, 240, 245, 240),
             cube_edge: Rgba(128, 137, 150, 255),
+            component_tints: [
+                Rgba(70, 130, 220, 255),
+                Rgba(226, 132, 40, 255),
+                Rgba(60, 170, 110, 255),
+                Rgba(196, 80, 160, 255),
+                Rgba(200, 176, 50, 255),
+                Rgba(60, 170, 190, 255),
+            ],
         }
     }
 
@@ -202,6 +229,14 @@ impl Theme {
             error: Rgba(240, 100, 100, 255),
             cube_face: Rgba(54, 58, 66, 235),
             cube_edge: Rgba(112, 120, 132, 255),
+            component_tints: [
+                Rgba(90, 150, 240, 255),
+                Rgba(240, 150, 60, 255),
+                Rgba(80, 190, 130, 255),
+                Rgba(210, 100, 180, 255),
+                Rgba(220, 196, 70, 255),
+                Rgba(80, 190, 210, 255),
+            ],
         }
     }
 

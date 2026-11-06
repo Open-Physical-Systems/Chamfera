@@ -1081,6 +1081,7 @@ impl Document {
             kind,
         });
         self.timeline_insert(id);
+        self.assembly.adopt(id);
         Ok(id)
     }
 

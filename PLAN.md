@@ -107,7 +107,7 @@ Each milestone ends with a demo you can see plus automated oracle tests.
 | M5 🟡 | **Core features:** ✅ sketch on a flat face (follows the face on rebuild), ✅ revolve, ✅ exact arcs, ✅ join / cut / intersect (kernel K7), ✅ linear and circular patterns of features (commands; ribbon button next). In progress (agents): fillet and chamfer (K11), sketch trim/extend/offset/fillet/mirror/patterns. ✅ construction planes (offset, angle, midplane, three points, tangent), axes and points as timeline features, sketches on construction planes, revolves and circular patterns about a construction axis (examples/construction-planes.json). Still to do: shell, holes, mirror of features | A reference part set (bracket, enclosure, flange) all match oracle values (flange ✅: examples/patterned-flange.json) |
 | M6 | **Agents:** MCP server, modelling skill, control channel with screenshots | Claude builds a bracket over MCP and verifies it with `measure` |
 | M7 | **Import and polish:** STEP import, measure tool, section view, appearance, preferences, autosave/recovery | Opening a third-party STEP and editing on top of it works |
-| M8 | **Components and assemblies:** components, joints, interference | — |
+| M8 🟡 | **Components and assemblies:** ✅ components (nested, placements, linked copies, active component, tints), ✅ joints (rigid, revolute, slider, cylindrical, planar; limits; solved as an exact tree from grounded components, loops refused; `examples/hinge-assembly.json`). Still to do: joint loops, as-built joints, interference, motion | A hinge opens to a driven angle and its bodies land where the hand calculation says ✅ |
 | M9 | **Drawings** | — |
 | M10 | **CAM (Manufacture workspace)** | see section 6 |
 

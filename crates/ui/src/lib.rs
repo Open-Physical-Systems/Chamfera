@@ -14,6 +14,7 @@ use egui::{Color32, PointerButton, Rect, Sense, Vec2};
 use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
 
+mod assembly_ui;
 mod blend_ui;
 mod browser;
 mod chrome;
@@ -143,6 +144,7 @@ pub struct ChamferaApp {
     sketch: sketch_ui::SketchUi,
     params: params_ui::ParamsUi,
     solid: solid_ui::SolidUi,
+    assembly: assembly_ui::AssemblyUi,
     construct: construct_ui::ConstructUi,
     file: file_ui::FileUi,
     browser: browser::BrowserUi,
@@ -225,6 +227,7 @@ impl ChamferaApp {
             sketch: sketch_ui::SketchUi::default(),
             params: params_ui::ParamsUi::default(),
             solid: solid_ui::SolidUi::default(),
+            assembly: assembly_ui::AssemblyUi::default(),
             construct: construct_ui::ConstructUi::default(),
             file: file_ui::FileUi::default(),
             browser: browser::BrowserUi::default(),
@@ -432,6 +435,17 @@ impl ChamferaApp {
             self.face_click(x, y, w, h);
             return;
         }
+        if self.assembly.joint.is_some() {
+            let at = response.hover_pos().map(local);
+            self.joint_hover(at, w, h);
+            if response.clicked()
+                && let Some(pos) = response.interact_pointer_pos()
+            {
+                let (x, y) = local(pos);
+                self.joint_click(x, y, w, h);
+                return;
+            }
+        }
         if self.solid.hole.is_some() {
             let at = response.hover_pos().map(local);
             self.hole_hover(at, w, h);
@@ -560,6 +574,8 @@ impl ChamferaApp {
         }
         let blends = self.blend_overlays();
         self.session.scene.overlays.extend(blends);
+        let joints = self.joint_overlays();
+        self.session.scene.overlays.extend(joints);
         let holes = self.hole_overlays();
         self.session.scene.overlays.extend(holes);
         self.inspect_overlays();
@@ -797,6 +813,7 @@ impl eframe::App for ChamferaApp {
             self.parameters_window(&ctx);
             self.extrude_dialog(&ctx);
             self.blend_dialog(&ctx);
+            self.joint_dialog(&ctx);
             self.hole_dialog(&ctx);
             self.transform_dialog(&ctx);
             self.inspect_dialog(&ctx);
