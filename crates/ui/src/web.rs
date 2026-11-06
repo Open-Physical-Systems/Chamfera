@@ -29,6 +29,8 @@ const AUTOSAVE_DELAY: f64 = 0.75;
 pub enum Kind {
     Design,
     Mesh,
+    /// A DXF drawing for the active sketch.
+    Dxf,
 }
 
 /// A file the user picked: its name, and its contents as base64 (or why it was refused).

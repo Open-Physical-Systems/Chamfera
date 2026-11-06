@@ -299,7 +299,8 @@ impl ChamferaApp {
             app.run("body.sample", json!({}));
         }
         for f in &options.files {
-            app.run("body.import_stl", json!({ "path": f.to_string_lossy() }));
+            let path = f.to_string_lossy();
+            app.run(file_ui::mesh_import_command(&path), json!({ "path": path }));
         }
         if !options.script.is_empty() {
             match chamfera_engine::script::run_steps(&mut app.session, &options.script) {
@@ -413,14 +414,16 @@ impl ChamferaApp {
     #[cfg(not(target_arch = "wasm32"))]
     fn import_dialog(&mut self) {
         let Some(files) = rfd::FileDialog::new()
-            .set_title(label("body.import_stl"))
-            .add_filter("STL mesh", &["stl", "STL"])
+            .set_title("Insert Mesh")
+            .add_filter("Mesh", &["stl", "STL", "obj", "OBJ", "3mf", "3MF"])
             .pick_files()
         else {
             return;
         };
         for f in files {
-            if let Some(v) = self.run("body.import_stl", json!({ "path": f.to_string_lossy() })) {
+            let path = f.to_string_lossy();
+            let command = file_ui::mesh_import_command(&path);
+            if let Some(v) = self.run(command, json!({ "path": path })) {
                 self.message = Some((
                     format!(
                         "Inserted {} ({} triangles)",

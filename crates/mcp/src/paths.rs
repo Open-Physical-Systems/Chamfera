@@ -22,15 +22,23 @@ pub enum Access {
 
 /// Every command that takes a `path`, and what it does with it.
 pub const PATH_COMMANDS: &[(&str, Access)] = &[
+    ("body.import_3mf", Access::Read),
+    ("body.import_obj", Access::Read),
     ("body.import_step", Access::Read),
     ("body.import_stl", Access::Read),
     ("cam.post", Access::Write),
     ("design.open", Access::Read),
+    ("design.export_3mf", Access::Write),
+    ("design.export_glb", Access::Write),
+    // Also writes the .mtl file of the same name beside it, in the same allowed folder.
+    ("design.export_obj", Access::Write),
     ("design.export_step", Access::Write),
     ("design.export_stl", Access::Write),
     ("design.save", Access::Write),
     ("sheet.export_flat", Access::Write),
     ("drawing.export", Access::Write),
+    ("sketch.export_dxf", Access::Write),
+    ("sketch.import_dxf", Access::Read),
 ];
 
 /// Longest path accepted (bytes).

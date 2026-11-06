@@ -7,6 +7,7 @@ mod component;
 mod construct;
 mod design;
 pub mod drawing;
+mod dxf;
 mod edit;
 mod face_edit;
 mod feature;
@@ -49,6 +50,7 @@ pub fn registry() -> Vec<&'static CommandSpec> {
         construct::COMMANDS,
         design::COMMANDS,
         drawing::COMMANDS,
+        dxf::COMMANDS,
         edit::COMMANDS,
         face_edit::COMMANDS,
         feature::COMMANDS,

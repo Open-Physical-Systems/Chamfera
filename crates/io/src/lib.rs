@@ -1,10 +1,19 @@
 //! Layer 3: design files, import and export.
 //!
 //! Design documents are versioned JSON. STL import and export arrived in M1 (mesh bodies);
-//! STEP export and import of B-rep bodies arrived with K9 (`step`); 3MF comes later.
+//! STEP export and import of B-rep bodies arrived with K9 (`step`). Meshes also go out as
+//! 3MF, OBJ and glTF binary and come in from 3MF and OBJ; sketches go out to and come in
+//! from 2D DXF.
 
+pub mod dxf;
+pub mod gltf;
+pub mod mesh;
+pub mod obj;
 pub mod step;
 pub mod stl;
+pub mod threemf;
+mod xml;
+pub mod zip;
 
 use chamfera_doc::{DocError, Document};
 use thiserror::Error;
