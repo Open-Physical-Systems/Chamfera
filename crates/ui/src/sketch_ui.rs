@@ -188,7 +188,7 @@ Click a curve to split it where other curves cross it; Split All splits every cr
     fn hint(self, clicks: usize) -> &'static str {
         match (self, clicks) {
             (Tool::Select, _) => {
-                "Click to select (Shift adds) · drag a point to move it · Del deletes"
+                "Click to select (Shift adds) · drag a point to move it · drag on empty space to box select · Del deletes"
             }
             (Tool::Line, 0) => "Click the start of the line",
             (Tool::Line, _) => {
@@ -324,7 +324,7 @@ impl SketchUi {
 }
 
 /// The geometric constraints: command kind, name, icon and what it does.
-const CONSTRAINTS: [(&str, &str, Icon, &str); 10] = [
+pub(crate) const CONSTRAINTS: [(&str, &str, Icon, &str); 10] = [
     (
         "horizontal",
         "Horizontal",
@@ -836,6 +836,12 @@ impl ChamferaApp {
                     .ok()
                     .and_then(|r| as_id(&r["item"]["point"]));
                 self.sketch.dragging = picked;
+                if picked.is_none() {
+                    self.box_begin(ui, rect, true);
+                }
+            }
+            if self.box_input(ui, response, rect) {
+                return true;
             }
             if let Some(point) = self.sketch.dragging {
                 if response.dragged_by(egui::PointerButton::Primary)
@@ -874,7 +880,8 @@ impl ChamferaApp {
         if tool == Tool::Select {
             self.run_sketch(
                 "sketch.select",
-                json!({ "x": x, "y": y, "width": w, "height": h, "add": shift }),
+                json!({ "x": x, "y": y, "width": w, "height": h, "add": shift,
+                        "filter": self.filter_param() }),
             );
             return;
         }

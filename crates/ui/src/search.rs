@@ -200,7 +200,7 @@ fn context_of(action: Action) -> &'static str {
     }
 }
 
-fn icon_of(action: Action) -> Icon {
+pub(crate) fn icon_of(action: Action) -> Icon {
     match action {
         Action::SketchTool(t) => t.icon(),
         Action::CreateSketch(_) | Action::SketchOnFace => Icon::SketchCreate,
@@ -325,7 +325,7 @@ impl ChamferaApp {
     }
 
     /// Why `action` cannot run now, in words, or `None` when it can.
-    fn unavailable(&self, action: Action) -> Option<String> {
+    pub(crate) fn unavailable(&self, action: Action) -> Option<String> {
         let sketching = self.session.active_sketch.is_some();
         let tool_free = self.solid.extrude.is_none() && self.solid.blend.is_none();
         let has_solids = !self.session.solids().is_empty();

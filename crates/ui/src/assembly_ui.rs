@@ -73,13 +73,12 @@ fn origin_text(app: &ChamferaApp, o: &JointOrigin) -> String {
     format!("{comp} · {what}")
 }
 
-/// A Browser row for a component or a body.
+/// A Browser row for a component or a body, at a depth in the tree with an icon.
 fn row(
     ui: &mut Ui,
     look: Look,
     id: egui::Id,
-    depth: usize,
-    icon: Icon,
+    (depth, icon): (usize, Icon),
     text: &str,
     note: Option<&str>,
     active: bool,
@@ -473,8 +472,7 @@ impl ChamferaApp {
             ui,
             look,
             ui.scope_id().with("components"),
-            1,
-            Icon::Component,
+            (1, Icon::Component),
             "Components",
             (count > 0).then_some(note.as_str()),
             false,
@@ -547,12 +545,14 @@ impl ChamferaApp {
             ui,
             look,
             ui.scope_id().with(("component", id)),
-            depth,
-            if id == ROOT {
-                Icon::Body
-            } else {
-                Icon::Component
-            },
+            (
+                depth,
+                if id == ROOT {
+                    Icon::Body
+                } else {
+                    Icon::Component
+                },
+            ),
             &name,
             (!note.is_empty()).then_some(note.as_str()),
             active,
@@ -613,8 +613,7 @@ impl ChamferaApp {
                 ui,
                 look,
                 ui.scope_id().with(("component body", id, b)),
-                depth + 1,
-                Icon::Body,
+                (depth + 1, Icon::Body),
                 &name,
                 None,
                 selected == Some(b),

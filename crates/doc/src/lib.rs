@@ -9,7 +9,7 @@ pub mod joint;
 pub use component::{Assembly, Component, ROOT};
 pub use feature::{
     Blend, BlendKind, Extrude, ExtrudeDirection, Feature, FeatureKind, Operation, Pattern,
-    PatternLayout, Revolve,
+    PatternLayout, Revolve, Shell,
 };
 pub use imported::ImportedBody;
 pub use joint::{EdgeEnd, Joint, JointKind, JointOrigin, OriginAt};
@@ -29,6 +29,7 @@ use thiserror::Error;
 /// - 7: linear and circular patterns of features.
 /// - 8: imported solid bodies.
 /// - 9: fillets and chamfers of edges.
+/// - 10: shells (hollowed solids with open faces).
 /// - 15: components (bodies grouped, each with a placement) and joints between them.
 ///   Older files open as a single root component.
 pub const FORMAT_VERSION: u32 = 15;
