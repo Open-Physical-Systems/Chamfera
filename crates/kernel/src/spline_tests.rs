@@ -236,7 +236,7 @@ fn spline_bodies_mirror_with_their_extruded_faces_outward() {
 }
 
 #[test]
-fn operations_that_do_not_handle_splines_yet_refuse_cleanly() {
+fn booleans_take_spline_sides_and_other_operations_refuse_cleanly() {
     let body = extrude(&Frame::XY, &arch(), 5.0).unwrap();
     let block = extrude(
         &Frame::XY,
@@ -244,14 +244,18 @@ fn operations_that_do_not_handle_splines_yet_refuse_cleanly() {
         3.0,
     )
     .unwrap();
-    assert!(matches!(
-        union(&body, &block),
-        Err(KernelError::Unsupported(_))
-    ));
-    assert!(matches!(
-        union(&block, &body),
-        Err(KernelError::Unsupported(_))
-    ));
+    // Booleans now take spline sides (see `boolean/extrusion_tests.rs`). The block meets
+    // the arch y = x (20 - x) / 10 where it reaches y = 5: x² - 20x + 50 = 0, so
+    // x0 = 10 - 5√2. Their common area is ∫₀^x0 x (20 - x) / 10 dx + 5 (5 - x0)
+    // = x0² - x0³/30 + 25 - 5 x0, and the union holds 5 · 400/3 + 3 · 25 - 3 · common.
+    let x0 = 10.0 - 5.0 * 2f64.sqrt();
+    let common = x0 * x0 - x0.powi(3) / 30.0 + 25.0 - 5.0 * x0;
+    let expected = 5.0 * 400.0 / 3.0 + 75.0 - 3.0 * common;
+    for u in [union(&body, &block).unwrap(), union(&block, &body).unwrap()] {
+        u.validate().unwrap();
+        assert!(close(u.volume().unwrap(), expected, 1e-9));
+        check_mesh(&u, expected);
+    }
     let e = body.edges()[0];
     assert!(matches!(
         fillet(&body, &[e], 1.0),

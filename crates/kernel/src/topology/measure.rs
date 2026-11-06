@@ -87,7 +87,7 @@ fn gauss5(f: &dyn Fn(f64) -> KernelResult<f64>, a: f64, b: f64) -> KernelResult<
 }
 
 /// `∫_a^b f` by adaptive Gauss-Legendre quadrature (see [`SURFACE_QUADRATURE_TOLERANCE`]).
-fn integrate(f: &dyn Fn(f64) -> KernelResult<f64>, a: f64, b: f64) -> KernelResult<f64> {
+pub(super) fn integrate(f: &dyn Fn(f64) -> KernelResult<f64>, a: f64, b: f64) -> KernelResult<f64> {
     if a == b {
         return Ok(0.0);
     }

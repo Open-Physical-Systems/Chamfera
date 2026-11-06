@@ -10,17 +10,62 @@
 //! nothing; an edge at constant height `v₀` from `u₀` to `u₁` contributes
 //! `-v₀ ∫ f du`: `-v₀` times the arc length (area), or `-v₀` times twice the curve's
 //! area moment about `q` (volume), both by adaptive Gauss-Legendre quadrature on the
-//! curve. Extrude makes only these two kinds of edge on its side faces; any other edge
-//! is refused (`Unsupported`), as booleans do not reach spline faces yet.
+//! curve. Extrude makes only these two kinds of edge on its side faces; a boolean's
+//! oblique plane section is integrated along its own parameter (`oblique_term`).
 
-use super::uv::LoopImage;
+use super::uv::{EdgeImage, LoopImage};
 use super::{Body, Curve, FaceId, Surface};
-use crate::{Extrusion, KernelError, KernelResult};
+use crate::{Extrusion, KernelResult};
 use chamfera_geom::{Point2, Point3};
 
 /// Image coordinates within this (relative) are the same: projections of an edge along
 /// or across the extrusion differ only by rounding and the point inversion's accuracy.
 const STRAIGHT_IMAGE_TOLERANCE: f64 = 1e-9;
+
+/// `-∫ v f(u) du` along an edge whose image is neither along nor across the extrusion
+/// (a booleans' oblique section), in the edge's own parameter `t` in the loop's direction:
+/// `u(t)` is the curve parameter of the edge point's projection, `v(t)` its height, and
+/// `u'(t) = c'(u) · p'(t) / |c'(u)|²` (the parameterisation is orthogonal, so the
+/// component of `p'` along `S_u` is `u' |c'|²`). Adaptive Gauss-Legendre quadrature.
+fn oblique_term(e: &Extrusion, edge: &EdgeImage, centre: Option<Point3>) -> KernelResult<f64> {
+    let (frame, curve) = (e.frame(), e.curve());
+    let (ta, tb) = if edge.forward {
+        (edge.t0, edge.t1)
+    } else {
+        (edge.t1, edge.t0)
+    };
+    let integrand = |t: f64| -> KernelResult<f64> {
+        let p = frame.to_local(edge.curve.point_at(t));
+        let dp = frame.vector_to_local(edge.curve.d1(t));
+        let u = curve.closest_point(Point2::new(p.x, p.y)).u;
+        let d = curve.derivatives(u, 1);
+        let (Some(c), Some(cd)) = (d.first(), d.get(1)) else {
+            return Ok(0.0);
+        };
+        let speed2 = cd.dot(*cd);
+        if speed2.is_nan() || speed2 <= 0.0 {
+            return Ok(0.0);
+        }
+        let du = (cd.x * dp.x + cd.y * dp.y) / speed2;
+        let f = match centre {
+            None => speed2.sqrt(),
+            Some(q) => (c.x - q.x) * cd.y - (c.y - q.y) * cd.x,
+        };
+        Ok(-p.z * f * du)
+    };
+    let (lo, hi) = (ta.min(tb), ta.max(tb));
+    let mut total = 0.0;
+    // Panels at the edge curve's own breaks (a spline's knots) and the extruded curve's.
+    let mut cuts = vec![lo, hi];
+    if let super::Curve::BSpline(s) = &edge.curve {
+        cuts.extend(s.breaks().into_iter().filter(|k| *k > lo && *k < hi));
+    }
+    cuts.sort_by(f64::total_cmp);
+    for w in cuts.windows(2) {
+        total += super::measure::integrate(&integrand, w[0], w[1])?;
+    }
+    Ok(if ta <= tb { total } else { -total })
+}
 
 impl Body {
     /// True when any face lies on a spline surface or any edge on a spline curve.
@@ -58,10 +103,8 @@ impl Body {
                     continue;
                 }
                 if !edge.uv.iter().all(|q| (q.1 - v0).abs() <= tol(v0)) {
-                    return Err(KernelError::Unsupported(format!(
-                        "{} crosses a spline face obliquely; only extruded spline faces are measured",
-                        edge.edge
-                    )));
+                    total += oblique_term(e, edge, centre)?;
+                    continue;
                 }
                 let integral = match centre {
                     None => curve.length_between(u0, u1)?,

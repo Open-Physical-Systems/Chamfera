@@ -30,7 +30,8 @@
 //! surface is outside; one within it of an edge or vertex is on the boundary; otherwise
 //! its `(u, v)` (each periodic representative within the image's range) is tested by ray
 //! crossing (even-odd over all loops, half-open in `v`) against the closed loop images.
-//! On a plane the images of circles and arcs are exact circular arcs; elsewhere they are
+//! On a plane the images of circles and arcs are exact circular arcs and splines are crossed
+//! exactly ([`chamfera_geom::BSplineCurve2::ray_crossings`]); elsewhere they are
 //! the sampled polylines, exact for straight images.
 
 use super::{Body, Curve, EdgeId, FaceId, LoopId, Surface};
@@ -41,6 +42,8 @@ use std::f64::consts::{FRAC_PI_2, PI, TAU};
 /// Two unwrapped parameters closer than this (radians, or mm for a cylinder's height) are
 /// the same: images are built from exact projections, so only rounding separates them.
 const IMAGE_TOLERANCE: f64 = 1e-9;
+/// Samples per knot span of a spline edge's image.
+const SPLINE_SAMPLES_PER_SPAN: usize = 32;
 
 /// Where a point lies relative to a face.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -139,6 +142,17 @@ impl LoopImage {
 /// than a sixteenth of a turn apart around any axis (so unwrapping is unambiguous), at
 /// least 8.
 pub(super) fn samples_for(curve: &Curve, t0: f64, t1: f64) -> usize {
+    if let Curve::BSpline(c) = curve {
+        // A spline's image bends within each knot span: a fixed number per span.
+        let (lo, hi) = (t0.min(t1), t0.max(t1));
+        let spans = c
+            .breaks()
+            .windows(2)
+            .filter(|w| w[1] > lo && w[0] < hi)
+            .count()
+            .max(1);
+        return (spans * SPLINE_SAMPLES_PER_SPAN).clamp(16, 2048);
+    }
     let turns = match curve {
         Curve::Line(_) | Curve::Segment(_) => 0.0,
         _ => (t1 - t0).abs() / TAU,
@@ -490,6 +504,22 @@ impl Body {
                         side: (0.5 * (w[0] + w[1])).cos().signum(),
                     });
                 }
+            } else if let Curve::BSpline(sc) = &c {
+                // Exact: the spline in the plane's coordinates, its own ray crossings.
+                let plane = sc.to_plane(frame)?;
+                let (lo, hi) = (t0.min(t1), t0.max(t1));
+                let (dlo, dhi) = plane.domain();
+                let piece = if lo <= dlo && hi >= dhi {
+                    plane
+                } else {
+                    plane.segment(lo.max(dlo), hi.min(dhi))?
+                };
+                let (a, b) = if forward { (start, end) } else { (end, start) };
+                out.push(Piece::Spline {
+                    curve: piece,
+                    a: chamfera_geom::Point2::new(a.0, a.1),
+                    b: chamfera_geom::Point2::new(b.0, b.1),
+                });
             } else {
                 let n = samples_for(&c, t0, t1);
                 let mut pts = vec![start];
@@ -521,12 +551,22 @@ enum Piece {
         radius: f64,
         side: f64,
     },
+    /// A spline from `a` (its domain's start) to `b`, crossed exactly.
+    Spline {
+        curve: chamfera_geom::BSplineCurve2,
+        a: chamfera_geom::Point2,
+        b: chamfera_geom::Point2,
+    },
 }
 
 impl Piece {
     /// Crossings (0 or 1) of the ray from `(u, v)` toward +u, half-open in `v`.
     fn crossings(&self, u: f64, v: f64) -> usize {
+        if let Piece::Spline { curve, a, b } = self {
+            return curve.ray_crossings(*a, *b, chamfera_geom::Point2::new(u, v));
+        }
         let hit = match *self {
+            Piece::Spline { .. } => false,
             Piece::Segment(a, b) => {
                 (a.1 > v) != (b.1 > v) && u < a.0 + (v - a.1) * (b.0 - a.0) / (b.1 - a.1)
             }

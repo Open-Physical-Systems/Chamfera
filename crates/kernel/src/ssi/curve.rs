@@ -108,10 +108,11 @@ pub fn intersect_curve_surface_on(
     t1: f64,
     surface: &Surface,
 ) -> KernelResult<CurveSurfaceIntersection> {
-    if matches!(curve, Curve::BSpline(_)) || matches!(surface, Surface::Extrusion(_)) {
-        return Err(KernelError::Unsupported(
-            "intersections of spline curves and surfaces are not supported yet (K10)".into(),
-        ));
+    if let Surface::Extrusion(e) = surface {
+        return super::extrusion::curve_extrusion(curve, t0, t1, e);
+    }
+    if let Curve::BSpline(c) = curve {
+        return super::extrusion::spline_surface(c, t0, t1, surface);
     }
     let ordered = !t0.is_nan() && !t1.is_nan() && t0 <= t1;
     let finite = t0.is_finite() && t1.is_finite();

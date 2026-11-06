@@ -3963,6 +3963,122 @@ fn an_ellipse_extrudes_into_an_elliptic_cylinder() {
     assert!((mv - 500.0 * std::f64::consts::PI).abs() < 1e-6, "{m}");
 }
 
+/// The ellipse plate of `an_ellipse_extrudes_into_an_elliptic_cylinder` (feature 2,
+/// 500π), and a second sketch (feature 3) on XY with the rectangle `x1..x2` by
+/// `y1..y2`, finished.
+fn ellipse_plate_and_rectangle(s: &mut Session, rect: [f64; 4]) {
+    s.execute("sketch.create", &json!({"plane": "xy"})).unwrap();
+    s.execute(
+        "sketch.ellipse",
+        &json!({"cx": 0, "cy": 0, "x": 10, "y": 0, "minor": 5}),
+    )
+    .unwrap();
+    s.execute("sketch.finish", &json!({})).unwrap();
+    s.execute(
+        "solid.extrude",
+        &json!({"sketch": 1, "profiles": [{"x": 0, "y": 0}], "distance": 10}),
+    )
+    .unwrap();
+    s.execute("sketch.create", &json!({"plane": "xy"})).unwrap();
+    s.execute(
+        "sketch.rectangle",
+        &json!({"x1": rect[0], "y1": rect[1], "x2": rect[2], "y2": rect[3]}),
+    )
+    .unwrap();
+    s.execute("sketch.finish", &json!({})).unwrap();
+}
+
+#[test]
+fn an_ellipse_plate_is_cut_joined_and_intersected() {
+    // The rectangle 0..30 by -20..20 covers the half x >= 0 of the ellipse a = 10, b = 5.
+    // Extruded 10 with the plate: cut leaves 250π, intersect keeps 250π, join makes
+    // the box (30 · 40 · 10 = 12000) and the other half: 12000 + 250π.
+    let pi = std::f64::consts::PI;
+    for (op, expected) in [
+        ("cut", 250.0 * pi),
+        ("intersect", 250.0 * pi),
+        ("join", 12_000.0 + 250.0 * pi),
+    ] {
+        let mut s = Session::new();
+        ellipse_plate_and_rectangle(&mut s, [0.0, -20.0, 30.0, 20.0]);
+        let r = s
+            .execute(
+                "solid.extrude",
+                &json!({"sketch": 3, "profiles": [{"x": 15, "y": 0}], "distance": 10,
+                        "operation": op}),
+            )
+            .unwrap();
+        let v = exact_volume(&r);
+        assert!(
+            (v - expected).abs() < 1e-6 * expected,
+            "{op}: {v} vs {expected}"
+        );
+        s.solids()[0].body.validate().unwrap();
+    }
+}
+
+#[test]
+fn a_hole_drills_through_an_ellipse_plate_and_exports_to_step() {
+    // A through hole of diameter 4 at the centre of the 500π plate: 500π - π 2² 10 = 460π.
+    let pi = std::f64::consts::PI;
+    let mut s = Session::new();
+    ellipse_plate_and_rectangle(&mut s, [20.0, 20.0, 30.0, 30.0]);
+    let plane = s.named_face_plane("2:top").unwrap();
+    let at = plane.to_plane(chamfera_geom::Point3::new(0.0, 0.0, 10.0));
+    let r = s
+        .execute(
+            "solid.hole",
+            &json!({"face": "2:top", "points": [{"x": at.x, "y": at.y}], "diameter": 4,
+                    "through_all": true, "tip_angle": "flat"}),
+        )
+        .unwrap();
+    let v = exact_volume(&r);
+    assert!((v - 460.0 * pi).abs() < 1e-6, "{v}");
+    let body = &s.solids()[0].body;
+    body.validate().unwrap();
+    // It tessellates and exports: the STEP file holds the extrusion surfaces and is read
+    // back by our reader.
+    chamfera_kernel::tessellate(body, &chamfera_kernel::TessOptions::default()).unwrap();
+    let dir = std::env::temp_dir().join(format!("chamfera-ellipse-hole-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("plate.step");
+    s.execute(
+        "design.export_step",
+        &json!({"path": path.to_str().unwrap()}),
+    )
+    .unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        text.contains("SURFACE_OF_LINEAR_EXTRUSION"),
+        "no extrusion surface"
+    );
+    assert!(text.contains("CYLINDRICAL_SURFACE"), "no hole wall");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn a_refused_spline_boolean_changes_nothing() {
+    // A round bar along y (a circle on the XZ plane, cut 20 deep) crosses the plate's
+    // elliptic sides, which run along z: the cylinder and the extrusion are not parallel
+    // and meet in a space curve, which is refused. The design is as it was.
+    let mut s = Session::new();
+    ellipse_plate_and_rectangle(&mut s, [20.0, 20.0, 30.0, 30.0]);
+    s.execute("sketch.create", &json!({"plane": "xz"})).unwrap();
+    s.execute("sketch.circle", &json!({"cx": 0, "cy": 5, "radius": 1}))
+        .unwrap();
+    s.execute("sketch.finish", &json!({})).unwrap();
+    let before = s.doc.clone();
+    let e = s
+        .execute(
+            "solid.extrude",
+            &json!({"sketch": 4, "profiles": [{"x": 0, "y": 5}], "distance": 20,
+                    "operation": "cut"}),
+        )
+        .unwrap_err();
+    assert!(e.to_string().contains("space curve"), "{e}");
+    assert_eq!(s.doc, before);
+}
+
 #[test]
 fn a_half_ellipse_closed_by_its_axis_extrudes_to_half_the_volume() {
     // The upper half of a = 10, b = 5 (an elliptical arc from +x to -x) closed by the
