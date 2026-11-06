@@ -5,7 +5,7 @@
 use crate::icons::Icon;
 use crate::widgets::{self, Look};
 use crate::{ChamferaApp, label};
-use chamfera_doc::ExtrudeDirection;
+use chamfera_doc::{ExtrudeDirection, Operation};
 use chamfera_geom::Point2;
 use chamfera_render::{Overlay, OverlayStyle};
 use serde_json::json;
@@ -22,6 +22,8 @@ pub struct ExtrudeTool {
     /// Revolve: the sketch line to turn around, and the angle expression.
     axis: Option<u32>,
     angle: String,
+    /// New body, join, cut or intersect.
+    operation: Operation,
 }
 
 impl Default for ExtrudeTool {
@@ -32,6 +34,7 @@ impl Default for ExtrudeTool {
             seeds: Vec::new(),
             distance: "10 mm".into(),
             direction: ExtrudeDirection::Normal,
+            operation: Operation::NewBody,
             axis: None,
             angle: "360 deg".into(),
         }
@@ -324,6 +327,19 @@ impl ChamferaApp {
             ));
             return;
         }
+        if tool.sketch.is_none() && tool.seeds.is_empty() {
+            // A sketch on a solid's face usually adds to (or cuts) that solid.
+            let on_face = self
+                .session
+                .doc
+                .sketch(sketch)
+                .is_ok_and(|f| f.attached.is_some());
+            tool.operation = if on_face {
+                Operation::Join
+            } else {
+                Operation::NewBody
+            };
+        }
         tool.sketch = Some(sketch);
         // Clicking a picked profile again unpicks it.
         let region_of = |q: Point2| {
@@ -460,6 +476,25 @@ impl ChamferaApp {
                             .response
                             .on_hover_text("Click a picked profile again to unpick it");
                             ui.end_row();
+                            widgets::field_label(ui, look, "Operation");
+                            egui::ComboBox::from_id_salt("feature operation")
+                                .selected_text(operation_name(tool.operation))
+                                .width(180.0)
+                                .show_ui(ui, |ui| {
+                                    for o in [
+                                        Operation::NewBody,
+                                        Operation::Join,
+                                        Operation::Cut,
+                                        Operation::Intersect,
+                                    ] {
+                                        ui.selectable_value(
+                                            &mut tool.operation,
+                                            o,
+                                            operation_name(o),
+                                        );
+                                    }
+                                });
+                            ui.end_row();
                             if tool.revolve {
                                 widgets::field_label(ui, look, "Axis");
                                 let current = lines
@@ -534,6 +569,7 @@ impl ChamferaApp {
                 "profiles": tool.seeds.iter().map(|p| json!({ "x": p.x, "y": p.y })).collect::<Vec<_>>(),
                 "axis": tool.axis,
                 "angle": tool.angle.trim(),
+                "operation": tool.operation.key(),
             });
             if let Some(r) = self.run("solid.revolve", params) {
                 let v = r["solids"][0]["volume"].as_f64().unwrap_or(0.0);
@@ -552,6 +588,7 @@ impl ChamferaApp {
                 "profiles": tool.seeds.iter().map(|p| json!({ "x": p.x, "y": p.y })).collect::<Vec<_>>(),
                 "distance": tool.distance.trim(),
                 "direction": direction_key(tool.direction),
+                "operation": tool.operation.key(),
             });
             if let Some(r) = self.run("solid.extrude", params) {
                 let v = r["solids"][0]["volume"].as_f64().unwrap_or(0.0);
@@ -568,6 +605,15 @@ impl ChamferaApp {
         if cancel {
             self.solid.extrude = None;
         }
+    }
+}
+
+pub(crate) fn operation_name(o: Operation) -> &'static str {
+    match o {
+        Operation::NewBody => "New body",
+        Operation::Join => "Join",
+        Operation::Cut => "Cut",
+        Operation::Intersect => "Intersect",
     }
 }
 

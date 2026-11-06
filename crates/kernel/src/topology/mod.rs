@@ -6,8 +6,11 @@
 //! chapter 10, stored in index arenas with typed ids (no reference-counted graphs):
 //!
 //! - A [`Body`] owns every entity and the geometry they refer to, and holds one or more
-//!   [`ShellId`]s. Each shell is the closed outer boundary of one lump (void shells come
-//!   with booleans, K7).
+//!   [`ShellId`]s. Each shell is a closed, connected, oriented surface: either the outer
+//!   boundary of one lump (it encloses positive volume) or a void inside a lump (its faces
+//!   point into the empty region, so it encloses negative volume). A body of several lumps
+//!   (a disjoint union, K7) has one outer shell per lump; lumps that touch share no
+//!   topology.
 //! - A shell lists its faces. A face has one outer loop and any number of inner loops
 //!   (rings), a surface and an orientation flag.
 //! - A loop is a cycle of half-edges (`next`/`prev`). A half-edge is the use of an edge by
@@ -34,6 +37,7 @@
 //! unchanged; deserialization re-checks everything. [`Body::validate`] adds the geometric
 //! checks a finished solid must pass.
 
+mod assemble;
 mod build;
 mod euler;
 mod geometry;
@@ -45,6 +49,7 @@ mod validate;
 mod tests;
 
 pub use crate::surface::Surface;
+pub(crate) use assemble::{ListEdge, ListFace, ListVertex};
 pub use build::MAX_PROFILE_VERTICES;
 pub use euler::Mvfs;
 pub use geometry::Curve;
