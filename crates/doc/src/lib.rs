@@ -6,7 +6,7 @@ pub mod imported;
 
 pub use feature::{
     Blend, BlendKind, Extrude, ExtrudeDirection, Feature, FeatureKind, Operation, Pattern,
-    PatternLayout, Revolve,
+    PatternLayout, Revolve, Shell,
 };
 pub use imported::ImportedBody;
 
@@ -25,7 +25,9 @@ use thiserror::Error;
 /// - 7: linear and circular patterns of features.
 /// - 8: imported solid bodies.
 /// - 9: fillets and chamfers of edges.
-pub const FORMAT_VERSION: u32 = 9;
+/// - 11: shells (hollowed solids with open faces). Another branch takes 10; the merge
+///   renumbers.
+pub const FORMAT_VERSION: u32 = 11;
 /// The tag every design file starts with, so other JSON is not mistaken for a design.
 pub const FORMAT_TAG: &str = "chamfera";
 /// Longest parameter name.
