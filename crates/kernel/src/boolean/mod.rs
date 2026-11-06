@@ -88,6 +88,7 @@
 //! decision [`chamfera_geom::ANGULAR_TOLERANCE`]; topology is decided on exact surfaces
 //! and curves, never on a mesh.
 
+mod patch_box;
 mod registry;
 mod sew;
 mod span;

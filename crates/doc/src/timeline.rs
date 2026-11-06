@@ -69,7 +69,7 @@ pub fn check_item_name(name: &str) -> Result<String, DocError> {
 
 /// The feature ids an edge name refers to: `2:top 0` names feature 2, `between 2:side 0
 /// and 4:top` names 2 and 4.
-fn edge_features(edge: &str) -> Vec<u32> {
+pub(crate) fn edge_features(edge: &str) -> Vec<u32> {
     edge.split_whitespace()
         .filter_map(|w| w.split_once(':'))
         .filter_map(|(id, _)| id.parse::<u32>().ok())

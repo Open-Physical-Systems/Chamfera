@@ -65,9 +65,12 @@ pub type CmdResult = Result<Value, CommandError>;
 #[derive(Debug, Default)]
 pub struct Session {
     pub doc: Document,
-    /// Bodies on screen. In M1 these are mesh bodies (imported STL, samples). They are not
-    /// saved in the design yet and are not part of undo.
+    /// Bodies on screen: the solids the design builds, its imported solids and meshes
+    /// (all saved and undone with the design), and the sample part (session only).
     pub scene: Scene,
+    /// The scene body showing each imported mesh of the design, by the mesh's id. Kept
+    /// across rebuilds so a mesh keeps its scene id ([`Session::sync_meshes`]).
+    pub(crate) mesh_scene: std::collections::BTreeMap<u32, u32>,
     /// The view. Not part of the design or of undo.
     pub camera: Camera,
     /// The sketch being edited (`sketch.create`, `sketch.edit`), if any.
@@ -137,13 +140,15 @@ impl Session {
         // the rebuild.
         // Solids follow the design: rebuild after anything that may have changed it.
         // solid.* and feature.* rebuild themselves; a failed command was rolled back, so
-        // the solids must follow the restored design.
+        // the solids must follow the restored design. The body commands that change
+        // imported meshes show the change themselves ([`Session::sync_meshes`]); a
+        // rebuild would also bring back a solid's scene body that `body.remove` hid.
         let rebuilt_itself = id.starts_with("solid.")
             || id.starts_with("feature.")
             || id.starts_with("component.")
             || id.starts_with("joint.")
             || id.starts_with("construct.")
-            || id == "body.import_step";
+            || (id.starts_with("body.") && id != "body.appearance");
         if (spec.mutates && (result.is_err() || !rebuilt_itself))
             || (id.starts_with("edit.") && result.is_ok())
             || (id.starts_with("design.") && result.is_ok() && id != "design.save")
@@ -243,6 +248,7 @@ impl Session {
         self.path = None;
         self.doc = doc;
         self.scene = Scene::default();
+        self.mesh_scene.clear();
         self.view_state = motion::AssemblyView::default();
         self.undo.clear();
         self.redo.clear();

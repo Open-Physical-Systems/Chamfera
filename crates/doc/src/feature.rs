@@ -1295,62 +1295,35 @@ impl Document {
         Ok(f)
     }
 
-    /// Sketches attached to a face of a feature or drawn on a construction plane, patterns
-    /// of it, constructions and revolves that use it, and extrudes up to one of its faces
-    /// (so deleting the feature can be refused).
+    /// Every sketch and feature that uses a feature, so deleting it can be refused:
+    /// whatever the timeline's order rules say depends on it ([`Document::item_dependencies`]:
+    /// sketches on its faces or planes and their linked projections, patterns, mirrors,
+    /// holes, constructions, fillets and chamfers of its edges, shells and face edits of
+    /// its faces, flanges, body tools), whatever holds a stored reference to one of its
+    /// faces, edges or vertices ([`Document::references`], rung K8), and expressions that
+    /// use its values (`Extrude1.distance`).
     pub fn feature_users(&self, feature: u32) -> Vec<String> {
-        let sketches = self
+        let mut ids: Vec<u32> = self
             .sketches
             .iter()
-            .filter(|s| {
-                s.attached.as_ref().is_some_and(|a| a.feature == feature)
-                    || s.on_plane == Some(feature)
-            })
-            .map(|s| s.name.clone());
-        let features = self
-            .features
-            .iter()
-            .filter(|f| match &f.kind {
-                FeatureKind::Surface(sf) => sf.features_used().contains(&feature),
-                FeatureKind::Pattern(p) => {
-                    p.source == feature
-                        || matches!(
-                            p.layout,
-                            PatternLayout::Circular { axis_feature: Some(a), .. } if a == feature
-                        )
-                }
-                FeatureKind::Revolve(r) => r.axis_feature == Some(feature),
-                FeatureKind::Construct(c) => c.features_used().contains(&feature),
-                FeatureKind::Hole(h) => h.face.feature == feature,
-                FeatureKind::Mirror(m) => {
-                    m.features.contains(&feature)
-                        || matches!(&m.plane, MirrorPlane::Face { feature: g, .. } if *g == feature)
-                }
-                FeatureKind::Extrude(e) => {
-                    matches!(&e.to, Some(ExtrudeTo::Face(r)) if r.feature == feature)
-                }
-                FeatureKind::SheetFlange(f) => {
-                    crate::sheet::referenced_features(&f.edge).contains(&feature)
-                }
-                FeatureKind::SheetUnfold(u) => u.base == feature,
-                FeatureKind::SplitBody(_) | FeatureKind::SplitFace(_) => {
-                    f.kind.body_tool_features().contains(&feature)
-                }
-                FeatureKind::Combine(_) | FeatureKind::Thicken(_) | FeatureKind::Remove(_) => false,
-                FeatureKind::SheetBase(_)
-                | FeatureKind::Blend(_)
-                | FeatureKind::Shell(_)
-                | FeatureKind::Move(_)
-                | FeatureKind::Sweep(_)
-                | FeatureKind::Loft(_)
-                | FeatureKind::OffsetFace(_)
-                | FeatureKind::DeleteFace(_)
-                | FeatureKind::MoveFace(_) => false,
-            })
-            .map(|f| f.name.clone());
-        let mut users: Vec<String> = sketches.chain(features).collect();
-        // Expressions elsewhere that use this feature's values (`Extrude1.distance`).
+            .map(|s| s.id)
+            .chain(self.features.iter().map(|f| f.id))
+            .filter(|id| *id != feature && self.item_dependencies(*id).contains(&feature))
+            .collect();
+        for (item, refs) in &self.references {
+            if *item != feature
+                && !ids.contains(item)
+                && self.item_kind(*item).is_some()
+                && refs
+                    .keys()
+                    .any(|r| crate::timeline::edge_features(r).contains(&feature))
+            {
+                ids.push(*item);
+            }
+        }
+        let mut users: Vec<String> = ids.iter().filter_map(|id| self.item_name(*id)).collect();
         users.extend(self.model_users_of_item(feature));
+        users.dedup();
         users
     }
 
