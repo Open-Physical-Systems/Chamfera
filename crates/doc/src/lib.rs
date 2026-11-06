@@ -4,6 +4,7 @@ pub mod appearance;
 pub mod body_tools;
 pub mod cam;
 pub mod component;
+pub mod config;
 pub mod construct;
 pub mod drawing;
 pub mod expr;
@@ -11,6 +12,7 @@ pub mod face_edit;
 pub mod feature;
 pub mod imported;
 pub mod joint;
+pub mod model_params;
 pub mod motion;
 pub mod naming;
 pub mod sheet;
@@ -23,6 +25,7 @@ pub use body_tools::{
     Combine, RemoveBodies, SplitBody, SplitFace, SplitFaceTool, Thicken, ThickenDirection,
 };
 pub use component::{Assembly, Component, ROOT};
+pub use config::{Configuration, Configurations};
 pub use construct::{
     AxisRef, ConstructKind, Construction, EdgeRef, OriginAxis, OriginPlane, PlaneRef, PointRef,
 };
@@ -35,6 +38,7 @@ pub use feature::{
 };
 pub use imported::ImportedBody;
 pub use joint::{EdgeEnd, Joint, JointKind, JointOrigin, OriginAt};
+pub use model_params::{ModelMeta, ModelParameter};
 pub use motion::{Motion, MotionKey};
 pub use sheet::{
     FlangePosition, FlangeSide, FlangeValues, ReliefShape, SheetBase, SheetFlange, SheetRule,
@@ -104,7 +108,13 @@ use thiserror::Error;
 ///   files open unchanged: they hold none.
 /// - 29: motion studies: keyframes of joint values over time (`motion.keys`: joint,
 ///   time in seconds, value). Older files open with no keys.
-pub const FORMAT_VERSION: u32 = 29;
+/// - 30: parameters v2 and configurations: a comment and favourite mark per parameter
+///   (`comment`, `favourite`), names, comments and favourites of model parameters by key
+///   (`model_parameters`: `f{feature}.{field}` or `s{sketch}.d{constraint}`), and the
+///   design table (`configurations`: named overrides of user parameters and of feature
+///   suppression, and the active one). Model parameter names (`Extrude1.distance`) may
+///   appear in expressions. Older files open with none of these.
+pub const FORMAT_VERSION: u32 = 30;
 /// The tag every design file starts with, so other JSON is not mistaken for a design.
 pub const FORMAT_TAG: &str = "chamfera";
 /// Longest parameter name.
@@ -195,6 +205,12 @@ pub struct Parameter {
     /// What the user typed, such as `width / 2 + 3 mm`. `None` for a plain value.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expression: Option<String>,
+    /// A note for people reading the parameter table (format 30).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub comment: String,
+    /// Pinned at the top of the parameter table (format 30).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub favourite: bool,
 }
 
 /// A face of a feature's solid, by the face's role name (`top`, `side 2`, ...). Names
@@ -302,6 +318,13 @@ pub struct Document {
     /// it, then by the reference name (`2:top`, `2:top 0#2`). See [`naming`].
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub references: BTreeMap<u32, BTreeMap<String, naming::Signature>>,
+    /// Names of their own, comments and favourites of model parameters, by key
+    /// (format 30). See [`model_params`].
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub model_parameters: BTreeMap<String, ModelMeta>,
+    /// The design table: configurations and the active one (format 30).
+    #[serde(default, skip_serializing_if = "Configurations::is_empty")]
+    pub configurations: Configurations,
 }
 
 impl Default for Document {
@@ -323,6 +346,8 @@ impl Default for Document {
             cam: cam::Cam::default(),
             units: DisplayUnits::default(),
             motion: Motion::default(),
+            model_parameters: BTreeMap::new(),
+            configurations: Configurations::default(),
         }
     }
 }
@@ -362,13 +387,17 @@ impl Document {
         if !self.parameters.contains_key(name) && self.parameters.len() >= MAX_PARAMETERS {
             return Err(DocError::TooManyParameters);
         }
+        self.check_free_name(name)?;
         let before = self.clone();
+        let (comment, favourite) = self.note_of(name);
         self.parameters.insert(
             name.to_owned(),
             Parameter {
                 value,
                 unit,
                 expression: None,
+                comment,
+                favourite,
             },
         );
         if let Err(e) = self.evaluate() {
@@ -392,13 +421,23 @@ impl Document {
         if !self.parameters.contains_key(name) && self.parameters.len() >= MAX_PARAMETERS {
             return Err(DocError::TooManyParameters);
         }
+        self.check_free_name(name)?;
+        if expression.chars().count() > expr::MAX_EXPRESSION_LEN {
+            return Err(DocError::Expression {
+                name: name.to_owned(),
+                error: expr::ExprError::TooLong,
+            });
+        }
         let before = self.clone();
+        let (comment, favourite) = self.note_of(name);
         self.parameters.insert(
             name.to_owned(),
             Parameter {
                 value: 0.0,
                 unit,
                 expression: Some(expression.to_owned()),
+                comment,
+                favourite,
             },
         );
         if let Err(e) = self.evaluate() {
@@ -408,120 +447,51 @@ impl Document {
         Ok(())
     }
 
-    /// Who refers to a parameter: other parameters and sketch dimensions.
+    /// Who refers to a parameter: other parameters, sketch dimensions, features (by
+    /// their model parameter names) and configurations.
     pub fn parameter_users(&self, name: &str) -> Vec<String> {
-        let mut users: Vec<String> = self
-            .parameters
-            .iter()
-            .filter(|(n, p)| {
-                n.as_str() != name
-                    && p.expression
-                        .as_deref()
-                        .is_some_and(|e| expr::names_in(e).iter().any(|x| x == name))
-            })
-            .map(|(n, _)| n.clone())
-            .collect();
-        for s in &self.sketches {
-            for (c, e) in &s.expressions {
-                if expr::names_in(e).iter().any(|x| x == name) {
-                    users.push(format!("{} dimension {c}", s.name));
-                }
-            }
+        self.expression_users(name)
+    }
+
+    /// A user parameter's comment and favourite mark, kept when it is set again.
+    fn note_of(&self, name: &str) -> (String, bool) {
+        self.parameters
+            .get(name)
+            .map(|p| (p.comment.clone(), p.favourite))
+            .unwrap_or_default()
+    }
+
+    /// A new user parameter may not take a model parameter's name.
+    fn check_free_name(&self, name: &str) -> Result<(), DocError> {
+        if !self.parameters.contains_key(name) && self.model_parameter(name).is_some() {
+            return Err(DocError::BadValue {
+                name: name.to_owned(),
+                reason: "that name is taken by a model parameter".into(),
+            });
         }
-        users.extend(self.feature_parameter_users(name));
-        users
+        Ok(())
     }
 
     /// Recomputes every parameter from its expression (in dependency order), then drives
     /// sketch dimensions from theirs and solves those sketches. On error the document may
     /// be partly updated: callers keep a copy and restore it (the session does).
     pub fn evaluate(&mut self) -> Result<(), DocError> {
-        use expr::Quantity;
-        let mut values: BTreeMap<String, Quantity> = self
-            .parameters
-            .iter()
-            .filter(|(_, p)| p.expression.is_none())
-            .map(|(n, p)| {
-                (
-                    n.clone(),
-                    Quantity {
-                        value: p.value,
-                        dim: p.unit.dim(),
-                    },
-                )
-            })
-            .collect();
-        // Depth-first evaluation with an explicit path, so a loop is reported by name.
-        fn visit(
-            name: &str,
-            doc: &Document,
-            values: &mut BTreeMap<String, expr::Quantity>,
-            path: &mut Vec<String>,
-        ) -> Result<(), DocError> {
-            if values.contains_key(name) {
-                return Ok(());
-            }
-            if let Some(i) = path.iter().position(|n| n == name) {
-                let mut cycle: Vec<String> = path.get(i..).unwrap_or_default().to_vec();
-                cycle.push(name.to_owned());
-                return Err(DocError::Cycle(cycle));
-            }
-            let Some(p) = doc.parameters.get(name) else {
-                return Ok(()); // An unknown name is reported when the expression runs.
-            };
-            let Some(e) = p.expression.as_deref() else {
-                return Ok(());
-            };
-            path.push(name.to_owned());
-            for dep in expr::names_in(e) {
-                visit(&dep, doc, values, path)?;
-            }
-            path.pop();
-            let v = expr::evaluate_as_in(e, p.unit.dim(), doc.length_scale(), values).map_err(
-                |error| DocError::Expression {
-                    name: name.to_owned(),
-                    error,
-                },
-            )?;
-            let limit = match p.unit {
-                Unit::Length => chamfera_geom::MAX_COORDINATE,
-                Unit::Angle => 1e3 * std::f64::consts::TAU,
-                Unit::Unitless => 1e9,
-            };
-            if v.abs() > limit {
-                return Err(DocError::BadValue {
-                    name: name.to_owned(),
-                    reason: format!("magnitude must be at most {limit}"),
-                });
-            }
-            values.insert(
-                name.to_owned(),
-                expr::Quantity {
-                    value: v,
-                    dim: p.unit.dim(),
-                },
-            );
-            Ok(())
-        }
+        let mut ns = model_params::Namespace::new(self);
         let names: Vec<String> = self.parameters.keys().cloned().collect();
         for n in &names {
-            visit(n, self, &mut values, &mut Vec::new())?;
+            ns.resolve(n, &mut Vec::new())?;
         }
         for (n, p) in self.parameters.iter_mut() {
-            if let Some(q) = values.get(n) {
+            if let Some(q) = ns.values.get(n) {
                 p.value = q.value;
             }
         }
-        // Dimensions that follow expressions.
-        let scale = self.length_scale();
-        for s in &mut self.sketches {
-            if s.expressions.is_empty() {
-                continue;
-            }
-            let mut changed = false;
+        // Dimensions that follow expressions: work out every value, then apply them.
+        let mut updates: Vec<(usize, u32, f64)> = Vec::new();
+        for (i, s) in self.sketches.iter().enumerate() {
             for (c, e) in &s.expressions {
-                let id = chamfera_sketch::ConstraintId(*c);
-                let Some(constraint) = s.sketch.constraint(id) else {
+                let Some(constraint) = s.sketch.constraint(chamfera_sketch::ConstraintId(*c))
+                else {
                     continue;
                 };
                 let dim = if constraint.kind_name() == "angle" {
@@ -529,23 +499,28 @@ impl Document {
                 } else {
                     expr::Dim::LENGTH
                 };
-                let v = expr::evaluate_as_in(e, dim, scale, &values).map_err(|error| {
-                    DocError::Expression {
-                        name: format!("{} dimension {c}", s.name),
-                        error,
-                    }
-                })?;
+                let what = format!("{} dimension {c}", s.name);
+                let v = ns.eval(&what, e, dim)?;
                 if constraint.value() != Some(v) {
-                    s.sketch
-                        .set_dimension(id, v)
-                        .map_err(|err| DocError::Solve {
-                            sketch: s.id,
-                            reason: err.to_string(),
-                        })?;
-                    changed = true;
+                    updates.push((i, *c, v));
                 }
             }
-            if changed {
+        }
+        let mut changed = std::collections::BTreeSet::new();
+        for (i, c, v) in updates {
+            let Some(s) = self.sketches.get_mut(i) else {
+                continue;
+            };
+            s.sketch
+                .set_dimension(chamfera_sketch::ConstraintId(c), v)
+                .map_err(|err| DocError::Solve {
+                    sketch: s.id,
+                    reason: err.to_string(),
+                })?;
+            changed.insert(i);
+        }
+        for i in changed {
+            if let Some(s) = self.sketches.get_mut(i) {
                 s.sketch.solve().map_err(|err| DocError::Solve {
                     sketch: s.id,
                     reason: err.to_string(),
@@ -732,6 +707,10 @@ impl Document {
         doc.assembly.check(checked.last_feature_id)?;
         checked.assembly = doc.assembly;
         doc.motion.check(&checked.assembly)?;
+        Document::check_model_meta(&doc.model_parameters)?;
+        checked.model_parameters = doc.model_parameters;
+        checked.check_configurations(&doc.configurations)?;
+        checked.configurations = doc.configurations;
         checked.motion = doc.motion.sorted();
         checked.timeline = doc.timeline;
         checked.check_timeline(&mut seen)?;

@@ -234,7 +234,7 @@ impl ChamferaApp {
                 name: f.name.clone(),
                 icon,
                 sketch: false,
-                suppressed: f.suppressed,
+                suppressed: doc.is_suppressed(f),
                 active: false,
                 built: built.contains(&id),
                 group,
@@ -1070,7 +1070,7 @@ impl ChamferaApp {
             feature: id,
             distance,
             extrude,
-            suppressed: f.suppressed,
+            suppressed: self.session.doc.is_suppressed(f),
         });
     }
 

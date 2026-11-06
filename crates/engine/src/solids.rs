@@ -1132,7 +1132,7 @@ impl Session {
                 continue;
             };
             let feature = &feature;
-            if feature.suppressed {
+            if self.doc.is_suppressed(feature) {
                 continue;
             }
             // Every sketch the feature uses (a sweep's path, a loft's sections too) was

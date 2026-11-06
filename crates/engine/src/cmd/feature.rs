@@ -280,7 +280,7 @@ pub(super) fn feature_reply(s: &Session, id: u32) -> Value {
         "feature": id,
         "name": f.map(|f| f.name.clone()),
         "definition": f.map(|f| &f.kind),
-        "suppressed": f.map(|f| f.suppressed),
+        "suppressed": f.map(|f| s.doc.is_suppressed(f)),
         "solids": solids,
         "error": s.feature_errors().get(&id),
         "display_error": s.display_errors().get(&id),
@@ -952,7 +952,7 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
     let f = s.doc.feature_mut(id)?;
     f.kind = kind;
     if let Some(v) = suppressed {
-        f.suppressed = v;
+        s.doc.set_suppressed(id, v)?;
     }
     s.rebuild();
     if let Some(e) = s.feature_errors().get(&id) {

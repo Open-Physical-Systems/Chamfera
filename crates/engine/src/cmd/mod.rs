@@ -5,6 +5,7 @@ mod body;
 mod body_tools;
 mod cam;
 mod component;
+mod config;
 mod construct;
 mod design;
 pub mod drawing;
@@ -16,7 +17,7 @@ mod hole;
 mod inspect;
 mod joint;
 mod motion;
-mod param;
+pub mod param;
 mod select;
 mod sheet;
 mod sketch;
@@ -51,6 +52,7 @@ pub fn registry() -> Vec<&'static CommandSpec> {
         cam::COMMANDS,
         body_tools::COMMANDS,
         component::COMMANDS,
+        config::COMMANDS,
         construct::COMMANDS,
         design::COMMANDS,
         drawing::COMMANDS,

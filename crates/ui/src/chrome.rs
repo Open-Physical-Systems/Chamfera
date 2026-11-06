@@ -73,6 +73,7 @@ impl ChamferaApp {
                 self.run("edit.redo", json!({}));
                 self.refresh_sketch_status();
             }
+            self.configuration_menu(ui);
         });
         // The design's name, centred in the bar, with a dot while changes are unsaved.
         let look = self.look();

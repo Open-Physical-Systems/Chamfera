@@ -300,6 +300,19 @@ impl Document {
                     *e = with_unit(e, old, &values);
                 }
             }
+            let lengths: Vec<String> = self
+                .parameters
+                .iter()
+                .filter(|(_, p)| p.unit == Unit::Length)
+                .map(|(n, _)| n.clone())
+                .collect();
+            for c in &mut self.configurations.list {
+                for (n, e) in c.parameters.iter_mut() {
+                    if lengths.contains(n) {
+                        *e = with_unit(e, old, &values);
+                    }
+                }
+            }
             for s in &mut self.sketches {
                 for (c, e) in s.expressions.iter_mut() {
                     let angle = s

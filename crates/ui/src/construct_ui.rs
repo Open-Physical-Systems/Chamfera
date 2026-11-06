@@ -620,7 +620,7 @@ impl ChamferaApp {
         self.construct.editing = Some(ConstructEdit {
             feature,
             value,
-            suppressed: f.suppressed,
+            suppressed: self.session.doc.is_suppressed(f),
         });
     }
 
@@ -734,7 +734,7 @@ impl ChamferaApp {
                     f.name.clone(),
                     feature_icon(c),
                     c.kind() == ConstructKind::Plane,
-                    f.suppressed,
+                    self.session.doc.is_suppressed(f),
                     self.session.feature_errors().contains_key(&f.id),
                 )),
                 _ => None,

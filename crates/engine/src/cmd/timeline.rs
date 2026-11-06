@@ -104,7 +104,7 @@ pub(crate) fn timeline_reply(s: &Session) -> Value {
                 "kind": kind,
                 "name": doc.item_name(id),
                 "built": built.contains(&id),
-                "suppressed": doc.feature(id).map(|f| f.suppressed).unwrap_or(false),
+                "suppressed": doc.feature(id).map(|f| doc.is_suppressed(f)).unwrap_or(false),
                 "group": doc.group_of(id).map(|g| g.id),
                 "error": s.feature_errors().get(&id).or_else(|| s.sketch_errors().get(&id)),
                 "broken_reference": s.broken_references().get(&id),
@@ -158,7 +158,7 @@ fn move_item(s: &mut Session, p: &Value) -> CmdResult {
         .doc
         .features
         .iter()
-        .filter(|f| built.contains(&f.id) && !f.suppressed)
+        .filter(|f| built.contains(&f.id) && !s.doc.is_suppressed(f))
         .map(|f| f.id)
         .filter(|id| !s.feature_errors().contains_key(id))
         .collect();
