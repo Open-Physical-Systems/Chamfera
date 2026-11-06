@@ -45,6 +45,7 @@ fn curve(c: &Curve, t: &Transform) -> KernelResult<Curve> {
                 end - start,
             )?)
         }
+        Curve::BSpline(c) => Curve::BSpline(c.transformed(t)?),
     })
 }
 
@@ -57,6 +58,11 @@ fn surface(s: &Surface, t: &Transform) -> KernelResult<Surface> {
         Surface::Torus(c) => {
             Surface::torus(frame(c.frame(), t)?, c.major_radius(), c.minor_radius())?
         }
+        // The curve is in the frame's plane coordinates, which a rigid move keeps.
+        Surface::Extrusion(e) => Surface::Extrusion(crate::Extrusion::new(
+            frame(e.frame(), t)?,
+            e.curve().clone(),
+        )?),
     })
 }
 

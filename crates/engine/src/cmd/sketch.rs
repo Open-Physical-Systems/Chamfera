@@ -734,6 +734,11 @@ fn dimension_selection(s: &mut Session, p: &Value) -> CmdResult {
                 curve: *c,
                 value: sk.radius(*c).ok_or_else(|| bad("the arc has no radius"))?,
             },
+            Some(Curve::Spline { .. }) => {
+                return Err(bad(
+                    "a spline has no dimension of its own; dimension its points",
+                ));
+            }
             None => return Err(bad("the selected curve is gone")),
         },
         ([a, b], []) => Constraint::Distance {

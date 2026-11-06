@@ -31,6 +31,11 @@
 //! intersection, splitting, classification and sewing, with coplanar and touching cases,
 //! multi-lump results and result faces named after the operand faces they came from.
 //!
+//! Rung K10 (curves) is here: B-spline edges ([`Curve::BSpline`], the curves in
+//! `chamfera_geom::BSplineCurve3`), spline profile edges ([`ProfileEdge::Spline`]) and
+//! surfaces of linear extrusion ([`Extrusion`]) for extruded splines; booleans and blends
+//! refuse spline faces for now.
+//!
 //! Rung K11 (first part) is here: edge blends, constant-radius [`fillet`] and
 //! equal-distance [`chamfer`] on straight edges between planes (cylinders, sphere-octant
 //! corners) and on plane/cylinder rims (tori, cones).
@@ -39,9 +44,12 @@ mod blend;
 mod boolean;
 mod check;
 mod curve3;
+mod extrusion;
 mod intersect;
 mod planar;
 mod profile;
+#[cfg(test)]
+mod spline_tests;
 mod ssi;
 mod surface;
 mod sweep;
@@ -56,6 +64,7 @@ pub use curve3::{
     Arc3, Circle3, ClosestPoint, ELLIPSE_LENGTH_RELATIVE_TOLERANCE, Ellipse3, EllipticalArc3,
     Line3, Segment3,
 };
+pub use extrusion::Extrusion;
 pub use intersect::{
     Contact, IntersectionPoint, Intersections, Overlap, arc_arc, circle_arc, circle_circle,
     line_arc, line_circle, line_line, line_segment, segment_arc, segment_circle, segment_segment,
@@ -97,3 +106,12 @@ pub enum KernelError {
 }
 
 pub type KernelResult<T> = Result<T, KernelError>;
+
+impl From<chamfera_geom::NurbsError> for KernelError {
+    fn from(e: chamfera_geom::NurbsError) -> Self {
+        match e {
+            chamfera_geom::NurbsError::NoConvergence(m) => KernelError::NoConvergence(m),
+            other => KernelError::InvalidInput(other.to_string()),
+        }
+    }
+}

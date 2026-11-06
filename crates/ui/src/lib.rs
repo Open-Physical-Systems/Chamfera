@@ -29,6 +29,7 @@ mod search;
 mod shortcuts;
 mod sketch_ui;
 mod solid_ui;
+mod spline_ui;
 mod timeline;
 mod viewcube;
 #[cfg(target_arch = "wasm32")]

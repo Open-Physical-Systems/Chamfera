@@ -73,6 +73,10 @@ pub fn curve_polyline(sketch: &Sketch, curve: &Curve) -> Vec<Point2> {
                 })
                 .collect()
         }
+        Curve::Spline { .. } => sketch
+            .spline_of(curve)
+            .map(|c| chamfera_sketch::spline_polyline(&c))
+            .unwrap_or_default(),
     }
 }
 
@@ -236,7 +240,7 @@ impl Session {
         let circle_label = |c: CurveId| {
             let centre = match s.curve(c)? {
                 Curve::Circle { centre, .. } | Curve::Arc { centre, .. } => s.point(*centre)?,
-                Curve::Line { .. } => return None,
+                Curve::Line { .. } | Curve::Spline { .. } => return None,
             };
             let r = s.radius(c)?;
             // Up and to the right of the centre, on the circle.

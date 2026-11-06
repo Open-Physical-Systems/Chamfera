@@ -69,7 +69,7 @@ impl Loaded<'_> {
         if other == f {
             return Ok(None);
         }
-        Ok(Some(self.face(other)?.side.surface))
+        Ok(Some(self.face(other)?.side.surface.clone()))
     }
 
     /// The distinct operand edges of face `f`.
@@ -118,7 +118,8 @@ fn face_box(body: &Body, f: FaceId, surface: &Surface) -> KernelResult<Aabb> {
         max: b.max + Vec3::new(d, d, d),
     };
     match surface {
-        Surface::Plane(_) => {}
+        // Booleans refuse spline faces before they get here.
+        Surface::Plane(_) | Surface::Extrusion(_) => {}
         Surface::Cylinder(c) => b = grow(b, 2.0 * c.radius()),
         Surface::Cone(_) => b = grow(b, 2.0 * rho_max),
         Surface::Sphere(s) => {
@@ -217,7 +218,7 @@ pub(super) fn load<'a>(
         faces.push(InFace {
             id: *f,
             side: Side {
-                surface,
+                surface: surface.clone(),
                 orient: if same { 1.0 } else { -1.0 },
             },
             name: body.face_name(*f)?.map(str::to_owned),

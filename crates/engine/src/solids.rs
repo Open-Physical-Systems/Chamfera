@@ -208,10 +208,34 @@ fn loop_edges(sketch: &Sketch, l: &ProfileLoop) -> Result<Vec<ProfileEdge>, Stri
                     sketch.point(*end).ok_or_else(gone)?,
                 )
                 .map_err(|e| format!("an arc of the profile: {e}"))?,
+                Curve::Spline { .. } => {
+                    // A spline's own curve; a closed one (a loop by itself) as two halves,
+                    // as the kernel wants every loop edge to have two ends.
+                    let c = sketch
+                        .spline_of(curve)
+                        .ok_or_else(|| "a spline of the profile has no curve".to_owned())?;
+                    let mut pieces = if c.is_closed() {
+                        let (lo, hi) = c.domain();
+                        let (a, b) = c
+                            .split_at(0.5 * (lo + hi))
+                            .map_err(|e| format!("a spline of the profile: {e}"))?;
+                        vec![ProfileEdge::Spline(a), ProfileEdge::Spline(b)]
+                    } else {
+                        vec![ProfileEdge::Spline(c)]
+                    };
+                    if seg.reversed {
+                        pieces.reverse();
+                        for p in &mut pieces {
+                            *p = p.reversed();
+                        }
+                    }
+                    return Ok(pieces);
+                }
             };
-            Ok(if seg.reversed { edge.reversed() } else { edge })
+            Ok(vec![if seg.reversed { edge.reversed() } else { edge }])
         })
-        .collect()
+        .collect::<Result<Vec<Vec<ProfileEdge>>, String>>()
+        .map(|v| v.into_iter().flatten().collect())
 }
 
 /// A sketch region as an exact kernel profile (outer loop and holes).

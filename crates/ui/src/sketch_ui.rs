@@ -23,6 +23,7 @@ pub enum Tool {
     Arc,
     ThreePointArc,
     TangentArc,
+    Spline,
     Offset,
     Mirror,
     RectangularPattern,
@@ -35,15 +36,16 @@ pub enum Tool {
 }
 
 /// The CREATE tools shown in the ribbon; the group's list has all of `CREATE_ALL`.
-const CREATE_SHOWN: [Tool; 6] = [
+const CREATE_SHOWN: [Tool; 7] = [
     Tool::Line,
     Tool::Rectangle,
     Tool::Circle,
     Tool::Arc,
+    Tool::Spline,
     Tool::Offset,
     Tool::Mirror,
 ];
-pub(crate) const CREATE_ALL: [Tool; 11] = [
+pub(crate) const CREATE_ALL: [Tool; 12] = [
     Tool::Line,
     Tool::Rectangle,
     Tool::CentreRectangle,
@@ -51,6 +53,7 @@ pub(crate) const CREATE_ALL: [Tool; 11] = [
     Tool::Arc,
     Tool::ThreePointArc,
     Tool::TangentArc,
+    Tool::Spline,
     Tool::Offset,
     Tool::Mirror,
     Tool::RectangularPattern,
@@ -76,6 +79,7 @@ impl Tool {
             Tool::Arc => label("sketch.arc"),
             Tool::ThreePointArc => label("sketch.arc.three_point"),
             Tool::TangentArc => label("sketch.arc.tangent"),
+            Tool::Spline => label("sketch.spline"),
             Tool::Offset => label("sketch.offset"),
             Tool::Mirror => label("sketch.mirror"),
             Tool::RectangularPattern => label("sketch.pattern.rectangular"),
@@ -100,6 +104,7 @@ impl Tool {
             Tool::Arc => Icon::Arc,
             Tool::ThreePointArc => Icon::ArcThreePoint,
             Tool::TangentArc => Icon::ArcTangent,
+            Tool::Spline => Icon::Spline,
             Tool::Offset => Icon::Offset,
             Tool::Mirror => Icon::Mirror,
             Tool::RectangularPattern => Icon::PatternRectangular,
@@ -114,6 +119,7 @@ impl Tool {
 
     fn tooltip(self) -> &'static str {
         match self {
+            Tool::Spline => crate::spline_ui::TOOLTIP,
             Tool::Select => {
                 "Select
 Pick points and curves to constrain or dimension (Shift adds); drag points to move them"
@@ -187,6 +193,7 @@ Click a curve to split it where other curves cross it; Split All splits every cr
 
     fn hint(self, clicks: usize) -> &'static str {
         match (self, clicks) {
+            (Tool::Spline, n) => crate::spline_ui::hint(n),
             (Tool::Select, _) => {
                 "Click to select (Shift adds) · drag a point to move it · Del deletes"
             }
@@ -244,9 +251,9 @@ Click a curve to split it where other curves cross it; Split All splits every cr
 
 /// A placed click: where it is, and the existing point it snapped to.
 #[derive(Debug, Clone, Copy)]
-struct Click {
-    at: Point2,
-    point: Option<u32>,
+pub(crate) struct Click {
+    pub(crate) at: Point2,
+    pub(crate) point: Option<u32>,
 }
 
 /// The values the editing tools use, as typed in the tool box.
@@ -283,7 +290,7 @@ impl Default for ToolOptions {
 #[derive(Default)]
 pub struct SketchUi {
     pub tool: Option<Tool>,
-    clicks: Vec<Click>,
+    pub(crate) clicks: Vec<Click>,
     /// The first point of the current line chain, to close the loop on it.
     chain_start: Option<u32>,
     hover: Option<Point2>,
@@ -797,6 +804,12 @@ impl ChamferaApp {
             )
         });
         let typing = ui.ctx().egui_wants_keyboard_input();
+        if self.sketch.tool() == Tool::Spline
+            && !typing
+            && ui.input(|i| i.key_pressed(egui::Key::Enter))
+        {
+            self.spline_finish(false);
+        }
         if esc && !typing {
             if self.sketch.clicks.is_empty() {
                 self.sketch.tool = Some(Tool::Select);
@@ -884,6 +897,10 @@ impl ChamferaApp {
         };
         if tool.edits() {
             self.edit_click(tool, (x, y, w, h), click);
+            return;
+        }
+        if tool == Tool::Spline {
+            self.spline_click(click, (x, y, w, h));
             return;
         }
         self.sketch.clicks.push(click);
@@ -1094,6 +1111,7 @@ impl ChamferaApp {
                     polylines.extend(self.op_polylines(&op));
                 }
             }
+            (Tool::Spline, _) => polylines.extend(self.spline_preview(hover)),
             (tool, _) if tool.edits() => polylines.extend(self.edit_preview(tool, hover)),
             _ => {}
         }

@@ -48,7 +48,7 @@ fn ends(s: &Sketch, id: CurveId) -> (Point2, Point2) {
         Curve::Line { start, end, .. } | Curve::Arc { start, end, .. } => {
             (s.point(*start).unwrap(), s.point(*end).unwrap())
         }
-        Curve::Circle { .. } => panic!("a circle has no ends"),
+        Curve::Circle { .. } | Curve::Spline { .. } => panic!("no line or arc ends"),
     }
 }
 

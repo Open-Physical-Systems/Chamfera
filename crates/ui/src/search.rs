@@ -67,6 +67,7 @@ fn command_of(action: Action) -> Option<&'static str> {
             Tool::Arc => "sketch.arc",
             Tool::ThreePointArc => "sketch.arc.three_point",
             Tool::TangentArc => "sketch.arc.tangent",
+            Tool::Spline => "sketch.spline",
             Tool::Offset => "sketch.offset",
             Tool::Mirror => "sketch.mirror",
             Tool::RectangularPattern => "sketch.pattern.rectangular",

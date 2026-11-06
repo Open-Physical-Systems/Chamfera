@@ -655,6 +655,7 @@ fn place(
 /// edge's direction.
 fn profile_curve(frame: &Frame, e: &ProfileEdge) -> KernelResult<(Curve, f64, f64)> {
     match *e {
+        ProfileEdge::Spline(ref c) => crate::extrusion::profile_spline_curve(frame, c),
         ProfileEdge::Line { a, b } => Ok((
             Curve::Segment(Segment3::new(frame.from_plane(a), frame.from_plane(b))?),
             0.0,
@@ -676,7 +677,15 @@ fn profile_curve(frame: &Frame, e: &ProfileEdge) -> KernelResult<(Curve, f64, f6
 /// The surface swept by profile edge `e`, and whether its normal is the outward one.
 /// `frame` is the canonical sketch frame (the sweep moves the profile along its normal).
 fn side_surface(frame: &Frame, motion: &Motion, e: &ProfileEdge) -> KernelResult<(Surface, bool)> {
-    let s = match (motion, *e) {
+    let s = match (motion, e.clone()) {
+        (Motion::Translate(d), ProfileEdge::Spline(c)) => {
+            crate::extrusion::extruded_side(frame, *d, &c)?
+        }
+        (Motion::Rotate { .. }, ProfileEdge::Spline(_)) => {
+            return Err(KernelError::Unsupported(
+                "revolving a spline (surfaces of revolution of splines come later)".into(),
+            ));
+        }
         (Motion::Translate(d), ProfileEdge::Line { a, b }) => {
             let t = frame.vector_from_plane(b - a);
             let n = t.cross(*d);
@@ -718,7 +727,8 @@ fn side_surface(frame: &Frame, motion: &Motion, e: &ProfileEdge) -> KernelResult
             }
         }
     };
-    Ok((s, same_sense(frame, motion, e, &s)))
+    let sense = same_sense(frame, motion, e, &s);
+    Ok((s, sense))
 }
 
 /// Whether the surface normal at the middle of profile edge `e` is the outward normal
@@ -848,7 +858,7 @@ fn build_swept(
         let n = l.len();
         for k in 0..n {
             let e = &l.edges[k];
-            let pe = e.edge;
+            let pe = e.edge.clone();
             let vs = e.vertex_source;
             let near_v = need(t.near_v[k], "a near vertex")?;
             let near_e = need(t.near_e[k], "a near edge")?;

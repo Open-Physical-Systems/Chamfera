@@ -187,7 +187,7 @@ impl Body {
             }
         }
         for (e, edge) in edges.iter().enumerate() {
-            let c = body.curves.push(edge.curve);
+            let c = body.curves.push(edge.curve.clone());
             let [Some(a), Some(b)] = halves[e] else {
                 return Err(bad(format!("edge {e} lost a half-edge")));
             };
@@ -204,7 +204,7 @@ impl Body {
         let mut lp_index = 0usize;
         let mut h = 0usize;
         for (fi, f) in faces.iter().enumerate() {
-            let s = body.surfaces.push(f.surface);
+            let s = body.surfaces.push(f.surface.clone());
             let first_loop = lp_index;
             for lp in &f.loops {
                 let first = h;
@@ -379,7 +379,7 @@ mod tests {
         let inward: Vec<ListFace> = f
             .iter()
             .map(|face| ListFace {
-                surface: face.surface,
+                surface: face.surface.clone(),
                 same_sense: false,
                 name: None,
                 loops: vec![face.loops[0].iter().rev().map(|&(e, d)| (e, !d)).collect()],

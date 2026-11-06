@@ -340,7 +340,8 @@ fn check_point(what: &str, p: Point2) -> Result<(), ToolError> {
 fn ends(curve: &Curve) -> Option<(PointId, PointId)> {
     match curve {
         Curve::Line { start, end, .. } | Curve::Arc { start, end, .. } => Some((*start, *end)),
-        Curve::Circle { .. } => None,
+        // The tools that need ends (trim, extend, fillet, ...) do not cut splines yet.
+        Curve::Circle { .. } | Curve::Spline { .. } => None,
     }
 }
 
@@ -355,7 +356,7 @@ fn with_end(curve: &Curve, at_start: bool, p: PointId) -> Curve {
                 *end = p;
             }
         }
-        Curve::Circle { .. } => {}
+        Curve::Circle { .. } | Curve::Spline { .. } => {}
     }
     c
 }
@@ -507,7 +508,7 @@ impl Sketch {
                 }
                 Some(circle.polyline(t0, t1))
             }
-            Curve::Circle { .. } => None,
+            Curve::Circle { .. } | Curve::Spline { .. } => None,
         }
     }
 
@@ -586,6 +587,8 @@ impl Sketch {
             Curve::Arc {
                 centre, start, end, ..
             } => Shape::arc(self.point(*centre)?, self.point(*start)?, self.point(*end)?),
+            // Splines take no part in the cutting tools yet.
+            Curve::Spline { .. } => None,
         }
     }
 
@@ -697,6 +700,7 @@ impl Sketch {
             Curve::Line { .. } => (false, None),
             Curve::Arc { centre, .. } => (false, Some(*centre)),
             Curve::Circle { centre, .. } => (true, Some(*centre)),
+            Curve::Spline { .. } => return refuse("splines cannot be cut yet"),
         };
         let n = if cyclic {
             chain.len()
@@ -897,6 +901,7 @@ impl Sketch {
                 // Piece 0 runs from the cut below the click to the cut above it.
                 self.rebuild(id, &[lo, hi], &[false, true])
             }
+            Curve::Spline { .. } => refuse("splines cannot be trimmed yet"),
         }
     }
 
@@ -1005,6 +1010,7 @@ impl Sketch {
                     v
                 }
                 Curve::Circle { .. } => inner,
+                Curve::Spline { .. } => continue,
             };
             let pieces = match c {
                 Curve::Circle { .. } => chain.len(),
@@ -1140,6 +1146,11 @@ impl Sketch {
                 Curve::Arc { start, end, .. } => {
                     if group.contains(start) || group.contains(end) {
                         return refuse("fillets and chamfers join two lines; an arc ends here");
+                    }
+                }
+                Curve::Spline { points, .. } => {
+                    if points.iter().any(|p| group.contains(p)) {
+                        return refuse("fillets and chamfers join two lines; a spline ends here");
                     }
                 }
                 Curve::Circle { .. } => {}
@@ -1420,6 +1431,7 @@ impl Sketch {
                     }
                 }
                 Curve::Circle { .. } => return refuse("a circle is offset on its own"),
+                Curve::Spline { .. } => return refuse("splines cannot be offset yet"),
             };
             let Some((s, e)) = ends(&c) else {
                 return refuse("a circle is offset on its own");
@@ -1768,6 +1780,19 @@ impl Sketch {
                     end: if mirrored { m(&start) } else { m(&end) },
                     construction,
                 },
+                // Interpolation and control polygons commute with rigid motions and
+                // reflections, so the copy is the spline on the copied points.
+                Curve::Spline {
+                    ref points,
+                    form,
+                    closed,
+                    construction,
+                } => Curve::Spline {
+                    points: points.iter().map(m).collect(),
+                    form,
+                    closed,
+                    construction,
+                },
             };
             if copy != curve {
                 out.insert(*c, self.add_curve(copy)?);
@@ -2111,6 +2136,9 @@ impl Sketch {
                 if *end == from { r.perp() } else { -r.perp() }
             }
             Curve::Circle { .. } => return refuse("a circle has no end"),
+            Curve::Spline { .. } => {
+                return refuse("a tangent arc from a spline is not supported yet");
+            }
         };
         let Some(t) = t.normalized() else {
             return refuse("the curve has no direction at that end");

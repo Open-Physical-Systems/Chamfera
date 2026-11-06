@@ -43,6 +43,7 @@ mod euler;
 mod geometry;
 mod import;
 mod measure;
+mod spline;
 mod transform;
 mod uv;
 mod validate;
@@ -499,7 +500,7 @@ impl Body {
             .surfaces
             .get(s.index())
             .ok_or_else(|| missing("surface", s))?;
-        Ok(Some((*surface, f.same_sense)))
+        Ok(Some((surface.clone(), f.same_sense)))
     }
     pub fn face_name(&self, face: FaceId) -> KernelResult<Option<&str>> {
         Ok(self.face(face)?.name.as_deref())
@@ -579,7 +580,7 @@ impl Body {
             .curves
             .get(ec.curve.index())
             .ok_or_else(|| missing("curve", ec.curve))?;
-        Ok(Some((*c, ec.t0, ec.t1)))
+        Ok(Some((c.clone(), ec.t0, ec.t1)))
     }
     pub fn edge_name(&self, e: EdgeId) -> KernelResult<Option<&str>> {
         Ok(self.edge(e)?.name.as_deref())

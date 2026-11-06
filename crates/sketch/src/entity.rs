@@ -4,8 +4,11 @@
 //! curve that uses it. A circle owns its radius. An arc is a centre, a start and an end
 //! point, swept counter-clockwise from start to end; its radius is the distance from the
 //! centre to the start, and the solver keeps the end at the same distance (one implicit
-//! equation per arc, which is why a free arc has 5 degrees of freedom, not 6).
+//! equation per arc, which is why a free arc has 5 degrees of freedom, not 6). A spline
+//! refers to its fit or control points in order and adds no unknowns or equations of its
+//! own: its degrees of freedom are its points'.
 
+use crate::spline::SplineForm;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
@@ -68,6 +71,18 @@ pub enum Curve {
         #[serde(default)]
         construction: bool,
     },
+    /// A smooth curve through its points in order (`form: fit`, the default) or guided by
+    /// them as a control polygon (`form: control`); see `spline.rs`. The points are
+    /// ordinary sketch points, so constraints on them shape the spline.
+    Spline {
+        points: Vec<PointId>,
+        #[serde(default)]
+        form: SplineForm,
+        #[serde(default)]
+        closed: bool,
+        #[serde(default)]
+        construction: bool,
+    },
 }
 
 impl Curve {
@@ -76,7 +91,8 @@ impl Curve {
         match self {
             Curve::Line { construction, .. }
             | Curve::Circle { construction, .. }
-            | Curve::Arc { construction, .. } => *construction,
+            | Curve::Arc { construction, .. }
+            | Curve::Spline { construction, .. } => *construction,
         }
     }
 
@@ -84,7 +100,8 @@ impl Curve {
         match self {
             Curve::Line { construction, .. }
             | Curve::Circle { construction, .. }
-            | Curve::Arc { construction, .. } => *construction = value,
+            | Curve::Arc { construction, .. }
+            | Curve::Spline { construction, .. } => *construction = value,
         }
     }
 
@@ -96,6 +113,7 @@ impl Curve {
             Curve::Arc {
                 centre, start, end, ..
             } => vec![*centre, *start, *end],
+            Curve::Spline { points, .. } => points.clone(),
         }
     }
 
@@ -108,12 +126,18 @@ impl Curve {
         matches!(self, Curve::Circle { .. } | Curve::Arc { .. })
     }
 
-    /// A short name for messages: "line", "circle" or "arc".
+    /// True for splines.
+    pub fn is_spline(&self) -> bool {
+        matches!(self, Curve::Spline { .. })
+    }
+
+    /// A short name for messages: "line", "circle", "arc" or "spline".
     pub fn kind_name(&self) -> &'static str {
         match self {
             Curve::Line { .. } => "line",
             Curve::Circle { .. } => "circle",
             Curve::Arc { .. } => "arc",
+            Curve::Spline { .. } => "spline",
         }
     }
 }
