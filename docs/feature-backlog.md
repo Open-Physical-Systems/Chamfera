@@ -16,7 +16,7 @@ Items 1 to 7 can run in parallel (they touch different crates or files); 8 to 10
 | # | Feature | Why now | Size | Main crates | Depends on |
 |---|---|---|---|---|---|
 | 1 | **Shell** (hollow a solid, remove chosen faces, wall thickness) | The third most used solid feature after extrude and fillet; kernel rung K12 | L | kernel, engine | none |
-| 2 | **Measure and mass properties** (distance, angle, edge length, face area, volume, centre of mass) | Users and agents check every part with it; the kernel already computes exact area and volume | M | kernel, engine, ui | none |
+| 2 | **Measure and mass properties** (distance, angle, edge length, face area, volume, centre of mass) | Users and agents check every part with it; the kernel already computes exact area and volume (done) | M | kernel, engine, ui | none |
 | 3 | **Construction planes, axes and points** (offset, at angle, midplane, through three points, tangent; axis through edge/two points; points) | Needed to sketch anywhere other than XY/XZ/YZ or a flat face | M | doc, engine, ui | none |
 | 4 | **Command search and keyboard shortcuts** (search box listing every command; single-key shortcuts for the common tools; right-click context menus in the viewport) | Every command already exists in the registry, so this is mostly UI | M | ui | none |
 | 5 | **Typed values and richer inference while drawing** (type length and angle in fields beside the cursor; snaps to midpoint, centre, quadrant, on curve, tangent, perpendicular; Shift to suspend snaps) | The sketcher feels unfinished without it; AutoCAD and Fusion users both rely on it | M | ui, engine (sketch commands) | none |
@@ -48,10 +48,10 @@ Close runners-up: selection filters and box selection (UI and NAV), splines (nee
 | Tangent arc | Arc that continues tangentially from a line end | branch (`sketch/tools`) | P0 | S | sketch, ui |
 | Point | A free sketch point | done | P0 | S | sketch |
 | Construction toggle | Mark a curve as construction (not part of profiles) | done | P0 | S | sketch, ui |
-| Polygon | Regular polygon, inscribed or circumscribed, by centre or edge | missing | P0 | S | sketch, ui |
-| Slot | Straight slot by centres or overall length, arc slot | missing | P0 | S | sketch, ui |
-| Ellipse | Ellipse by centre and two axes (kernel ellipses exist) | missing | P1 | S | sketch, ui |
-| Elliptical arc | Partial ellipse | missing | P2 | S | sketch |
+| Polygon | Regular polygon, inscribed or circumscribed, by centre or edge | branch (`sketch/shapes-project`) (by centre) | P0 | S | sketch, ui |
+| Slot | Straight slot by centres or overall length, arc slot | branch (`sketch/shapes-project`) (straight) | P0 | S | sketch, ui |
+| Ellipse | Ellipse by centre and two axes (kernel ellipses exist) | branch (`sketch/shapes-project`) (not extruded yet) | P1 | S | sketch, ui |
+| Elliptical arc | Partial ellipse | branch (`sketch/shapes-project`) (command only) | P2 | S | sketch |
 | Conic curve | A conic with a shape value (rho) between two ends | missing | P2 | M | sketch, geom |
 | Fit-point spline | Smooth curve through clicked points, with tangent handles | missing | P1 | L | sketch, geom (needs K10) |
 | Control-point spline | Spline edited by its control polygon | missing | P1 | M | sketch, geom (needs K10) |
@@ -65,7 +65,7 @@ Close runners-up: selection filters and box selection (UI and NAV), splines (nee
 | Sketch mirror | Mirror curves across a line, with symmetry constraints | branch (`sketch/tools`) | P0 | S | sketch, engine |
 | Sketch rectangular and circular patterns | Repeat curves in a grid or around a point | branch (`sketch/tools`) | P1 | S | sketch, engine |
 | Move, rotate, scale, copy sketch geometry | Transform selected curves by drag or typed values | missing | P1 | M | sketch, engine, ui |
-| Project / include geometry | Bring model edges, faces and other sketch curves into the sketch, linked to their source | missing | P0 | M | sketch, doc, engine |
+| Project / include geometry | Bring model edges, faces and other sketch curves into the sketch, linked to their source | branch (`sketch/shapes-project`) (edges and faces) | P0 | M | sketch, doc, engine |
 | Intersection curve | Curve where the sketch plane cuts a body | missing | P1 | M | kernel, sketch |
 | Project to surface / wrap | Project curves onto a curved face | missing | P2 | L | kernel |
 | 3D sketch | Curves in space, not on one plane (paths for sweeps) | missing | P2 | L | sketch, doc |
@@ -132,8 +132,8 @@ Close runners-up: selection filters and box selection (UI and NAV), splines (nee
 | Feature | Description | Status | Pri | Size | Layer |
 |---|---|---|---|---|---|
 | Extrude (one side, flipped, symmetric) | Sweep a profile along its normal; distance as an expression | done | P0 | M | kernel, doc, engine |
-| Extrude extents | Through all, to a face or object, start offset, two different sides | missing | P0 | M | engine, doc, kernel |
-| Extrude taper | Draft angle on the extrude sides | missing | P0 | M | kernel |
+| Extrude extents | Through all, to a face or object, start offset, two different sides | done (to object: parallel flat faces and planes only) | P0 | M | engine, doc, kernel |
+| Extrude taper | Draft angle on the extrude sides | done (planar profiles; sharp corners at arcs refused) | P0 | M | kernel |
 | Thin extrude | Extrude an open or closed profile as a wall of given thickness | missing | P1 | M | kernel, engine |
 | Revolve | Profile around an axis, partial or full | done | P0 | M | kernel, engine |
 | Boolean operation choice | New body, join, cut, intersect for each feature | done | P0 | M | kernel (K7), engine |
@@ -145,15 +145,15 @@ Close runners-up: selection filters and box selection (UI and NAV), splines (nee
 | Variable-radius fillet | Radius changes along the edge | missing | P2 | L | kernel |
 | Rule fillet / full round | Round all edges of a face, or a full round between three faces | missing | P2 | M | kernel |
 | Tangent chain selection | Picking one edge selects its tangent-connected chain | missing | P0 | S | engine, ui |
-| Shell | Hollow a body with chosen faces removed | missing | P0 | L | kernel (K12), engine |
-| Hole | Simple, counterbore, countersink; blind, to a face, through all | missing | P0 | M | engine, doc, kernel |
+| Shell | Hollow a body with chosen faces removed | branch `kernel/k12-shell` (planes, cylinders, cones; inward or outward; closed hollow) | P0 | L | kernel (K12), engine |
+| Hole | Simple, counterbore, countersink; blind, to a face, through all | branch (`solid/hole`: simple, counterbore, countersink, blind or through all, drill point; not yet "to a face") | P0 | M | engine, doc, kernel |
 | Thread | Cosmetic thread (attribute + drawing note), later modelled thread | missing | P1 | M | doc, kernel |
 | Linear (rectangular) pattern | Features repeated in one or two directions | done | P0 | M | engine, doc |
 | Circular pattern | Features repeated around an axis | done | P0 | M | engine, doc |
-| Pattern buttons in the ribbon | UI for the pattern commands | missing | P0 | S | ui |
+| Pattern buttons in the ribbon | UI for the pattern commands | branch (`solid/mirror-move`) | P0 | S | ui |
 | Pattern on a path, pattern of bodies or faces | Further pattern kinds | missing | P2 | M | engine |
-| Mirror | Mirror features or bodies across a plane | missing | P0 | M | engine, kernel |
-| Move / copy body | Translate or rotate a body, by drag handles or values | missing | P0 | M | engine, ui |
+| Mirror | Mirror features or bodies across a plane | branch (`solid/mirror-move`) | P0 | M | engine, kernel |
+| Move / copy body | Translate or rotate a body, by drag handles or values | branch (`solid/mirror-move`: typed values; drag handles missing) | P0 | M | engine, ui |
 | Align | Move a body so one face or edge meets another | missing | P2 | S | engine |
 | Sweep | Profile along a path, with guide rail and twist options | missing | P1 | L | kernel (K12, K10) |
 | Loft | Solid through several profiles, with rails and end conditions | missing | P1 | L | kernel (K12, K10) |
@@ -233,9 +233,9 @@ Close runners-up: selection filters and box selection (UI and NAV), splines (nee
 | Feature | Description | Status | Pri | Size | Layer |
 |---|---|---|---|---|---|
 | Point pick with normal | Picking a point on a body returns its position and normal | done | P0 | S | engine, gpu |
-| Measure distance and angle | Between any two picked points, edges, faces, bodies (minimum distance) | missing | P0 | M | kernel, engine, ui |
-| Measure length, area, radius | Of a picked edge or face | missing | P0 | S | kernel, engine |
-| Mass properties | Volume, area, mass, centre of mass, moments of inertia | missing | P0 | M | kernel, engine |
+| Measure distance and angle | Between any two picked points, edges, faces, bodies (minimum distance) | done (`inspect.measure`, `inspect.measure_at`, INSPECT > Measure) | P0 | M | kernel, engine, ui |
+| Measure length, area, radius | Of a picked edge or face | done | P0 | S | kernel, engine |
+| Mass properties | Volume, area, mass, centre of mass, moments of inertia | done (`inspect.mass`, INSPECT > Mass Properties) | P0 | M | kernel, engine |
 | Section analysis | Cut the view with a plane and show the cut face | missing | P1 | M | gpu, render, kernel |
 | Interference | See assemblies | missing | P1 | M | kernel |
 | Curvature and zebra analysis | Show surface quality (comb, zebra stripes, curvature map) | missing | P2 | M | gpu, kernel |
@@ -306,12 +306,12 @@ Close runners-up: selection filters and box selection (UI and NAV), splines (nee
 | Command search | A search box (on a key) that finds any command by name and runs it | missing | P0 | S | ui |
 | Keyboard shortcuts | Single keys for line, rectangle, circle, extrude, fillet, measure, dimension, trim, offset, and so on; editable | missing | P0 | S | ui (now only file, undo, fit, home) |
 | Radial context menu | Right-click menu laid out around the cursor with the common commands | missing | P1 | M | ui |
-| Context menu in the viewport | Right-click on a body, face or sketch for its commands | missing | P0 | S | ui |
-| Selection filters | Limit picks to bodies, faces, edges, vertices, sketches, components | missing | P0 | S | engine, ui |
+| Context menu in the viewport | Right-click on a body, face or sketch for its commands | done (body, face, edge, empty space, sketch) | P0 | S | ui |
+| Selection filters | Limit picks to bodies, faces, edges, vertices, sketches, components | partial (bodies, faces, edges; sketch points, curves, construction; no solid vertices or components yet) | P0 | S | engine, ui |
 | Box selection | Window and crossing selection by dragging | missing | P0 | M | engine, gpu, ui |
 | Select through / select other | Cycle through overlapping items under the cursor | missing | P1 | S | engine, ui |
 | Pre-selection highlight | Highlight what a click would pick | missing | P0 | S | gpu, ui |
-| Feature dialogs with live preview | A panel per feature with fields and a preview before OK | missing | P0 | M | ui, engine (partial: some features) |
+| Feature dialogs with live preview | A panel per feature with fields and a preview before OK | missing | P0 | M | ui, engine (partial: Extrude shows a translucent preview through `solid.extrude_preview`) |
 | Drag manipulators | Arrows and rings on the model to set distances and angles | missing | P1 | M | ui, gpu |
 | Undo and redo | Every change undoable | done | P0 | S | engine |
 | Themes (light, dark, system) | From theme tokens | done | P0 | S | render, ui |

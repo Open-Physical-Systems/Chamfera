@@ -1,14 +1,14 @@
-//! `cam.*` commands against hand-derived values, on examples/hole-plate.json.
+//! `cam.*` commands against hand-derived values, on examples/cam-plate.json.
 
 use super::*;
 use serde_json::json;
 
-/// A session that has run examples/hole-plate.json: a 100 x 60 x 12 plate with four
+/// A session that has run examples/cam-plate.json: a 100 x 60 x 12 plate with four
 /// Ø6 through holes and a 50 x 30 pocket 5 deep round a Ø12 island, and its CAM setup.
 fn hole_plate() -> Session {
     let text = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../examples/hole-plate.json"
+        "/../../examples/cam-plate.json"
     ))
     .unwrap();
     let steps: serde_json::Value = serde_json::from_str(&text).unwrap();
@@ -18,7 +18,70 @@ fn hole_plate() -> Session {
 }
 
 #[test]
-fn drilling_finds_every_vertical_hole_of_the_hole_plate() {
+fn drilling_finds_every_vertical_hole_of_the_hole_plate_example() {
+    // examples/hole-plate.json: an 80 x 50 x 10 plate with four Ø6.6 counterbored
+    // through holes at (10, 10), (70, 10), (70, 40), (10, 40), a Ø6 countersunk through
+    // hole at (40, 25) and two Ø5 blind holes 6 deep at (25, 25) and (55, 25). A
+    // counterbore is drilled at its smaller (through) diameter.
+    let text = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../examples/hole-plate.json"
+    ))
+    .unwrap();
+    let steps: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let mut s = Session::new();
+    script::run_steps(&mut s, steps.as_array().unwrap()).unwrap();
+    let t = s
+        .execute("cam.tool_add", &json!({"kind": "drill", "diameter": 4}))
+        .unwrap()["tool"]
+        .clone();
+    let r = s
+        .execute(
+            "cam.op_add",
+            &json!({"kind": "drill", "tool": t, "peck": 2}),
+        )
+        .unwrap();
+    assert!(r.get("error").is_none(), "{r}");
+    let mut holes: Vec<(f64, f64, f64)> = r["holes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|h| {
+            (
+                h["x"].as_f64().unwrap(),
+                h["y"].as_f64().unwrap(),
+                (h["diameter"].as_f64().unwrap() * 1000.0).round() / 1000.0,
+            )
+        })
+        .collect();
+    holes.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let want = [
+        (10.0, 10.0, 6.6),
+        (10.0, 40.0, 6.6),
+        (25.0, 25.0, 5.0),
+        (40.0, 25.0, 6.0),
+        (55.0, 25.0, 5.0),
+        (70.0, 10.0, 6.6),
+        (70.0, 40.0, 6.6),
+    ];
+    assert_eq!(holes.len(), want.len(), "{holes:?}");
+    for (h, w) in holes.iter().zip(want) {
+        assert!(
+            (h.0 - w.0).abs() < 1e-9 && (h.1 - w.1).abs() < 1e-9 && (h.2 - w.2).abs() < 1e-9,
+            "{h:?} vs {w:?}"
+        );
+    }
+    // The blind holes stop 6 below the top (z 10): bottom at 4; the through holes at 0.
+    for h in r["holes"].as_array().unwrap() {
+        let blind = (h["diameter"].as_f64().unwrap() - 5.0).abs() < 1e-9;
+        let bottom = h["bottom"].as_f64().unwrap();
+        assert!(bottom <= if blind { 4.0 + 1e-9 } else { 1e-9 }, "{h}");
+        assert!(bottom >= if blind { 3.0 } else { -1e-9 }, "{h}");
+    }
+}
+
+#[test]
+fn drilling_finds_every_vertical_hole_of_the_cam_plate() {
     let mut s = hole_plate();
     let list = s.execute("cam.list", &json!({})).unwrap();
     let drill = list["operations"]

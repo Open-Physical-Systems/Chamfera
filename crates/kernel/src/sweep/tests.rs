@@ -733,3 +733,174 @@ fn bad_sweeps_are_refused_without_panicking() {
     assert_close("U", part.volume().unwrap(), 11.5);
     assert!(edge_names(&part).contains("axis 3") && edge_names(&part).contains("axis 7"));
 }
+
+// ---------------------------------------------------------------- tapered extrude
+
+fn deg(a: f64) -> f64 {
+    a * PI / 180.0
+}
+
+#[test]
+fn a_tapered_rectangle_is_the_frustum_of_the_prismatoid() {
+    let p = Profile::new(rect(0.0, 0.0, 50.0, 30.0), vec![]);
+    let (h, theta) = (10.0, deg(5.0));
+    let b = extrude_tapered(&Frame::XY, &p, h, theta).unwrap();
+    assert_eq!(counts(&b), (8, 12, 6, 0));
+    // Every edge moves in by d = h tan θ at the top, so the section at height z is
+    // (50 - 2δ)(30 - 2δ) with δ = z tan θ, quadratic in z: Simpson (the prismatoid
+    // formula) is exact. V = h/6 [1500 + 4 (50 - d)(30 - d) + (50 - 2d)(30 - 2d)]
+    // = h/6 [9000 - 480 d + 8 d²] = h (1500 - 80 d + 4/3 d²).
+    let d = h * theta.tan();
+    let want = h * (1500.0 - 80.0 * d + 4.0 / 3.0 * d * d);
+    assert_close("volume", b.volume().unwrap(), want);
+    let top = face_named(&b, "top");
+    assert_close(
+        "top",
+        b.face_area(top).unwrap(),
+        (50.0 - 2.0 * d) * (30.0 - 2.0 * d),
+    );
+    // A long side leans in by θ: its slant height is h / cos θ, its area the trapezoid
+    // (50 + 50 - 2d) / 2 · h / cos θ.
+    let side = face_named(&b, "side 0");
+    assert_close(
+        "side",
+        b.face_area(side).unwrap(),
+        (50.0 - d) * h / theta.cos(),
+    );
+    let bb = b.bounding_box().unwrap();
+    assert_close("min z", bb.min.z, 0.0);
+    assert_close("max z", bb.max.z, 10.0);
+    assert_eq!(
+        face_names(&b),
+        face_names(&extrude(&Frame::XY, &p, h).unwrap())
+    );
+    // Downward the same frustum, mirrored; a negative angle grows the profile instead.
+    let down = extrude_tapered(&Frame::XY, &p, -h, theta).unwrap();
+    assert_close("down", down.volume().unwrap(), want);
+    assert_close("down min z", down.bounding_box().unwrap().min.z, -10.0);
+    let grown = extrude_tapered(&Frame::XY, &p, h, -theta).unwrap();
+    assert_close(
+        "grown",
+        grown.volume().unwrap(),
+        h * (1500.0 + 80.0 * d + 4.0 / 3.0 * d * d),
+    );
+}
+
+#[test]
+fn a_tapered_circle_is_a_cone_frustum() {
+    let p = Profile::circle(Point2::ORIGIN, 5.0);
+    let (h, theta) = (10.0, deg(10.0));
+    let b = extrude_tapered(&Frame::XY, &p, h, theta).unwrap();
+    assert_eq!(counts(&b), (2, 3, 3, 0));
+    // r₂ = r₁ - h tan θ; V = π h / 3 (r₁² + r₁ r₂ + r₂²).
+    let (r1, r2) = (5.0, 5.0 - h * theta.tan());
+    assert_close(
+        "volume",
+        b.volume().unwrap(),
+        PI * h / 3.0 * (r1 * r1 + r1 * r2 + r2 * r2),
+    );
+    // The side is a cone: lateral area π (r₁ + r₂) s with slant s = h / cos θ.
+    let side = face_named(&b, "side 0");
+    assert!(matches!(
+        b.face_surface(side).unwrap(),
+        Some((Surface::Cone(_), _))
+    ));
+    assert_close(
+        "side",
+        b.face_area(side).unwrap(),
+        PI * (r1 + r2) * h / theta.cos(),
+    );
+}
+
+#[test]
+fn a_tapered_plate_with_a_hole_opens_the_hole_as_it_closes_the_outside() {
+    let hole = vec![ProfileEdge::circle(Point2::new(25.0, 15.0), 5.0)];
+    let p = Profile::new(rect(0.0, 0.0, 50.0, 30.0), vec![hole]);
+    let (h, theta) = (10.0, deg(3.0));
+    let b = extrude_tapered(&Frame::XY, &p, h, theta).unwrap();
+    assert_eq!(counts(&b), (10, 15, 7, 1));
+    // The hole's radius grows to 5 + δ: π ∫₀ʰ (5 + z tan θ)² dz = π h (25 + 5 d + d²/3).
+    let d = h * theta.tan();
+    let outer = h * (1500.0 - 80.0 * d + 4.0 / 3.0 * d * d);
+    let hole = PI * h * (25.0 + 5.0 * d + d * d / 3.0);
+    assert_close("volume", b.volume().unwrap(), outer - hole);
+}
+
+#[test]
+fn a_tapered_slot_keeps_its_tangent_ends() {
+    let slot = vec![
+        ProfileEdge::line(Point2::new(0.0, -5.0), Point2::new(20.0, -5.0)),
+        ProfileEdge::Arc {
+            centre: Point2::new(20.0, 0.0),
+            radius: 5.0,
+            start_angle: -FRAC_PI_2,
+            sweep: PI,
+        },
+        ProfileEdge::line(Point2::new(20.0, 5.0), Point2::new(0.0, 5.0)),
+        ProfileEdge::Arc {
+            centre: Point2::new(0.0, 0.0),
+            radius: 5.0,
+            start_angle: FRAC_PI_2,
+            sweep: PI,
+        },
+    ];
+    let (h, theta) = (10.0, deg(8.0));
+    let b = extrude_tapered(&Frame::XY, &Profile::new(slot, vec![]), h, theta).unwrap();
+    assert_eq!(counts(&b), (8, 12, 6, 0));
+    // The section with half-width w = 5 - δ is 20 · 2w + π w², quadratic in δ, so Simpson
+    // is exact over the height.
+    let d = h * theta.tan();
+    let area = |delta: f64| {
+        let w = 5.0 - delta;
+        40.0 * w + PI * w * w
+    };
+    let want = h / 6.0 * (area(0.0) + 4.0 * area(d / 2.0) + area(d));
+    assert_close("volume", b.volume().unwrap(), want);
+}
+
+#[test]
+fn tapers_that_vanish_overlap_or_need_conic_edges_are_refused() {
+    let f = Frame::XY;
+    let plate = Profile::new(rect(0.0, 0.0, 50.0, 30.0), vec![]);
+    // d = 10 tan 60° ≈ 17.3 > 15: the 30 mm side closes up before the top.
+    assert!(extrude_tapered(&f, &plate, 10.0, deg(60.0)).is_err());
+    // r₂ = 5 - 10 tan 30° < 0.
+    let disc = Profile::circle(Point2::ORIGIN, 5.0);
+    assert!(extrude_tapered(&f, &disc, 10.0, deg(30.0)).is_err());
+    // The hole grows and the outside shrinks by d each: they meet when 2d ≥ 10 (the hole
+    // is 10 from the long sides), here d = 10 tan 30° ≈ 5.77.
+    let holed = Profile::new(
+        rect(0.0, 0.0, 50.0, 30.0),
+        vec![vec![ProfileEdge::circle(Point2::new(25.0, 15.0), 5.0)]],
+    );
+    assert!(extrude_tapered(&f, &holed, 10.0, deg(30.0)).is_err());
+    // A half disc has sharp corners where its diameter meets the arc: their struts would
+    // be conics.
+    let half = Profile::new(
+        vec![
+            ProfileEdge::line(Point2::new(5.0, 0.0), Point2::new(-5.0, 0.0)),
+            ProfileEdge::Arc {
+                centre: Point2::ORIGIN,
+                radius: 5.0,
+                start_angle: PI,
+                sweep: PI,
+            },
+        ],
+        vec![],
+    );
+    assert!(matches!(
+        extrude_tapered(&f, &half, 10.0, deg(2.0)),
+        Err(KernelError::Unsupported(_))
+    ));
+    // Without a taper it is a plain extrusion.
+    assert!(extrude_tapered(&f, &half, 10.0, 0.0).is_ok());
+    for t in [f64::NAN, f64::INFINITY, deg(89.5), -deg(90.0), 1e300] {
+        assert!(extrude_tapered(&f, &plate, 10.0, t).is_err(), "taper {t}");
+    }
+    for d in [0.0, f64::NAN, 1e300] {
+        assert!(
+            extrude_tapered(&f, &plate, d, deg(5.0)).is_err(),
+            "distance {d}"
+        );
+    }
+}

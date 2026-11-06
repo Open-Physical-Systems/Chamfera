@@ -364,12 +364,21 @@ pub fn find_holes(
             None => groups.push((centre, r, lo, hi, swept, vec![f])),
         }
     }
-    Ok(groups
-        .into_iter()
-        .filter(|g| g.4 >= TAU - 1e-6)
-        .filter(|g| only.is_none_or(|o| g.5.iter().any(|f| o.contains(f))))
-        .map(|(centre, r, lo, hi, _, faces)| {
-            (
+    // Cylinders on one axis are one hole (a counterbore and its through hole): drilled
+    // at the smallest diameter, from the highest top to the lowest bottom.
+    let mut holes: Vec<(Hole, Vec<FaceId>)> = Vec::new();
+    for (centre, r, lo, hi, _, faces) in groups.into_iter().filter(|g| g.4 >= TAU - 1e-6) {
+        match holes
+            .iter_mut()
+            .find(|h| h.0.centre.distance(centre) <= JOIN_TOLERANCE)
+        {
+            Some(h) => {
+                h.0.diameter = h.0.diameter.min(2.0 * r);
+                h.0.top = h.0.top.max(hi);
+                h.0.bottom = h.0.bottom.min(lo);
+                h.1.extend(faces);
+            }
+            None => holes.push((
                 Hole {
                     centre,
                     diameter: 2.0 * r,
@@ -377,7 +386,11 @@ pub fn find_holes(
                     bottom: lo,
                 },
                 faces,
-            )
-        })
+            )),
+        }
+    }
+    Ok(holes
+        .into_iter()
+        .filter(|h| only.is_none_or(|o| h.1.iter().any(|f| o.contains(f))))
         .collect())
 }

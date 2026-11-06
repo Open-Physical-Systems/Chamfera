@@ -1,13 +1,18 @@
 //! Layer 2: the design document: parameters and sketches now, the feature timeline from M4.
 
 pub mod cam;
+pub mod construct;
 pub mod expr;
 pub mod feature;
 pub mod imported;
 
+pub use construct::{
+    AxisRef, ConstructKind, Construction, EdgeRef, OriginAxis, OriginPlane, PlaneRef, PointRef,
+};
 pub use feature::{
-    Blend, BlendKind, Extrude, ExtrudeDirection, Feature, FeatureKind, Operation, Pattern,
-    PatternLayout, Revolve,
+    Blend, BlendKind, Extrude, ExtrudeDirection, ExtrudeExtent, ExtrudeTo, ExtrudeValues, Feature,
+    FeatureKind, Hole, HoleKind, HoleSizes, Mirror, MirrorPlane, Move, MoveTransform, Operation,
+    Pattern, PatternLayout, Revolve, Shell,
 };
 pub use imported::ImportedBody;
 
@@ -26,7 +31,17 @@ use thiserror::Error;
 /// - 7: linear and circular patterns of features.
 /// - 8: imported solid bodies.
 /// - 9: fillets and chamfers of edges.
-/// - 10 to 19: taken by work landing in parallel (the merger renumbers).
+/// - 10: shells (hollowed solids with open faces).
+/// - 11: construction planes, axes and points as timeline features (`construct`), sketches
+///   on a construction plane (`on_plane`), and revolves and circular patterns about a
+///   construction axis (`axis_feature`). Older files open unchanged: every new field is
+///   optional.
+/// - 12: hole features (simple, counterbore, countersink) on a flat face.
+/// - 13: extrude options: extents (through all, up to a face or plane), two sides with
+///   their own distances, a start offset and a taper angle. Older extrudes read as by
+///   distance from the sketch plane without a taper.
+/// - 14: mirror and move/copy of bodies and features.
+/// - 19: projected (linked) sketch curves and ellipses.
 /// - 20: the CAM section: setups, tools and machining operations (`cam`).
 pub const FORMAT_VERSION: u32 = 20;
 /// The tag every design file starts with, so other JSON is not mistaken for a design.
@@ -125,6 +140,27 @@ pub struct FaceRef {
     pub face: String,
 }
 
+/// Most projected edges one sketch may hold.
+pub const MAX_PROJECTIONS: usize = 10_000;
+/// Longest edge reference a projection may hold.
+pub const MAX_EDGE_REF_LEN: usize = 512;
+
+/// A model edge projected into a sketch: the sketch curve it became, fixed in place, and
+/// the edge it follows when the design rebuilds, by its reference name (`2:top 0`, or
+/// `between 2:side 0 and 2:top` for an edge without a name of its own).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Projection {
+    pub edge: String,
+    pub curve: u32,
+    /// Whether the curve follows the edge on rebuild; an unlinked copy stays where it is.
+    #[serde(default = "linked_default")]
+    pub linked: bool,
+}
+
+fn linked_default() -> bool {
+    true
+}
+
 /// A sketch and the plane it is drawn on.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SketchFeature {
@@ -141,6 +177,20 @@ pub struct SketchFeature {
     /// rebuilds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attached: Option<FaceRef>,
+    /// The construction plane (its feature id) this sketch lies on, if any: its plane
+    /// follows that construction when the design rebuilds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_plane: Option<u32>,
+    /// Model edges projected into the sketch (see [`Projection`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub projections: Vec<Projection>,
+}
+
+impl SketchFeature {
+    /// The projection that made `curve`, if any.
+    pub fn projection_of(&self, curve: u32) -> Option<&Projection> {
+        self.projections.iter().find(|p| p.curve == curve)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -435,6 +485,8 @@ impl Document {
             sketch: chamfera_sketch::Sketch::new(),
             expressions: BTreeMap::new(),
             attached: None,
+            projections: Vec::new(),
+            on_plane: None,
         });
         Ok(id)
     }
@@ -527,6 +579,19 @@ impl Document {
                     return Err(bad(format!("expression for missing constraint {c}")));
                 }
             }
+            if s.projections.len() > MAX_PROJECTIONS {
+                return Err(bad("too many projected edges".into()));
+            }
+            for p in &s.projections {
+                if s.sketch.curve(chamfera_sketch::CurveId(p.curve)).is_none()
+                    || p.edge.chars().count() > MAX_EDGE_REF_LEN
+                {
+                    return Err(bad(format!(
+                        "projection of {:?} to missing curve {}",
+                        p.edge, p.curve
+                    )));
+                }
+            }
         }
         checked.sketches = doc.sketches;
         checked.last_feature_id = doc.last_feature_id;
@@ -545,6 +610,11 @@ impl Document {
                 return Err(DocError::BadFeature {
                     reason: format!("feature {} has a name longer than 256", f.id),
                 });
+            }
+            if let FeatureKind::Construct(c) = &f.kind {
+                c.check_shape().map_err(|reason| DocError::BadFeature {
+                    reason: format!("feature {}: {reason}", f.id),
+                })?;
             }
         }
         checked.features = doc.features;
@@ -725,5 +795,30 @@ mod tests {
         let bad =
             r#"{"format":"chamfera","version":1,"parameters":{"2x":{"value":1,"unit":"length"}}}"#;
         assert!(Document::from_json(bad).is_err());
+    }
+
+    #[test]
+    fn projections_must_name_a_curve_of_their_sketch() {
+        let mut doc = Document::default();
+        let id = doc.add_sketch(chamfera_geom::Frame::XY).unwrap();
+        let f = doc.sketch_mut(id).unwrap();
+        let p = f
+            .sketch
+            .add_point(chamfera_geom::Point2::new(0.0, 0.0))
+            .unwrap();
+        let c = f.sketch.add_circle(p, 4.0).unwrap();
+        f.projections.push(Projection {
+            edge: "2:top 4".into(),
+            curve: c.0,
+            linked: true,
+        });
+        let back = Document::from_json(&doc.to_json().unwrap()).unwrap();
+        assert_eq!(back, doc);
+        let mut text: serde_json::Value = serde_json::from_str(&doc.to_json().unwrap()).unwrap();
+        text["sketches"][0]["projections"][0]["curve"] = serde_json::json!(99);
+        assert!(Document::from_json(&text.to_string()).is_err());
+        text["sketches"][0]["projections"][0]["curve"] = serde_json::json!(c.0);
+        text["sketches"][0]["projections"][0]["edge"] = serde_json::json!("x".repeat(600));
+        assert!(Document::from_json(&text.to_string()).is_err());
     }
 }
