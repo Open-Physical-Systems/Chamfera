@@ -42,6 +42,33 @@ pub struct Preferences {
     pub grid_spacing: Option<f64>,
     /// Sketch clicks on empty space snap to the grid.
     pub snap_to_grid: bool,
+    /// The Assistant panel (the API key is not here: it has a file of its own).
+    pub assistant: AssistantPrefs,
+}
+
+/// The Assistant's settings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AssistantPrefs {
+    pub model: chamfera_assistant::Model,
+    pub effort: chamfera_assistant::Effort,
+    /// Offer Claude the commands that read or write files; each call still asks.
+    pub allow_file_commands: bool,
+    /// Ask before a command that replaces or deletes much of the design.
+    pub confirm_destructive: bool,
+    /// Offer Claude a screenshot of the viewport.
+    pub screenshots: bool,
+}
+
+impl Default for AssistantPrefs {
+    fn default() -> Self {
+        Self {
+            model: chamfera_assistant::Model::default(),
+            effort: chamfera_assistant::Effort::default(),
+            allow_file_commands: false,
+            confirm_destructive: true,
+            screenshots: true,
+        }
+    }
 }
 
 impl Default for Preferences {
@@ -55,6 +82,7 @@ impl Default for Preferences {
             navigation: Navigation::default(),
             grid_spacing: None,
             snap_to_grid: false,
+            assistant: AssistantPrefs::default(),
         }
     }
 }
@@ -112,6 +140,13 @@ impl Preferences {
             },
             "grid_spacing": self.grid_spacing,
             "snap_to_grid": self.snap_to_grid,
+            "assistant": {
+                "model": self.assistant.model.id(),
+                "effort": self.assistant.effort.key(),
+                "allow_file_commands": self.assistant.allow_file_commands,
+                "confirm_destructive": self.assistant.confirm_destructive,
+                "screenshots": self.assistant.screenshots,
+            },
         });
         serde_json::to_string_pretty(&v).unwrap_or_default()
     }
@@ -169,6 +204,24 @@ impl Preferences {
         p.grid_spacing = number(&m, "grid_spacing", MIN_GRID, MAX_GRID);
         if let Some(b) = boolean(&m, "snap_to_grid") {
             p.snap_to_grid = b;
+        }
+        if let Some(Value::Object(a)) = m.get("assistant") {
+            let ap = &mut p.assistant;
+            if let Some(model) = text(a, "model").and_then(chamfera_assistant::Model::parse) {
+                ap.model = model;
+            }
+            if let Some(e) = text(a, "effort").and_then(chamfera_assistant::Effort::parse) {
+                ap.effort = e;
+            }
+            if let Some(b) = boolean(a, "allow_file_commands") {
+                ap.allow_file_commands = b;
+            }
+            if let Some(b) = boolean(a, "confirm_destructive") {
+                ap.confirm_destructive = b;
+            }
+            if let Some(b) = boolean(a, "screenshots") {
+                ap.screenshots = b;
+            }
         }
         p
     }
@@ -288,6 +341,13 @@ mod tests {
             },
             grid_spacing: Some(5.0),
             snap_to_grid: true,
+            assistant: AssistantPrefs {
+                model: chamfera_assistant::Model::Sonnet,
+                effort: chamfera_assistant::Effort::High,
+                allow_file_commands: true,
+                confirm_destructive: false,
+                screenshots: false,
+            },
         }
     }
 
@@ -323,6 +383,8 @@ mod tests {
             r#"{"navigation": {"preset": "chaos", "sensitivity": 1e9, "invert_zoom": 1}}"#.into(),
             r#"{"navigation": [1], "grid_spacing": -1, "snap_to_grid": "yes"}"#.into(),
             r#"{"grid_spacing": 0, "recent_count": 1e20}"#.into(),
+            r#"{"assistant": {"model": "gpt", "effort": 3, "screenshots": "no"}}"#.into(),
+            r#"{"assistant": [1], "api_key": "sk-ant-not-read-from-here"}"#.into(),
         ];
         for c in &cases {
             let p = Preferences::from_json(c);
@@ -335,6 +397,8 @@ mod tests {
                 p.grid_spacing
                     .is_none_or(|g| (MIN_GRID..=MAX_GRID).contains(&g))
             );
+            assert_eq!(p.assistant, AssistantPrefs::default());
+            assert!(!p.to_json().contains("sk-ant"));
         }
         // Good fields survive next to bad ones.
         let p = Preferences::from_json(

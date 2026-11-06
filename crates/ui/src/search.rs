@@ -114,7 +114,8 @@ pub(crate) fn command_of_action(action: Action) -> Option<&'static str> {
         | Action::Cancel
         | Action::ShowShortcuts
         | Action::Search
-        | Action::Preferences => return None,
+        | Action::Preferences
+        | Action::Assistant => return None,
     })
 }
 
@@ -161,6 +162,7 @@ fn ui_actions() -> Vec<Action> {
         Action::ImportStl,
         Action::Sample,
         Action::Preferences,
+        Action::Assistant,
         Action::ShowShortcuts,
     ]);
     // Every ribbon tool, so the palette and the ribbon list the same tools.
@@ -203,7 +205,11 @@ fn context_of(action: Action) -> &'static str {
         | Action::Fillet
         | Action::Chamfer
         | Action::Parameters => "Solid",
-        Action::Fit | Action::Home | Action::StandardView(_) | Action::ToggleProjection => "View",
+        Action::Fit
+        | Action::Home
+        | Action::StandardView(_)
+        | Action::ToggleProjection
+        | Action::Assistant => "View",
         Action::New
         | Action::Open
         | Action::Save
@@ -260,6 +266,7 @@ pub(crate) fn icon_of(action: Action) -> Icon {
         Action::ImportStl => Icon::ImportMesh,
         Action::Sample => Icon::Body,
         Action::Preferences => Icon::Parameters,
+        Action::Assistant => Icon::Assistant,
         Action::ShowShortcuts | Action::Search => Icon::Select,
         Action::Tool(id) => crate::ribbon::by_id(id).map_or(Icon::Origin, |t| t.icon),
         Action::Command(id) => match id.split('.').next() {
@@ -582,6 +589,7 @@ impl ChamferaApp {
             }
             Action::ShowShortcuts => self.search.shortcuts_open = true,
             Action::Preferences => self.prefs_ui.open = true,
+            Action::Assistant => self.assistant.open = !self.assistant.open,
             Action::Search => self.open_search(),
             Action::Command(id) => self.run_command_item(id),
             Action::Tool(id) => self.run_tool(id),

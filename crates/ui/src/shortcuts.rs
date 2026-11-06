@@ -49,6 +49,8 @@ pub enum Action {
     ShowShortcuts,
     Search,
     Preferences,
+    /// Show or hide the Assistant panel.
+    Assistant,
     /// A registry command with no tool of its own.
     Command(&'static str),
     /// A ribbon tool with no action above, by its id in `ribbon::TOOLS` (a command id
@@ -149,7 +151,7 @@ const fn row(action: Action, keys: Keys, context: &'static str, handler: Handler
 }
 
 /// Every default shortcut. Keys are unique (`no_two_shortcuts_share_a_key`).
-pub const SHORTCUTS: [Shortcut; 25] = [
+pub const SHORTCUTS: [Shortcut; 26] = [
     row(
         Action::Search,
         Keys::CtrlSpaceThen(Key::F),
@@ -290,6 +292,12 @@ pub const SHORTCUTS: [Shortcut; 25] = [
         "Anywhere",
         Handler::Elsewhere,
     ),
+    row(
+        Action::Assistant,
+        Keys::ctrl_shift(Key::A),
+        "Anywhere",
+        Handler::Here,
+    ),
 ];
 
 /// Keys kept free for tools that are planned, so nothing else takes them.
@@ -357,6 +365,7 @@ pub fn action_label(action: Action) -> String {
         Action::Sample => label("body.sample").into(),
         Action::ShowShortcuts => "Keyboard Shortcuts".into(),
         Action::Preferences => "Preferences".into(),
+        Action::Assistant => "Assistant".into(),
         Action::Search => "Search Tools and Commands".into(),
         Action::Command(id) => label(id).into(),
         Action::Tool(id) => {
@@ -462,6 +471,7 @@ mod tests {
             (Action::Fit, "F"),
             (Action::Home, "H"),
             (Action::Search, "Ctrl+Space, F"),
+            (Action::Assistant, "Ctrl+Shift+A"),
         ];
         for (action, keys) in expect {
             assert_eq!(keys_for(action).as_deref(), Some(keys), "{action:?}");
