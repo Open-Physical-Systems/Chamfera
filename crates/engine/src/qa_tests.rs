@@ -361,19 +361,19 @@ fn qa_dxf_plate_combine_cut_and_step_round_trip() {
 }
 
 #[test]
-#[ignore = "open: a plane face and a torus face whose boxes overlap are refused (docs/qa-report.md)"]
 fn qa_a_sweep_bend_near_a_flat_face_joins() {
     // Part 2 with a 40 mm straight run before the bend (the shipped script uses 50): the
     // bend's full torus box (centre z 68, reach 42.5) reaches down to z 25.5, past the
     // transition's top face at z 28, although the bend itself stays above z 68 - 12.5.
     // Volume as in qa_flanged_pipe_has_its_hand_volume with a path 40 + 15π + 50.
     let text = std::fs::read_to_string(repo().join("examples/qa/02-flanged-pipe.json")).unwrap();
+    // The arc first: its end point `"x2": 0, "y2": 78` is also the straight run's end.
     let text = text
-        .replace(r#""x2": 0, "y2": 78"#, r#""x2": 0, "y2": 68"#)
         .replace(
             r#""cy": 78, "x1": 30, "y1": 108, "x2": 0, "y2": 78"#,
             r#""cy": 68, "x1": 30, "y1": 98, "x2": 0, "y2": 68"#,
         )
+        .replace(r#""x2": 0, "y2": 78"#, r#""x2": 0, "y2": 68"#)
         .replace(
             r#""y1": 108, "x2": 80, "y2": 108"#,
             r#""y1": 98, "x2": 80, "y2": 98"#,
@@ -385,4 +385,37 @@ fn qa_a_sweep_bend_near_a_flat_face_joins() {
         - 588.0 * PI
         - 119.0 * PI / 3.0;
     close(volumes(&s)[0].1, want, "flanged pipe with a shorter run");
+}
+
+#[test]
+fn qa_deleting_a_feature_that_a_fillet_and_a_shell_name_is_refused() {
+    // Part 1: Fillet1 rounds the box's edges `2:sweep 0..3` and Shell1 opens its face
+    // `2:top`, so deleting the box (feature 2) would break both: refused, naming them,
+    // and the design is unchanged (base and lid at their hand volumes).
+    let out = out_dir("delete-used");
+    let mut s = Session::new();
+    run_qa(&mut s, "01-enclosure.json", &out);
+    let before = volumes(&s);
+    let box_id = s
+        .doc
+        .features
+        .iter()
+        .find(|f| f.name == "Extrude1")
+        .unwrap()
+        .id;
+    let err = s
+        .execute("feature.delete", &json!({"feature": box_id}))
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("Extrude1 is used by"), "{err}");
+    assert!(err.contains("Fillet1") && err.contains("Shell1"), "{err}");
+    assert_same(&before, &volumes(&s), "after the refused delete");
+    let (base, lid) = enclosure(80.0);
+    close(before[0].1, base, "base");
+    close(before[1].1, lid, "lid");
+    // The last feature, which nothing uses, can still be deleted.
+    let last = s.doc.features.last().unwrap().id;
+    assert!(s.doc.feature_users(last).is_empty());
+    s.execute("feature.delete", &json!({"feature": last}))
+        .unwrap();
 }

@@ -1041,8 +1041,12 @@ fn delete(s: &mut Session, p: &Value) -> CmdResult {
     let id = params::req_id(p, "feature")?;
     let users = s.doc.feature_users(id);
     if !users.is_empty() {
+        let name = s
+            .doc
+            .feature(id)
+            .map_or_else(|_| id.to_string(), |f| f.name.clone());
         return Err(CommandError::Unavailable(format!(
-            "{} uses this feature; delete it first",
+            "{name} is used by {}; delete or change them first",
             users.join(", ")
         )));
     }

@@ -16,23 +16,29 @@
 //! surfaces, K10).
 //!
 //! # Matching edges
-//! Every profile needs the same number of edges and no holes. Each loop is oriented
-//! counter-clockwise about the loft's direction (from the first section toward the
-//! last); the edges of each section are then matched to the previous section's by the
-//! cyclic shift that puts each vertex nearest (in the plane) to the one it is joined to,
-//! among the shifts that match lines with lines and arcs with arcs.
+//! Every profile needs the same number of edges and the same number of holes. The holes
+//! of each section are matched to the previous section's by their centres (each to the
+//! nearest one left, seen along the loft direction), and every hole needs as many edges
+//! as the hole it is matched with. Each loop is oriented counter-clockwise about the
+//! loft's direction (from the first section toward the last); the edges of each loop
+//! are then matched to the same loop of the previous section by the cyclic shift that
+//! puts each vertex nearest (in the plane) to the one it is joined to, among the shifts
+//! that match lines with lines and arcs with arcs. A hole's bands face into the hole.
 //!
 //! # Checks
 //! Sections must lie on distinct parallel planes in order along their common normal.
 //! Each band's cross-section at a quarter, a half and three quarters of the way is the
 //! linear interpolation of its two profiles, which is exact for these surfaces; each must
-//! be a simple loop of the same orientation, or the loft would fold through itself.
+//! be a valid profile (simple loops of the same orientation, the holes inside the outer
+//! loop and apart), or the loft would fold through itself.
 //!
 //! # Names
 //! `start` and `end` (the caps at the first and last section), `band i side k` (the face
 //! from section `i` to `i + 1` through edge `k`, numbered as in the first profile's
 //! input), `section i k` (edge and vertex `k` of section `i`), `band i rail k` (the
-//! straight edge from vertex `k` of section `i` to section `i + 1`).
+//! straight edge from vertex `k` of section `i` to section `i + 1`). A hole's entities
+//! insert `hole j` (numbered as in the first profile): `band i hole j side k`,
+//! `section i hole j k`, `band i hole j rail k`.
 
 #[cfg(test)]
 mod tests;
@@ -138,15 +144,16 @@ impl Edge3 {
     }
 }
 
-/// A section: its plane's height along the loft direction and its loop in space.
+/// One loop of a section in space (its outer loop or a hole), counter-clockwise about
+/// the loft direction.
 struct Section {
     edges: Vec<Edge3>,
     /// The input index of each edge (for names).
     source: Vec<usize>,
 }
 
-/// The loop of `l` (checked, counter-clockwise in `frame`) in space, counter-clockwise
-/// about `n`.
+/// The loop of `l` (checked: an outer loop counter-clockwise in `frame`, a hole
+/// clockwise) in space, counter-clockwise about `n`.
 fn section(frame: &Frame, l: &CheckedLoop, n: Vec3) -> Section {
     let mut edges: Vec<Edge3> = Vec::with_capacity(l.edges.len());
     let mut source = Vec::with_capacity(l.edges.len());
@@ -176,7 +183,7 @@ fn section(frame: &Frame, l: &CheckedLoop, n: Vec3) -> Section {
         });
         source.push(e.source);
     }
-    if frame.z().dot(n) < 0.0 {
+    if (frame.z().dot(n) < 0.0) == l.hole.is_none() {
         // Clockwise about `n`: run the loop backwards.
         let ends: Vec<Point3> = edges.iter().map(|e| e.at(1.0).0).collect();
         let mut rev: Vec<Edge3> = edges
@@ -309,47 +316,107 @@ pub fn loft(sections: &[(Frame, Profile)]) -> KernelResult<Body> {
             "the profiles of a loft must lie on distinct planes, in order along their normal",
         ));
     }
-    let mut loops: Vec<Section> = Vec::with_capacity(sections.len());
+    // Every section's loops: the outer loop first, then its holes.
+    let mut rings: Vec<Vec<Section>> = Vec::with_capacity(sections.len());
     for (i, (f, p)) in sections.iter().enumerate() {
         let c = p.check()?;
-        if !c.holes.is_empty() {
-            return Err(unsupported(format!(
-                "lofting a profile with holes (profile {i})"
-            )));
-        }
-        if c.outer
-            .edges
-            .iter()
+        if c.loops()
+            .flat_map(|l| &l.edges)
             .any(|e| matches!(e.edge, ProfileEdge::Spline(_)))
         {
             return Err(unsupported(format!(
                 "lofting a profile with spline edges (profile {i})"
             )));
         }
-        loops.push(section(f, &c.outer, n));
+        rings.push(c.loops().map(|l| section(f, l, n)).collect());
     }
-    let m = loops.first().map_or(0, |s| s.edges.len());
-    if loops.iter().any(|s| s.edges.len() != m) {
-        return Err(invalid(
-            "every profile of a loft must have the same number of edges",
-        ));
+    let holes = rings.first().map_or(0, |r| r.len().saturating_sub(1));
+    for (i, r) in rings.iter().enumerate() {
+        if r.len() != holes + 1 {
+            return Err(invalid(format!(
+                "every profile of a loft must have the same number of holes (profile 0 has \
+                 {holes}, profile {i} has {})",
+                r.len().saturating_sub(1)
+            )));
+        }
     }
-    // Match each section's edges to the previous one's.
-    for i in 1..loops.len() {
-        let (prev, rest) = loops.split_at_mut(i);
-        let (Some(a), Some(b)) = (prev.last(), rest.first_mut()) else {
-            continue;
-        };
-        let shift = best_shift(a, b, n).ok_or_else(|| {
-            unsupported(
-                "lofting profiles whose edges do not correspond (lines must meet lines and arcs meet arcs)",
-            )
-        })?;
-        b.edges.rotate_left(shift);
-        b.source.rotate_left(shift);
+    // Match each section's holes to the previous section's.
+    for i in 1..rings.len() {
+        let (prev, rest) = rings.split_at_mut(i);
+        if let (Some(a), Some(b)) = (prev.last(), rest.first_mut()) {
+            match_holes(a, b, n);
+        }
     }
-    check_bands(&loops, n)?;
-    build(&loops, n)
+    // Match each loop's edges to the same loop of the previous section.
+    for l in 0..=holes {
+        let m = rings
+            .first()
+            .and_then(|r| r.get(l))
+            .map_or(0, |s| s.edges.len());
+        if rings
+            .iter()
+            .any(|r| r.get(l).is_none_or(|s| s.edges.len() != m))
+        {
+            return Err(invalid(if l == 0 {
+                "every profile of a loft must have the same number of edges".to_owned()
+            } else {
+                format!(
+                    "hole {} of every profile of a loft must have the same number of edges",
+                    l - 1
+                )
+            }));
+        }
+        for i in 1..rings.len() {
+            let (prev, rest) = rings.split_at_mut(i);
+            let (Some(a), Some(b)) = (
+                prev.last().and_then(|r| r.get(l)),
+                rest.first_mut().and_then(|r| r.get_mut(l)),
+            ) else {
+                continue;
+            };
+            let shift = best_shift(a, b, n).ok_or_else(|| {
+                unsupported(
+                    "lofting profiles whose edges do not correspond (lines must meet lines and arcs meet arcs)",
+                )
+            })?;
+            b.edges.rotate_left(shift);
+            b.source.rotate_left(shift);
+        }
+    }
+    check_bands(&rings, n)?;
+    build(&rings, n)
+}
+
+/// The middle of a loop's vertices, projected onto the plane through the origin normal
+/// to `n`.
+fn loop_centre(s: &Section, n: Vec3) -> Vec3 {
+    let count = s.edges.len().max(1) as f64;
+    let sum = s
+        .edges
+        .iter()
+        .map(|e| e.start() - Point3::ORIGIN)
+        .fold(Vec3::new(0.0, 0.0, 0.0), |acc, v| acc + v);
+    let c = sum * (1.0 / count);
+    c - n * c.dot(n)
+}
+
+/// Puts the holes of `b` (its loops after the first) in the order of the holes of `a`,
+/// each matched with the nearest remaining one (by their centres seen along `n`).
+fn match_holes(a: &[Section], b: &mut Vec<Section>, n: Vec3) {
+    let mut rest: Vec<Section> = b.drain(1..).collect();
+    for ha in a.iter().skip(1) {
+        let ca = loop_centre(ha, n);
+        let nearest = rest
+            .iter()
+            .enumerate()
+            .map(|(j, hb)| (j, (loop_centre(hb, n) - ca).length()))
+            .min_by(|x, y| x.1.total_cmp(&y.1))
+            .map(|(j, _)| j);
+        if let Some(j) = nearest {
+            b.push(rest.remove(j));
+        }
+    }
+    b.append(&mut rest);
 }
 
 /// The cyclic shift of `b` that matches `a` edge kind for edge kind with the smallest sum
@@ -383,55 +450,70 @@ fn best_shift(a: &Section, b: &Section, n: Vec3) -> Option<usize> {
     best.map(|(_, s)| s)
 }
 
-/// Each band's interpolated cross-sections must be simple loops of the same orientation.
-fn check_bands(loops: &[Section], n: Vec3) -> KernelResult<()> {
+/// The cross-section a fraction `f` of the way from loop `a` to loop `b` (in the plane
+/// coordinates of `frame`): the linear interpolation of matched vertices, and of arc
+/// centres, which is exact for the planes and cones of a band.
+fn interpolate(a: &Section, b: &Section, f: f64, frame: &Frame, n: Vec3) -> Vec<ProfileEdge> {
+    let mut edges = Vec::with_capacity(a.edges.len());
+    for (ea, eb) in a.edges.iter().zip(&b.edges) {
+        let pa = frame.to_plane(ea.start());
+        let pb = frame.to_plane(eb.start());
+        let qa = frame.to_plane(ea.at(1.0).0);
+        let qb = frame.to_plane(eb.at(1.0).0);
+        let s = pa.lerp(pb, f);
+        let e = qa.lerp(qb, f);
+        edges.push(match (*ea, *eb) {
+            (
+                Edge3::Arc {
+                    centre: ca,
+                    axis,
+                    sweep,
+                    ..
+                },
+                Edge3::Arc { centre: cb, .. },
+            ) => {
+                let c = frame.to_plane(ca).lerp(frame.to_plane(cb), f);
+                if sweep >= TAU - chamfera_geom::ANGULAR_TOLERANCE {
+                    ProfileEdge::circle(c, s.distance(c))
+                } else {
+                    let start = (s - c).angle();
+                    let sign = if axis.dot(n) > 0.0 { 1.0 } else { -1.0 };
+                    ProfileEdge::Arc {
+                        centre: c,
+                        radius: s.distance(c),
+                        start_angle: start,
+                        sweep: sweep * sign,
+                    }
+                }
+            }
+            _ => ProfileEdge::line(s, e),
+        });
+    }
+    edges
+}
+
+/// Each band's interpolated cross-sections must be valid profiles: every loop simple and
+/// still counter-clockwise, the holes inside the outer loop and apart from each other.
+fn check_bands(rings: &[Vec<Section>], n: Vec3) -> KernelResult<()> {
     let frame =
         Frame::from_normal(Point3::ORIGIN, n).ok_or_else(|| invalid("no loft direction"))?;
-    for w in loops.windows(2) {
+    let twist = || invalid("the loft would twist through itself between two profiles");
+    for w in rings.windows(2) {
         let [a, b] = w else { continue };
         for f in [0.25, 0.5, 0.75] {
-            let mut edges = Vec::with_capacity(a.edges.len());
-            for (ea, eb) in a.edges.iter().zip(&b.edges) {
-                let pa = frame.to_plane(ea.start());
-                let pb = frame.to_plane(eb.start());
-                let qa = frame.to_plane(ea.at(1.0).0);
-                let qb = frame.to_plane(eb.at(1.0).0);
-                let s = pa.lerp(pb, f);
-                let e = qa.lerp(qb, f);
-                edges.push(match (*ea, *eb) {
-                    (
-                        Edge3::Arc {
-                            centre: ca,
-                            axis,
-                            sweep,
-                            ..
-                        },
-                        Edge3::Arc { centre: cb, .. },
-                    ) => {
-                        let c = frame.to_plane(ca).lerp(frame.to_plane(cb), f);
-                        if sweep >= TAU - chamfera_geom::ANGULAR_TOLERANCE {
-                            ProfileEdge::circle(c, s.distance(c))
-                        } else {
-                            let start = (s - c).angle();
-                            let sign = if axis.dot(n) > 0.0 { 1.0 } else { -1.0 };
-                            ProfileEdge::Arc {
-                                centre: c,
-                                radius: s.distance(c),
-                                start_angle: start,
-                                sweep: sweep * sign,
-                            }
-                        }
-                    }
-                    _ => ProfileEdge::line(s, e),
-                });
+            let mut loops = Vec::with_capacity(a.len());
+            for (la, lb) in a.iter().zip(b) {
+                let edges = interpolate(la, lb, f, &frame, n);
+                let area: f64 = edges.iter().map(ProfileEdge::area_term).sum();
+                if area <= 0.0 || !area.is_finite() {
+                    return Err(twist());
+                }
+                loops.push(edges);
             }
-            // Still counter-clockwise (positive area) and simple.
-            let area: f64 = edges.iter().map(ProfileEdge::area_term).sum();
-            let ok = area > 0.0 && Profile::new(edges, Vec::new()).check().is_ok();
-            if !ok {
-                return Err(invalid(
-                    "the loft would twist through itself between two profiles",
-                ));
+            let mut it = loops.into_iter();
+            let outer = it.next().unwrap_or_default();
+            if Profile::new(outer, it.collect()).check().is_err() {
+                return Err(twist());
             }
         }
     }
@@ -439,102 +521,175 @@ fn check_bands(loops: &[Section], n: Vec3) -> KernelResult<()> {
 }
 
 /// The face list of the loft.
-fn build(loops: &[Section], n: Vec3) -> KernelResult<Body> {
-    let m = loops.first().map_or(0, |s| s.edges.len());
-    let names0: Vec<usize> = loops.first().map(|s| s.source.clone()).unwrap_or_default();
-    let name_k = |k: usize| names0.get(k).copied().unwrap_or(k);
+///
+/// Section `i` has loops `l = 0` (outer) and `1..` (holes) of `m_l` edges each; vertex
+/// and section edge `k` of loop `l` in section `i` are both numbered
+/// `i M + off_l + k` (`M` the edges of one section, `off_l` those of the loops before
+/// `l`), and its rail to section `i + 1` is `S M + i M + off_l + k` (`S` sections).
+fn build(rings: &[Vec<Section>], n: Vec3) -> KernelResult<Body> {
+    let Some(first_ring) = rings.first() else {
+        return Err(invalid("a loft needs at least two profiles"));
+    };
+    let sizes: Vec<usize> = first_ring.iter().map(|s| s.edges.len()).collect();
+    let mut off = Vec::with_capacity(sizes.len());
+    let mut total = 0;
+    for m in &sizes {
+        off.push(total);
+        total += m;
+    }
+    let mm = total;
+    let size = |l: usize| sizes.get(l).copied().unwrap_or(0);
+    let start_of = |l: usize| off.get(l).copied().unwrap_or(0);
+    let v = |i: usize, l: usize, k: usize| i * mm + start_of(l) + k % size(l).max(1);
+    let rail0 = rings.len() * mm;
+    let rail = |i: usize, l: usize, k: usize| rail0 + i * mm + start_of(l) + k % size(l).max(1);
+    let name_k = |l: usize, k: usize| {
+        first_ring
+            .get(l)
+            .and_then(|s| s.source.get(k))
+            .copied()
+            .unwrap_or(k)
+    };
+    // The outer loop keeps the names it always had; holes add `hole j`.
+    let label = |l: usize| {
+        if l == 0 {
+            String::new()
+        } else {
+            format!("hole {} ", l - 1)
+        }
+    };
     let mut vertices = Vec::new();
     let mut edges: Vec<ListEdge> = Vec::new();
     let mut faces = Vec::new();
-    // Vertex k of section i is i * m + k; its section edge has the same index.
-    for (i, s) in loops.iter().enumerate() {
-        for (k, e) in s.edges.iter().enumerate() {
-            vertices.push(ListVertex {
-                point: e.start(),
-                name: Some(format!("section {i} {}", name_k(k))),
-            });
+    for (i, r) in rings.iter().enumerate() {
+        for (l, s) in r.iter().enumerate() {
+            for (k, e) in s.edges.iter().enumerate() {
+                vertices.push(ListVertex {
+                    point: e.start(),
+                    name: Some(format!("section {i} {}{}", label(l), name_k(l, k))),
+                });
+            }
         }
     }
-    for (i, s) in loops.iter().enumerate() {
-        for (k, e) in s.edges.iter().enumerate() {
-            let (curve, t0, t1) = e.curve()?;
-            edges.push(ListEdge {
-                vertices: [i * m + k, i * m + (k + 1) % m],
-                curve,
-                t0,
-                t1,
-                name: Some(format!("section {i} {}", name_k(k))),
-            });
+    for (i, r) in rings.iter().enumerate() {
+        for (l, s) in r.iter().enumerate() {
+            for (k, e) in s.edges.iter().enumerate() {
+                let (curve, t0, t1) = e.curve()?;
+                edges.push(ListEdge {
+                    vertices: [v(i, l, k), v(i, l, k + 1)],
+                    curve,
+                    t0,
+                    t1,
+                    name: Some(format!("section {i} {}{}", label(l), name_k(l, k))),
+                });
+            }
         }
     }
-    // Rail k of band i: edge loops.len() * m + i * m + k.
-    let rail0 = loops.len() * m;
-    for i in 0..loops.len().saturating_sub(1) {
-        for k in 0..m {
-            let (a, b) = (
-                vertices.get(i * m + k).map(|v: &ListVertex| v.point),
-                vertices.get((i + 1) * m + k).map(|v: &ListVertex| v.point),
-            );
-            let (Some(a), Some(b)) = (a, b) else {
-                return Err(internal("a loft vertex is missing"));
-            };
-            edges.push(ListEdge {
-                vertices: [i * m + k, (i + 1) * m + k],
-                curve: Curve::Segment(Segment3::new(a, b)?),
-                t0: 0.0,
-                t1: 1.0,
-                name: Some(format!("band {i} rail {}", name_k(k))),
-            });
+    for i in 0..rings.len().saturating_sub(1) {
+        for l in 0..sizes.len() {
+            for k in 0..size(l) {
+                let (a, b) = (
+                    vertices.get(v(i, l, k)).map(|x: &ListVertex| x.point),
+                    vertices.get(v(i + 1, l, k)).map(|x: &ListVertex| x.point),
+                );
+                let (Some(a), Some(b)) = (a, b) else {
+                    return Err(internal("a loft vertex is missing"));
+                };
+                edges.push(ListEdge {
+                    vertices: [v(i, l, k), v(i + 1, l, k)],
+                    curve: Curve::Segment(Segment3::new(a, b)?),
+                    t0: 0.0,
+                    t1: 1.0,
+                    name: Some(format!("band {i} {}rail {}", label(l), name_k(l, k))),
+                });
+            }
         }
     }
-    let (Some(first), Some(last)) = (loops.first(), loops.last()) else {
+    let Some(last_ring) = rings.last() else {
         return Err(invalid("a loft needs at least two profiles"));
     };
-    let p0 = first.edges.first().map_or(Point3::ORIGIN, Edge3::start);
-    let p1 = last.edges.first().map_or(Point3::ORIGIN, Edge3::start);
+    let anchor = |r: &[Section]| {
+        r.first()
+            .and_then(|s| s.edges.first())
+            .map_or(Point3::ORIGIN, Edge3::start)
+    };
     let cap = |o: Point3, normal: Vec3| {
         Frame::from_normal(o, normal)
             .map(Surface::Plane)
             .ok_or_else(|| internal("a loft cap has no plane"))
     };
+    // The start cap faces -n: its outer loop runs clockwise about n (backwards), its
+    // holes counter-clockwise (forwards); the end cap the other way round.
+    let li = rings.len() - 1;
+    let cap_loops = |i: usize, outer_forward: bool| -> Vec<Vec<(usize, bool)>> {
+        (0..sizes.len())
+            .map(|l| {
+                let forward = outer_forward == (l == 0);
+                if forward {
+                    (0..size(l)).map(|k| (v(i, l, k), true)).collect()
+                } else {
+                    (0..size(l)).rev().map(|k| (v(i, l, k), false)).collect()
+                }
+            })
+            .collect()
+    };
     faces.push(ListFace {
-        surface: cap(p0, -n)?,
+        surface: cap(anchor(first_ring), -n)?,
         same_sense: true,
         name: Some("start".into()),
-        loops: vec![(0..m).rev().map(|k| (k, false)).collect()],
+        loops: cap_loops(0, false),
     });
-    let li = loops.len() - 1;
     faces.push(ListFace {
-        surface: cap(p1, n)?,
+        surface: cap(anchor(last_ring), n)?,
         same_sense: true,
         name: Some("end".into()),
-        loops: vec![(0..m).map(|k| (li * m + k, true)).collect()],
+        loops: cap_loops(li, true),
     });
-    for (i, w) in loops.windows(2).enumerate() {
+    for (i, w) in rings.windows(2).enumerate() {
         let [a, b] = w else { continue };
-        for k in 0..m {
-            let (Some(ea), Some(eb)) = (a.edges.get(k), b.edges.get(k)) else {
-                return Err(internal("a loft edge is missing"));
-            };
-            let (surface, same_sense) = ruled_surface(ea, eb, n)?.ok_or_else(|| {
-                unsupported(format!(
-                    "lofting edge {} between profiles {i} and {}: only parallel lines (planes) and coaxial arcs over the same angles (cones) are exact so far",
-                    name_k(k),
-                    i + 1
-                ))
-            })?;
-            let r = |kk: usize| rail0 + i * m + kk % m;
-            faces.push(ListFace {
-                surface,
-                same_sense,
-                name: Some(format!("band {i} side {}", name_k(k))),
-                loops: vec![vec![
-                    (i * m + k, true),
-                    (r(k + 1), true),
-                    ((i + 1) * m + k, false),
-                    (r(k), false),
-                ]],
-            });
+        for (l, (la, lb)) in a.iter().zip(b).enumerate() {
+            for k in 0..size(l) {
+                let (Some(ea), Some(eb)) = (la.edges.get(k), lb.edges.get(k)) else {
+                    return Err(internal("a loft edge is missing"));
+                };
+                let (surface, sense) = ruled_surface(ea, eb, n)?.ok_or_else(|| {
+                    unsupported(format!(
+                        "lofting {}edge {} between profiles {i} and {}: only parallel lines (planes) and coaxial arcs over the same angles (cones) are exact so far",
+                        label(l),
+                        name_k(l, k),
+                        i + 1
+                    ))
+                })?;
+                // A hole's side faces into the hole: its outward normal is the opposite
+                // of the outer loop's rule, and its loop runs the other way round.
+                let (same_sense, lp) = if l == 0 {
+                    (
+                        sense,
+                        vec![
+                            (v(i, l, k), true),
+                            (rail(i, l, k + 1), true),
+                            (v(i + 1, l, k), false),
+                            (rail(i, l, k), false),
+                        ],
+                    )
+                } else {
+                    (
+                        !sense,
+                        vec![
+                            (rail(i, l, k), true),
+                            (v(i + 1, l, k), true),
+                            (rail(i, l, k + 1), false),
+                            (v(i, l, k), false),
+                        ],
+                    )
+                };
+                faces.push(ListFace {
+                    surface,
+                    same_sense,
+                    name: Some(format!("band {i} {}side {}", label(l), name_k(l, k))),
+                    loops: vec![lp],
+                });
+            }
         }
     }
     let body = Body::from_face_list(&vertices, &edges, &faces)?;

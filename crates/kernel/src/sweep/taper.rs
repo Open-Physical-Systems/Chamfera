@@ -32,6 +32,14 @@
 //! loop that turns inside out, all refuse the taper. The offsets at a quarter, half and
 //! three quarters of the height are checked too, so a profile that collides part-way is
 //! refused even when its far end would happen to look valid.
+//!
+//! Spline edges (and ellipses, which reach the kernel as exact rational splines) are
+//! refused. Their tapered side would be the ruled surface between the curve and its
+//! offset at the far end, but the offset of a B-spline or an ellipse is not itself a
+//! (rational) B-spline in general (Farouki and Neff, "Analytic properties of plane offset
+//! curves", CAGD 7, 1990): only approximations exist, and model decisions use exact
+//! geometry. Scaling the curve about a point instead would be exact (a general cone) but
+//! is not a taper: the draft angle would vary along the edge.
 
 use crate::profile::{CheckedLoop, CheckedProfile, ProfileEdge};
 use crate::{KernelError, KernelResult, Profile};
@@ -165,7 +173,10 @@ fn offset_loop(l: &CheckedLoop, d: f64) -> KernelResult<Vec<ProfileEdge>> {
             }
             ProfileEdge::Spline(_) => {
                 return Err(KernelError::Unsupported(format!(
-                    "a taper on {}: spline edges cannot be tapered yet",
+                    "a taper on {}: spline and ellipse edges cannot be tapered: the side of a \
+                     tapered curve is its offset, and the offset of a spline or ellipse is \
+                     not a spline, so no exact surface holds it (extrude it straight, or \
+                     draw the profile with lines and arcs)",
                     loop_label(l)
                 )));
             }
