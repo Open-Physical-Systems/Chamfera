@@ -30,6 +30,13 @@ pub struct Options {
     pub script: Vec<(String, Value)>,
     /// Open the Parameters window at start.
     pub parameters: bool,
+    /// Open the Extrude tool at start and pick the profile under the viewport's centre,
+    /// as a click there would.
+    pub extrude: bool,
+    /// The window's inner size in points, instead of the default 1400 x 900.
+    pub window_size: Option<[f32; 2]>,
+    /// Interface zoom (pixels per point multiplier), for checking crispness at 2x.
+    pub zoom: Option<f32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,6 +88,8 @@ pub struct ChamferaApp {
     file: file_ui::FileUi,
     /// Close the window on the next frame (Quit was confirmed).
     ctx_close: bool,
+    /// `--zoom`: applied on the first frame.
+    zoom: Option<f32>,
 }
 
 /// A command's label, so menus show the same words as the command list.
@@ -138,6 +147,7 @@ impl ChamferaApp {
             solid: solid_ui::SolidUi::default(),
             file: file_ui::FileUi::default(),
             ctx_close: false,
+            zoom: None,
         };
         if options.sample {
             app.run("body.sample", json!({}));
@@ -155,6 +165,11 @@ impl ChamferaApp {
             app.refresh_sketch_status();
         }
         app.params.open = options.parameters;
+        if options.extrude {
+            app.solid.extrude = Some(solid_ui::ExtrudeTool::default());
+            app.solid.pick_centre = true;
+        }
+        app.zoom = options.zoom;
         app
     }
 
@@ -511,6 +526,11 @@ impl ChamferaApp {
             self.fit_pending = false;
             self.run("view.home", self.viewport_params());
         }
+        if self.solid.pick_centre && rect.width() > 1.0 && rect.height() > 1.0 {
+            self.solid.pick_centre = false;
+            let (w, h) = (f64::from(rect.width()), f64::from(rect.height()));
+            self.extrude_click(w * 0.5, h * 0.5, w, h);
+        }
         self.navigate(ui, &response, rect);
 
         // The drawing tool's preview rides along with the sketch overlays.
@@ -694,6 +714,11 @@ fn save_png(_: &std::path::Path, _: &egui::ColorImage) -> Result<(), String> {
 impl eframe::App for ChamferaApp {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        if let Some(z) = self.zoom.take()
+            && z.is_finite()
+        {
+            ctx.set_zoom_factor(z.clamp(0.5, 4.0));
+        }
         self.apply_theme(&ctx);
         egui::Panel::top("menu").show(ui, |ui| self.menu_bar(ui));
         if self.session.active_sketch.is_some() {
@@ -725,7 +750,7 @@ pub fn run_native(options: Options) -> Result<(), String> {
         viewport: egui::ViewportBuilder::default()
             .with_title("Chamfera")
             .with_app_id("chamfera")
-            .with_inner_size([1400.0, 900.0])
+            .with_inner_size(options.window_size.unwrap_or([1400.0, 900.0]))
             .with_min_inner_size([640.0, 400.0]),
         ..Default::default()
     };

@@ -1,7 +1,8 @@
 //! The Chamfera desktop app.
 //!
 //! ```text
-//! chamfera [part.stl ...] [--sample] [--theme light|dark] [--screenshot shot.png]
+//! chamfera [part.stl ...] [--sample] [--theme light|dark] [--script steps.json]
+//!          [--parameters] [--extrude] [--size WxH] [--zoom F] [--screenshot shot.png]
 //! ```
 
 // Release builds on Windows open no console window; chamfera-cli stays a console app.
@@ -9,8 +10,8 @@
 
 use std::process::ExitCode;
 
-const USAGE: &str =
-    "usage: chamfera [part.stl ...] [--sample] [--theme light|dark] [--screenshot shot.png]";
+const USAGE: &str = "usage: chamfera [part.stl ...] [--sample] [--theme light|dark] \
+[--script steps.json] [--parameters] [--extrude] [--size WxH] [--zoom F] [--screenshot shot.png]";
 
 fn main() -> ExitCode {
     let mut options = chamfera_ui::Options::default();
@@ -19,6 +20,15 @@ fn main() -> ExitCode {
         match a.as_str() {
             "--sample" => options.sample = true,
             "--parameters" => options.parameters = true,
+            "--extrude" => options.extrude = true,
+            "--size" => match args.next().as_deref().and_then(parse_size) {
+                Some(size) => options.window_size = Some(size),
+                None => return fail(USAGE),
+            },
+            "--zoom" => match args.next().and_then(|z| z.parse::<f32>().ok()) {
+                Some(z) if z.is_finite() && (0.5..=4.0).contains(&z) => options.zoom = Some(z),
+                _ => return fail("--zoom takes a number from 0.5 to 4"),
+            },
             "--theme" => match args.next().as_deref() {
                 Some("light") => options.theme = Some(chamfera_render::ThemeMode::Light),
                 Some("dark") => options.theme = Some(chamfera_render::ThemeMode::Dark),
@@ -54,6 +64,14 @@ fn main() -> ExitCode {
 fn fail(msg: &str) -> ExitCode {
     eprintln!("chamfera: {msg}");
     ExitCode::FAILURE
+}
+
+/// `1000x680` → [1000, 680], within sensible window sizes.
+fn parse_size(text: &str) -> Option<[f32; 2]> {
+    let (w, h) = text.split_once(['x', 'X'])?;
+    let (w, h) = (w.trim().parse::<f32>().ok()?, h.trim().parse::<f32>().ok()?);
+    let ok = |v: f32| v.is_finite() && (320.0..=8192.0).contains(&v);
+    (ok(w) && ok(h)).then_some([w, h])
 }
 
 /// Reads a `chamfera-cli run` style script: a JSON list of {"command", "params"}.

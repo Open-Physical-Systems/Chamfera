@@ -40,6 +40,8 @@ pub struct SolidUi {
     pub extrude: Option<ExtrudeTool>,
     /// Waiting for a click on a flat face to sketch on.
     pub pick_face: bool,
+    /// `--extrude`: pick the profile under the viewport's centre on the first frame.
+    pub pick_centre: bool,
     /// Feature distance being edited in the timeline: (feature id, text).
     editing: Option<(u32, String)>,
 }
