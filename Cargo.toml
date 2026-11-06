@@ -18,12 +18,24 @@ chamfera-render = { path = "crates/render" }
 chamfera-doc = { path = "crates/doc" }
 chamfera-io = { path = "crates/io" }
 chamfera-engine = { path = "crates/engine" }
+chamfera-gpu = { path = "crates/gpu" }
+chamfera-ui = { path = "crates/ui" }
 
 # external: permissive licences only (deny.toml)
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 toml = "0.9"
+
+# GPU and UI (layers 5-6 only; `cargo xtask layers` enforces it)
+wgpu = "30"
+bytemuck = { version = "1", features = ["derive"] }
+pollster = "1"
+png = "0.18"
+egui = "0.37"
+eframe = { version = "0.37", default-features = false, features = ["wgpu", "default_fonts", "wayland", "x11"] }
+egui-wgpu = "0.37"
+rfd = "0.17"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

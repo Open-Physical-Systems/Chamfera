@@ -17,10 +17,14 @@ const LAYERS: &[(&str, u32)] = &[
     ("chamfera-doc", 2),
     ("chamfera-io", 3),
     ("chamfera-engine", 4),
-    ("chamfera-cli", 6),
+    ("chamfera-gpu", 5),
+    ("chamfera-ui", 6),
+    ("chamfera", 7),
+    ("chamfera-cli", 7),
+    ("chamfera-web", 7),
 ];
 
-/// Window, GPU and dialog crates: only layer 5 (UI) and apps may use them.
+/// Window, GPU and dialog crates: only layer 5 (gpu) and up may use them.
 const UI_ONLY_DEPS: &[&str] = &["egui", "eframe", "winit", "wgpu", "rfd", "egui-wgpu"];
 
 /// Crates that build for the browser (wasm32-unknown-unknown).
@@ -32,6 +36,9 @@ const WASM_CRATES: &[&str] = &[
     "chamfera-doc",
     "chamfera-io",
     "chamfera-engine",
+    "chamfera-gpu",
+    "chamfera-ui",
+    "chamfera-web",
 ];
 
 /// Subcommands, so `cargo xtask skills` can check that docs name only real ones.

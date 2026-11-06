@@ -1,0 +1,99 @@
+// Chamfera viewport shaders: shaded bodies, lines (grid, axes, edges) and the background.
+
+struct Globals {
+    view_proj: mat4x4<f32>,
+    eye: vec4<f32>,
+    // xyz: key light direction (towards the light); w: 1 for orthographic views.
+    light: vec4<f32>,
+    // Camera forward direction, used as the view direction in orthographic views.
+    forward: vec4<f32>,
+    background_top: vec4<f32>,
+    background_bottom: vec4<f32>,
+};
+
+@group(0) @binding(0) var<uniform> g: Globals;
+
+struct Body {
+    color: vec4<f32>,
+};
+
+@group(1) @binding(0) var<uniform> body: Body;
+
+// ---- bodies ----
+
+struct MeshOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) normal: vec3<f32>,
+    @location(1) world: vec3<f32>,
+};
+
+@vertex
+fn mesh_vs(@location(0) position: vec3<f32>, @location(1) normal: vec3<f32>) -> MeshOut {
+    var out: MeshOut;
+    out.clip = g.view_proj * vec4<f32>(position, 1.0);
+    out.normal = normal;
+    out.world = position;
+    return out;
+}
+
+@fragment
+fn mesh_fs(in: MeshOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    var n = normalize(in.normal);
+    // Meshes from files may be inside out; light the side we see.
+    if (!front) {
+        n = -n;
+    }
+    var v = normalize(g.eye.xyz - in.world);
+    if (g.light.w > 0.5) {
+        v = -g.forward.xyz;
+    }
+    let key = normalize(g.light.xyz);
+    let head = max(dot(n, v), 0.0);
+    let side = max(dot(n, key), 0.0);
+    let h = normalize(v + key);
+    let spec = pow(max(dot(n, h), 0.0), 48.0) * 0.18;
+    let shade = 0.22 + 0.55 * head + 0.3 * side;
+    return vec4<f32>(body.color.rgb * shade + vec3<f32>(spec), 1.0);
+}
+
+// ---- lines ----
+
+struct LineOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) color: vec4<f32>,
+};
+
+@vertex
+fn line_vs(@location(0) position: vec3<f32>, @location(1) color: vec4<f32>) -> LineOut {
+    var out: LineOut;
+    out.clip = g.view_proj * vec4<f32>(position, 1.0);
+    out.color = color;
+    return out;
+}
+
+@fragment
+fn line_fs(in: LineOut) -> @location(0) vec4<f32> {
+    return in.color;
+}
+
+// ---- background: a vertical gradient from one full-screen triangle ----
+
+struct BgOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) t: f32,
+};
+
+@vertex
+fn bg_vs(@builtin(vertex_index) i: u32) -> BgOut {
+    let x = f32((i << 1u) & 2u) * 2.0 - 1.0;
+    let y = f32(i & 2u) * 2.0 - 1.0;
+    var out: BgOut;
+    out.clip = vec4<f32>(x, y, 1.0, 1.0);
+    out.t = y * 0.5 + 0.5;
+    return out;
+}
+
+@fragment
+fn bg_fs(in: BgOut) -> @location(0) vec4<f32> {
+    return mix(g.background_bottom, g.background_top, clamp(in.t, 0.0, 1.0));
+}

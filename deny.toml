@@ -19,6 +19,13 @@ allow = [
 ]
 confidence-threshold = 0.9
 
+# Font licences for the UI fonts egui bundles: Ubuntu Light (Ubuntu-font-1.0), Noto Emoji (OFL-1.1).
+# They allow shipping the fonts inside an application. Allowed for this crate only, never for
+# code. Credited in ATTRIBUTION.md.
+[[licenses.exceptions]]
+crate = "epaint_default_fonts"
+allow = ["OFL-1.1", "Ubuntu-font-1.0"]
+
 [bans]
 multiple-versions = "allow"
 wildcards = "deny"

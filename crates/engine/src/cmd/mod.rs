@@ -1,9 +1,12 @@
 //! The command registry. Each area has its own file; `registry()` joins them.
 
 mod app;
+mod body;
 mod design;
 mod edit;
 mod param;
+mod select;
+mod view;
 
 use crate::{CmdResult, Session};
 use serde_json::Value;
@@ -26,9 +29,12 @@ pub fn registry() -> Vec<&'static CommandSpec> {
     let mut all: Vec<&'static CommandSpec> = Vec::new();
     for area in [
         app::COMMANDS,
+        body::COMMANDS,
         design::COMMANDS,
         edit::COMMANDS,
         param::COMMANDS,
+        select::COMMANDS,
+        view::COMMANDS,
     ] {
         all.extend(area.iter());
     }

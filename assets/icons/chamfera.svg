@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <!-- Chamfera app icon: an isometric cube whose near corner is chamfered. Original artwork,
+       MIT OR Apache-2.0 like the code. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2A7FE0"/>
+      <stop offset="1" stop-color="#1250A6"/>
+    </linearGradient>
+  </defs>
+  <rect x="8" y="8" width="240" height="240" rx="52" fill="url(#bg)"/>
+  <g stroke="#0B3D82" stroke-width="3" stroke-linejoin="round">
+    <polygon points="128,44 208,90 154,121 102,121 48,90" fill="#FFFFFF"/>
+    <polygon points="48,90 102,121 128,166 128,228 48,182" fill="#D3E2F6"/>
+    <polygon points="154,121 208,90 208,182 128,228 128,166" fill="#A9C5EC"/>
+    <polygon points="102,121 154,121 128,166" fill="#FFB020"/>
+  </g>
+</svg>

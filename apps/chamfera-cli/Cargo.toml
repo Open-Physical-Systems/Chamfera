@@ -10,6 +10,8 @@ authors.workspace = true
 
 [dependencies]
 chamfera-engine.workspace = true
+chamfera-gpu.workspace = true
+chamfera-render.workspace = true
 serde_json.workspace = true
 
 [lints]

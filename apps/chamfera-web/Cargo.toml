@@ -1,0 +1,24 @@
+[package]
+name = "chamfera-web"
+description = "Chamfera in the browser (WebAssembly)"
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+chamfera-ui.workspace = true
+eframe.workspace = true
+# WebGL 2 as the fallback where WebGPU is not available.
+wgpu = { workspace = true, features = ["webgl"] }
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = ["Document", "Window", "Element", "HtmlCanvasElement"] }
+
+[lints]
+workspace = true

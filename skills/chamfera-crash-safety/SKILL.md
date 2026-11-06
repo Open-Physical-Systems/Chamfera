@@ -14,7 +14,8 @@ A CAD app that crashes loses someone's work. The workspace lints deny `unwrap`, 
 - Floating point: compare with tolerances (`LINEAR_TOLERANCE`, `ANGULAR_TOLERANCE`), never `==` on computed values. Guard divisions and `normalized()` (it returns `Option`).
 - Indexing: prefer `get()` over `[i]` where the index comes from input or topology.
 - Recursion and loops over input are bounded (depth, iteration limits); solvers have a maximum iteration count.
-- Reading a file re-validates everything in it (`Document::from_json`).
+- Read files only through `chamfera_io::read_limited` (in `crates/io/src/lib.rs`): it refuses devices, pipes and folders and stops at a size limit. `/dev/zero` reports size 0, so a plain `std::fs::read` after a size check never ends.
+- Reading a file re-validates everything in it (`Document::from_json`, `TriMesh::validate`).
 
 ## Tests that guard this
 - `hostile_params_never_panic` in `crates/engine/src/tests.rs` runs every command with hostile parameters. A new parameter kind gets a hostile case there.
