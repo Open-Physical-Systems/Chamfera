@@ -25,9 +25,8 @@ use thiserror::Error;
 /// - 7: linear and circular patterns of features.
 /// - 8: imported solid bodies.
 /// - 9: fillets and chamfers of edges.
-/// - 11: shells (hollowed solids with open faces). Another branch takes 10; the merge
-///   renumbers.
-pub const FORMAT_VERSION: u32 = 11;
+/// - 10: shells (hollowed solids with open faces).
+pub const FORMAT_VERSION: u32 = 10;
 /// The tag every design file starts with, so other JSON is not mistaken for a design.
 pub const FORMAT_TAG: &str = "chamfera";
 /// Longest parameter name.
