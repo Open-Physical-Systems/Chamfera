@@ -85,7 +85,7 @@ mod sweep_path;
 mod tessellate;
 mod topology;
 
-pub use blend::{MAX_BLEND_EDGES, chamfer, fillet};
+pub use blend::{MAX_BLEND_EDGES, chamfer, fillet, fillet_variable};
 pub use boolean::{
     BooleanOp, MAX_BOOLEAN_ENTITIES, MAX_BOOLEAN_FACES, boolean, intersect, subtract, union,
 };
