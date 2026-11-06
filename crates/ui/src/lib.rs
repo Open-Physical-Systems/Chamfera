@@ -14,6 +14,7 @@ use egui::{Color32, PointerButton, Rect, Sense, Vec2};
 use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
 
+mod blend_ui;
 mod browser;
 mod chrome;
 mod file_ui;
@@ -343,6 +344,17 @@ impl ChamferaApp {
             self.face_click(x, y, w, h);
             return;
         }
+        if self.solid.blend.is_some() {
+            let at = response.hover_pos().map(local);
+            self.blend_hover(at, w, h);
+            if response.clicked()
+                && let Some(pos) = response.interact_pointer_pos()
+            {
+                let (x, y) = local(pos);
+                self.blend_click(x, y, w, h);
+                return;
+            }
+        }
         if self.solid.extrude.is_some()
             && response.clicked()
             && let Some(pos) = response.interact_pointer_pos()
@@ -407,6 +419,8 @@ impl ChamferaApp {
         if let Some(preview) = self.sketch_preview() {
             self.session.scene.overlays.push(preview);
         }
+        let blends = self.blend_overlays();
+        self.session.scene.overlays.extend(blends);
         if let Some(picked) = self.extrude_overlay() {
             self.session.scene.overlays.push(Overlay {
                 style: chamfera_render::OverlayStyle::Highlight,
@@ -617,6 +631,7 @@ impl eframe::App for ChamferaApp {
         } else {
             self.parameters_window(&ctx);
             self.extrude_dialog(&ctx);
+            self.blend_dialog(&ctx);
             self.feature_dialog(&ctx);
         }
         self.unsaved_dialog(&ctx);
@@ -649,4 +664,99 @@ pub fn run_native(options: Options) -> Result<(), String> {
         return Err("the screenshot could not be taken".into());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod input_tests {
+    use super::*;
+    use eframe::App;
+
+    /// Runs one frame of the real UI with these input events.
+    fn frame(app: &mut ChamferaApp, ctx: &egui::Context, t: f64, events: Vec<egui::Event>) {
+        let raw = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(
+                egui::Pos2::ZERO,
+                Vec2::new(1400.0, 900.0),
+            )),
+            time: Some(t),
+            events,
+            ..Default::default()
+        };
+        let mut f = eframe::Frame::_new_kittest();
+        let mut out = ctx.run_ui(raw, |ui| app.ui(ui, &mut f));
+        out.textures_delta.clear();
+    }
+
+    #[test]
+    fn a_left_click_in_the_viewport_selects_the_body_under_it() {
+        let ctx = egui::Context::default();
+        let mut app = ChamferaApp::headless();
+        app.run("body.sample", json!({}));
+        app.fit_pending = true;
+        let mut t = 0.0;
+        for _ in 0..4 {
+            frame(&mut app, &ctx, t, vec![]);
+            t += 0.05;
+        }
+        let at = app.viewport_rect.center();
+        eprintln!("viewport {:?}", app.viewport_rect);
+        let button = |pressed| egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame(&mut app, &ctx, t, vec![egui::Event::PointerMoved(at)]);
+        t += 0.05;
+        frame(&mut app, &ctx, t, vec![button(true)]);
+        t += 0.08;
+        frame(&mut app, &ctx, t, vec![button(false)]);
+        t += 0.05;
+        frame(&mut app, &ctx, t, vec![]);
+        assert!(app.session.scene.selection.is_some(), "nothing selected");
+    }
+
+    fn click(app: &mut ChamferaApp, ctx: &egui::Context, t: &mut f64, at: egui::Pos2) {
+        let button = |pressed| egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame(app, ctx, *t, vec![egui::Event::PointerMoved(at)]);
+        *t += 0.05;
+        frame(app, ctx, *t, vec![button(true)]);
+        *t += 0.08;
+        frame(app, ctx, *t, vec![button(false)]);
+        *t += 0.05;
+        frame(app, ctx, *t, vec![]);
+        *t += 0.05;
+    }
+
+    #[test]
+    fn two_left_clicks_in_a_new_sketch_draw_a_line() {
+        let ctx = egui::Context::default();
+        let mut app = ChamferaApp::headless();
+        let mut t = 0.0;
+        for _ in 0..3 {
+            frame(&mut app, &ctx, t, vec![]);
+            t += 0.05;
+        }
+        app.create_sketch("xy", "top");
+        frame(&mut app, &ctx, t, vec![]);
+        t += 0.05;
+        let c = app.viewport_rect.center();
+        click(&mut app, &ctx, &mut t, c);
+        click(&mut app, &ctx, &mut t, c + Vec2::new(120.0, 7.0));
+        let sketch = app.session.active_sketch.unwrap();
+        let n = app
+            .session
+            .doc
+            .sketch(sketch)
+            .unwrap()
+            .sketch
+            .curves()
+            .count();
+        assert!(n >= 1, "no line drawn");
+    }
 }

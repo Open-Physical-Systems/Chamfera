@@ -50,6 +50,9 @@ impl Session {
                 body,
                 scene_id,
                 faces,
+                // Not pickable for fillets yet: the timeline's blends work on the bodies
+                // features build, and imported bodies are kept apart from those.
+                edges: Vec::new(),
             });
         }
     }
