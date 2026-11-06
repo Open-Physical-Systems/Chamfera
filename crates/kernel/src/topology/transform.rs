@@ -90,7 +90,7 @@ fn curve(c: &Curve, t: &Transform, mirror: bool) -> KernelResult<Curve> {
     })
 }
 
-fn surface(s: &Surface, t: &Transform) -> KernelResult<Surface> {
+fn surface(s: &Surface, t: &Transform, mirror: bool) -> KernelResult<Surface> {
     let frame = |f: &Frame| surface_frame(f, t);
     Ok(match s {
         Surface::Plane(f) => Surface::Plane(frame(f)?),
@@ -98,10 +98,15 @@ fn surface(s: &Surface, t: &Transform) -> KernelResult<Surface> {
         Surface::Cone(c) => Surface::cone(frame(c.frame())?, c.radius(), c.half_angle())?,
         Surface::Sphere(c) => Surface::sphere(frame(c.frame())?, c.radius())?,
         Surface::Torus(c) => Surface::torus(frame(c.frame())?, c.major_radius(), c.minor_radius())?,
-        // The curve is in the frame's plane coordinates, which a rigid move keeps.
-        Surface::Extrusion(e) => {
-            Surface::Extrusion(crate::Extrusion::new(frame(e.frame())?, e.curve().clone())?)
-        }
+        // The curve is in the frame's plane coordinates, so the frame must be `(Rx, Ry, ±Rz)`
+        // like a curve's: with `(Rx, -Ry, Rz)` a mirror would need the curve reflected too.
+        // The extrusion direction flips under a mirror, and with it the sign of
+        // `S_u x S_v`: `R S_u x (-R z) = R (S_u x z)` for `det R = -1`, so the normal is `R`
+        // of the original's and the face keeps its sense.
+        Surface::Extrusion(e) => Surface::Extrusion(crate::Extrusion::new(
+            curve_frame(e.frame(), t, mirror)?,
+            e.curve().clone(),
+        )?),
     })
 }
 
@@ -131,7 +136,7 @@ impl Body {
             *c = curve(c, t, mirror)?;
         }
         for s in out.surfaces.items.iter_mut().flatten() {
-            *s = surface(s, t)?;
+            *s = surface(s, t, mirror)?;
         }
         if mirror {
             out.reverse_loops()?;

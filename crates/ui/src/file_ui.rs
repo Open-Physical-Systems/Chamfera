@@ -132,6 +132,7 @@ impl ChamferaApp {
             "",
             true,
         );
+        let step_in = item_if(ui, Icon::ImportMesh, "Insert STEP…", "", true);
         let sketching = self.session.active_sketch.is_some();
         let dxf_text = format!("{} into Sketch…", label("sketch.import_dxf"));
         let dxf = item_if(ui, Icon::ImportMesh, &dxf_text, "", sketching);
@@ -200,6 +201,10 @@ impl ChamferaApp {
         if import {
             ui.close();
             self.import_dialog();
+        }
+        if step_in {
+            ui.close();
+            self.step_dialog();
         }
         if dxf {
             ui.close();
@@ -330,6 +335,52 @@ impl ChamferaApp {
             json!({ "path": path.to_string_lossy() }),
         );
         self.after_dxf(reply.as_ref());
+    }
+
+    /// STEP files are read from a path, which the browser build has none of.
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn step_dialog(&mut self) {
+        self.message = Some((
+            "Insert STEP needs the desktop app: the browser build cannot read STEP files yet"
+                .to_owned(),
+            true,
+        ));
+    }
+
+    /// Asks for a STEP file and adds its solids as exact bodies.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn step_dialog(&mut self) {
+        let Some(path) = rfd::FileDialog::new()
+            .set_title(label("body.import_step"))
+            .add_filter("STEP model", &["step", "stp", "STEP", "STP"])
+            .pick_file()
+        else {
+            return;
+        };
+        let reply = self.run(
+            "body.import_step",
+            json!({ "path": path.to_string_lossy() }),
+        );
+        self.after_step(reply.as_ref());
+    }
+
+    /// Reports a STEP import: how many solids came in and how many were left out.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn after_step(&mut self, reply: Option<&serde_json::Value>) {
+        let Some(v) = reply else {
+            return;
+        };
+        let solids = v["solids"].as_array().map_or(0, Vec::len);
+        let skipped = v["skipped"].as_array().map_or(0, Vec::len);
+        let mut text = format!(
+            "Inserted {solids} STEP solid{}",
+            if solids == 1 { "" } else { "s" }
+        );
+        if skipped > 0 {
+            text.push_str(&format!("; {skipped} left out (not supported yet)"));
+        }
+        self.message = Some((text, skipped > 0 && solids == 0));
+        self.fit_pending = true;
     }
 
     /// Reports a DXF import.
@@ -684,6 +735,74 @@ impl ChamferaApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_theme_forced_at_start_survives_opening_a_design_until_the_user_picks_one() {
+        // `chamfera --theme dark` with light preferences: opening a design records it in
+        // the recent list, which applies the preferences again; that must not undo the
+        // forced theme (screenshots of scripts that open a design came out light).
+        let options = crate::Options {
+            theme: Some(chamfera_render::ThemeMode::Dark),
+            ..Default::default()
+        };
+        let prefs = crate::prefs::Preferences {
+            theme: crate::ThemeChoice::Light,
+            ..Default::default()
+        };
+        let mut app = ChamferaApp::with_gpu(None, &options, prefs);
+        assert_eq!(app.theme_choice, crate::ThemeChoice::Dark);
+        let dir = std::env::temp_dir().join(format!("chamfera-ui-theme-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("t.chamfera");
+        app.run("design.save", json!({ "path": path.to_string_lossy() }));
+        app.run("design.open", json!({ "path": path.to_string_lossy() }));
+        app.track_recent();
+        assert_eq!(app.theme_choice, crate::ThemeChoice::Dark);
+        // Choosing a theme in the preferences wins over the start-up option.
+        app.prefs.theme = crate::ThemeChoice::System;
+        app.preferences_changed();
+        assert_eq!(app.theme_choice, crate::ThemeChoice::System);
+    }
+
+    #[test]
+    fn insert_step_is_in_the_solid_insert_group_and_reports_what_came_in() {
+        let t = crate::ribbon::by_id("body.import_step").expect("an Insert STEP tool");
+        assert_eq!(t.tab, crate::ribbon::Tab::Solid);
+        assert_eq!(t.group, "INSERT");
+        // A 10 mm cube written as STEP reads back as one solid of volume 1000.
+        let mut source = ChamferaApp::headless();
+        source.run("sketch.create", json!({ "plane": "xy" }));
+        source.run(
+            "sketch.rectangle",
+            json!({ "x1": 0, "y1": 0, "x2": 10, "y2": 10 }),
+        );
+        source.run("sketch.finish", json!({}));
+        source.run(
+            "solid.extrude",
+            json!({ "sketch": 1, "profiles": [{ "x": 5, "y": 5 }], "distance": 10 }),
+        );
+        let dir = std::env::temp_dir().join(format!("chamfera-ui-step-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("cube.step");
+        source.run(
+            "design.export_step",
+            json!({ "path": path.to_string_lossy() }),
+        );
+        let mut app = ChamferaApp::headless();
+        let reply = app.run(
+            "body.import_step",
+            json!({ "path": path.to_string_lossy() }),
+        );
+        let v = reply.as_ref().unwrap()["solids"][0]["volume"]
+            .as_f64()
+            .unwrap();
+        assert!((v - 1000.0).abs() < 1e-6, "{v}");
+        app.after_step(reply.as_ref());
+        assert_eq!(
+            app.message,
+            Some(("Inserted 1 STEP solid".to_owned(), false))
+        );
+    }
 
     #[test]
     fn new_asks_first_only_when_there_are_unsaved_changes() {

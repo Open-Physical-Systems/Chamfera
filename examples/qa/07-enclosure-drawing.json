@@ -1,0 +1,18 @@
+[
+  { "command": "design.open", "params": { "path": "target/qa/01-enclosure.chamfera" } },
+  { "command": "drawing.new_sheet", "params": { "paper": "a3", "scale": 1, "part_name": "Enclosure", "drawn_by": "Chamfera QA" }, "as": "sheet" },
+  { "command": "drawing.add_view", "params": { "view": "front", "x": 110, "y": 110 }, "as": "front" },
+  { "command": "drawing.add_view", "params": { "view": "top", "x": 110, "y": 200 }, "as": "top" },
+  { "command": "drawing.add_view", "params": { "view": "right", "x": 220, "y": 110 }, "as": "right" },
+  { "command": "drawing.add_view", "params": { "view": "iso", "x": 320, "y": 200 }, "as": "iso" },
+  { "command": "drawing.add_dimension", "params": { "view": "$front.view", "kind": "horizontal", "x1": 70, "y1": 91, "x2": 150, "y2": 91, "offset": -12 }, "as": "d_width" },
+  { "command": "drawing.add_dimension", "params": { "view": "$front.view", "kind": "vertical", "x1": 150, "y1": 91, "x2": 150, "y2": 129, "offset": 12 }, "as": "d_height" },
+  { "command": "drawing.add_dimension", "params": { "view": "$top.view", "kind": "vertical", "x1": 150, "y1": 175, "x2": 150, "y2": 225, "offset": 12 }, "as": "d_depth" },
+  { "command": "drawing.add_dimension", "params": { "view": "$right.view", "kind": "horizontal", "x1": 195, "y1": 91, "x2": 245, "y2": 91, "offset": -12 }, "as": "d_right" },
+  { "command": "drawing.add_dimension", "params": { "view": "$top.view", "kind": "radius", "x1": 148.243, "y1": 223.243, "offset": 10 }, "as": "d_corner" },
+  { "command": "drawing.add_dimension", "params": { "view": "$top.view", "kind": "diameter", "x1": 79.25, "y1": 181, "offset": 12 }, "as": "d_cbore" },
+  { "command": "drawing.list", "as": "list" },
+  { "command": "drawing.export", "params": { "path": "target/qa/07-enclosure.pdf" } },
+  { "command": "drawing.export", "params": { "path": "target/qa/07-enclosure.svg" } },
+  { "command": "drawing.export", "params": { "path": "target/qa/07-enclosure.dxf" } }
+]

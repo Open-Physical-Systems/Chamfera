@@ -1,0 +1,16 @@
+[
+  { "command": "design.open", "params": { "path": "target/qa/01-enclosure.chamfera" } },
+  { "command": "solid.remove", "params": { "bodies": ["Extrude2"] } },
+  { "command": "solid.hole", "params": { "face": "4:shell of 2:bottom", "points": [{ "x": 15, "y": 15 }, { "x": 65, "y": 15 }, { "x": 65, "y": 35 }, { "x": 15, "y": 35 }], "diameter": 4, "through_all": true }, "as": "vents" },
+  { "command": "cam.setup", "params": { "name": "Base", "stock": { "kind": "from_model", "side": 3, "top": 1, "bottom": 0 }, "origin": "stock_top_corner" } },
+  { "command": "cam.tool_add", "params": { "kind": "flat_end_mill", "diameter": 12, "feed": 900 }, "as": "face_mill" },
+  { "command": "cam.tool_add", "params": { "kind": "flat_end_mill", "diameter": 6, "feed": 600 }, "as": "mill" },
+  { "command": "cam.tool_add", "params": { "kind": "drill", "diameter": 4, "feed": 150, "plunge_feed": 100 }, "as": "drill" },
+  { "command": "cam.op_add", "params": { "kind": "facing", "tool": "$face_mill.tool", "stepover": 60, "stepdown": 1 }, "as": "facing" },
+  { "command": "cam.op_add", "params": { "kind": "pocket", "tool": "$mill.tool", "face": "4:shell of 2:bottom", "stepover": 40, "stepdown": 2 }, "as": "pocket" },
+  { "command": "cam.op_add", "params": { "kind": "drill", "tool": "$drill.tool", "peck": 1, "breakthrough": 1 }, "as": "drilling" },
+  { "command": "cam.generate", "as": "gen" },
+  { "command": "cam.post", "params": { "dialect": "grbl", "path": "target/qa/06-base-grbl.nc" } },
+  { "command": "cam.post", "params": { "dialect": "linuxcnc", "path": "target/qa/06-base-linuxcnc.ngc" } },
+  { "command": "view.home", "params": { "width": 1600, "height": 950 } }
+]
