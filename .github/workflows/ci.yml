@@ -2,7 +2,7 @@ name: ci
 
 on:
   push:
-    branches: [dev, main, ci/windows-macos]
+    branches: [dev, main]
     tags: ["v*"]
   pull_request:
     branches: [dev, main]
