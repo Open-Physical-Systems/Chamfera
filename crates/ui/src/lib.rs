@@ -17,6 +17,7 @@ use std::sync::{Arc, Mutex};
 mod blend_ui;
 mod browser;
 mod chrome;
+mod context_menu;
 mod file_ui;
 
 /// `--screenshot` gives up after this long without a drawn frame.
@@ -61,6 +62,8 @@ pub struct Options {
     pub zoom: Option<f32>,
     /// Open the search palette at start with this query typed.
     pub search: Option<String>,
+    /// Open the viewport's right-click menu at this viewport point once it has drawn.
+    pub context_menu: Option<[f32; 2]>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -119,6 +122,8 @@ pub struct ChamferaApp {
     browser: browser::BrowserUi,
     timeline: timeline::TimelineUi,
     search: search::SearchUi,
+    /// Right-click menus, the selection filter and hover pre-highlight.
+    ctx_menu: context_menu::ContextMenuUi,
     /// The browser's file picker, downloads and local storage.
     #[cfg(target_arch = "wasm32")]
     web: web::WebFiles,
@@ -193,6 +198,7 @@ impl ChamferaApp {
             browser: browser::BrowserUi::default(),
             timeline: timeline::TimelineUi::default(),
             search: search::SearchUi::default(),
+            ctx_menu: context_menu::ContextMenuUi::default(),
             #[cfg(target_arch = "wasm32")]
             web: web::WebFiles::default(),
             ctx_close: false,
@@ -220,6 +226,7 @@ impl ChamferaApp {
             app.solid.pick_centre = true;
         }
         app.zoom = options.zoom;
+        app.ctx_menu.open_at = options.context_menu;
         if let Some(q) = &options.search {
             app.run_action(shortcuts::Action::Search);
             app.search.query = q.chars().take(120).collect();
@@ -315,6 +322,12 @@ impl ChamferaApp {
                 ),
             )
         });
+        let pressed = ui.input(|i| i.pointer.any_down());
+        let hover = response
+            .hover_pos()
+            .filter(|_| !pressed)
+            .map(|p| (local(p).0, local(p).1, w, h));
+        self.hover_update(hover);
         let delta = response.drag_delta();
         if delta != Vec2::ZERO {
             let (dx, dy) = (f64::from(delta.x), f64::from(delta.y));
@@ -375,6 +388,9 @@ impl ChamferaApp {
         }
         let used_by_sketch =
             self.session.active_sketch.is_some() && self.sketch_input(ui, response, rect);
+        if !used_by_sketch {
+            self.context_click(response, rect);
+        }
         if !used_by_sketch
             && self.session.active_sketch.is_none()
             && response.clicked()
@@ -383,7 +399,7 @@ impl ChamferaApp {
             let (x, y) = local(pos);
             self.run(
                 "select.pick",
-                json!({ "x": x, "y": y, "width": w, "height": h }),
+                json!({ "x": x, "y": y, "width": w, "height": h, "filter": self.filter_param() }),
             );
         }
         let typing = ui.ctx().egui_wants_keyboard_input();
@@ -426,6 +442,8 @@ impl ChamferaApp {
             .scene
             .overlays
             .retain(|o| o.style != chamfera_render::OverlayStyle::Preview);
+        // Tool and hover overlays are added for this frame's picture only.
+        let base_overlays = self.session.scene.overlays.len();
         if let Some(preview) = self.sketch_preview() {
             self.session.scene.overlays.push(preview);
         }
@@ -437,6 +455,8 @@ impl ChamferaApp {
                 ..picked
             });
         }
+        let picks = self.pick_overlays();
+        self.session.scene.overlays.extend(picks);
         let ppp = ui.ctx().pixels_per_point();
         let size = (
             (rect.width() * ppp).round().max(1.0) as u32,
@@ -492,6 +512,7 @@ impl ChamferaApp {
             }
             self.drawn = Some(now);
         }
+        self.session.scene.overlays.truncate(base_overlays);
         if let Some(Some(id)) = self.gpu.as_ref().map(|g| g.texture) {
             ui.painter().image(
                 id,
@@ -505,6 +526,13 @@ impl ChamferaApp {
         }
         self.view_cube(ui, rect);
         self.viewport_hint(ui, rect);
+        self.selection_filter_bar(ui.ctx(), rect);
+        if self.frames >= 2
+            && let Some([x, y]) = self.ctx_menu.open_at.take()
+        {
+            self.open_context_menu(rect.min + Vec2::new(x, y), rect);
+        }
+        self.context_menu_window(ui.ctx());
     }
 
     /// `--screenshot`: wait a few frames for the view to settle, grab the window, save, quit.
@@ -601,6 +629,7 @@ impl eframe::App for ChamferaApp {
             ctx.set_zoom_factor(z.clamp(0.5, 4.0));
         }
         self.apply_theme(&ctx);
+        self.track_last_used();
         // Keys first, so the palette and the shortcuts take theirs before anything else.
         self.search_keys(&ctx);
         self.shortcut_keys(&ctx);
@@ -646,6 +675,8 @@ impl eframe::App for ChamferaApp {
             self.extrude_dialog(&ctx);
             self.blend_dialog(&ctx);
             self.feature_dialog(&ctx);
+            self.rename_dialog(&ctx);
+            self.properties_window(&ctx);
         }
         self.unsaved_dialog(&ctx);
         self.shortcuts_window(&ctx);

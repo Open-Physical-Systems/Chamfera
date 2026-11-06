@@ -2,8 +2,8 @@
 //!
 //! ```text
 //! chamfera [part.stl ...] [--sample] [--theme light|dark] [--script steps.json]
-//!          [--parameters] [--extrude] [--search QUERY] [--size WxH] [--zoom F]
-//!          [--screenshot shot.png]
+//!          [--parameters] [--extrude] [--search QUERY] [--context-menu X,Y]
+//!          [--size WxH] [--zoom F] [--screenshot shot.png]
 //! ```
 
 // Release builds on Windows open no console window; chamfera-cli stays a console app.
@@ -12,7 +12,8 @@
 use std::process::ExitCode;
 
 const USAGE: &str = "usage: chamfera [part.stl ...] [--sample] [--theme light|dark] \
-[--script steps.json] [--parameters] [--extrude] [--search QUERY] [--size WxH] [--zoom F] [--screenshot shot.png]";
+[--script steps.json] [--parameters] [--extrude] [--search QUERY] [--context-menu X,Y] \
+[--size WxH] [--zoom F] [--screenshot shot.png]";
 
 fn main() -> ExitCode {
     let mut options = chamfera_ui::Options::default();
@@ -25,6 +26,10 @@ fn main() -> ExitCode {
             "--search" => match args.next() {
                 Some(q) => options.search = Some(q),
                 None => return fail(USAGE),
+            },
+            "--context-menu" => match args.next().as_deref().and_then(parse_point) {
+                Some(p) => options.context_menu = Some(p),
+                None => return fail("--context-menu takes a viewport point such as 600,400"),
             },
             "--size" => match args.next().as_deref().and_then(parse_size) {
                 Some(size) => options.window_size = Some(size),
@@ -69,6 +74,14 @@ fn main() -> ExitCode {
 fn fail(msg: &str) -> ExitCode {
     eprintln!("chamfera: {msg}");
     ExitCode::FAILURE
+}
+
+/// `600,400` → [600, 400]: a point in the viewport, in points from its top-left.
+fn parse_point(text: &str) -> Option<[f32; 2]> {
+    let (x, y) = text.split_once(',')?;
+    let (x, y) = (x.trim().parse::<f32>().ok()?, y.trim().parse::<f32>().ok()?);
+    let ok = |v: f32| v.is_finite() && (0.0..=8192.0).contains(&v);
+    (ok(x) && ok(y)).then_some([x, y])
 }
 
 /// `1000x680` → [1000, 680], within sensible window sizes.

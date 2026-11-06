@@ -52,6 +52,8 @@ pub struct Theme {
     pub sketch_preview: Rgba,
     /// What the pointer is over, or what is picked.
     pub highlight: Rgba,
+    /// The face or edge under the pointer in the viewport, before a click picks it.
+    pub hover_highlight: Rgba,
     // interface surfaces (see docs/design/ui.md)
     /// The app bar, ribbon, timeline and status bar.
     pub chrome: Rgba,
@@ -105,6 +107,7 @@ impl Theme {
             sketch_construction: Rgba(214, 120, 30, 255),
             sketch_preview: Rgba(30, 100, 220, 140),
             highlight: Rgba(240, 160, 20, 255),
+            hover_highlight: Rgba(0, 150, 180, 255),
             chrome: Rgba(252, 252, 253, 255),
             panel: Rgba(246, 247, 249, 255),
             panel_alt: Rgba(236, 239, 243, 255),
@@ -144,6 +147,7 @@ impl Theme {
             sketch_construction: Rgba(240, 150, 60, 255),
             sketch_preview: Rgba(96, 170, 255, 140),
             highlight: Rgba(255, 190, 60, 255),
+            hover_highlight: Rgba(90, 215, 235, 255),
             chrome: Rgba(29, 31, 35, 255),
             panel: Rgba(35, 38, 43, 255),
             panel_alt: Rgba(45, 49, 56, 255),

@@ -177,10 +177,23 @@ impl Session {
     /// The point or curve of the active sketch nearest pixel `(x, y)`: points first
     /// (within [`PICK_POINT_PX`]), then curves (within [`PICK_CURVE_PX`]).
     pub fn pick_sketch_item(&self, x: f64, y: f64, w: f64, h: f64) -> Option<SketchItem> {
+        self.pick_sketch_item_filtered(x, y, w, h, &crate::pick_filter::PickFilter::ALL)
+    }
+
+    /// [`Session::pick_sketch_item`], skipping what the selection filter leaves out.
+    pub fn pick_sketch_item_filtered(
+        &self,
+        x: f64,
+        y: f64,
+        w: f64,
+        h: f64,
+        filter: &crate::pick_filter::PickFilter,
+    ) -> Option<SketchItem> {
         let f = self.active_sketch()?;
         let near_point = f
             .sketch
             .points()
+            .filter(|_| filter.vertices)
             .filter_map(|(id, p)| {
                 let (sx, sy) = self.to_screen(&f.plane, p, w, h)?;
                 Some((id, (sx - x).hypot(sy - y)))
@@ -192,6 +205,14 @@ impl Session {
         }
         let mut best: Option<(CurveId, f64)> = None;
         for (id, curve) in f.sketch.curves() {
+            let allowed = if curve.is_construction() {
+                filter.construction
+            } else {
+                filter.sketch
+            };
+            if !allowed {
+                continue;
+            }
             let screen: Vec<(f64, f64)> = curve_polyline(&f.sketch, curve)
                 .into_iter()
                 .filter_map(|p| self.to_screen(&f.plane, p, w, h))

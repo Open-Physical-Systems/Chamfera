@@ -1,6 +1,7 @@
 //! `select.*`: what the user has picked in the viewport.
 
 use super::CommandSpec;
+use crate::pick_filter::{PickFilter, Picked};
 use crate::{CmdResult, CommandError, Session, params};
 use serde_json::{Value, json};
 
@@ -23,13 +24,24 @@ pub static COMMANDS: &[CommandSpec] = &[
         id: "select.pick",
         label: "Pick",
         params: "x, y: number (required) - pixel, origin top-left\n\
-                 width, height: number (required) - viewport size in pixels",
+                 width, height: number (required) - viewport size in pixels\n\
+                 filter: list of strings (optional) - what may be picked: bodies, faces, \
+                 edges (an edge near the pixel comes first); without it, the body hit",
         mutates: false,
         run: pick,
     },
 ];
 
 fn reply(s: &Session) -> Value {
+    let mut r = body_reply(s);
+    r["edges"] = json!(s.selected_edges);
+    if let Some(face) = s.selected_face() {
+        r["face"] = json!(face);
+    }
+    r
+}
+
+fn body_reply(s: &Session) -> Value {
     match s.scene.selection {
         Some(h) => json!({
             "body": h.body,
@@ -50,13 +62,23 @@ fn pick(s: &mut Session, p: &Value) -> CmdResult {
         .camera
         .ray_through(x, y, w, h, bounds.as_ref())
         .ok_or_else(|| CommandError::BadParams("no ray through that pixel".into()))?;
-    s.scene.selection = s.scene.pick(&ray);
+    let (hit, edge) = match PickFilter::from_params(p)? {
+        None => (s.scene.pick(&ray), None),
+        Some(filter) => match s.pick_filtered(x, y, w, h, &filter) {
+            Picked::Edge { name, .. } => (None, Some(name)),
+            Picked::Face { hit, .. } | Picked::Body(hit) => (Some(hit), None),
+            Picked::Nothing => (None, None),
+        },
+    };
+    s.scene.selection = hit;
+    s.selected_edges = edge.into_iter().collect();
     Ok(reply(s))
 }
 
 fn clear(s: &mut Session, p: &Value) -> CmdResult {
     params::none(p)?;
     s.scene.selection = None;
+    s.selected_edges.clear();
     Ok(reply(s))
 }
 

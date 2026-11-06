@@ -198,6 +198,11 @@ fn hostile_params_never_panic() {
         json!({"edges": [long], "radius": -1, "distance": "0 mm", "size": "q"}),
         json!({"edges": [], "pick": {"x": 1e300, "y": "a"}, "radius": 1}),
         json!({"pick": {"x": 400, "y": 300, "width": 800, "height": 600}, "radius": 1e9}),
+        json!({"x": 400, "y": 300, "width": 800, "height": 600, "filter": ["edges", 5, null]}),
+        json!({"x": 400, "y": 300, "width": 800, "height": 600, "filter": "edges"}),
+        json!({"x": 400, "y": 300, "width": 800, "height": 600, "filter": [], "name": "   "}),
+        json!({"x": 1, "y": 1, "width": 2, "height": 2, "filter": [long], "name": "a\u{7}b"}),
+        json!({"filter": vec!["faces"; 100], "feature": 2, "sketch": 1, "name": "Plate"}),
     ];
     for c in registry() {
         for p in &hostile {
@@ -1730,4 +1735,170 @@ fn body_import_step_adds_exact_solids_that_undo_save_and_open_keep() {
             .is_err()
     );
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+// ----- selection filters and renaming -----
+
+/// The extruded plate (50 x 30 x 10) seen from the top, centred on (25, 15), in an
+/// 800 x 600 viewport; returns where model point `p` lands on screen.
+fn plate_from_the_top(s: &mut Session) -> impl Fn([f64; 3]) -> (f64, f64) + use<> {
+    use chamfera_render::{mat_mul, transform_point};
+    extruded_plate(s, json!(10));
+    s.execute("view.standard", &json!({"view": "top"})).unwrap();
+    s.camera.target = chamfera_geom::Point3::new(25.0, 15.0, 0.0);
+    let vp = mat_mul(
+        &s.camera
+            .projection_matrix(800.0 / 600.0, s.scene.bounds().as_ref()),
+        &s.camera.view_matrix(),
+    );
+    move |p| {
+        let n = transform_point(&vp, chamfera_geom::Point3::new(p[0], p[1], p[2])).unwrap();
+        ((n[0] + 1.0) * 0.5 * 800.0, (1.0 - n[1]) * 0.5 * 600.0)
+    }
+}
+
+#[test]
+fn a_pick_filter_chooses_edges_faces_or_bodies() {
+    let mut s = Session::new();
+    let screen = plate_from_the_top(&mut s);
+    let pick = |s: &mut Session, (x, y): (f64, f64), filter: serde_json::Value| {
+        s.execute(
+            "select.pick",
+            &json!({"x": x, "y": y, "width": 800, "height": 600, "filter": filter}),
+        )
+        .unwrap()
+    };
+    // The centre pixel looks down on the middle of the top face (z = 10), far from edges.
+    let centre = screen([25.0, 15.0, 10.0]);
+    let r = pick(&mut s, centre, json!(["edges"]));
+    assert!(r["body"].is_null(), "only edges pass: {r}");
+    assert_eq!(r["edges"], json!([]));
+    let r = pick(&mut s, centre, json!(["faces"]));
+    assert!(r["face"].as_str().unwrap().ends_with(":top"), "{r}");
+    assert!(
+        (r["point"]["z"].as_f64().unwrap() - 10.0).abs() < 1e-6,
+        "{r}"
+    );
+    let r = pick(&mut s, centre, json!(["bodies"]));
+    assert!(r["body"].is_u64(), "{r}");
+    // 3 px off the middle of the top front edge (25, 0, 10), inside the face: edges come
+    // first.
+    let (ex, ey) = screen([25.0, 0.0, 10.0]);
+    let near = (ex, ey - 3.0);
+    let want = edge_between(&mut s, [0.0, 0.0, 10.0], [50.0, 0.0, 10.0]);
+    let r = pick(&mut s, near, json!(["edges", "faces", "bodies"]));
+    assert_eq!(r["edges"], json!([want]), "{r}");
+    assert!(r["body"].is_null(), "{r}");
+    // Without edges the same pixel picks the top face.
+    let r = pick(&mut s, near, json!(["faces"]));
+    assert!(r["face"].as_str().unwrap().ends_with(":top"), "{r}");
+    assert_eq!(r["edges"], json!([]));
+    // Nothing allowed: nothing picked. Clearing drops picked edges too.
+    assert_eq!(pick(&mut s, centre, json!([]))["body"], json!(null));
+    pick(&mut s, near, json!(["edges"]));
+    let r = s.execute("select.clear", &json!({})).unwrap();
+    assert_eq!(r["edges"], json!([]));
+    // Without a filter the pick is the body hit, as before.
+    let r = s
+        .execute(
+            "select.pick",
+            &json!({"x": near.0, "y": near.1, "width": 800, "height": 600}),
+        )
+        .unwrap();
+    assert!(r["body"].is_u64(), "{r}");
+    // Bad filters are refused.
+    for bad in [json!("edges"), json!(["teeth"]), json!([3])] {
+        let p = json!({"x": 400, "y": 300, "width": 800, "height": 600, "filter": bad});
+        assert!(s.execute("select.pick", &p).is_err(), "{p}");
+    }
+}
+
+#[test]
+fn a_sketch_filter_passes_points_curves_or_construction() {
+    // As in `clicks_pick_sketch_points_and_lines_and_find_the_plane`: a top view centred
+    // on (20, 10), with a point there on a line through it.
+    let mut s = Session::new();
+    s.execute("sketch.create", &json!({"plane": "xy"})).unwrap();
+    s.execute("view.standard", &json!({"view": "top"})).unwrap();
+    s.camera.target = chamfera_geom::Point3::new(20.0, 10.0, 0.0);
+    let curve = s
+        .execute(
+            "sketch.line",
+            &json!({"x1": 0, "y1": 10, "x2": 40, "y2": 10}),
+        )
+        .unwrap()["curve"]
+        .as_u64()
+        .unwrap();
+    let p = s
+        .execute("sketch.point", &json!({"x": 20, "y": 10}))
+        .unwrap()["point"]
+        .as_u64()
+        .unwrap();
+    let select = |s: &mut Session, filter: serde_json::Value| {
+        s.execute(
+            "sketch.select",
+            &json!({"x": 400, "y": 300, "width": 800, "height": 600, "filter": filter}),
+        )
+        .unwrap()["item"]
+            .clone()
+    };
+    assert_eq!(select(&mut s, json!(["vertices", "sketch"]))["point"], p);
+    // Points filtered out: the line under the same pixel is picked instead.
+    assert_eq!(select(&mut s, json!(["sketch"]))["curve"], curve);
+    // A construction line passes only with construction allowed.
+    s.execute(
+        "sketch.construction",
+        &json!({"curve": curve, "construction": true}),
+    )
+    .unwrap();
+    assert!(select(&mut s, json!(["sketch"])).is_null());
+    assert_eq!(select(&mut s, json!(["construction"]))["curve"], curve);
+}
+
+#[test]
+fn renaming_features_sketches_and_bodies_and_undo() {
+    let mut s = Session::new();
+    extruded_plate(&mut s, json!(10));
+    let feature = s.doc.features[0].id;
+    let before = s.doc.feature(feature).unwrap().name.clone();
+    let r = s
+        .execute(
+            "feature.rename",
+            &json!({"feature": feature, "name": "  Base plate "}),
+        )
+        .unwrap();
+    assert_eq!(r["name"], "Base plate");
+    // The solid and its scene body take the feature's name.
+    assert_eq!(s.scene.bodies[0].name, "Base plate");
+    let body = s.scene.bodies[0].id;
+    assert!(
+        s.execute("body.rename", &json!({"body": body, "name": "x"}))
+            .is_err(),
+        "a solid is renamed through its feature"
+    );
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.doc.feature(feature).unwrap().name, before);
+    s.execute("sketch.rename", &json!({"sketch": 1, "name": "Outline"}))
+        .unwrap();
+    assert_eq!(s.doc.sketch(1).unwrap().name, "Outline");
+    for bad in [
+        json!(""),
+        json!("   "),
+        json!("a\u{1}b"),
+        json!("x".repeat(81)),
+        json!(5),
+    ] {
+        assert!(
+            s.execute("sketch.rename", &json!({"sketch": 1, "name": bad}))
+                .is_err()
+        );
+    }
+    assert_eq!(s.doc.sketch(1).unwrap().name, "Outline");
+    let mesh = s.execute("body.sample", &json!({})).unwrap()["body"]
+        .as_u64()
+        .unwrap();
+    s.execute("body.rename", &json!({"body": mesh, "name": "Bracket"}))
+        .unwrap();
+    let mesh = u32::try_from(mesh).unwrap();
+    assert_eq!(s.scene.body(mesh).unwrap().name, "Bracket");
 }

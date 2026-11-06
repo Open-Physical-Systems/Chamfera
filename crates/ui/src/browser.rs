@@ -2,6 +2,7 @@
 //! eye toggles for bodies and the active sketch highlighted. Acts through `sketch.*` and
 //! `body.*` commands.
 
+use crate::context_menu::{Act, Entry, RenameTarget, show_entries};
 use crate::icons::Icon;
 use crate::widgets::{self, Look, ROW_HEIGHT, T_BODY};
 use crate::{ChamferaApp, label};
@@ -286,15 +287,28 @@ impl ChamferaApp {
                 if can_edit && row.double_clicked() {
                     self.edit_sketch(id);
                 }
-                row.context_menu(|ui| {
-                    let look = self.look();
-                    if widgets::menu_item(ui, look, Icon::Edit, label("sketch.edit"), can_edit)
-                        .clicked()
-                    {
-                        ui.close();
-                        self.edit_sketch(id);
-                    }
-                });
+                let entries = vec![
+                    Entry::Item {
+                        text: label("sketch.edit").into(),
+                        icon: Icon::Edit,
+                        why_not: (!can_edit).then(|| "Finish the active sketch first".into()),
+                        act: Act::EditSketch(id),
+                    },
+                    Entry::Item {
+                        text: label("sketch.rename").into(),
+                        icon: Icon::Edit,
+                        why_not: None,
+                        act: Act::Rename(RenameTarget::Sketch(id)),
+                    },
+                    Entry::Separator,
+                    Entry::Item {
+                        text: label("sketch.delete").into(),
+                        icon: Icon::Delete,
+                        why_not: active.then(|| "Finish the sketch first".into()),
+                        act: Act::DeleteSketch(id),
+                    },
+                ];
+                self.row_menu(&row, &entries);
             }
         }
 
@@ -325,6 +339,8 @@ impl ChamferaApp {
                         ..Row::default()
                     },
                 );
+                let entries = self.body_entries(id, None, true);
+                self.row_menu(&r.row, &entries);
                 if let Some(eye) = r.eye {
                     let tip = if visible { "Hide" } else { "Show" };
                     if eye
@@ -338,6 +354,21 @@ impl ChamferaApp {
                     }
                 }
             }
+        }
+    }
+
+    /// A right-click menu on a tree row, with the same items as the viewport's.
+    fn row_menu(&mut self, row: &egui::Response, entries: &[Entry]) {
+        let look = self.look();
+        let mut chosen = None;
+        row.context_menu(|ui| {
+            chosen = show_entries(ui, look, entries, &mut Vec::new());
+            if chosen.is_some() {
+                ui.close();
+            }
+        });
+        if let Some(act) = chosen {
+            self.menu_act(act);
         }
     }
 

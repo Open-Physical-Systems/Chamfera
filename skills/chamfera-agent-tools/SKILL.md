@@ -9,7 +9,7 @@ description: "Use when running Chamfera to see a change working: the desktop app
 - `cargo run -p chamfera -- --sample` opens the window with the sample bracket; give `.stl` paths to insert meshes; `--theme light|dark` forces a theme.
 - `cargo run -p chamfera -- --sample --screenshot /path/shot.png` opens the window, waits for it to draw, saves a screenshot of the whole window and quits. Then read the PNG and look at it.
 - `--script steps.json` runs commands at start (same format as `chamfera-cli run`), so a screenshot can show a state reached by commands, for example a sketch being edited (`examples/sketch-plate.json`).
-- More start-up options for screenshots: `--size WxH` (window size), `--zoom F` (UI scale, e.g. 2 for a HiDPI check), `--extrude` (opens the Extrude tool with the profile under the viewport centre picked), `--search "ext"` (opens the search palette with that query typed).
+- More start-up options for screenshots: `--size WxH` (window size), `--zoom F` (UI scale, e.g. 2 for a HiDPI check), `--extrude` (opens the Extrude tool with the profile under the viewport centre picked), `--search "ext"` (opens the search palette with that query typed), `--context-menu X,Y` (opens the viewport right-click menu at that viewport point, for the body, face, edge, empty-space or sketch menu).
 - Scripts can name a step's reply with `"as": "axis"` and use it later as `"$axis.curve"` (`crates/engine/src/script.rs`), in the CLI and in `--script`.
 - It needs a display (Wayland or X11). Without one, use the snapshot below.
 
