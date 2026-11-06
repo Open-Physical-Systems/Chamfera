@@ -1,0 +1,377 @@
+{
+  "format": "chamfera",
+  "version": 6,
+  "parameters": {
+    "thickness": {
+      "value": 10.0,
+      "unit": "length",
+      "expression": "10 mm"
+    }
+  },
+  "sketches": [
+    {
+      "id": 1,
+      "name": "Sketch1",
+      "plane": {
+        "origin": {
+          "x": 0.0,
+          "y": 0.0,
+          "z": 0.0
+        },
+        "normal": {
+          "x": 0.0,
+          "y": 0.0,
+          "z": 1.0
+        },
+        "x": {
+          "x": 1.0,
+          "y": 0.0,
+          "z": 0.0
+        }
+      },
+      "sketch": {
+        "next_id": 13,
+        "points": [
+          {
+            "id": 1,
+            "at": {
+              "x": 0.0,
+              "y": 0.0
+            }
+          },
+          {
+            "id": 2,
+            "at": {
+              "x": 80.0,
+              "y": 0.0
+            }
+          },
+          {
+            "id": 3,
+            "at": {
+              "x": 80.0,
+              "y": 50.0
+            }
+          },
+          {
+            "id": 4,
+            "at": {
+              "x": 0.0,
+              "y": 50.0
+            }
+          }
+        ],
+        "curves": [
+          {
+            "id": 5,
+            "curve": {
+              "kind": "line",
+              "start": 1,
+              "end": 2,
+              "construction": false
+            }
+          },
+          {
+            "id": 6,
+            "curve": {
+              "kind": "line",
+              "start": 2,
+              "end": 3,
+              "construction": false
+            }
+          },
+          {
+            "id": 7,
+            "curve": {
+              "kind": "line",
+              "start": 3,
+              "end": 4,
+              "construction": false
+            }
+          },
+          {
+            "id": 8,
+            "curve": {
+              "kind": "line",
+              "start": 4,
+              "end": 1,
+              "construction": false
+            }
+          }
+        ],
+        "constraints": [
+          {
+            "id": 9,
+            "constraint": {
+              "kind": "horizontal",
+              "line": 5
+            }
+          },
+          {
+            "id": 10,
+            "constraint": {
+              "kind": "vertical",
+              "line": 6
+            }
+          },
+          {
+            "id": 11,
+            "constraint": {
+              "kind": "horizontal",
+              "line": 7
+            }
+          },
+          {
+            "id": 12,
+            "constraint": {
+              "kind": "vertical",
+              "line": 8
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": 3,
+      "name": "Sketch2",
+      "plane": {
+        "origin": {
+          "x": 0.0,
+          "y": 0.0,
+          "z": 10.0
+        },
+        "normal": {
+          "x": 0.0,
+          "y": 0.0,
+          "z": 1.0
+        },
+        "x": {
+          "x": 1.0,
+          "y": 0.0,
+          "z": 0.0
+        }
+      },
+      "sketch": {
+        "next_id": 13,
+        "points": [
+          {
+            "id": 1,
+            "at": {
+              "x": 25.0,
+              "y": 15.0
+            }
+          },
+          {
+            "id": 2,
+            "at": {
+              "x": 55.0,
+              "y": 15.0
+            }
+          },
+          {
+            "id": 3,
+            "at": {
+              "x": 55.0,
+              "y": 35.0
+            }
+          },
+          {
+            "id": 4,
+            "at": {
+              "x": 25.0,
+              "y": 35.0
+            }
+          }
+        ],
+        "curves": [
+          {
+            "id": 5,
+            "curve": {
+              "kind": "line",
+              "start": 1,
+              "end": 2,
+              "construction": false
+            }
+          },
+          {
+            "id": 6,
+            "curve": {
+              "kind": "line",
+              "start": 2,
+              "end": 3,
+              "construction": false
+            }
+          },
+          {
+            "id": 7,
+            "curve": {
+              "kind": "line",
+              "start": 3,
+              "end": 4,
+              "construction": false
+            }
+          },
+          {
+            "id": 8,
+            "curve": {
+              "kind": "line",
+              "start": 4,
+              "end": 1,
+              "construction": false
+            }
+          }
+        ],
+        "constraints": [
+          {
+            "id": 9,
+            "constraint": {
+              "kind": "horizontal",
+              "line": 5
+            }
+          },
+          {
+            "id": 10,
+            "constraint": {
+              "kind": "vertical",
+              "line": 6
+            }
+          },
+          {
+            "id": 11,
+            "constraint": {
+              "kind": "horizontal",
+              "line": 7
+            }
+          },
+          {
+            "id": 12,
+            "constraint": {
+              "kind": "vertical",
+              "line": 8
+            }
+          }
+        ]
+      },
+      "attached": {
+        "feature": 2,
+        "face": "top"
+      }
+    },
+    {
+      "id": 5,
+      "name": "Sketch3",
+      "plane": {
+        "origin": {
+          "x": 0.0,
+          "y": 0.0,
+          "z": 25.0
+        },
+        "normal": {
+          "x": 0.0,
+          "y": 0.0,
+          "z": 1.0
+        },
+        "x": {
+          "x": 1.0,
+          "y": 0.0,
+          "z": 0.0
+        }
+      },
+      "sketch": {
+        "next_id": 5,
+        "points": [
+          {
+            "id": 1,
+            "at": {
+              "x": 40.0,
+              "y": 25.0
+            }
+          },
+          {
+            "id": 3,
+            "at": {
+              "x": 65.0,
+              "y": 25.0
+            }
+          }
+        ],
+        "curves": [
+          {
+            "id": 2,
+            "curve": {
+              "kind": "circle",
+              "centre": 1,
+              "radius": 6.0,
+              "construction": false
+            }
+          },
+          {
+            "id": 4,
+            "curve": {
+              "kind": "circle",
+              "centre": 3,
+              "radius": 4.0,
+              "construction": false
+            }
+          }
+        ],
+        "constraints": []
+      },
+      "attached": {
+        "feature": 4,
+        "face": "top"
+      }
+    }
+  ],
+  "features": [
+    {
+      "id": 2,
+      "name": "Extrude1",
+      "suppressed": false,
+      "kind": "extrude",
+      "sketch": 1,
+      "profiles": [
+        {
+          "x": 5.0,
+          "y": 5.0
+        }
+      ],
+      "distance": "thickness",
+      "direction": "normal",
+      "operation": "new_body"
+    },
+    {
+      "id": 4,
+      "name": "Extrude2",
+      "suppressed": false,
+      "kind": "extrude",
+      "sketch": 3,
+      "profiles": [
+        {
+          "x": 30.0,
+          "y": 20.0
+        }
+      ],
+      "distance": "thickness * 1.5",
+      "direction": "normal",
+      "operation": "join"
+    },
+    {
+      "id": 6,
+      "name": "Extrude3",
+      "suppressed": false,
+      "kind": "extrude",
+      "sketch": 5,
+      "profiles": [
+        {
+          "x": 40.0,
+          "y": 25.0
+        }
+      ],
+      "distance": "thickness * 3",
+      "direction": "reversed",
+      "operation": "cut"
+    }
+  ],
+  "last_feature_id": 6
+}

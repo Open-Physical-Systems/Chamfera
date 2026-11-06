@@ -28,6 +28,8 @@ mod sketch_ui;
 mod solid_ui;
 mod timeline;
 mod viewcube;
+#[cfg(target_arch = "wasm32")]
+mod web;
 mod widgets;
 
 use widgets::Look;
@@ -111,6 +113,9 @@ pub struct ChamferaApp {
     file: file_ui::FileUi,
     browser: browser::BrowserUi,
     timeline: timeline::TimelineUi,
+    /// The browser's file picker, downloads and local storage.
+    #[cfg(target_arch = "wasm32")]
+    web: web::WebFiles,
     /// Close the window on the next frame (Quit was confirmed).
     ctx_close: bool,
     /// `--zoom`: applied on the first frame.
@@ -143,6 +148,8 @@ impl ChamferaApp {
         if app.gpu.is_none() {
             app.message = Some(("No GPU device: the viewport cannot draw.".into(), true));
         }
+        #[cfg(target_arch = "wasm32")]
+        app.restore_from_browser();
         app
     }
 
@@ -179,6 +186,8 @@ impl ChamferaApp {
             file: file_ui::FileUi::default(),
             browser: browser::BrowserUi::default(),
             timeline: timeline::TimelineUi::default(),
+            #[cfg(target_arch = "wasm32")]
+            web: web::WebFiles::default(),
             ctx_close: false,
             zoom: None,
             frames: 0,
@@ -278,9 +287,6 @@ impl ChamferaApp {
         }
         self.fit_pending = true;
     }
-
-    #[cfg(target_arch = "wasm32")]
-    fn import_dialog(&mut self) {}
 
     /// Mouse, touchpad and keys → view and select commands. The only camera input path.
     fn navigate(&mut self, ui: &egui::Ui, response: &egui::Response, rect: Rect) {
@@ -615,6 +621,8 @@ impl eframe::App for ChamferaApp {
         }
         self.unsaved_dialog(&ctx);
         self.file_shortcuts(&ctx);
+        #[cfg(target_arch = "wasm32")]
+        self.browser_files(&ctx);
         self.update_title(&ctx);
         self.handle_close_request(&ctx);
     }

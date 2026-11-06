@@ -1,0 +1,7 @@
+# trunk build --release (in this folder) writes the browser app to dist/.
+[build]
+target = "index.html"
+dist = "dist"
+# Relative links, so the same build works at a site's root and under a path such as
+# GitHub Pages' https://<owner>.github.io/<repository>/.
+public_url = "./"
