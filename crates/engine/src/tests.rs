@@ -164,6 +164,10 @@ fn hostile_params_never_panic() {
         json!({"constraint": {"kind": "teleport"}, "kind": "nonsense", "point": 1, "x": 1e300, "y": 0}),
         json!({"constraint": "horizontal", "value": 1e300, "sketch": 1, "curve": 1, "construction": true}),
         json!({"constraint": 1, "value": f64::MIN_POSITIVE, "point": 1, "x": 3, "y": 4, "snap": "yes"}),
+        json!({"name": "w", "expression": "w + 1", "constraint": 5, "unit": "length"}),
+        json!({"name": "w", "expression": "((((((", "constraint": 13}),
+        json!({"name": "w", "expression": 5, "constraint": 13, "value": 3}),
+        json!({"name": "q", "expression": "1e308 * 1e308", "constraint": 14}),
     ];
     for c in registry() {
         for p in &hostile {
@@ -547,4 +551,55 @@ fn a_design_with_a_sketch_saves_and_opens() {
         .unwrap();
     assert_eq!(t.doc, s.doc);
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn a_parameter_drives_a_sketch_dimension_through_the_commands() {
+    let mut s = Session::new();
+    s.execute(
+        "param.set",
+        &json!({"name": "width", "expression": "50 mm"}),
+    )
+    .unwrap();
+    let (_, lines) = dimensioned_rectangle(&mut s);
+    let width = s.doc.sketches[0]
+        .sketch
+        .constraints()
+        .find(|(_, c)| matches!(c, chamfera_sketch::Constraint::Length { line, .. } if u64::from(line.0) == lines[0]))
+        .map(|(id, _)| id.0)
+        .unwrap();
+    s.execute(
+        "sketch.dimension",
+        &json!({"constraint": width, "expression": "width * 2"}),
+    )
+    .unwrap();
+    let area = |s: &mut Session| {
+        s.execute("sketch.get", &json!({})).unwrap()["profiles"][0]["area"]
+            .as_f64()
+            .unwrap()
+    };
+    assert!((area(&mut s) - 3000.0).abs() < 1e-6, "100 x 30");
+    s.execute("param.set", &json!({"name": "width", "expression": "60"}))
+        .unwrap();
+    assert!((area(&mut s) - 3600.0).abs() < 1e-6, "120 x 30");
+    // In use: the parameter cannot be removed while the dimension refers to it.
+    assert!(
+        s.execute("param.remove", &json!({"name": "width"}))
+            .is_err()
+    );
+    // Undo goes back to width = 50, so 100 x 30.
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!((area(&mut s) - 3000.0).abs() < 1e-6);
+    // A plain value takes over from the expression.
+    s.execute(
+        "sketch.dimension",
+        &json!({"constraint": width, "value": 10}),
+    )
+    .unwrap();
+    s.execute("param.set", &json!({"name": "width", "expression": "99"}))
+        .unwrap();
+    assert!(
+        (area(&mut s) - 300.0).abs() < 1e-6,
+        "10 x 30, no longer driven"
+    );
 }

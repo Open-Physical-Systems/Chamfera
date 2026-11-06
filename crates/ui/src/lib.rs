@@ -10,6 +10,7 @@ use egui::{Color32, PointerButton, Rect, Sense, UiBuilder, Vec2};
 use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
 
+mod params_ui;
 mod sketch_ui;
 
 /// How the app starts.
@@ -25,6 +26,8 @@ pub struct Options {
     pub theme: Option<ThemeMode>,
     /// Commands to run at start: `(command id, params)`, as in a `chamfera-cli run` script.
     pub script: Vec<(String, Value)>,
+    /// Open the Parameters window at start.
+    pub parameters: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -71,6 +74,7 @@ pub struct ChamferaApp {
     screenshot: Option<(std::path::PathBuf, Shot)>,
     shot_image: Arc<Mutex<Option<Arc<egui::ColorImage>>>>,
     sketch: sketch_ui::SketchUi,
+    params: params_ui::ParamsUi,
 }
 
 /// A command's label, so menus show the same words as the command list.
@@ -124,6 +128,7 @@ impl ChamferaApp {
             screenshot: options.screenshot.clone().map(|p| (p, Shot::Waiting(4))),
             shot_image: Arc::new(Mutex::new(None)),
             sketch: sketch_ui::SketchUi::default(),
+            params: params_ui::ParamsUi::default(),
         };
         if options.sample {
             app.run("body.sample", json!({}));
@@ -140,6 +145,7 @@ impl ChamferaApp {
             app.sketch.tool = Some(sketch_ui::Tool::Select);
             app.refresh_sketch_status();
         }
+        app.params.open = options.parameters;
         app
     }
 
@@ -232,6 +238,12 @@ impl ChamferaApp {
                         ui.close();
                         self.finish_sketch();
                     }
+                }
+            });
+            ui.menu_button("Modify", |ui| {
+                if ui.button("Parameters…").clicked() {
+                    ui.close();
+                    self.params.open = true;
                 }
             });
             ui.menu_button("View", |ui| {
@@ -682,6 +694,7 @@ impl eframe::App for ChamferaApp {
             .min_size(140.0)
             .show(ui, |ui| self.browser(ui));
         egui::CentralPanel::no_frame().show(ui, |ui| self.viewport(ui, frame));
+        self.parameters_window(&ctx);
         self.screenshot_step(&ctx);
     }
 }

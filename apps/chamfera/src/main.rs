@@ -15,6 +15,7 @@ fn main() -> ExitCode {
     while let Some(a) = args.next() {
         match a.as_str() {
             "--sample" => options.sample = true,
+            "--parameters" => options.parameters = true,
             "--theme" => match args.next().as_deref() {
                 Some("light") => options.theme = Some(chamfera_render::ThemeMode::Light),
                 Some("dark") => options.theme = Some(chamfera_render::ThemeMode::Dark),
