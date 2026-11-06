@@ -66,6 +66,8 @@ impl ChamferaApp {
             &format!("{}…", label("design.export_stl")),
             "",
         );
+        // While the DRAWING tab is open: the sheet's exports (`drawing_ui.rs`).
+        let drawing_export = self.drawing_export_items(ui, look);
         ui.separator();
         let import = item(
             ui,
@@ -109,6 +111,10 @@ impl ChamferaApp {
         if stl {
             ui.close();
             self.export("STL mesh", &["stl"], "design.export_stl");
+        }
+        if let Some(f) = drawing_export {
+            ui.close();
+            self.export_drawing(f);
         }
         if import {
             ui.close();

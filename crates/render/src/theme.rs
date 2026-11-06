@@ -99,6 +99,15 @@ pub struct Theme {
     // the view cube
     pub cube_face: Rgba,
     pub cube_edge: Rgba,
+    /// The drawing workspace: the area around the sheet, the paper, and its lines.
+    pub sheet_backdrop: Rgba,
+    pub sheet_paper: Rgba,
+    pub sheet_line: Rgba,
+    pub sheet_hidden: Rgba,
+    pub sheet_centre: Rgba,
+    pub sheet_dimension: Rgba,
+    pub sheet_border: Rgba,
+    pub sheet_pick: Rgba,
 }
 
 impl Theme {
@@ -146,6 +155,14 @@ impl Theme {
             error: Rgba(196, 44, 44, 255),
             cube_face: Rgba(236, 240, 245, 240),
             cube_edge: Rgba(128, 137, 150, 255),
+            sheet_backdrop: Rgba(214, 219, 226, 255),
+            sheet_paper: Rgba(255, 255, 255, 255),
+            sheet_line: Rgba(20, 24, 30, 255),
+            sheet_hidden: Rgba(70, 78, 92, 255),
+            sheet_centre: Rgba(176, 64, 44, 255),
+            sheet_dimension: Rgba(28, 92, 190, 255),
+            sheet_border: Rgba(20, 24, 30, 255),
+            sheet_pick: Rgba(240, 140, 20, 255),
         }
     }
 
@@ -193,6 +210,14 @@ impl Theme {
             error: Rgba(240, 100, 100, 255),
             cube_face: Rgba(54, 58, 66, 235),
             cube_edge: Rgba(112, 120, 132, 255),
+            sheet_backdrop: Rgba(24, 26, 30, 255),
+            sheet_paper: Rgba(38, 42, 48, 255),
+            sheet_line: Rgba(232, 236, 242, 255),
+            sheet_hidden: Rgba(160, 170, 184, 255),
+            sheet_centre: Rgba(240, 130, 100, 255),
+            sheet_dimension: Rgba(110, 172, 255, 255),
+            sheet_border: Rgba(200, 206, 214, 255),
+            sheet_pick: Rgba(255, 180, 60, 255),
         }
     }
 
@@ -265,6 +290,22 @@ mod tests {
             }
             assert_ne!(t.select_window, t.select_crossing);
             assert!(t.select_window_fill.3 < 64 && t.select_crossing_fill.3 < 64);
+        }
+    }
+
+    #[test]
+    fn drawing_lines_stand_out_from_the_paper_in_both_themes() {
+        for t in [Theme::light(), Theme::dark()] {
+            for (what, fg) in [
+                ("sheet_line", t.sheet_line),
+                ("sheet_hidden", t.sheet_hidden),
+                ("sheet_centre", t.sheet_centre),
+                ("sheet_dimension", t.sheet_dimension),
+                ("sheet_border", t.sheet_border),
+            ] {
+                let ratio = contrast(fg, t.sheet_paper);
+                assert!(ratio >= 3.0, "{:?}: {what}: {ratio}", t.mode);
+            }
         }
     }
 

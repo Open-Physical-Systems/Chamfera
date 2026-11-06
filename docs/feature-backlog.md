@@ -247,12 +247,12 @@ Close runners-up: selection filters and box selection (UI and NAV), splines (nee
 
 | Feature | Description | Status | Pri | Size | Layer |
 |---|---|---|---|---|---|
-| Drawing sheets | Sheets of chosen size with a title block template we design ourselves | missing | P1 | L | new `drawing` crate, ui |
-| Base and projected views | Orthographic views from the model, with hidden lines | missing | P1 | L | kernel (exact projection), drawing |
+| Drawing sheets | Sheets of chosen size with a title block template we design ourselves | done (A4/A3/A2, ANSI A/B, our own title block) | P1 | L | new `drawing` crate, ui |
+| Base and projected views | Orthographic views from the model, with hidden lines | done (cylinder silhouettes; cone, sphere and torus silhouettes missing) | P1 | L | kernel (exact projection), drawing |
 | Section, detail, auxiliary and break views | Further view kinds | missing | P2 | L | drawing, kernel |
-| Views update with the model | Associative views | missing | P1 | M | doc, drawing |
-| Dimensions on drawings | Linear, aligned, angular, radial, diameter, ordinate, baseline, chain | missing | P1 | L | drawing |
-| Centre marks and centre lines | Automatic marks on holes and axes | missing | P1 | S | drawing |
+| Views update with the model | Associative views | done (views; dimensions keep their picked points) | P1 | M | doc, drawing |
+| Dimensions on drawings | Linear, aligned, angular, radial, diameter, ordinate, baseline, chain | partial (linear, aligned, angular, radius, diameter) | P1 | L | drawing |
+| Centre marks and centre lines | Automatic marks on holes and axes | done | P1 | S | drawing |
 | Annotations | Notes, leaders, balloons, surface texture, weld and datum symbols, GD&T frames | missing | P2 | L | drawing |
 | Tables | Parts list, hole table, revision table | missing | P2 | M | drawing |
 | Hatching | Fill closed regions with a pattern (solid, lines at an angle, cross-hatch), associative to the boundary | missing | P1 | M | drawing, geom |
@@ -264,7 +264,7 @@ Close runners-up: selection filters and box selection (UI and NAV), splines (nee
 | Command line with aliases | Type a command or a short alias (`L` for line, `C` for circle); options as prompts | missing | P1 | M | ui (on top of the command registry) |
 | 2D modify tools | Move, copy, rotate, scale, stretch, array, mirror, offset, fillet, chamfer, join, break, explode | branch (`sketch/tools` has offset, mirror, fillet, chamfer, patterns, split) / missing for the rest | P1 | M | sketch, drawing |
 | Paper space / model space and viewports | Layouts with scaled windows into the model | missing | P2 | L | drawing |
-| Print and export to PDF, DXF, DWG | Output drawings (DWG through a clean-room reader/writer of the public spec only) | missing | P1 | L | io |
+| Print and export to PDF, DXF, DWG | Output drawings (DWG through a clean-room reader/writer of the public spec only) | partial (SVG, DXF R12, PDF 1.4) | P1 | L | io |
 
 ## 11. Import and export
 

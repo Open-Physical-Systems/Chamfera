@@ -1,6 +1,7 @@
 //! Layer 2: the design document: parameters and sketches now, the feature timeline from M4.
 
 pub mod construct;
+pub mod drawing;
 pub mod expr;
 pub mod feature;
 pub mod imported;
@@ -8,6 +9,7 @@ pub mod imported;
 pub use construct::{
     AxisRef, ConstructKind, Construction, EdgeRef, OriginAxis, OriginPlane, PlaneRef, PointRef,
 };
+pub use drawing::Drawing;
 pub use feature::{
     Blend, BlendKind, Extrude, ExtrudeDirection, Feature, FeatureKind, Hole, HoleKind, HoleSizes,
     Mirror, MirrorPlane, Move, MoveTransform, Operation, Pattern, PatternLayout, Revolve, Shell,
@@ -36,7 +38,10 @@ use thiserror::Error;
 ///   optional.
 /// - 12: hole features (simple, counterbore, countersink) on a flat face.
 /// - 14: mirror and move/copy of bodies and features.
-pub const FORMAT_VERSION: u32 = 14;
+/// - 18: drawings: sheets with views of the solids and dimensions (`drawing`).
+///   Older files open with no sheets. (13 and 15 to 17 are taken by work landing in
+///   parallel.)
+pub const FORMAT_VERSION: u32 = 18;
 /// The tag every design file starts with, so other JSON is not mistaken for a design.
 pub const FORMAT_TAG: &str = "chamfera";
 /// Longest parameter name.
@@ -81,6 +86,8 @@ pub enum DocError {
     NoSuchFeature(u32),
     #[error("{reason}")]
     BadFeature { reason: String },
+    #[error("drawing: {reason}")]
+    BadDrawing { reason: String },
 }
 
 /// What a parameter measures. Values are stored in internal units: mm and radians.
@@ -171,6 +178,9 @@ pub struct Document {
     /// Solid bodies imported from other CAD files (STEP), kept as exact B-rep bodies.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub imported: Vec<ImportedBody>,
+    /// Drawing sheets (format 18).
+    #[serde(default, skip_serializing_if = "Drawing::is_empty")]
+    pub drawing: Drawing,
 }
 
 impl Default for Document {
@@ -183,6 +193,7 @@ impl Default for Document {
             features: Vec::new(),
             last_feature_id: 0,
             imported: Vec::new(),
+            drawing: Drawing::default(),
         }
     }
 }
@@ -564,6 +575,8 @@ impl Document {
         checked.features = doc.features;
         imported::check(&doc.imported, &mut seen, checked.last_feature_id)?;
         checked.imported = doc.imported;
+        doc.drawing.check()?;
+        checked.drawing = doc.drawing;
         // Values in the file must agree with their expressions.
         checked.evaluate()?;
         Ok(checked)

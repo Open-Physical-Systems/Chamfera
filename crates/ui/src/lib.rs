@@ -19,6 +19,7 @@ mod browser;
 mod chrome;
 mod construct_ui;
 mod context_menu;
+mod drawing_ui;
 mod file_ui;
 mod hole_ui;
 mod inspect_ui;
@@ -59,6 +60,8 @@ pub struct Options {
     pub script: Vec<Value>,
     /// Open the Parameters window at start.
     pub parameters: bool,
+    /// Open the DRAWING workspace at start.
+    pub drawing: bool,
     /// Open the Extrude tool at start and pick the profile under the viewport's centre,
     /// as a click there would.
     pub extrude: bool,
@@ -135,6 +138,7 @@ pub struct ChamferaApp {
     sketch: sketch_ui::SketchUi,
     params: params_ui::ParamsUi,
     solid: solid_ui::SolidUi,
+    drawing: drawing_ui::DrawingUi,
     construct: construct_ui::ConstructUi,
     file: file_ui::FileUi,
     browser: browser::BrowserUi,
@@ -216,6 +220,7 @@ impl ChamferaApp {
             sketch: sketch_ui::SketchUi::default(),
             params: params_ui::ParamsUi::default(),
             solid: solid_ui::SolidUi::default(),
+            drawing: drawing_ui::DrawingUi::default(),
             construct: construct_ui::ConstructUi::default(),
             file: file_ui::FileUi::default(),
             browser: browser::BrowserUi::default(),
@@ -247,6 +252,7 @@ impl ChamferaApp {
             app.refresh_sketch_status();
         }
         app.params.open = options.parameters;
+        app.drawing.active = options.drawing;
         if options.extrude {
             app.solid.extrude = Some(solid_ui::ExtrudeTool::default());
             app.solid.pick_centre = true;
@@ -767,7 +773,13 @@ impl eframe::App for ChamferaApp {
             .default_size(248.0)
             .size_range(180.0..=420.0)
             .show(ui, |ui| self.browser(ui));
-        egui::CentralPanel::no_frame().show(ui, |ui| self.viewport(ui, frame));
+        egui::CentralPanel::no_frame().show(ui, |ui| {
+            if self.drawing.active && self.session.active_sketch.is_none() {
+                self.drawing_canvas(ui);
+            } else {
+                self.viewport(ui, frame);
+            }
+        });
         if self.frames < 2 {
             self.frames += 1;
             ctx.request_repaint();
