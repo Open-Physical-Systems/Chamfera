@@ -13,6 +13,7 @@ chamfera-engine.workspace = true
 chamfera-geom.workspace = true
 chamfera-gpu.workspace = true
 chamfera-render.workspace = true
+chamfera-sketch.workspace = true
 egui.workspace = true
 eframe.workspace = true
 egui-wgpu.workspace = true

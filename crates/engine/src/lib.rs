@@ -6,6 +6,7 @@
 
 pub mod cmd;
 mod params;
+pub mod sketching;
 
 use chamfera_doc::{DocError, Document};
 use chamfera_render::{Camera, Scene};
@@ -43,6 +44,10 @@ pub struct Session {
     pub scene: Scene,
     /// The view. Not part of the design or of undo.
     pub camera: Camera,
+    /// The sketch being edited (`sketch.create`, `sketch.edit`), if any.
+    pub active_sketch: Option<u32>,
+    /// Selected points and curves of the active sketch.
+    pub sketch_selection: Vec<sketching::SketchItem>,
     undo: Vec<Document>,
     redo: Vec<Document>,
 }
@@ -56,23 +61,37 @@ impl Session {
     /// changes the design can be undone.
     pub fn execute(&mut self, id: &str, params: &Value) -> CmdResult {
         let spec = cmd::find(id).ok_or_else(|| CommandError::UnknownCommand(id.to_owned()))?;
-        if !spec.mutates {
-            return (spec.run)(self, params);
-        }
-        let before = self.doc.clone();
-        match (spec.run)(self, params) {
-            Ok(reply) => {
-                if self.doc != before {
-                    self.push_undo(before);
-                    self.redo.clear();
+        let state = (self.active_sketch, self.sketch_selection.clone());
+        let result = if spec.mutates {
+            let before = self.doc.clone();
+            match (spec.run)(self, params) {
+                Ok(reply) => {
+                    if self.doc != before {
+                        self.push_undo(before);
+                        self.redo.clear();
+                    }
+                    Ok(reply)
                 }
-                Ok(reply)
+                Err(e) => {
+                    self.doc = before;
+                    (self.active_sketch, self.sketch_selection) = state.clone();
+                    Err(e)
+                }
             }
-            Err(e) => {
-                self.doc = before;
-                Err(e)
-            }
+        } else {
+            (spec.run)(self, params)
+        };
+        // Sketch display follows the design, the active sketch and its selection. Commands
+        // that change none of these (camera moves, picks, queries: every mouse move) skip
+        // the rebuild.
+        if spec.mutates
+            || id.starts_with("edit.")
+            || id.starts_with("design.")
+            || (self.active_sketch, &self.sketch_selection) != (state.0, &state.1)
+        {
+            self.refresh_overlays();
         }
+        result
     }
 
     fn push_undo(&mut self, doc: Document) {

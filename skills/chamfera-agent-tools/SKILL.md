@@ -8,6 +8,7 @@ description: "Use when running Chamfera to see a change working: the desktop app
 ## The desktop app
 - `cargo run -p chamfera -- --sample` opens the window with the sample bracket; give `.stl` paths to insert meshes; `--theme light|dark` forces a theme.
 - `cargo run -p chamfera -- --sample --screenshot /path/shot.png` opens the window, waits for it to draw, saves a screenshot of the whole window and quits. Then read the PNG and look at it.
+- `--script steps.json` runs commands at start (same format as `chamfera-cli run`), so a screenshot can show a state reached by commands, for example a sketch being edited (`examples/sketch-plate.json`).
 - It needs a display (Wayland or X11). Without one, use the snapshot below.
 
 ## Snapshots without a window
@@ -20,6 +21,10 @@ description: "Use when running Chamfera to see a change working: the desktop app
 - `--pick X,Y`, which prints what that pixel hits and shows it selected.
 
 It uses the GPU if there is one, else a software Vulkan driver (lavapipe, `mesa-vulkan-drivers`).
+
+## Sketches
+- `sketch.create {"plane": "xy"}` makes a sketch active; `sketch.line`, `sketch.rectangle`, `sketch.circle`, `sketch.arc` draw; `sketch.constrain {"constraint": {"kind": ..., ...}}` constrains; `sketch.get` returns points, curves, constraints, DOF, status and profile areas. Check DOF and areas against values you worked out.
+- Points, curves and constraints share one id counter per sketch: read ids from each reply instead of guessing them.
 
 ## Commands and scripts
 - `chamfera-cli commands` lists every command; `chamfera-cli exec <id> '<json>'` runs one.

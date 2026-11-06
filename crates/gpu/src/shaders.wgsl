@@ -9,6 +9,8 @@ struct Globals {
     forward: vec4<f32>,
     background_top: vec4<f32>,
     background_bottom: vec4<f32>,
+    // x, y: view size in pixels; z: overlay point size in pixels.
+    viewport: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> g: Globals;
@@ -96,4 +98,27 @@ fn bg_vs(@builtin(vertex_index) i: u32) -> BgOut {
 @fragment
 fn bg_fs(in: BgOut) -> @location(0) vec4<f32> {
     return mix(g.background_bottom, g.background_top, clamp(in.t, 0.0, 1.0));
+}
+
+// ---- overlay points: a square of constant screen size per point (instanced) ----
+
+@vertex
+fn point_vs(
+    @builtin(vertex_index) i: u32,
+    @location(0) position: vec3<f32>,
+    @location(1) color: vec4<f32>,
+) -> LineOut {
+    var corners = array<vec2<f32>, 6>(
+        vec2<f32>(-1.0, -1.0), vec2<f32>(1.0, -1.0), vec2<f32>(1.0, 1.0),
+        vec2<f32>(-1.0, -1.0), vec2<f32>(1.0, 1.0), vec2<f32>(-1.0, 1.0),
+    );
+    let c = corners[i % 6u];
+    var clip = g.view_proj * vec4<f32>(position, 1.0);
+    let half_px = g.viewport.z * 0.5;
+    clip.x = clip.x + c.x * half_px * 2.0 / max(g.viewport.x, 1.0) * clip.w;
+    clip.y = clip.y + c.y * half_px * 2.0 / max(g.viewport.y, 1.0) * clip.w;
+    var out: LineOut;
+    out.clip = clip;
+    out.color = color;
+    return out;
 }

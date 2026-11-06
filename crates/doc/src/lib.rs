@@ -1,17 +1,22 @@
-//! Layer 2: the design document: parameters now, the feature timeline from M4.
+//! Layer 2: the design document: parameters and sketches now, the feature timeline from M4.
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use thiserror::Error;
 
 /// The design format version this build writes. Bump it with a migration for older files.
-pub const FORMAT_VERSION: u32 = 1;
+///
+/// - 1: parameters.
+/// - 2: sketches (each on a plane). Version 1 files open with no sketches.
+pub const FORMAT_VERSION: u32 = 2;
 /// The tag every design file starts with, so other JSON is not mistaken for a design.
 pub const FORMAT_TAG: &str = "chamfera";
 /// Longest parameter name.
 pub const MAX_NAME_LEN: usize = 64;
 /// Most parameters one design may hold.
 pub const MAX_PARAMETERS: usize = 10_000;
+/// Most sketches one design may hold.
+pub const MAX_SKETCHES: usize = 10_000;
 
 #[derive(Debug, Clone, PartialEq, Error)]
 pub enum DocError {
@@ -27,6 +32,12 @@ pub enum DocError {
     Format(String),
     #[error("the design uses format {found}, this build reads up to {FORMAT_VERSION}")]
     TooNew { found: u32 },
+    #[error("no sketch {0}")]
+    NoSuchSketch(u32),
+    #[error("a design holds at most {MAX_SKETCHES} sketches")]
+    TooManySketches,
+    #[error("sketch {sketch}: {reason}")]
+    BadSketch { sketch: u32, reason: String },
 }
 
 /// What a parameter measures. Values are stored in internal units: mm and radians.
@@ -55,11 +66,26 @@ pub struct Parameter {
     pub unit: Unit,
 }
 
+/// A sketch and the plane it is drawn on.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SketchFeature {
+    pub id: u32,
+    pub name: String,
+    /// Sketch coordinates (x, y) map to `plane.from_plane(p)`.
+    pub plane: chamfera_geom::Frame,
+    pub sketch: chamfera_sketch::Sketch,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Document {
     pub format: String,
     pub version: u32,
     pub parameters: BTreeMap<String, Parameter>,
+    #[serde(default)]
+    pub sketches: Vec<SketchFeature>,
+    /// The last feature id handed out; ids are never reused.
+    #[serde(default)]
+    pub last_feature_id: u32,
 }
 
 impl Default for Document {
@@ -68,6 +94,8 @@ impl Default for Document {
             format: FORMAT_TAG.to_owned(),
             version: FORMAT_VERSION,
             parameters: BTreeMap::new(),
+            sketches: Vec::new(),
+            last_feature_id: 0,
         }
     }
 }
@@ -118,6 +146,48 @@ impl Document {
             .ok_or_else(|| DocError::NoSuchParameter(name.to_owned()))
     }
 
+    /// Adds an empty sketch on `plane` and returns its id.
+    pub fn add_sketch(&mut self, plane: chamfera_geom::Frame) -> Result<u32, DocError> {
+        if self.sketches.len() >= MAX_SKETCHES {
+            return Err(DocError::TooManySketches);
+        }
+        let id = self
+            .last_feature_id
+            .checked_add(1)
+            .ok_or(DocError::TooManySketches)?;
+        self.last_feature_id = id;
+        self.sketches.push(SketchFeature {
+            id,
+            name: format!("Sketch{}", self.sketches.len() + 1),
+            plane,
+            sketch: chamfera_sketch::Sketch::new(),
+        });
+        Ok(id)
+    }
+
+    pub fn sketch(&self, id: u32) -> Result<&SketchFeature, DocError> {
+        self.sketches
+            .iter()
+            .find(|s| s.id == id)
+            .ok_or(DocError::NoSuchSketch(id))
+    }
+
+    pub fn sketch_mut(&mut self, id: u32) -> Result<&mut SketchFeature, DocError> {
+        self.sketches
+            .iter_mut()
+            .find(|s| s.id == id)
+            .ok_or(DocError::NoSuchSketch(id))
+    }
+
+    pub fn remove_sketch(&mut self, id: u32) -> Result<SketchFeature, DocError> {
+        let i = self
+            .sketches
+            .iter()
+            .position(|s| s.id == id)
+            .ok_or(DocError::NoSuchSketch(id))?;
+        Ok(self.sketches.remove(i))
+    }
+
     pub fn to_json(&self) -> Result<String, serde_json::Error> {
         serde_json::to_string_pretty(self)
     }
@@ -137,6 +207,25 @@ impl Document {
         for (name, p) in &doc.parameters {
             checked.set_parameter(name, p.value, p.unit)?;
         }
+        if doc.sketches.len() > MAX_SKETCHES {
+            return Err(DocError::TooManySketches);
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        for s in &doc.sketches {
+            let bad = |reason: String| DocError::BadSketch {
+                sketch: s.id,
+                reason,
+            };
+            if !seen.insert(s.id) || s.id == 0 || s.id > doc.last_feature_id {
+                return Err(bad("duplicate or out-of-range id".into()));
+            }
+            if s.name.chars().count() > 256 {
+                return Err(bad("name is longer than 256 characters".into()));
+            }
+            s.sketch.validate().map_err(|e| bad(e.to_string()))?;
+        }
+        checked.sketches = doc.sketches;
+        checked.last_feature_id = doc.last_feature_id;
         Ok(checked)
     }
 }
@@ -172,6 +261,33 @@ mod tests {
         doc.set_parameter("draft", 0.05, Unit::Angle).unwrap();
         let back = Document::from_json(&doc.to_json().unwrap()).unwrap();
         assert_eq!(back, doc);
+    }
+
+    #[test]
+    fn sketches_survive_a_round_trip_and_version_1_files_still_open() {
+        let mut doc = Document::default();
+        let id = doc.add_sketch(chamfera_geom::Frame::XZ).unwrap();
+        let s = &mut doc.sketch_mut(id).unwrap().sketch;
+        let a = s.add_point(chamfera_geom::Point2::new(0.1, 0.2)).unwrap();
+        let b = s
+            .add_point(chamfera_geom::Point2::new(10.0, 1.0 / 3.0))
+            .unwrap();
+        s.add_line(a, b).unwrap();
+        let back = Document::from_json(&doc.to_json().unwrap()).unwrap();
+        assert_eq!(back, doc, "float_roundtrip keeps every coordinate exact");
+
+        let v1 = r#"{"format":"chamfera","version":1,"parameters":{}}"#;
+        let old = Document::from_json(v1).unwrap();
+        assert!(old.sketches.is_empty());
+    }
+
+    #[test]
+    fn bad_sketch_ids_are_refused() {
+        let mut doc = Document::default();
+        doc.add_sketch(chamfera_geom::Frame::XY).unwrap();
+        let mut text: serde_json::Value = serde_json::from_str(&doc.to_json().unwrap()).unwrap();
+        text["last_feature_id"] = serde_json::json!(0);
+        assert!(Document::from_json(&text.to_string()).is_err());
     }
 
     #[test]

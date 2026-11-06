@@ -3,3 +3,5 @@ target*/
 /plan/
 *.swp
 .DS_Store
+# Agent worktrees (Claude Code)
+/.claude/worktrees/

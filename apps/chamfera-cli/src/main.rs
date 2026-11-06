@@ -172,6 +172,7 @@ fn snapshot(args: &[String]) -> Result<(), String> {
         theme: &theme,
         width: width as u32,
         height: height as u32,
+        scale: 1.0,
     };
     let png = chamfera_gpu::snapshot_png(&frame).map_err(|e| e.to_string())?;
     std::fs::write(&out, png).map_err(|e| format!("{out}: {e}"))?;

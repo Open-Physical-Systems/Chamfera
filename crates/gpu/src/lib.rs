@@ -5,7 +5,7 @@
 //! CLI and tests see exactly what users see.
 
 use chamfera_geom::{Point3, TriMesh};
-use chamfera_render::{Camera, Projection, Scene, Theme, mat_mul};
+use chamfera_render::{Camera, MAX_OVERLAY_ITEMS, Projection, Scene, Theme, mat_mul};
 use std::collections::HashMap;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -23,6 +23,8 @@ const SAMPLES: u32 = 4;
 pub const EDGE_ANGLE: f64 = std::f64::consts::PI / 6.0;
 /// Largest view size (pixels per side).
 pub const MAX_SIZE: u32 = 8192;
+/// Overlay point size in logical pixels (multiplied by [`Frame::scale`]).
+pub const POINT_SIZE: f32 = 7.0;
 
 /// What to draw.
 pub struct Frame<'a> {
@@ -31,6 +33,8 @@ pub struct Frame<'a> {
     pub theme: &'a Theme,
     pub width: u32,
     pub height: u32,
+    /// Physical pixels per logical pixel (the UI's scale; 1 for snapshots).
+    pub scale: f32,
 }
 
 #[repr(C)]
@@ -42,6 +46,7 @@ struct Globals {
     forward: [f32; 4],
     background_top: [f32; 4],
     background_bottom: [f32; 4],
+    viewport: [f32; 4],
 }
 
 #[repr(C)]
@@ -88,6 +93,8 @@ pub struct ViewRenderer {
     mesh: wgpu::RenderPipeline,
     edges: wgpu::RenderPipeline,
     grid: wgpu::RenderPipeline,
+    overlay_lines: wgpu::RenderPipeline,
+    overlay_points: wgpu::RenderPipeline,
     targets: Option<Targets>,
     bodies: HashMap<u32, GpuBody>,
 }
@@ -155,6 +162,11 @@ impl ViewRenderer {
         let line_buffers = [Some(wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<LineVertex>() as u64,
             step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &line_attrs,
+        })];
+        let point_buffers = [Some(wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<LineVertex>() as u64,
+            step_mode: wgpu::VertexStepMode::Instance,
             attributes: &line_attrs,
         })];
 
@@ -264,6 +276,31 @@ impl ViewRenderer {
             bias: no_bias,
             blend: Some(wgpu::BlendState::ALPHA_BLENDING),
         });
+        // Overlays draw over everything, in order, blended.
+        let overlay_lines = make(Spec {
+            label: "overlay lines",
+            layout: &base_layout,
+            vs: "line_vs",
+            fs: "line_fs",
+            buffers: &line_buffers,
+            topology: wgpu::PrimitiveTopology::LineList,
+            depth_write: false,
+            compare: wgpu::CompareFunction::Always,
+            bias: no_bias,
+            blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+        });
+        let overlay_points = make(Spec {
+            label: "overlay points",
+            layout: &base_layout,
+            vs: "point_vs",
+            fs: "line_fs",
+            buffers: &point_buffers,
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            depth_write: false,
+            compare: wgpu::CompareFunction::Always,
+            bias: no_bias,
+            blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+        });
         ViewRenderer {
             globals,
             globals_bind,
@@ -272,6 +309,8 @@ impl ViewRenderer {
             mesh,
             edges,
             grid,
+            overlay_lines,
+            overlay_points,
             targets: None,
             bodies: HashMap::new(),
         }
@@ -428,6 +467,12 @@ impl ViewRenderer {
             ],
             background_top: frame.theme.background_top.linear(),
             background_bottom: frame.theme.background_bottom.linear(),
+            viewport: [
+                w as f32,
+                h as f32,
+                POINT_SIZE * frame.scale.clamp(0.25, 8.0),
+                0.0,
+            ],
         };
         queue.write_buffer(&self.globals, 0, bytemuck::bytes_of(&globals));
         for b in &frame.scene.bodies {
@@ -447,6 +492,19 @@ impl ViewRenderer {
             contents: bytemuck::cast_slice(&grid),
             usage: wgpu::BufferUsages::VERTEX,
         });
+
+        let (overlay_lines, overlay_points) = overlay_vertices(frame.scene, frame.theme);
+        let vertex_buffer = |label, data: &[LineVertex]| {
+            (!data.is_empty()).then(|| {
+                device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some(label),
+                    contents: bytemuck::cast_slice(data),
+                    usage: wgpu::BufferUsages::VERTEX,
+                })
+            })
+        };
+        let overlay_line_buf = vertex_buffer("overlay lines", &overlay_lines);
+        let overlay_point_buf = vertex_buffer("overlay points", &overlay_points);
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("viewport"),
@@ -504,9 +562,53 @@ impl ViewRenderer {
                 pass.set_vertex_buffer(0, grid_buf.slice(..));
                 pass.draw(0..grid.len() as u32, 0..1);
             }
+            if let Some(buf) = &overlay_line_buf {
+                pass.set_pipeline(&self.overlay_lines);
+                pass.set_vertex_buffer(0, buf.slice(..));
+                pass.draw(0..overlay_lines.len() as u32, 0..1);
+            }
+            if let Some(buf) = &overlay_point_buf {
+                pass.set_pipeline(&self.overlay_points);
+                pass.set_vertex_buffer(0, buf.slice(..));
+                pass.draw(0..6, 0..overlay_points.len() as u32);
+            }
         }
         encoder.finish()
     }
+}
+
+/// Overlay line vertices (pairs) and point instances, in drawing order, capped at
+/// [`MAX_OVERLAY_ITEMS`]. Points with invalid coordinates are skipped.
+fn overlay_vertices(scene: &Scene, theme: &Theme) -> (Vec<LineVertex>, Vec<LineVertex>) {
+    let mut lines = Vec::new();
+    let mut points = Vec::new();
+    let mut budget = MAX_OVERLAY_ITEMS;
+    for o in &scene.overlays {
+        let color = o.style.color(theme).linear();
+        for [a, b] in o.lines.iter().take(budget) {
+            if a.is_valid() && b.is_valid() {
+                lines.push(LineVertex {
+                    position: f3(*a),
+                    color,
+                });
+                lines.push(LineVertex {
+                    position: f3(*b),
+                    color,
+                });
+            }
+        }
+        budget = budget.saturating_sub(o.lines.len());
+        for p in o.points.iter().take(budget) {
+            if p.is_valid() {
+                points.push(LineVertex {
+                    position: f3(*p),
+                    color,
+                });
+            }
+        }
+        budget = budget.saturating_sub(o.points.len());
+    }
+    (lines, points)
 }
 
 /// Flat-shaded triangles: each corner carries its face's normal.

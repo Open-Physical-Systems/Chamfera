@@ -351,6 +351,41 @@ pub struct Hit {
     pub distance: f64,
 }
 
+/// How overlay geometry is coloured (from the theme's sketch tokens).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OverlayStyle {
+    Sketch,
+    Constrained,
+    Construction,
+    Preview,
+    Highlight,
+}
+
+impl OverlayStyle {
+    pub fn color(self, theme: &Theme) -> Rgba {
+        match self {
+            OverlayStyle::Sketch => theme.sketch,
+            OverlayStyle::Constrained => theme.sketch_constrained,
+            OverlayStyle::Construction => theme.sketch_construction,
+            OverlayStyle::Preview => theme.sketch_preview,
+            OverlayStyle::Highlight => theme.highlight,
+        }
+    }
+}
+
+/// Lines and points drawn over the model, never hidden by bodies: sketches, previews
+/// and highlights. Display only.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Overlay {
+    pub style: OverlayStyle,
+    pub lines: Vec<[Point3; 2]>,
+    pub points: Vec<Point3>,
+}
+
+/// Most overlay lines plus points one scene holds (hostile-input limit).
+pub const MAX_OVERLAY_ITEMS: usize = 2_000_000;
+
 /// Most bodies one scene holds (hostile-input limit).
 pub const MAX_BODIES: usize = 10_000;
 
@@ -358,6 +393,9 @@ pub const MAX_BODIES: usize = 10_000;
 pub struct Scene {
     pub bodies: Vec<SceneBody>,
     pub selection: Option<Hit>,
+    /// Drawn over everything, in order.
+    #[serde(default)]
+    pub overlays: Vec<Overlay>,
     next_id: u32,
 }
 
@@ -386,12 +424,20 @@ impl Scene {
         self.bodies.iter_mut().find(|b| b.id == id)
     }
 
-    /// Bounds of the visible bodies.
+    /// Bounds of the visible bodies and the overlays.
     pub fn bounds(&self) -> Option<Aabb> {
+        let overlay_points = self
+            .overlays
+            .iter()
+            .flat_map(|o| o.lines.iter().flatten().chain(o.points.iter()))
+            .copied()
+            .filter(|p| p.is_valid());
+        let overlays = Aabb::from_points(overlay_points);
         self.bodies
             .iter()
             .filter(|b| b.visible)
             .filter_map(|b| b.mesh.bounds())
+            .chain(overlays)
             .reduce(Aabb::union)
     }
 
