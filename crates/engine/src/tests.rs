@@ -1046,7 +1046,7 @@ fn a_sketch_used_by_a_feature_is_hidden_until_it_is_edited() {
 }
 
 #[test]
-fn join_and_cut_need_a_body_to_act_on_and_are_reported_until_booleans_exist() {
+fn join_and_cut_need_a_body_to_act_on() {
     // A cut far away from every body: nothing to cut, refused, nothing changes.
     let mut s = Session::new();
     extruded_plate(&mut s, json!(10));
@@ -1071,4 +1071,76 @@ fn join_and_cut_need_a_body_to_act_on_and_are_reported_until_booleans_exist() {
             &json!({"sketch": 3, "profiles": [{"x": 505, "y": 505}], "distance": 5, "operation": "smash"}),
         )
         .is_err());
+}
+
+#[test]
+fn a_boss_joined_on_top_makes_one_solid_and_a_cut_drills_a_hole() {
+    // Plate 50 x 30 x 10 = 15000. A 10 x 10 boss on its top face, 5 tall, joined: one body
+    // of 15000 + 500. Then a circle r = 4 on the boss's top, cut through everything by
+    // 15 (reversed): a hole through boss and plate, 15 deep: 15500 - 16π * 15.
+    let mut s = Session::new();
+    extruded_plate(&mut s, json!(10));
+    let top = s
+        .execute(
+            "sketch.create_on_face",
+            &json!({"feature": 2, "face": "top"}),
+        )
+        .unwrap()["sketch"]
+        .as_u64()
+        .unwrap();
+    s.execute(
+        "sketch.rectangle",
+        &json!({"x1": 20, "y1": 10, "x2": 30, "y2": 20}),
+    )
+    .unwrap();
+    s.execute("sketch.finish", &json!({})).unwrap();
+    let boss = s
+        .execute(
+            "solid.extrude",
+            &json!({"sketch": top, "profiles": [{"x": 25, "y": 15}], "distance": 5, "operation": "join"}),
+        )
+        .unwrap();
+    assert_eq!(s.solids().len(), 1, "joined into one solid");
+    let v = boss["solids"][0]["volume"].as_f64().unwrap();
+    assert!((v - 15_500.0).abs() < 1e-6, "{v}");
+    // The plate's top is still found by name after the join.
+    let boss_id = boss["feature"].as_u64().unwrap();
+    let hole_sketch = s
+        .execute(
+            "sketch.create_on_face",
+            &json!({"feature": boss_id, "face": "top"}),
+        )
+        .unwrap();
+    assert!((hole_sketch["origin"]["z"].as_f64().unwrap() - 15.0).abs() < 1e-9);
+    let hs = hole_sketch["sketch"].as_u64().unwrap();
+    s.execute("sketch.circle", &json!({"cx": 25, "cy": 15, "radius": 4}))
+        .unwrap();
+    s.execute("sketch.finish", &json!({})).unwrap();
+    let cut = s
+        .execute(
+            "solid.extrude",
+            &json!({"sketch": hs, "profiles": [{"x": 25, "y": 15}], "distance": 15, "direction": "reversed", "operation": "cut"}),
+        )
+        .unwrap();
+    assert_eq!(s.solids().len(), 1);
+    let v = cut["solids"][0]["volume"].as_f64().unwrap();
+    let expected = 15_500.0 - 16.0 * std::f64::consts::PI * 15.0;
+    assert!((v - expected).abs() < 1e-6, "{v} vs {expected}");
+    // A thicker plate rebuilds everything: boss on top, hole through both.
+    s.execute("feature.edit", &json!({"feature": 2, "distance": "20"}))
+        .unwrap();
+    let list = s.execute("feature.list", &json!({})).unwrap();
+    assert!(
+        list["features"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|f| f["error"].is_null()),
+        "{list}"
+    );
+    // 50 x 30 x 20 + boss 500 - hole r 4 through 15 (boss 5 + 10 of the plate): the cut
+    // starts at the boss top (z 25) and goes 15 down to z 10.
+    let v = s.solids()[0].body.volume().unwrap();
+    let expected = 30_000.0 + 500.0 - 16.0 * std::f64::consts::PI * 15.0;
+    assert!((v - expected).abs() < 1e-6, "{v} vs {expected}");
 }

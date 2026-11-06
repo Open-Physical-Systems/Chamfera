@@ -128,7 +128,7 @@ fn feature_reply(s: &Session, id: u32) -> Value {
     let solids: Vec<Value> = s
         .solids()
         .iter()
-        .filter(|x| x.feature == id)
+        .filter(|x| x.feature == id || crate::solids::body_has_feature(&x.body, id))
         .map(|x| {
             json!({
                 "name": x.name,

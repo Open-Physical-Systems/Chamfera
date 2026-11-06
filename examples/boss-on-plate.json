@@ -1,12 +1,17 @@
 [
   { "command": "param.set", "params": { "name": "thickness", "expression": "10 mm" } },
-  { "command": "sketch.create", "params": { "plane": "xy" } },
+  { "command": "sketch.create", "params": { "plane": "xy" }, "as": "base" },
   { "command": "sketch.rectangle", "params": { "x1": 0, "y1": 0, "x2": 80, "y2": 50 } },
   { "command": "sketch.finish" },
-  { "command": "solid.extrude", "params": { "sketch": 1, "profiles": [{ "x": 5, "y": 5 }], "distance": "thickness" } },
-  { "command": "sketch.create_on_face", "params": { "feature": 2, "face": "top" } },
+  { "command": "solid.extrude", "params": { "sketch": "$base.sketch", "profiles": [{ "x": 5, "y": 5 }], "distance": "thickness" }, "as": "plate" },
+  { "command": "sketch.create_on_face", "params": { "feature": "$plate.feature", "face": "top" }, "as": "top" },
   { "command": "sketch.rectangle", "params": { "x1": 25, "y1": 15, "x2": 55, "y2": 35 } },
   { "command": "sketch.finish" },
-  { "command": "solid.extrude", "params": { "sketch": 3, "profiles": [{ "x": 40, "y": 25 }], "distance": "thickness * 1.5" } },
+  { "command": "solid.extrude", "params": { "sketch": "$top.sketch", "profiles": [{ "x": 30, "y": 20 }], "distance": "thickness * 1.5", "operation": "join" }, "as": "boss" },
+  { "command": "sketch.create_on_face", "params": { "feature": "$boss.feature", "face": "top" }, "as": "holes" },
+  { "command": "sketch.circle", "params": { "cx": 40, "cy": 25, "radius": 6 } },
+  { "command": "sketch.circle", "params": { "cx": 65, "cy": 25, "radius": 4 } },
+  { "command": "sketch.finish" },
+  { "command": "solid.extrude", "params": { "sketch": "$holes.sketch", "profiles": [{ "x": 40, "y": 25 }], "distance": "thickness * 3", "direction": "reversed", "operation": "cut" } },
   { "command": "view.home", "params": { "width": 1100, "height": 760 } }
 ]

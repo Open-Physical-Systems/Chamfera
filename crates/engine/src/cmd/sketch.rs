@@ -241,17 +241,17 @@ fn create_on_face(s: &mut Session, p: &Value) -> CmdResult {
     let (feature, face, plane) = if p.get("feature").is_some_and(|v| !v.is_null()) {
         let feature = params::req_id(p, "feature")?;
         let face = params::req_str(p, "face")?.to_owned();
-        let solid = s
-            .solids()
-            .iter()
-            .find(|x| x.feature == feature)
-            .ok_or_else(|| bad(format!("feature {feature} has no solid")))?;
-        let id = solid
-            .body
-            .faces()
-            .into_iter()
-            .find(|f| solid.body.face_name(*f).ok().flatten() == Some(face.as_str()))
-            .ok_or_else(|| bad(format!("feature {feature} has no face named {face:?}")))?;
+        // The face may be in any body: joins move a feature's faces into another body.
+        let key = crate::solids::face_key(feature, &face);
+        let found = s.solids().iter().find_map(|x| {
+            x.body
+                .faces()
+                .into_iter()
+                .find(|f| x.body.face_name(*f).ok().flatten() == Some(key.as_str()))
+                .map(|f| (x, f))
+        });
+        let (solid, id) =
+            found.ok_or_else(|| bad(format!("feature {feature} has no face named {face:?}")))?;
         let plane = crate::solids::face_plane(&solid.body, id)
             .ok_or_else(|| bad("sketches go on flat faces"))?;
         (feature, face, plane)
