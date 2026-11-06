@@ -268,6 +268,9 @@ impl Mesh2 {
                 }
             }
         }
+        // Each triangle's fit as last worked out; a point's move forgets those of the
+        // triangles around it (no triangle changes its corners while smoothing).
+        let mut fits: Vec<Option<f64>> = vec![None; self.triangles.len()];
         for v in self.fixed..self.uv.len() {
             let Some(ts) = around.get(v) else { continue };
             let Ok(vi) = u32::try_from(v) else { continue };
@@ -296,20 +299,46 @@ impl Mesh2 {
                 )
             };
             let in_uv = Point2::ORIGIN + sum_uv * (1.0 / count);
-            let worst = |m: &Mesh2| {
-                ts.iter()
-                    .filter_map(|&t| m.triangles.get(t).copied())
-                    .filter(|tri| !m.pinched(*tri))
-                    .map(|tri| m.fit(tri, domain))
-                    .fold(f64::INFINITY, f64::min)
+            let worst = |m: &Mesh2, fits: &mut Vec<Option<f64>>| {
+                let mut w = f64::INFINITY;
+                for &t in ts {
+                    let Some(tri) = m.triangles.get(t).copied() else {
+                        continue;
+                    };
+                    if m.pinched(tri) {
+                        continue;
+                    }
+                    let f = match fits.get(t).copied().flatten() {
+                        Some(f) => f,
+                        None => {
+                            let f = m.fit(tri, domain);
+                            if let Some(slot) = fits.get_mut(t) {
+                                *slot = Some(f);
+                            }
+                            f
+                        }
+                    };
+                    w = w.min(f);
+                }
+                w
             };
-            let before = worst(self);
+            let forget = |fits: &mut Vec<Option<f64>>| {
+                for &t in ts {
+                    if let Some(slot) = fits.get_mut(t) {
+                        *slot = None;
+                    }
+                }
+            };
+            let before = worst(self, &mut fits);
+            let saved: Vec<Option<f64>> =
+                ts.iter().map(|&t| fits.get(t).copied().flatten()).collect();
             for target in [in_space, in_uv] {
                 if !(target.x.is_finite() && target.y.is_finite()) {
                     continue;
                 }
                 self.place(v, target, domain.surface_point(target));
-                let keep = worst(self) > before + FIT_GAIN
+                forget(&mut fits);
+                let keep = worst(self, &mut fits) > before + FIT_GAIN
                     && ts.iter().all(|&t| {
                         self.triangles.get(t).is_some_and(|&[a, b, c]| {
                             orient(self.p(a), self.p(b), self.p(c)) == Sign::Positive
@@ -319,6 +348,12 @@ impl Mesh2 {
                     break;
                 }
                 self.place(v, old_uv, old_xyz);
+                // Back where it was: the fits from before hold again.
+                for (&t, f) in ts.iter().zip(&saved) {
+                    if let Some(slot) = fits.get_mut(t) {
+                        *slot = *f;
+                    }
+                }
             }
         }
     }
@@ -503,11 +538,34 @@ impl Mesh2 {
         angle: f64,
         max_triangles: usize,
     ) -> KernelResult<()> {
-        let mut flips = 64 * max_triangles.min(1 << 24) + 1024;
+        let mut flips = 64 * max_triangles.min(1 << 24) + 1024; // Triangles found within tolerance, as they were then. Whether a triangle is too
+        // far depends only on its corners (which do not move while refining: splits only
+        // add points) and on which of its sides are interior, so one that is still the
+        // same need not be checked again; the rounds find the same bad triangles, in the
+        // same order, as checking every triangle every round.
+        let mut good: Vec<Option<([u32; 3], [bool; 3])>> = Vec::new();
         for _ in 0..MAX_REFINE_ROUNDS {
-            let bad: Vec<usize> = (0..self.triangles.len())
-                .filter(|&t| self.too_far(t, domain, tol, angle))
-                .collect();
+            let mut bad: Vec<usize> = Vec::new();
+            for t in 0..self.triangles.len() {
+                let Some(&tri) = self.triangles.get(t) else {
+                    continue;
+                };
+                let interior = Self::sides(tri).map(|(i, j)| self.edges.contains_key(&(j, i)));
+                let state = Some((tri, interior));
+                if good.get(t) == Some(&state) {
+                    continue;
+                }
+                if self.too_far(t, domain, tol, angle) {
+                    bad.push(t);
+                } else {
+                    if good.len() <= t {
+                        good.resize(t + 1, None);
+                    }
+                    if let Some(g) = good.get_mut(t) {
+                        *g = state;
+                    }
+                }
+            }
             if bad.is_empty() {
                 let space = Space { domain, tol, angle };
                 for _ in 0..IMPROVE_PASSES {

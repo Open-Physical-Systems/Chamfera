@@ -5,8 +5,11 @@
 //! chamfera-cli exec <id> [json]         run one command, print its reply
 //! chamfera-cli run <script.json>        run a script: a JSON list of {"command", "params"}
 //! chamfera-cli snapshot [options]       render the viewport to a PNG, no window needed
+//! chamfera-cli bench [--runs N] [s.json] time rebuilds and edits of the examples (release)
 //! chamfera-cli mcp [--allow-path DIR]... serve MCP on stdio for AI agents (docs/mcp.md)
 //! ```
+
+mod bench;
 
 use chamfera_engine::{Session, registry};
 use serde_json::{Value, json};
@@ -24,6 +27,7 @@ const USAGE: &str = "usage:
                         [--view iso|front|back|left|right|top|bottom]
                         [--projection perspective|orthographic] [--theme light|dark]
                         [--size 1280x800] [--pick X,Y]
+  chamfera-cli bench [--runs N] [script.json]...
   chamfera-cli mcp [--allow-path DIR]...
   chamfera-cli --version";
 
@@ -94,6 +98,7 @@ fn run(args: &[String]) -> Result<(), Stop> {
         }
         Some("run") => run_script(args.get(1).ok_or(USAGE)?, &mut Session::new()).map(|_| ()),
         Some("snapshot") => snapshot(&args[1..]),
+        Some("bench") => bench::bench(&args[1..]),
         Some("mcp") => mcp(&args[1..]),
         Some("--version") => out(format_args!("chamfera-cli {}", env!("CARGO_PKG_VERSION"))),
         _ => Err(USAGE.into()),
@@ -116,16 +121,22 @@ fn mcp(args: &[String]) -> Result<(), Stop> {
     Ok(chamfera_mcp::serve_stdio(config)?)
 }
 
-/// Runs each step in order and prints one JSON reply per line. Stops at the first failure.
-fn run_script(path: &str, session: &mut Session) -> Result<(), Stop> {
+/// A script file's steps.
+fn load_script(path: &str) -> Result<Vec<Value>, String> {
     let bytes = chamfera_engine::read_limited(std::path::Path::new(path), MAX_SCRIPT_BYTES)
         .map_err(|e| e.to_string())?;
     let text = String::from_utf8(bytes).map_err(|_| format!("{path}: not UTF-8 text"))?;
     let script: Value = serde_json::from_str(&text).map_err(|e| format!("{path}: {e}"))?;
-    let steps = script
-        .as_array()
-        .ok_or("a script is a JSON list of {\"command\": ..., \"params\": {...}}")?;
-    let replies = chamfera_engine::script::run_steps(session, steps).map_err(|e| e.to_string())?;
+    match script {
+        Value::Array(steps) => Ok(steps),
+        _ => Err("a script is a JSON list of {\"command\": ..., \"params\": {...}}".into()),
+    }
+}
+
+/// Runs each step in order and prints one JSON reply per line. Stops at the first failure.
+fn run_script(path: &str, session: &mut Session) -> Result<(), Stop> {
+    let steps = load_script(path)?;
+    let replies = chamfera_engine::script::run_steps(session, &steps).map_err(|e| e.to_string())?;
     for (i, (step, reply)) in steps.iter().zip(&replies).enumerate() {
         out(json!({ "step": i + 1, "command": step.get("command"), "reply": reply }))?;
     }

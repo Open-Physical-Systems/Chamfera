@@ -32,6 +32,8 @@ doc::Document (parameters, timeline) --recompute--> sketch solver + kernel ops -
                                                     tessellate (display/export only)
 ```
 
+A rebuild does not start from nothing: after each timeline item the session keeps a checkpoint of the bodies built so far, keyed by a hash of the item's definition, the parameter values it reads and the key of the item before it, and starts the next rebuild after the last item whose key is unchanged; meshes are kept by the exact body. Both caches are bounded LRUs and give the same result as a full rebuild, bit for bit (`crates/engine/src/perf.rs`, tests in `perf_tests.rs`, numbers in `docs/performance.md`).
+
 ## Assemblies
 Components and joints are stored in the design (`crates/doc/src/component.rs`, `joint.rs`, format 15) and solved as an exact chain from the grounded components (`crates/engine/src/assembly.rs`). Motion study keys (`crates/doc/src/motion.rs`, format 27) are joint values at times, interpolated linearly. What a joint drag, a motion time and an exploded view show is display state in the session (`crates/engine/src/motion.rs`, `AssemblyView`): never part of the design or of undo; an exploded view moves the shown meshes, not the exact bodies. Interference intersects the placed exact bodies (K7) for pairs whose boxes overlap. UI: `crates/ui/src/assembly_ui.rs` and `crates/ui/src/motion_ui.rs`.
 

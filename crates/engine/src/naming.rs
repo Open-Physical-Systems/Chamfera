@@ -29,13 +29,15 @@ pub(crate) fn resolve(
     reference: &str,
     want: Want,
 ) -> Result<Vec<Found>, NameError> {
-    chamfera_doc::naming::resolve(
-        bodies,
-        kind,
-        reference,
-        doc.signature(owner, reference),
-        want,
-    )
+    crate::perf::naming(|| {
+        chamfera_doc::naming::resolve(
+            bodies,
+            kind,
+            reference,
+            doc.signature(owner, reference),
+            want,
+        )
+    })
 }
 
 /// [`resolve`] for a face reference.

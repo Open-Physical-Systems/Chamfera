@@ -3,7 +3,7 @@
 
 use crate::Session;
 use crate::solids::{Built, Solid, face_key};
-use chamfera_kernel::{TessOptions, tessellate};
+use chamfera_kernel::TessOptions;
 
 impl Session {
     /// Makes the scene show the design's imported meshes: a body for each new one, the
@@ -82,7 +82,7 @@ impl Session {
                 let _ = body.set_face_name(face, &face_key(imported.id, &role));
             }
             let mut faces = Vec::new();
-            let scene_id = match tessellate(&body, &options) {
+            let scene_id = match self.caches.tessellate(&body, &options) {
                 Ok(m) => {
                     faces = m.face_of_triangle;
                     let id = self.scene.add(&imported.name, m.mesh);

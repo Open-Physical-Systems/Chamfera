@@ -214,7 +214,8 @@ of the part:
 Part 2 is dominated by the sweep join (2 s per rebuild): after it, every hole, pattern or
 chamfer costs 2 s more, and undoing its 26 steps takes 15 s. The pocket in part 6 (3227
 moves) generates in under a second. Incremental rebuilds (rebuild from the changed feature
-on, keeping the bodies before it) would make the big parts usable.
+on, keeping the bodies before it) would make the big parts usable. Done since: see
+`docs/performance.md` (undo, redo and edits near the end now take under a millisecond).
 
 ## The real UI
 

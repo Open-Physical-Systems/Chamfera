@@ -462,6 +462,68 @@ impl Body {
         }
     }
 
+    /// About how many bytes the body holds: its slots, names, face rings and spline
+    /// geometry. Caches use it to stay within their memory limit; it is an estimate, not
+    /// an exact allocation count.
+    pub fn approx_bytes(&self) -> usize {
+        fn slots<T>(a: &Arena<T>) -> usize {
+            a.items
+                .len()
+                .saturating_mul(std::mem::size_of::<Option<T>>())
+        }
+        fn name(n: &Option<String>) -> usize {
+            n.as_ref().map_or(0, String::len)
+        }
+        // A spline holds its knots, weights and control points (up to three coordinates
+        // each), eight bytes per number.
+        fn spline(knots: usize, weights: usize) -> usize {
+            knots
+                .saturating_add(weights.saturating_mul(4))
+                .saturating_mul(8)
+        }
+        let mut heap = 0usize;
+        for (_, s) in self.shells.live() {
+            heap = heap.saturating_add(s.faces.len().saturating_mul(4));
+        }
+        for (_, f) in self.faces.live() {
+            heap = heap
+                .saturating_add(f.inner.len().saturating_mul(4))
+                .saturating_add(name(&f.name));
+        }
+        for (_, e) in self.edges.live() {
+            heap = heap.saturating_add(name(&e.name));
+        }
+        for (_, v) in self.vertices.live() {
+            heap = heap.saturating_add(name(&v.name));
+        }
+        for (_, c) in self.curves.live() {
+            if let Curve::BSpline(b) = c {
+                heap = heap.saturating_add(spline(b.knots().len(), b.weights().len()));
+            }
+        }
+        for (_, s) in self.surfaces.live() {
+            if let Surface::Extrusion(x) = s {
+                let b = x.curve();
+                heap = heap.saturating_add(spline(b.knots().len(), b.weights().len()));
+            }
+        }
+        [
+            slots(&self.shells),
+            slots(&self.faces),
+            slots(&self.loops),
+            slots(&self.half_edges),
+            slots(&self.edges),
+            slots(&self.vertices),
+            slots(&self.points),
+            slots(&self.curves),
+            slots(&self.surfaces),
+            std::mem::size_of::<Body>(),
+            heap,
+        ]
+        .into_iter()
+        .fold(0usize, usize::saturating_add)
+    }
+
     pub fn shells(&self) -> Vec<ShellId> {
         self.shells
             .live()
