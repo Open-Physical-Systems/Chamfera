@@ -190,6 +190,21 @@ pub(super) fn move_transform(p: &Value) -> Result<Option<MoveTransform>, Command
 /// `feature.edit` for mirrors and moves: a new plane, transform or copy flag. Those keys
 /// on any other feature are refused.
 pub(super) fn edit_transform(kind: &mut FeatureKind, p: &Value) -> Result<(), CommandError> {
+    if !matches!(kind, FeatureKind::Mirror(_) | FeatureKind::Move(_)) {
+        // `angle` is shared with planes at an angle, which feature.edit handles itself.
+        let given = |k: &str| p.get(k).is_some_and(|v| !v.is_null());
+        if [
+            "plane", "dx", "dy", "dz", "axis", "origin", "from", "to", "copy",
+        ]
+        .into_iter()
+        .any(given)
+        {
+            return Err(bad(
+                "plane belongs to mirrors; dx, dy, dz, angle, from, to and copy to moves",
+            ));
+        }
+        return Ok(());
+    }
     let plane = mirror_plane(p)?;
     let transform = move_transform(p)?;
     let copy = match p.get("copy") {

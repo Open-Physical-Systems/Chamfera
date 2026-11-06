@@ -587,6 +587,8 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
                 *angle = a;
             }
         }
+        // A move's angle was applied by edit_transform above.
+        FeatureKind::Move(_) => {}
         _ if new_angle.is_some() => {
             return Err(bad("angle belongs to planes at an angle"));
         }
