@@ -35,4 +35,5 @@ Status and the next milestone: `PLAN.md`. Layers: `docs/architecture.md`. Kernel
 | Geometry, topology, the B-rep kernel, the sketch solver | `skills/chamfera-kernel/SKILL.md` |
 | A panel, menu, the viewport, colours, camera input | `skills/chamfera-ui/SKILL.md` |
 | Running the app, screenshots, snapshots | `skills/chamfera-agent-tools/SKILL.md` |
+| Building a part as an agent over MCP | `skills/chamfera-modeling/SKILL.md` |
 | The AppImage, releases, packages | `skills/chamfera-packaging/SKILL.md` |

@@ -8,7 +8,7 @@
 | L3 | `io` | design files; STEP, STL, 3MF import and export |
 | L4 | `engine` | the session, undo, and the command registry (everything is a command) |
 | L5 | `gpu` | the wgpu viewport renderer, and windowless snapshots of the same picture |
-| L6 | `ui`, `mcp` (M6) | the egui front end for desktop and browser; the MCP server for agents |
+| L6 | `ui`, `mcp` | the egui front end for desktop and browser; the MCP server for agents over stdio (`docs/mcp.md`) |
 | L7 | `chamfera`, `chamfera-cli`, `chamfera-web` | desktop app, headless CLI, browser app |
 
 A crate depends only on lower layers (`cargo xtask layers`). Nothing below L5 uses window, GPU or dialog crates, so the core builds for wasm (`cargo xtask wasm`) and runs headless.

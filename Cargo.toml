@@ -20,6 +20,7 @@ chamfera-io = { path = "crates/io" }
 chamfera-engine = { path = "crates/engine" }
 chamfera-gpu = { path = "crates/gpu" }
 chamfera-ui = { path = "crates/ui" }
+chamfera-mcp = { path = "crates/mcp" }
 
 # external: permissive licences only (deny.toml)
 serde = { version = "1", features = ["derive"] }
