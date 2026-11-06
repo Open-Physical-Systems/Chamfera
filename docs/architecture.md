@@ -29,5 +29,8 @@ doc::Document (parameters, timeline) --recompute--> sketch solver + kernel ops -
                                                     tessellate (display/export only)
 ```
 
+## Assemblies
+Components and joints are stored in the design (`crates/doc/src/component.rs`, `joint.rs`, format 15) and solved as an exact chain from the grounded components (`crates/engine/src/assembly.rs`). Motion study keys (`crates/doc/src/motion.rs`, format 27) are joint values at times, interpolated linearly. What a joint drag, a motion time and an exploded view show is display state in the session (`crates/engine/src/motion.rs`, `AssemblyView`): never part of the design or of undo; an exploded view moves the shown meshes, not the exact bodies. Interference intersects the placed exact bodies (K7) for pairs whose boxes overlap. UI: `crates/ui/src/assembly_ui.rs` and `crates/ui/src/motion_ui.rs`.
+
 ## Manufacture (CAM)
 The design's `cam` section (`crates/doc/src/cam.rs`, format 20) stores setups (stock, part zero), the tool library and operations, which name model faces and edges by their persistent names. `chamfera-cam` (L3) reads boundaries, pocket regions and holes from the B-rep, offsets lines and arcs exactly (offset, split, trim by distance, join), and makes toolpaths and G-code. The engine works the toolpaths out again after every rebuild (`crates/engine/src/cam.rs`) and draws them as overlays: feeds solid, rapids dashed, in the `toolpath_*` theme colours. Commands: `cam.*` (`crates/engine/src/cmd/cam.rs`); UI: the MANUFACTURE tab (`crates/ui/src/cam_ui.rs`). Refused for now: undercuts, walls that are not vertical, open chains, ellipses, holes not along Z.

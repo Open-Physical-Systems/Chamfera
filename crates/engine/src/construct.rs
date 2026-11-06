@@ -649,6 +649,7 @@ impl Session {
             vec![Fill {
                 style: FillStyle::Construct,
                 triangles,
+                on_top: false,
             }]
         };
         (overlays, fills)

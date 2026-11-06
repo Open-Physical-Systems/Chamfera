@@ -11,6 +11,7 @@ pub mod face_edit;
 pub mod feature;
 pub mod imported;
 pub mod joint;
+pub mod motion;
 pub mod sheet;
 pub mod timeline;
 pub mod units;
@@ -32,6 +33,7 @@ pub use feature::{
 };
 pub use imported::ImportedBody;
 pub use joint::{EdgeEnd, Joint, JointKind, JointOrigin, OriginAt};
+pub use motion::{Motion, MotionKey};
 pub use sheet::{
     FlangePosition, FlangeSide, FlangeValues, ReliefShape, SheetBase, SheetFlange, SheetRule,
     SheetUnfold,
@@ -87,7 +89,9 @@ use thiserror::Error;
 /// - 26: body tools: combine, split body, split face, thicken and remove bodies
 ///   (`combine`, `split_body`, `split_face`, `thicken`, `remove`). Older files open
 ///   unchanged: they hold none.
-pub const FORMAT_VERSION: u32 = 26;
+/// - 27: motion studies: keyframes of joint values over time (`motion.keys`: joint,
+///   time in seconds, value). Older files open with no keys.
+pub const FORMAT_VERSION: u32 = 27;
 /// The tag every design file starts with, so other JSON is not mistaken for a design.
 pub const FORMAT_TAG: &str = "chamfera";
 /// Longest parameter name.
@@ -278,6 +282,9 @@ pub struct Document {
     /// Sheet metal rules, by name (format 25).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sheet_rules: Vec<SheetRule>,
+    /// The motion study's keyframes (format 27).
+    #[serde(default, skip_serializing_if = "Motion::is_empty")]
+    pub motion: Motion,
 }
 
 impl Default for Document {
@@ -297,6 +304,7 @@ impl Default for Document {
             appearances: BTreeMap::new(),
             cam: cam::Cam::default(),
             units: DisplayUnits::default(),
+            motion: Motion::default(),
         }
     }
 }
@@ -704,6 +712,8 @@ impl Document {
         checked.units = doc.units;
         doc.assembly.check(checked.last_feature_id)?;
         checked.assembly = doc.assembly;
+        doc.motion.check(&checked.assembly)?;
+        checked.motion = doc.motion.sorted();
         checked.timeline = doc.timeline;
         checked.check_timeline(&mut seen)?;
         doc.drawing.check()?;

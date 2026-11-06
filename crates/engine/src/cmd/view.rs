@@ -8,6 +8,23 @@ use serde_json::{Value, json};
 
 pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec {
+        id: "view.explode",
+        label: "Explode",
+        params: "factor: number (optional) - 1 (assembled) to 20: each component is shown moved away from the assembly's centre along the axis (x, y or z) it is furthest along, to factor times its distance\n\
+                 component: integer (optional) - a component to give a manual offset (0 is the root)\n\
+                 offset: {x, y, z} (optional) - with `component`: mm added to its exploded offset; zero removes it\n\
+                 A display state: the model, measures and exports do not change. Trails show where each component sits.",
+        mutates: false,
+        run: super::motion::explode,
+    },
+    CommandSpec {
+        id: "view.explode_clear",
+        label: "Collapse Explode",
+        params: "(none)",
+        mutates: false,
+        run: super::motion::explode_clear,
+    },
+    CommandSpec {
         id: "view.fit",
         label: "Fit",
         params: "width, height: number (required) - viewport size in pixels",

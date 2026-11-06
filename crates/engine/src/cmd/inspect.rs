@@ -25,6 +25,17 @@ use serde_json::{Value, json};
 
 pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec {
+        id: "inspect.interference",
+        label: "Interference",
+        params: "components: [integer] (optional) - check only the bodies of these components (0 is the root)\n\
+                 bodies: [string] (optional) - check only the bodies with these names\n\
+                 at_keys: boolean (optional) - also check at each motion study keyframe\n\
+                 clear: boolean (optional) - remove the overlap highlight and check nothing\n\
+                 Replies with each overlapping pair (as placed) and its overlap volume in mm³, from the exact intersection; the overlaps are drawn highlighted.",
+        mutates: false,
+        run: super::motion::interference,
+    },
+    CommandSpec {
         id: "inspect.mass",
         label: "Mass Properties",
         params: "body: string or number (required) - the solid's name, or the scene id that shows it\n\

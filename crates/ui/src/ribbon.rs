@@ -459,6 +459,43 @@ pub const TOOLS: &[RibbonTool] = &[
         "Ground",
         "Fix the selected body's component in place: joints move the other side",
     ),
+    tool(
+        P,
+        "ASSEMBLE",
+        Action::Tool("joint.drag"),
+        Icon::DriveJoint,
+        "Drive Joint",
+        "Turn or slide a joint: drag a jointed part in the viewport, or set its value",
+    )
+    .primary()
+    .short("Drive")
+    .sep(),
+    tool(
+        P,
+        "ASSEMBLE",
+        Action::Tool("motion.set_time"),
+        Icon::MotionStudy,
+        "Motion Study",
+        "Keyframes of joint values over time: play, pause and scrub the motion",
+    )
+    .short("Motion"),
+    tool(
+        P,
+        "ASSEMBLE",
+        Action::Tool("inspect.interference"),
+        Icon::Interference,
+        "Interference",
+        "Find bodies that overlap where they are placed, and the overlap volume",
+    ),
+    tool(
+        P,
+        "ASSEMBLE",
+        Action::Tool("view.explode"),
+        Icon::Explode,
+        "Explode",
+        "Show the components moved apart along the assembly's axes, with trails; the \
+         model does not change",
+    ),
     // SOLID > CONSTRUCT
     construct(
         "construct.plane_offset",
@@ -1346,6 +1383,10 @@ impl ChamferaApp {
                 "inspect.mass" => inspect == Some(InspectMode::Mass),
                 "joint.create" => self.assembly.joint.is_some(),
                 "component.ground" => self.ground_state().1,
+                "joint.drag" => self.motion.drive.is_some(),
+                "motion.set_time" => self.motion.study.is_some(),
+                "inspect.interference" => self.motion.interference.is_some(),
+                "view.explode" => self.motion.explode.is_some(),
                 "cam.tool_add" => self.cam.tool_dialog.is_some(),
                 "sheet.base" => self.sheet_metal.base.is_some(),
                 "sheet.flange" => self.sheet_metal.flange.is_some(),
@@ -1402,6 +1443,18 @@ impl ChamferaApp {
                 "joint.create" if !has_solids => {
                     format!("{name}: build bodies in two components first")
                 }
+                "joint.drag" | "motion.set_time" if self.session.doc.assembly.joints.is_empty() => {
+                    format!("{name}: connect two components with a Joint first")
+                }
+                "joint.drag" | "motion.set_time" => return None,
+                "inspect.interference" if self.session.solids().len() < 2 => {
+                    format!("{name}: build at least two bodies first")
+                }
+                "inspect.interference" => return None,
+                "view.explode" if self.session.doc.assembly.components.is_empty() => {
+                    format!("{name}: group bodies into components first")
+                }
+                "view.explode" => return None,
                 "solid.remove" if has_solids && self.session.scene.selected_bodies().is_empty() => {
                     format!("{name}: select the bodies to remove first")
                 }
@@ -1503,6 +1556,10 @@ impl ChamferaApp {
             "component.new" => self.new_component(),
             "joint.create" => self.toggle_joint(),
             "component.ground" => self.toggle_ground(),
+            "joint.drag" => self.toggle_drive(),
+            "motion.set_time" => self.toggle_study(),
+            "inspect.interference" => self.toggle_interference(),
+            "view.explode" => self.toggle_explode(),
             "sketch.import_dxf" => self.dxf_dialog(),
             "sketch.export_dxf" => self.export("DXF drawing", &["dxf"], "sketch.export_dxf"),
             "sketch.split_all" => {
@@ -1551,7 +1608,14 @@ impl ChamferaApp {
                 if id.starts_with("inspect.")
                     || id.starts_with("drawing.view.")
                     || id.starts_with("drawing.dim.")
-                    || matches!(id, "joint.create" | "component.ground") =>
+                    || matches!(
+                        id,
+                        "joint.create"
+                            | "component.ground"
+                            | "joint.drag"
+                            | "motion.set_time"
+                            | "view.explode"
+                    ) =>
             {
                 self.run_tool(id);
             }

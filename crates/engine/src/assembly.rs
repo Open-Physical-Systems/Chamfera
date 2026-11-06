@@ -253,7 +253,7 @@ pub fn origin_frame<'a>(
 }
 
 /// A body placed in the world: (feature that made it, component, name, body).
-pub(crate) type Placed = (u32, u32, String, Body);
+pub type Placed = (u32, u32, String, Body);
 
 impl Session {
     /// Solves the assembly from the bodies the timeline built (in their components' own
@@ -265,7 +265,9 @@ impl Session {
         made: Vec<(u32, String, Body)>,
         built: &mut Built,
     ) -> Vec<Placed> {
-        let asm = &self.doc.assembly;
+        // Joints at the values a drag or the motion study shows.
+        let shown = self.shown_assembly();
+        let asm: &Assembly = &shown;
         let owner = |feature: u32| asm.owner_of(feature);
         let frame = |o: &JointOrigin| {
             let original = asm.original_of(o.component);

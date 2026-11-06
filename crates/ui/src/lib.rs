@@ -33,6 +33,7 @@ const SHOT_TIMEOUT_SECS: f64 = 30.0;
 static SHOT_FAILED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 mod body_tools_ui;
 mod icons;
+mod motion_ui;
 mod navigation;
 mod params_ui;
 mod prefs;
@@ -173,6 +174,8 @@ pub struct ChamferaApp {
     /// The SHEET METAL workspace (`sheet_ui`).
     sheet_metal: sheet_ui::SheetUi,
     assembly: assembly_ui::AssemblyUi,
+    /// Drive Joint, Motion Study, Interference and Explode (`motion_ui`).
+    motion: motion_ui::MotionUi,
     drawing: drawing_ui::DrawingUi,
     construct: construct_ui::ConstructUi,
     file: file_ui::FileUi,
@@ -274,6 +277,7 @@ impl ChamferaApp {
             solid: solid_ui::SolidUi::default(),
             sheet_metal: sheet_ui::SheetUi::default(),
             assembly: assembly_ui::AssemblyUi::default(),
+            motion: motion_ui::MotionUi::default(),
             drawing: drawing_ui::DrawingUi::default(),
             construct: construct_ui::ConstructUi::default(),
             file: file_ui::FileUi::default(),
@@ -514,6 +518,9 @@ impl ChamferaApp {
                 self.joint_click(x, y, w, h);
                 return;
             }
+        }
+        if self.drive_input(response, rect) {
+            return;
         }
         if self.solid.hole.is_some() {
             let at = response.hover_pos().map(local);
@@ -942,6 +949,7 @@ impl eframe::App for ChamferaApp {
             self.extrude_dialog(&ctx);
             self.blend_dialog(&ctx);
             self.joint_dialog(&ctx);
+            self.motion_panels(&ctx);
             self.hole_dialog(&ctx);
             self.transform_dialog(&ctx);
             self.inspect_dialog(&ctx);

@@ -30,6 +30,18 @@ pub static COMMANDS: &[CommandSpec] = &[
         run: delete,
     },
     CommandSpec {
+        id: "joint.drag",
+        label: "Drag Joint",
+        params: "joint: integer (required)\n\
+                 from, to: {x, y} (required) - the drag's start and current pixel\n\
+                 width, height: number (required) - viewport size in pixels\n\
+                 start: number or expression (optional) - the joint's value when the drag began (degrees or mm); default its value now\n\
+                 cancel: boolean (optional) - stop showing the drag\n\
+                 Shows the joint turned about its axis or slid along it as the drag says, kept inside its limits, without changing the design; send `joint.set_value` with the reply's `value` to keep it.",
+        mutates: false,
+        run: super::motion::joint_drag,
+    },
+    CommandSpec {
         id: "joint.origin_at",
         label: "Joint Origin at Pixel",
         params: "x, y: number (required) - pixel, origin top-left\n\
@@ -80,7 +92,7 @@ pub(crate) fn joint_json(s: &Session, id: u32) -> Value {
 
 /// A value in the joint's unit: degrees or an angle expression for turning joints, mm or
 /// a length expression for a slider.
-fn joint_value(
+pub(crate) fn joint_value(
     s: &Session,
     kind: JointKind,
     v: Option<&Value>,
@@ -299,6 +311,9 @@ fn set_value(s: &mut Session, p: &Value) -> CmdResult {
     if offset.is_some() && kind != JointKind::Planar {
         return Err(bad("only a planar joint takes an `offset`"));
     }
+    // Driving a joint leaves a drag or a motion study's time, so the new value shows.
+    s.view_state.drag.remove(&id);
+    s.view_state.motion_time = None;
     let j = s.doc.assembly.joint_mut(id)?;
     if let Some(v) = value {
         j.check_value(v)?;
@@ -329,6 +344,8 @@ fn delete(s: &mut Session, p: &Value) -> CmdResult {
             .find(|c| asm.driver_of(*c).is_some_and(|d| d.joint == id))
     });
     let removed = s.doc.assembly.remove_joint(id)?;
+    s.doc.motion.forget_joint(id);
+    s.view_state.drag.remove(&id);
     if let Some(c) = moved {
         let world = s.placements().of(c);
         let parent = s.doc.assembly.component(c).map(|x| x.parent).unwrap_or(0);
