@@ -37,6 +37,9 @@
 //! Rung K11 (first part) is here: edge blends, constant-radius [`fillet`] and
 //! equal-distance [`chamfer`] on straight edges between planes (cylinders, sphere-octant
 //! corners) and on plane/cylinder rims (tori, cones).
+//!
+//! Rung K12 (first part) is here: [`shell`] hollows a solid of planes, cylinders and
+//! cones into walls of a thickness, with chosen faces open (an inward offset subtracted).
 
 mod blend;
 mod boolean;
@@ -47,6 +50,7 @@ mod intersect;
 mod mass;
 mod planar;
 mod profile;
+mod shell;
 mod ssi;
 mod surface;
 mod sweep;
@@ -69,6 +73,7 @@ pub use intersect::{
 pub use mass::{MASS_QUADRATURE_TOLERANCE, MAX_DENSITY, MassProperties};
 pub use planar::{Arc2, Circle2, Line2, Segment2};
 pub use profile::{PROFILE_JOIN_TOLERANCE, Profile, ProfileEdge, polygon_edges};
+pub use shell::shell;
 pub use ssi::{
     CurveSurfaceIntersection, CurveSurfacePoint, IntersectionCurve, ON_SURFACE_SAMPLES,
     PointInSolid, RAY_DIRECTIONS, SurfaceIntersection, UnsupportedIntersection, classify_point,

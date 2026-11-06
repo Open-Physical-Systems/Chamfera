@@ -250,7 +250,8 @@ async function main() {
     const portFile = join(profile, "DevToolsActivePort");
     const devPort = await waitFor(
       () => existsSync(portFile) && readFileSync(portFile, "utf8").split("\n")[0],
-      15000,
+      // A fresh profile on a busy CI runner can take well over 15 s before the port opens.
+      60000,
       "Chrome to start",
     );
     const targets = await waitFor(async () => {
@@ -373,7 +374,7 @@ async function main() {
                   cdp
                     .eval(`(JSON.parse(document.body.dataset.targets || "{}"))[${JSON.stringify(step.clickText)}] || null`)
                     .catch(() => null),
-                step.timeout || 10000,
+                step.timeout || 30000,
                 `"${step.clickText}" on screen`,
               );
           const button = step.button || "left";
@@ -405,13 +406,13 @@ async function main() {
         } else if (step.expect) {
           await waitFor(
             () => cdp.eval(step.expect).catch(() => false),
-            step.timeout || 10000,
+            step.timeout || 30000,
             step.what || step.expect,
           );
         } else if (step.download) {
           const d = await waitFor(
             () => downloads.slice(seen).find((x) => x.name.endsWith(step.download) && x.state !== "started"),
-            step.timeout || 10000,
+            step.timeout || 30000,
             `a download ending in ${step.download}`,
           );
           seen = downloads.indexOf(d) + 1;

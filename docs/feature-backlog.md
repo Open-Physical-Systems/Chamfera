@@ -145,7 +145,7 @@ Close runners-up: selection filters and box selection (UI and NAV), splines (nee
 | Variable-radius fillet | Radius changes along the edge | missing | P2 | L | kernel |
 | Rule fillet / full round | Round all edges of a face, or a full round between three faces | missing | P2 | M | kernel |
 | Tangent chain selection | Picking one edge selects its tangent-connected chain | missing | P0 | S | engine, ui |
-| Shell | Hollow a body with chosen faces removed | missing | P0 | L | kernel (K12), engine |
+| Shell | Hollow a body with chosen faces removed | branch `kernel/k12-shell` (planes, cylinders, cones; inward or outward; closed hollow) | P0 | L | kernel (K12), engine |
 | Hole | Simple, counterbore, countersink; blind, to a face, through all | missing | P0 | M | engine, doc, kernel |
 | Thread | Cosmetic thread (attribute + drawing note), later modelled thread | missing | P1 | M | doc, kernel |
 | Linear (rectangular) pattern | Features repeated in one or two directions | done | P0 | M | engine, doc |
@@ -306,8 +306,8 @@ Close runners-up: selection filters and box selection (UI and NAV), splines (nee
 | Command search | A search box (on a key) that finds any command by name and runs it | missing | P0 | S | ui |
 | Keyboard shortcuts | Single keys for line, rectangle, circle, extrude, fillet, measure, dimension, trim, offset, and so on; editable | missing | P0 | S | ui (now only file, undo, fit, home) |
 | Radial context menu | Right-click menu laid out around the cursor with the common commands | missing | P1 | M | ui |
-| Context menu in the viewport | Right-click on a body, face or sketch for its commands | missing | P0 | S | ui |
-| Selection filters | Limit picks to bodies, faces, edges, vertices, sketches, components | missing | P0 | S | engine, ui |
+| Context menu in the viewport | Right-click on a body, face or sketch for its commands | done (body, face, edge, empty space, sketch) | P0 | S | ui |
+| Selection filters | Limit picks to bodies, faces, edges, vertices, sketches, components | partial (bodies, faces, edges; sketch points, curves, construction; no solid vertices or components yet) | P0 | S | engine, ui |
 | Box selection | Window and crossing selection by dragging | missing | P0 | M | engine, gpu, ui |
 | Select through / select other | Cycle through overlapping items under the cursor | missing | P1 | S | engine, ui |
 | Pre-selection highlight | Highlight what a click would pick | missing | P0 | S | gpu, ui |
