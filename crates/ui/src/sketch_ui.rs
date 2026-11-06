@@ -6,9 +6,10 @@
 use crate::icons::Icon;
 use crate::widgets::{self, menu_item};
 use crate::{ChamferaApp, color, label};
-use chamfera_engine::sketching::SketchItem;
+use chamfera_engine::sketching::{SketchItem, curve_polyline};
 use chamfera_geom::{Point2, Point3};
 use chamfera_render::{Overlay, OverlayStyle, mat_mul, transform_point};
+use chamfera_sketch::{CurveId, OffsetCorners, PointId, ToolOp};
 use egui::{Pos2, Rect, Vec2};
 use serde_json::{Value, json};
 
@@ -17,9 +18,52 @@ pub enum Tool {
     Select,
     Line,
     Rectangle,
+    CentreRectangle,
     Circle,
     Arc,
+    ThreePointArc,
+    TangentArc,
+    Offset,
+    Mirror,
+    RectangularPattern,
+    CircularPattern,
+    Fillet,
+    Chamfer,
+    Trim,
+    Extend,
+    Split,
 }
+
+/// The CREATE tools shown in the ribbon; the group's list has all of `CREATE_ALL`.
+const CREATE_SHOWN: [Tool; 6] = [
+    Tool::Line,
+    Tool::Rectangle,
+    Tool::Circle,
+    Tool::Arc,
+    Tool::Offset,
+    Tool::Mirror,
+];
+const CREATE_ALL: [Tool; 11] = [
+    Tool::Line,
+    Tool::Rectangle,
+    Tool::CentreRectangle,
+    Tool::Circle,
+    Tool::Arc,
+    Tool::ThreePointArc,
+    Tool::TangentArc,
+    Tool::Offset,
+    Tool::Mirror,
+    Tool::RectangularPattern,
+    Tool::CircularPattern,
+];
+/// The MODIFY tools shown in the ribbon (Construction and Delete follow them).
+const MODIFY_TOOLS: [Tool; 5] = [
+    Tool::Fillet,
+    Tool::Chamfer,
+    Tool::Trim,
+    Tool::Extend,
+    Tool::Split,
+];
 
 impl Tool {
     fn name(self) -> &'static str {
@@ -27,8 +71,22 @@ impl Tool {
             Tool::Select => "Select",
             Tool::Line => label("sketch.line"),
             Tool::Rectangle => label("sketch.rectangle"),
+            Tool::CentreRectangle => label("sketch.rectangle.centre"),
             Tool::Circle => label("sketch.circle"),
             Tool::Arc => label("sketch.arc"),
+            Tool::ThreePointArc => label("sketch.arc.three_point"),
+            Tool::TangentArc => label("sketch.arc.tangent"),
+            Tool::Offset => label("sketch.offset"),
+            Tool::Mirror => label("sketch.mirror"),
+            Tool::RectangularPattern => label("sketch.pattern.rectangular"),
+            Tool::CircularPattern => label("sketch.pattern.circular"),
+            // Short ribbon labels; the command labels say "Sketch Fillet" to tell them
+            // from solid fillets.
+            Tool::Fillet => "Fillet",
+            Tool::Chamfer => "Chamfer",
+            Tool::Trim => label("sketch.trim"),
+            Tool::Extend => label("sketch.extend"),
+            Tool::Split => label("sketch.split"),
         }
     }
 
@@ -37,8 +95,20 @@ impl Tool {
             Tool::Select => Icon::Select,
             Tool::Line => Icon::Line,
             Tool::Rectangle => Icon::Rectangle,
+            Tool::CentreRectangle => Icon::RectangleCentre,
             Tool::Circle => Icon::Circle,
             Tool::Arc => Icon::Arc,
+            Tool::ThreePointArc => Icon::ArcThreePoint,
+            Tool::TangentArc => Icon::ArcTangent,
+            Tool::Offset => Icon::Offset,
+            Tool::Mirror => Icon::Mirror,
+            Tool::RectangularPattern => Icon::PatternRectangular,
+            Tool::CircularPattern => Icon::PatternCircular,
+            Tool::Fillet => Icon::Fillet,
+            Tool::Chamfer => Icon::Chamfer,
+            Tool::Trim => Icon::Trim,
+            Tool::Extend => Icon::Extend,
+            Tool::Split => Icon::Split,
         }
     }
 
@@ -56,6 +126,10 @@ Click point after point; click the first point again to close the shape"
                 "Rectangle
 Two clicks: opposite corners"
             }
+            Tool::CentreRectangle => {
+                "Centre Rectangle
+Two clicks: the centre, then a corner"
+            }
             Tool::Circle => {
                 "Circle
 Two clicks: the centre, then a point on the circle"
@@ -63,6 +137,50 @@ Two clicks: the centre, then a point on the circle"
             Tool::Arc => {
                 "Arc
 Three clicks: the centre, the start, then the end (counter-clockwise)"
+            }
+            Tool::ThreePointArc => {
+                "3-Point Arc
+Three clicks: the start, the end, then a point the arc passes through"
+            }
+            Tool::TangentArc => {
+                "Tangent Arc
+Click the free end of a line or arc, then where the arc ends; it leaves smoothly"
+            }
+            Tool::Offset => {
+                "Offset
+Click a curve to offset its whole chain, then click the side; the distance is in the tool box"
+            }
+            Tool::Mirror => {
+                "Mirror
+Select the geometry first, then click the line to mirror it in; the copy stays symmetric"
+            }
+            Tool::RectangularPattern => {
+                "Rectangular Pattern
+Select the geometry, set columns, rows and spacing in the tool box, then Apply"
+            }
+            Tool::CircularPattern => {
+                "Circular Pattern
+Select the geometry, set the count in the tool box, then click the centre"
+            }
+            Tool::Fillet => {
+                "Fillet
+Click a corner where two lines meet to round it; the radius is in the tool box"
+            }
+            Tool::Chamfer => {
+                "Chamfer
+Click a corner where two lines meet to cut it; the distance is in the tool box"
+            }
+            Tool::Trim => {
+                "Trim
+Click the piece of a curve to remove, between the curves that cross it"
+            }
+            Tool::Extend => {
+                "Extend
+Click near the end of a line or arc to run it on to the next curve"
+            }
+            Tool::Split => {
+                "Split
+Click a curve to split it where other curves cross it; Split All splits every crossing"
             }
         }
     }
@@ -78,12 +196,49 @@ Three clicks: the centre, the start, then the end (counter-clockwise)"
             }
             (Tool::Rectangle, 0) => "Click the first corner",
             (Tool::Rectangle, _) => "Click the opposite corner",
+            (Tool::CentreRectangle, 0) => "Click the centre of the rectangle",
+            (Tool::CentreRectangle, _) => "Click a corner",
             (Tool::Circle, 0) => "Click the centre",
             (Tool::Circle, _) => "Click to set the radius",
             (Tool::Arc, 0) => "Click the centre",
             (Tool::Arc, 1) => "Click the start (sets the radius)",
             (Tool::Arc, _) => "Click the end (counter-clockwise from the start)",
+            (Tool::ThreePointArc, 0) => "Click the start of the arc",
+            (Tool::ThreePointArc, 1) => "Click the end of the arc",
+            (Tool::ThreePointArc, _) => "Click a point the arc passes through",
+            (Tool::TangentArc, 0) => "Click the free end of a line or arc",
+            (Tool::TangentArc, _) => "Click where the arc ends · Esc cancels",
+            (Tool::Offset, 0) => "Click a line, arc or circle: its chain is offset",
+            (Tool::Offset, _) => "Click the side to offset toward · Esc cancels",
+            (Tool::Mirror, _) => "Click the mirror line (select the geometry first) · Esc cancels",
+            (Tool::RectangularPattern, _) => {
+                "Set columns, rows and spacing, then Apply (select the geometry first)"
+            }
+            (Tool::CircularPattern, _) => {
+                "Click the centre of the pattern (select the geometry first) · Esc cancels"
+            }
+            (Tool::Fillet, _) => "Click a corner to round it · Esc cancels",
+            (Tool::Chamfer, _) => "Click a corner to cut it · Esc cancels",
+            (Tool::Trim, _) => "Click the piece to remove · Esc cancels",
+            (Tool::Extend, _) => "Click near the end to extend · Esc cancels",
+            (Tool::Split, _) => "Click a curve to split it where others cross it · Esc cancels",
         }
+    }
+
+    /// Tools that act on existing geometry instead of placing points.
+    fn edits(self) -> bool {
+        matches!(
+            self,
+            Tool::Offset
+                | Tool::Mirror
+                | Tool::RectangularPattern
+                | Tool::CircularPattern
+                | Tool::Fillet
+                | Tool::Chamfer
+                | Tool::Trim
+                | Tool::Extend
+                | Tool::Split
+        )
     }
 }
 
@@ -94,6 +249,37 @@ struct Click {
     point: Option<u32>,
 }
 
+/// The values the editing tools use, as typed in the tool box.
+pub struct ToolOptions {
+    pub radius: String,
+    pub chamfer: String,
+    pub offset: String,
+    pub offset_round: bool,
+    pub columns: String,
+    pub rows: String,
+    pub dx: String,
+    pub dy: String,
+    pub count: String,
+    pub angle: String,
+}
+
+impl Default for ToolOptions {
+    fn default() -> Self {
+        Self {
+            radius: "5".into(),
+            chamfer: "2".into(),
+            offset: "2".into(),
+            offset_round: false,
+            columns: "3".into(),
+            rows: "1".into(),
+            dx: "20".into(),
+            dy: "20".into(),
+            count: "6".into(),
+            angle: "360".into(),
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct SketchUi {
     pub tool: Option<Tool>,
@@ -101,6 +287,11 @@ pub struct SketchUi {
     /// The first point of the current line chain, to close the loop on it.
     chain_start: Option<u32>,
     hover: Option<Point2>,
+    /// The hovered pixel and viewport size, for previews that pick geometry.
+    hover_px: Option<(f64, f64, f64, f64)>,
+    /// The curve the Offset tool picked with its first click.
+    picked_curve: Option<u32>,
+    pub options: ToolOptions,
     dragging: Option<u32>,
     /// A dimension being edited: its constraint id, kind and the text typed so far.
     editing: Option<(u64, String, String)>,
@@ -128,6 +319,7 @@ impl SketchUi {
     fn reset_tool(&mut self) {
         self.clicks.clear();
         self.chain_start = None;
+        self.picked_curve = None;
     }
 }
 
@@ -276,7 +468,7 @@ impl ChamferaApp {
         });
         widgets::ribbon_divider(ui, look);
         let (_, menu) = widgets::ribbon_group(ui, look, "CREATE", true, |ui| {
-            for tool in [Tool::Line, Tool::Rectangle, Tool::Circle, Tool::Arc] {
+            for tool in CREATE_SHOWN {
                 if widgets::tool_button(
                     ui,
                     look,
@@ -294,7 +486,7 @@ impl ChamferaApp {
             }
         });
         egui::Popup::menu(&menu).show(|ui| {
-            for tool in [Tool::Line, Tool::Rectangle, Tool::Circle, Tool::Arc] {
+            for tool in CREATE_ALL {
                 if menu_item(ui, look, tool.icon(), tool.name(), true).clicked() {
                     ui.close();
                     pick = Some(tool);
@@ -399,7 +591,25 @@ impl ChamferaApp {
         widgets::ribbon_divider(ui, look);
         let mut construction = false;
         let mut remove = false;
-        widgets::ribbon_group(ui, look, "MODIFY", false, |ui| {
+        let mut split_all = false;
+        let mut pick: Option<Tool> = None;
+        let (_, menu) = widgets::ribbon_group(ui, look, "MODIFY", true, |ui| {
+            for tool in MODIFY_TOOLS {
+                if widgets::tool_button(
+                    ui,
+                    look,
+                    tool.icon(),
+                    tool.name(),
+                    true,
+                    current == tool,
+                    false,
+                )
+                .on_hover_text(tool.tooltip())
+                .clicked()
+                {
+                    pick = Some(tool);
+                }
+            }
             if widgets::tool_button(
                 ui,
                 look,
@@ -431,6 +641,39 @@ impl ChamferaApp {
                 remove = true;
             }
         });
+        egui::Popup::menu(&menu).show(|ui| {
+            for tool in MODIFY_TOOLS {
+                if menu_item(ui, look, tool.icon(), tool.name(), true).clicked() {
+                    ui.close();
+                    pick = Some(tool);
+                }
+            }
+            if menu_item(ui, look, Icon::Split, "Split All Crossings", true)
+                .on_hover_text("Split every curve where another crosses it, so overlapping shapes give their regions")
+                .clicked()
+            {
+                ui.close();
+                split_all = true;
+            }
+            ui.separator();
+            if menu_item(ui, look, Icon::Construction, label("sketch.construction"), has_selection)
+                .clicked()
+            {
+                ui.close();
+                construction = true;
+            }
+            if menu_item(ui, look, Icon::Delete, label("sketch.remove"), has_selection).clicked() {
+                ui.close();
+                remove = true;
+            }
+        });
+        if let Some(tool) = pick {
+            self.sketch.tool = Some(tool);
+            self.sketch.reset_tool();
+        }
+        if split_all {
+            self.run_sketch("sketch.split", json!({}));
+        }
         if construction {
             self.toggle_construction();
         }
@@ -542,6 +785,10 @@ impl ChamferaApp {
             self.run_sketch("sketch.remove", json!({}));
         }
         // Hover: where the next click would land (for previews).
+        self.sketch.hover_px = response.hover_pos().map(|p| {
+            let (x, y) = local(p);
+            (x, y, w, h)
+        });
         self.sketch.hover = response
             .hover_pos()
             .and_then(|p| {
@@ -612,6 +859,10 @@ impl ChamferaApp {
             self.message = Some(("The sketch plane is edge-on: turn the view".into(), true));
             return;
         };
+        if tool.edits() {
+            self.edit_click(tool, (x, y, w, h), click);
+            return;
+        }
         self.sketch.clicks.push(click);
         self.place(tool);
     }
@@ -682,8 +933,62 @@ impl ChamferaApp {
                 );
                 self.sketch.clicks.clear();
             }
+            (Tool::CentreRectangle, [c0, k]) => {
+                self.run_sketch(
+                    "sketch.rectangle.centre",
+                    json!({ "cx": c0.at.x, "cy": c0.at.y, "x": k.at.x, "y": k.at.y }),
+                );
+                self.sketch.clicks.clear();
+            }
+            (Tool::ThreePointArc, [a, b, m]) => {
+                self.run_sketch(
+                    "sketch.arc.three_point",
+                    json!({
+                        "x1": a.at.x, "y1": a.at.y, "x2": m.at.x, "y2": m.at.y,
+                        "x3": b.at.x, "y3": b.at.y,
+                    }),
+                );
+                self.sketch.clicks.clear();
+            }
+            (Tool::TangentArc, [p]) if p.point.is_none() => {
+                self.message = Some((
+                    "Tangent Arc: start on the free end of a line or arc".into(),
+                    true,
+                ));
+                self.sketch.clicks.clear();
+            }
+            (Tool::TangentArc, [p, q]) => {
+                let r = self.run_sketch(
+                    "sketch.arc.tangent",
+                    json!({ "point": p.point, "x": q.at.x, "y": q.at.y }),
+                );
+                self.sketch.clicks.clear();
+                // Chain on from the new arc's end, like the line tool.
+                if let Some(r) = r
+                    && let Some(end) = self.arc_end_point(&r, q.at)
+                {
+                    self.sketch.clicks.push(Click {
+                        at: q.at,
+                        point: Some(end),
+                    });
+                }
+            }
             _ => {}
         }
+    }
+
+    /// The point at `at` among the points a command created.
+    fn arc_end_point(&self, reply: &Value, at: Point2) -> Option<u32> {
+        let f = self.session.active_sketch()?;
+        reply["created_points"]
+            .as_array()?
+            .iter()
+            .filter_map(as_id)
+            .find(|p| {
+                f.sketch
+                    .point(PointId(*p))
+                    .is_some_and(|q| q.coincident(at))
+            })
     }
 
     /// The preview overlay for the tool in progress, in world coordinates.
@@ -696,6 +1001,7 @@ impl ChamferaApp {
         let c = &self.sketch.clicks;
         let w = |p: Point2| f.plane.from_plane(p);
         let mut lines: Vec<[Point3; 2]> = Vec::new();
+        let mut polylines: Vec<Vec<Point2>> = Vec::new();
         let ring = |centre: Point2, r: f64, a0: f64, sweep: f64| -> Vec<[Point3; 2]> {
             let n = 64;
             (0..n)
@@ -740,7 +1046,36 @@ impl ChamferaApp {
                 }
                 lines.extend(ring(a.at, a.at.distance(s.at), a0, sweep));
             }
+            (Tool::CentreRectangle, [a]) => {
+                let op = ToolOp::CentreRectangle {
+                    centre: a.at,
+                    corner: hover,
+                };
+                polylines.extend(self.op_polylines(&op));
+            }
+            (Tool::ThreePointArc, [a]) => lines.push([w(a.at), w(hover)]),
+            (Tool::ThreePointArc, [a, b]) => {
+                let op = ToolOp::ThreePointArc {
+                    start: a.at,
+                    through: hover,
+                    end: b.at,
+                };
+                polylines.extend(self.op_polylines(&op));
+            }
+            (Tool::TangentArc, [p]) => {
+                if let Some(from) = p.point {
+                    let op = ToolOp::TangentArc {
+                        from: PointId(from),
+                        to: hover,
+                    };
+                    polylines.extend(self.op_polylines(&op));
+                }
+            }
+            (tool, _) if tool.edits() => polylines.extend(self.edit_preview(tool, hover)),
             _ => {}
+        }
+        for poly in polylines {
+            lines.extend(poly.windows(2).map(|s| [w(s[0]), w(s[1])]));
         }
         Some(Overlay {
             style: OverlayStyle::Preview,
@@ -820,6 +1155,7 @@ impl ChamferaApp {
             }
         }
         self.dimension_editor(ui, rect);
+        self.sketch_tool_box(ui, rect);
     }
 
     /// The inline value box for the dimension being edited. Enter applies, Esc cancels.
@@ -901,6 +1237,407 @@ fn parse_value(kind: &str, text: &str) -> Option<f64> {
         return None;
     }
     Some(if kind == "angle" { v.to_radians() } else { v })
+}
+
+// ----- the editing tools: trim, extend, split, fillet, chamfer, offset, mirror, patterns -----
+
+/// A length typed in the tool box, in mm.
+fn option_length(text: &str) -> Option<f64> {
+    parse_value("length", text).filter(|v| *v > 0.0)
+}
+
+/// A whole number typed in the tool box.
+fn option_count(text: &str) -> Option<u32> {
+    text.trim().parse().ok()
+}
+
+impl ChamferaApp {
+    /// The selected curves and points, without `skip`.
+    fn selected_ids(&self, skip: Option<u32>) -> (Vec<u32>, Vec<u32>) {
+        let mut curves = Vec::new();
+        let mut points = Vec::new();
+        for item in &self.session.sketch_selection {
+            match item {
+                SketchItem::Curve(c) if Some(*c) != skip => curves.push(*c),
+                SketchItem::Point(p) => points.push(*p),
+                SketchItem::Curve(_) => {}
+            }
+        }
+        (curves, points)
+    }
+
+    /// What an editing tool would do at pixel `(x, y)` (sketch point `at`): the command,
+    /// its parameters and the same operation for the preview. `None` when nothing there
+    /// suits the tool.
+    fn tool_op(
+        &self,
+        tool: Tool,
+        px: (f64, f64, f64, f64),
+        at: Point2,
+    ) -> Option<(&'static str, Value, ToolOp)> {
+        let (x, y, w, h) = px;
+        let item = self.session.pick_sketch_item(x, y, w, h);
+        let curve = match item {
+            Some(SketchItem::Curve(c)) => Some(c),
+            _ => None,
+        };
+        let point = match item {
+            Some(SketchItem::Point(p)) => Some(p),
+            _ => None,
+        };
+        let o = &self.sketch.options;
+        match tool {
+            Tool::Trim | Tool::Extend => {
+                let c = curve?;
+                let p = json!({ "curve": c, "x": at.x, "y": at.y });
+                let op = if tool == Tool::Trim {
+                    ToolOp::Trim {
+                        curve: CurveId(c),
+                        at,
+                    }
+                } else {
+                    ToolOp::Extend {
+                        curve: CurveId(c),
+                        at,
+                    }
+                };
+                let id = if tool == Tool::Trim {
+                    "sketch.trim"
+                } else {
+                    "sketch.extend"
+                };
+                Some((id, p, op))
+            }
+            Tool::Split => {
+                let c = curve?;
+                Some((
+                    "sketch.split",
+                    json!({ "curve": c }),
+                    ToolOp::Split {
+                        curve: Some(CurveId(c)),
+                    },
+                ))
+            }
+            Tool::Fillet => {
+                let corner = point?;
+                let radius = option_length(&o.radius)?;
+                Some((
+                    "sketch.fillet",
+                    json!({ "point": corner, "radius": radius }),
+                    ToolOp::Fillet {
+                        corner: PointId(corner),
+                        radius,
+                    },
+                ))
+            }
+            Tool::Chamfer => {
+                let corner = point?;
+                let distance = option_length(&o.chamfer)?;
+                Some((
+                    "sketch.chamfer",
+                    json!({ "point": corner, "distance": distance }),
+                    ToolOp::Chamfer {
+                        corner: PointId(corner),
+                        distance,
+                        distance2: None,
+                    },
+                ))
+            }
+            Tool::Offset => {
+                let c = self.sketch.picked_curve?;
+                let distance = option_length(&o.offset)?;
+                let corners = if o.offset_round {
+                    OffsetCorners::Round
+                } else {
+                    OffsetCorners::Sharp
+                };
+                Some((
+                    "sketch.offset",
+                    json!({
+                        "curves": [c], "distance": distance, "x": at.x, "y": at.y,
+                        "corners": if o.offset_round { "round" } else { "sharp" },
+                    }),
+                    ToolOp::Offset {
+                        curves: vec![CurveId(c)],
+                        distance,
+                        side: Some(at),
+                        corners,
+                        dimension: true,
+                    },
+                ))
+            }
+            Tool::Mirror => {
+                let axis = curve?;
+                let (curves, points) = self.selected_ids(Some(axis));
+                if curves.is_empty() && points.is_empty() {
+                    return None;
+                }
+                Some((
+                    "sketch.mirror",
+                    json!({ "axis": axis, "curves": curves, "points": points }),
+                    ToolOp::Mirror {
+                        curves: curves.iter().map(|c| CurveId(*c)).collect(),
+                        points: points.iter().map(|p| PointId(*p)).collect(),
+                        axis: CurveId(axis),
+                    },
+                ))
+            }
+            Tool::CircularPattern => {
+                let (curves, points) = self.selected_ids(None);
+                if curves.is_empty() && points.is_empty() {
+                    return None;
+                }
+                let count = option_count(&o.count)?;
+                let angle = parse_value("angle", &o.angle)?;
+                Some((
+                    "sketch.pattern.circular",
+                    json!({
+                        "curves": curves, "points": points, "cx": at.x, "cy": at.y,
+                        "count": count, "angle": angle,
+                    }),
+                    ToolOp::CircularPattern {
+                        curves: curves.iter().map(|c| CurveId(*c)).collect(),
+                        points: points.iter().map(|p| PointId(*p)).collect(),
+                        centre: at,
+                        count,
+                        angle,
+                    },
+                ))
+            }
+            _ => None,
+        }
+    }
+
+    /// The rectangular pattern of the selection, from the tool box.
+    fn rectangular_pattern_op(&self) -> Option<(Value, ToolOp)> {
+        let (curves, points) = self.selected_ids(None);
+        if curves.is_empty() && points.is_empty() {
+            return None;
+        }
+        let o = &self.sketch.options;
+        let columns = option_count(&o.columns)?;
+        let rows = option_count(&o.rows)?;
+        let dx = parse_value("length", &o.dx)?;
+        let dy = parse_value("length", &o.dy)?;
+        Some((
+            json!({
+                "curves": curves, "points": points, "columns": columns, "rows": rows,
+                "dx": dx, "dy": dy,
+            }),
+            ToolOp::RectangularPattern {
+                curves: curves.iter().map(|c| CurveId(*c)).collect(),
+                points: points.iter().map(|p| PointId(*p)).collect(),
+                columns,
+                rows,
+                dx,
+                dy,
+            },
+        ))
+    }
+
+    /// A click of an editing tool.
+    fn edit_click(&mut self, tool: Tool, px: (f64, f64, f64, f64), click: Click) {
+        if tool == Tool::Offset && self.sketch.picked_curve.is_none() {
+            let (x, y, w, h) = px;
+            match self.session.pick_sketch_item(x, y, w, h) {
+                Some(SketchItem::Curve(c)) => {
+                    self.sketch.picked_curve = Some(c);
+                    self.sketch.clicks.push(click);
+                }
+                _ => {
+                    self.message = Some(("Offset: click a line, arc or circle".into(), true));
+                }
+            }
+            return;
+        }
+        if tool == Tool::RectangularPattern {
+            return;
+        }
+        let Some((id, params, _)) = self.tool_op(tool, px, click.at) else {
+            let what = match tool {
+                Tool::Fillet | Tool::Chamfer => "click a corner point where two lines meet",
+                Tool::Mirror => "select the geometry, then click a line to mirror it in",
+                Tool::CircularPattern => "select the geometry first",
+                Tool::Offset => "type a distance above 0",
+                _ => "click a curve",
+            };
+            self.message = Some((format!("{}: {what}", tool.name()), true));
+            return;
+        };
+        if self.run_sketch(id, params).is_some() {
+            self.message = None;
+            self.sketch.reset_tool();
+        }
+    }
+
+    /// The preview of an editing tool under the cursor, in sketch coordinates.
+    fn edit_preview(&self, tool: Tool, hover: Point2) -> Vec<Vec<Point2>> {
+        let Some(f) = self.session.active_sketch() else {
+            return Vec::new();
+        };
+        let op = if tool == Tool::RectangularPattern {
+            self.rectangular_pattern_op().map(|(_, op)| op)
+        } else {
+            match self.sketch.hover_px {
+                Some(px) => self.tool_op(tool, px, hover).map(|(_, _, op)| op),
+                None => None,
+            }
+        };
+        let Some(op) = op else {
+            // Offset: show the picked chain's curve while the side is chosen.
+            if let Some(c) = self.sketch.picked_curve
+                && let Some(curve) = f.sketch.curve(CurveId(c))
+            {
+                return vec![curve_polyline(&f.sketch, curve)];
+            }
+            return Vec::new();
+        };
+        match op {
+            ToolOp::Trim { curve, at } => f.sketch.trim_preview(curve, at).into_iter().collect(),
+            ToolOp::Extend { curve, at } => {
+                f.sketch.extend_preview(curve, at).into_iter().collect()
+            }
+            op => self.op_polylines(&op),
+        }
+    }
+
+    /// The curves a tool would make or change, as polylines, for its preview.
+    fn op_polylines(&self, op: &ToolOp) -> Vec<Vec<Point2>> {
+        let Some(f) = self.session.active_sketch() else {
+            return Vec::new();
+        };
+        let Some((after, report)) = f.sketch.preview_tool(op) else {
+            return Vec::new();
+        };
+        report
+            .created_curves
+            .iter()
+            .chain(&report.changed_curves)
+            .filter_map(|c| after.curve(*c))
+            .filter(|c| !c.is_construction())
+            .map(|c| curve_polyline(&after, c))
+            .collect()
+    }
+
+    /// The tool box for tools that take values (fillet radius, offset distance, pattern
+    /// counts), at the viewport's top left.
+    fn sketch_tool_box(&mut self, ui: &mut egui::Ui, rect: Rect) {
+        let tool = self.sketch.tool();
+        if !matches!(
+            tool,
+            Tool::Fillet
+                | Tool::Chamfer
+                | Tool::Offset
+                | Tool::Mirror
+                | Tool::RectangularPattern
+                | Tool::CircularPattern
+                | Tool::Split
+        ) {
+            return;
+        }
+        let look = widgets::Look {
+            theme: &self.theme,
+            icons: &self.icons,
+        };
+        let mut apply = false;
+        let mut split_all = false;
+        let selected = self.session.sketch_selection.len();
+        let field = |ui: &mut egui::Ui, name: &str, text: &mut String, unit: &str| {
+            ui.horizontal(|ui| {
+                widgets::field_label(ui, look, name);
+                ui.add(egui::TextEdit::singleline(text).desired_width(64.0));
+                ui.label(egui::RichText::new(unit).color(look.c(|t| t.text_muted)));
+            });
+        };
+        let options = &mut self.sketch.options;
+        egui::Area::new(ui.scope_id().with("sketch tool box"))
+            .fixed_pos(rect.min + Vec2::new(widgets::S5, widgets::S5))
+            .order(egui::Order::Foreground)
+            .show(ui.ctx(), |ui| {
+                widgets::dialog_frame(look)
+                    .inner_margin(egui::Margin::same(widgets::S4 as i8))
+                    .show(ui, |ui| {
+                        ui.spacing_mut().item_spacing.y = widgets::S2;
+                        ui.horizontal(|ui| {
+                            let (r, _) =
+                                ui.allocate_exact_size(Vec2::splat(18.0), egui::Sense::hover());
+                            look.icon(ui, tool.icon(), r, true);
+                            ui.label(
+                                egui::RichText::new(tool.name())
+                                    .size(widgets::T_TITLE)
+                                    .color(look.c(|t| t.text)),
+                            );
+                        });
+                        match tool {
+                            Tool::Fillet => field(ui, "Radius", &mut options.radius, "mm"),
+                            Tool::Chamfer => field(ui, "Distance", &mut options.chamfer, "mm"),
+                            Tool::Offset => {
+                                field(ui, "Distance", &mut options.offset, "mm");
+                                ui.checkbox(&mut options.offset_round, "Round outside corners");
+                            }
+                            Tool::Mirror => {
+                                widgets::caption(
+                                    ui,
+                                    look,
+                                    &format!("{selected} selected · click the mirror line"),
+                                );
+                            }
+                            Tool::CircularPattern => {
+                                field(ui, "Count", &mut options.count, "");
+                                field(ui, "Angle", &mut options.angle, "°");
+                                widgets::caption(
+                                    ui,
+                                    look,
+                                    &format!("{selected} selected · click the centre"),
+                                );
+                            }
+                            Tool::RectangularPattern => {
+                                field(ui, "Columns", &mut options.columns, "");
+                                field(ui, "Spacing X", &mut options.dx, "mm");
+                                field(ui, "Rows", &mut options.rows, "");
+                                field(ui, "Spacing Y", &mut options.dy, "mm");
+                                ui.horizontal(|ui| {
+                                    widgets::caption(ui, look, &format!("{selected} selected"));
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            apply = widgets::primary_button(
+                                                ui,
+                                                look,
+                                                "Apply",
+                                                selected > 0,
+                                            )
+                                            .clicked();
+                                        },
+                                    );
+                                });
+                            }
+                            Tool::Split => {
+                                split_all =
+                                    widgets::secondary_button(ui, look, "Split All Crossings")
+                                        .clicked();
+                            }
+                            _ => {}
+                        }
+                    });
+            });
+        if apply {
+            match self.rectangular_pattern_op() {
+                Some((params, _)) => {
+                    self.run_sketch("sketch.pattern.rectangular", params);
+                }
+                None => {
+                    self.message = Some((
+                        "Rectangular Pattern: select geometry and type whole numbers".into(),
+                        true,
+                    ));
+                }
+            }
+        }
+        if split_all {
+            self.run_sketch("sketch.split", json!({}));
+        }
+    }
 }
 
 pub(crate) fn tool_hint(app: &ChamferaApp) -> &'static str {
@@ -1021,5 +1758,176 @@ mod tests {
         assert!((a - std::f64::consts::FRAC_PI_4).abs() < 1e-15);
         assert_eq!(parse_value("length", "abc"), None);
         assert_eq!(parse_value("length", "inf"), None);
+    }
+
+    fn areas(app: &mut ChamferaApp) -> Vec<f64> {
+        let g = app.session.execute("sketch.get", &json!({})).unwrap();
+        let mut a: Vec<f64> = g["profiles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["area"].as_f64().unwrap())
+            .collect();
+        a.sort_by(f64::total_cmp);
+        a
+    }
+
+    fn curve_count(app: &mut ChamferaApp) -> usize {
+        let g = app.session.execute("sketch.get", &json!({})).unwrap();
+        g["curves"].as_array().unwrap().len()
+    }
+
+    /// An exact 80 x 50 rectangle from (0, 0), drawn by command.
+    fn plate(app: &mut ChamferaApp) {
+        app.run_sketch(
+            "sketch.rectangle",
+            json!({ "x1": 0, "y1": 0, "x2": 80, "y2": 50 }),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn trim_tool_clicks_remove_the_piece_under_the_cursor() {
+        let (mut app, px) = app_on_top_plane();
+        app.run_sketch(
+            "sketch.line",
+            json!({ "x1": 0, "y1": 25, "x2": 80, "y2": 25 }),
+        )
+        .unwrap();
+        app.run_sketch(
+            "sketch.line",
+            json!({ "x1": 40, "y1": 0, "x2": 40, "y2": 50 }),
+        )
+        .unwrap();
+        app.sketch.tool = Some(Tool::Trim);
+        assert!(tool_hint(&app).contains("piece"));
+        click(&mut app, px(60.0, 25.0));
+        assert_eq!(curve_count(&mut app), 2);
+        let f = app.session.active_sketch().unwrap();
+        // The horizontal line now ends exactly at the crossing (40, 25).
+        let ends: Vec<Point2> = f.sketch.points().map(|(_, p)| p).collect();
+        assert!(
+            ends.iter()
+                .any(|p| p.distance(Point2::new(40.0, 25.0)) < 1e-9)
+        );
+        assert!(
+            !ends
+                .iter()
+                .any(|p| p.distance(Point2::new(80.0, 25.0)) < 1e-9)
+        );
+        // Clicking empty space does nothing and says what to do.
+        click(&mut app, px(10.0, 10.0));
+        assert_eq!(curve_count(&mut app), 2);
+        assert!(app.message.is_some());
+    }
+
+    #[test]
+    fn fillet_tool_clicks_round_each_corner() {
+        let (mut app, px) = app_on_top_plane();
+        plate(&mut app);
+        app.sketch.tool = Some(Tool::Fillet);
+        app.sketch.options.radius = "5".into();
+        for (x, y) in [(0.0, 0.0), (80.0, 0.0), (80.0, 50.0), (0.0, 50.0)] {
+            click(&mut app, px(x, y));
+        }
+        // 80 x 50 less (4 - π) r² at r = 5.
+        let a = areas(&mut app);
+        let expected = 4000.0 - (4.0 - std::f64::consts::PI) * 25.0;
+        assert!((a[0] - expected).abs() < 1e-6, "{a:?}");
+        // A chamfer of 2 on a fresh plate's corner takes 2 · 2 / 2.
+        let (mut app, px) = app_on_top_plane();
+        plate(&mut app);
+        app.sketch.tool = Some(Tool::Chamfer);
+        click(&mut app, px(80.0, 50.0));
+        let a = areas(&mut app);
+        assert!((a[0] - 3998.0).abs() < 1e-6, "{a:?}");
+    }
+
+    #[test]
+    fn offset_tool_takes_a_chain_then_a_side() {
+        let (mut app, px) = app_on_top_plane();
+        plate(&mut app);
+        app.sketch.tool = Some(Tool::Offset);
+        app.sketch.options.offset = "2".into();
+        click(&mut app, px(40.0, 0.0));
+        assert!(tool_hint(&app).contains("side"));
+        // The preview follows the cursor toward the outside.
+        app.sketch.hover = Some(Point2::new(40.0, -10.0));
+        app.sketch.hover_px = Some((px(40.0, -10.0).0, px(40.0, -10.0).1, 800.0, 600.0));
+        let preview = app.sketch_preview().unwrap();
+        assert!(preview.lines.len() >= 4);
+        click(&mut app, px(40.0, -10.0));
+        // Sharp corners: an 84 x 54 rectangle around the 80 x 50.
+        let a = areas(&mut app);
+        assert!((a[0] - (84.0 * 54.0 - 4000.0)).abs() < 1e-6, "{a:?}");
+        assert!(app.sketch.picked_curve.is_none());
+    }
+
+    #[test]
+    fn mirror_and_circular_pattern_tools_copy_the_selection() {
+        let (mut app, px) = app_on_top_plane();
+        app.run_sketch(
+            "sketch.line",
+            json!({ "x1": 40, "y1": 0, "x2": 40, "y2": 50 }),
+        )
+        .unwrap();
+        app.run_sketch("sketch.circle", json!({ "cx": 50, "cy": 25, "radius": 4 }))
+            .unwrap();
+        app.sketch.tool = Some(Tool::Select);
+        click(&mut app, px(54.0, 25.0));
+        assert_eq!(app.session.sketch_selection.len(), 1);
+        app.sketch.tool = Some(Tool::Mirror);
+        click(&mut app, px(40.0, 10.0));
+        let f = app.session.active_sketch().unwrap();
+        // The image of (50, 25) in x = 40 is (30, 25).
+        assert!(
+            f.sketch
+                .points()
+                .any(|(_, p)| p.distance(Point2::new(30.0, 25.0)) < 1e-9)
+        );
+        assert_eq!(curve_count(&mut app), 3);
+        // Four around the line's midpoint (40, 25).
+        app.sketch.tool = Some(Tool::Select);
+        click(&mut app, px(54.0, 25.0));
+        app.sketch.tool = Some(Tool::CircularPattern);
+        app.sketch.options.count = "4".into();
+        click(&mut app, px(40.0, 25.0));
+        assert_eq!(curve_count(&mut app), 6);
+    }
+
+    #[test]
+    fn centre_rectangle_and_three_point_arc_tools_take_their_clicks() {
+        let (mut app, px) = app_on_top_plane();
+        app.sketch.tool = Some(Tool::CentreRectangle);
+        click(&mut app, px(40.0, 25.0));
+        assert!(tool_hint(&app).contains("corner"));
+        click(&mut app, px(60.0, 35.0));
+        let a = areas(&mut app);
+        // 40 x 20 to within half a pixel per side.
+        assert!((a[0] - 800.0).abs() < 800.0 * 0.03, "{a:?}");
+        app.sketch.tool = Some(Tool::ThreePointArc);
+        click(&mut app, px(0.0, 0.0));
+        click(&mut app, px(20.0, 0.0));
+        click(&mut app, px(10.0, 10.0));
+        let f = app.session.active_sketch().unwrap();
+        assert!(
+            f.sketch
+                .curves()
+                .any(|(_, c)| matches!(c, chamfera_sketch::Curve::Arc { .. }))
+        );
+        assert!(app.sketch.clicks.is_empty());
+    }
+
+    #[test]
+    fn the_ribbon_lists_every_tool_with_an_icon_and_a_hint() {
+        for tool in CREATE_ALL.into_iter().chain(MODIFY_TOOLS) {
+            assert!(!tool.name().is_empty());
+            assert!(tool.tooltip().starts_with(tool.name()), "{tool:?}");
+            assert!(!tool.hint(0).is_empty() && !tool.hint(1).is_empty());
+            let _ = tool.icon();
+        }
+        for tool in CREATE_SHOWN {
+            assert!(CREATE_ALL.contains(&tool));
+        }
     }
 }

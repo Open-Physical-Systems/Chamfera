@@ -17,9 +17,10 @@
 //! its area (outer area minus holes). A circle inside a rectangle gives two regions: the
 //! rectangle with a circular hole, and the disc.
 //!
-//! **Limits (M2).** Curves are not split where they cross or where one ends in the middle
-//! of another (a T-junction): a junction counts only where curves share an endpoint. Crossing
-//! curves give undefined, though never panicking, results. Arcs are measured exactly; signed
+//! **Limits.** Curves are not split here where they cross or where one ends in the middle
+//! of another (a T-junction): a junction counts only where curves share an endpoint, and
+//! crossing curves give undefined, though never panicking, results. The split tool
+//! (`ToolOp::Split`, `sketch.split`) cuts such drawings into pieces first. Arcs are measured exactly; signed
 //! areas use Green's theorem on each line and arc.
 
 use crate::constraint::Constraint;

@@ -23,6 +23,24 @@ use std::f64::consts::{PI, TAU};
 /// line; a distance between (nearly) coincident points takes +X as its direction.
 const MIN_LENGTH: f64 = LINEAR_TOLERANCE;
 
+/// An endpoint shared by a line or arc `a` and an arc `b` (or the other way round), when
+/// at least one of them is an arc: the point where they touch if they are tangent.
+fn shared_end(sketch: &Sketch, a: CurveId, b: CurveId) -> Option<PointId> {
+    let ends = |c: CurveId| match sketch.curve(c)? {
+        Curve::Line { start, end, .. } | Curve::Arc { start, end, .. } => Some([*start, *end]),
+        Curve::Circle { .. } => None,
+    };
+    let (ea, eb) = (ends(a)?, ends(b)?);
+    let arcs = [a, b]
+        .iter()
+        .filter(|c| matches!(sketch.curve(**c), Some(Curve::Arc { .. })))
+        .count();
+    if arcs == 0 {
+        return None;
+    }
+    ea.into_iter().find(|p| eb.contains(p))
+}
+
 /// A radius: a circle's unknown, or an arc's centre-to-start distance.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum Radius {
@@ -566,32 +584,13 @@ fn sign_of(v: f64) -> f64 {
     if v < 0.0 { -1.0 } else { 1.0 }
 }
 
-/// Compiles the sketch into equations: each arc's equal-radius equation first (curve id
-/// order), then every constraint in id order. Branch choices (sides, inside or outside
+/// Compiles the sketch into equations: every constraint in id order, then each arc's
+/// equal-radius equation (curve id order). The arcs come last so that when constraints
+/// already imply an arc's equal radii (an arc tangent to two placed lines at its ends), it
+/// is the arc's own equation that counts as dependent, not a constraint the user added. Branch choices (sides, inside or outside
 /// tangency) are taken from the current geometry in `layout.x`.
 pub(crate) fn compile(sketch: &Sketch, layout: &Layout) -> Result<Vec<Equation>, SketchError> {
     let mut eqs = Vec::new();
-    for (_, c) in sketch.curves() {
-        if let Curve::Arc {
-            centre, start, end, ..
-        } = c
-        {
-            let (c, s, e) = (layout.p(*centre)?, layout.p(*start)?, layout.p(*end)?);
-            eqs.push(Equation {
-                residual: Residual::RadiusDiff {
-                    r1: Radius::Arc {
-                        centre: c,
-                        start: e,
-                    },
-                    r2: Radius::Arc {
-                        centre: c,
-                        start: s,
-                    },
-                },
-                owner: None,
-            });
-        }
-    }
     let x = &layout.x;
     let scale = layout.scale;
     for (id, c) in sketch.constraints() {
@@ -670,7 +669,35 @@ pub(crate) fn compile(sketch: &Sketch, layout: &Layout) -> Result<Vec<Equation>,
             Constraint::Tangent { a, b } => {
                 let a_is_line = sketch.curve(*a).is_some_and(Curve::is_line);
                 let b_is_line = sketch.curve(*b).is_some_and(Curve::is_line);
-                if a_is_line || b_is_line {
+                if let Some(shared) = shared_end(sketch, *a, *b) {
+                    // The curves meet at a common endpoint, which lies on both: tangency
+                    // is then the radius at that point being square to the line (or the
+                    // two centres being in line with it). This form stays well
+                    // conditioned, where "distance from the centre equals the radius" has a
+                    // zero gradient along the line at the touching point and would report a
+                    // freedom that is not there.
+                    let p = layout.p(shared)?;
+                    if a_is_line || b_is_line {
+                        let (line, circ) = if a_is_line { (*a, *b) } else { (*b, *a) };
+                        let (la, lb) = layout.line(sketch, line)?;
+                        let (centre, _) = layout.circular(sketch, circ)?;
+                        add(Residual::SymmetricPerp {
+                            p,
+                            q: centre,
+                            a: la,
+                            b: lb,
+                        });
+                    } else {
+                        let (c1, _) = layout.circular(sketch, *a)?;
+                        let (c2, _) = layout.circular(sketch, *b)?;
+                        add(Residual::LineDistance {
+                            p,
+                            a: c1,
+                            b: c2,
+                            value: 0.0,
+                        });
+                    }
+                } else if a_is_line || b_is_line {
                     let (line, circ) = if a_is_line { (*a, *b) } else { (*b, *a) };
                     let (la, lb) = layout.line(sketch, line)?;
                     let (centre, radius) = layout.circular(sketch, circ)?;
@@ -784,6 +811,27 @@ pub(crate) fn compile(sketch: &Sketch, layout: &Layout) -> Result<Vec<Equation>,
                     value: *value,
                 });
             }
+        }
+    }
+    for (_, c) in sketch.curves() {
+        if let Curve::Arc {
+            centre, start, end, ..
+        } = c
+        {
+            let (c, s, e) = (layout.p(*centre)?, layout.p(*start)?, layout.p(*end)?);
+            eqs.push(Equation {
+                residual: Residual::RadiusDiff {
+                    r1: Radius::Arc {
+                        centre: c,
+                        start: e,
+                    },
+                    r2: Radius::Arc {
+                        centre: c,
+                        start: s,
+                    },
+                },
+                owner: None,
+            });
         }
     }
     Ok(eqs)

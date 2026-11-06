@@ -33,7 +33,14 @@
 //! [`Sketch::profiles`] finds the closed regions bounded by non-construction curves: outer
 //! loops counter-clockwise, holes clockwise, with exact signed areas. Curves are joined only
 //! at shared (or coincident) endpoints; crossings and T-junctions in the middle of a curve
-//! are not split yet (`profile.rs`).
+//! are not split by profile detection itself (`profile.rs`); the split tool below cuts
+//! crossing curves into pieces that share points, after which their regions are found.
+//!
+//! # Tools
+//! [`Sketch::apply_tool`] runs a [`ToolOp`]: trim, extend, split at crossings, fillet,
+//! chamfer, offset, mirror, rectangular and circular patterns, centre rectangle,
+//! three-point and tangent arcs (`tools.rs`, with planar intersections in
+//! `intersect.rs`). A failed tool changes nothing.
 //!
 //! Clean room: the solver and profile code are written from textbooks and papers
 //! (Madsen, Nielsen and Tingleff on Levenberg-Marquardt; Golub and Van Loan on QR and
@@ -43,12 +50,16 @@
 mod constraint;
 mod entity;
 mod equations;
+mod intersect;
 mod linalg;
 mod profile;
 mod sketch;
 mod solver;
 #[cfg(test)]
 mod tests;
+mod tools;
+#[cfg(test)]
+mod tools_tests;
 
 pub use chamfera_geom as geom;
 pub use constraint::Constraint;
@@ -58,4 +69,7 @@ pub use sketch::{MAX_CONSTRAINTS, MAX_CURVES, MAX_POINTS, Sketch, SketchError};
 pub use solver::{
     ConstraintStatus, DETERMINED_TOLERANCE, DofReport, DragReport, MAX_DRAG_STEPS,
     MAX_GROUP_EQUATIONS, MAX_GROUP_UNKNOWNS, MAX_ITERATIONS, SOLVE_TARGET, SolveError, SolveReport,
+};
+pub use tools::{
+    MAX_PATTERN_COPIES, MAX_TOOL_CURVES, OffsetCorners, ToolError, ToolOp, ToolReport,
 };
