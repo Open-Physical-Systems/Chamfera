@@ -280,6 +280,13 @@ fn hostile_params_never_panic() {
         json!({"edges": [long], "faces": [{"feature": 4294967296u64, "face": long}], "linked": 1}),
         json!({"faces": "top", "pick": {"x": 1e300}, "edges": [null], "linked": null}),
         json!({"faces": [{"feature": 2, "face": "top"}], "edges": ["2:top 0"], "pick": {"x": 400, "y": 300, "width": 800, "height": 600}}),
+        json!({"sketch": 1, "profiles": [{"x": 0, "y": 0}], "path_sketch": 1, "path_curves": [1, 2, 99999]}),
+        json!({"sketch": 1, "profiles": [{"x": 0, "y": 0}], "path_sketch": -1, "path_curves": [-1, 1e300]}),
+        json!({"sketch": 1, "profiles": [{"x": 0, "y": 0}], "path_sketch": 1, "path_curves": "all"}),
+        json!({"sections": [{"sketch": 1, "x": 0, "y": 0}, {"sketch": 1, "x": 1e300, "y": 0}]}),
+        json!({"sections": [{"sketch": 1, "x": 5, "y": 5}, {"sketch": 99, "x": 0}], "feature": 1}),
+        json!({"sections": "two", "path_curves": null, "operation": "join", "plane": "xy", "offset": 1e300}),
+        json!({"plane": "xz", "offset": f64::NAN, "feature": 1, "path_curves": [1]}),
     ];
     for c in registry() {
         for p in &hostile {
@@ -3581,4 +3588,200 @@ fn projecting_needs_a_sketch_and_real_edges() {
         s.execute("sketch.project", &json!({"edges": ["2:top 1"]}))
             .is_err()
     );
+}
+
+/// A circle of radius `r` on the YZ plane at the origin (sketch 1) and the L path (sketch
+/// 2, on XY): 30 along +x, a quarter arc of radius 20 about (30, 20), 30 along +y.
+fn sweep_design(r: f64) -> (Session, Vec<u64>) {
+    let mut s = Session::new();
+    s.execute("sketch.create", &json!({"plane": "yz"})).unwrap();
+    s.execute("sketch.circle", &json!({"cx": 0, "cy": 0, "radius": r}))
+        .unwrap();
+    s.execute("sketch.finish", &json!({})).unwrap();
+    s.execute("sketch.create", &json!({"plane": "xy"})).unwrap();
+    let mut path = Vec::new();
+    for (cmd, p) in [
+        ("sketch.line", json!({"x1": 0, "y1": 0, "x2": 30, "y2": 0})),
+        (
+            "sketch.arc",
+            json!({"cx": 30, "cy": 20, "x1": 30, "y1": 0, "x2": 50, "y2": 20}),
+        ),
+        (
+            "sketch.line",
+            json!({"x1": 50, "y1": 20, "x2": 50, "y2": 50}),
+        ),
+    ] {
+        path.push(s.execute(cmd, &p).unwrap()["curve"].as_u64().unwrap());
+    }
+    s.execute("sketch.finish", &json!({})).unwrap();
+    (s, path)
+}
+
+#[test]
+fn sweeping_a_circle_along_an_l_path_gives_the_sum_of_its_parts() {
+    let (mut s, path) = sweep_design(2.0);
+    let r = s
+        .execute(
+            "solid.sweep",
+            &json!({"sketch": 1, "profiles": [{"x": 0, "y": 0}], "path_sketch": 2, "path_curves": path}),
+        )
+        .unwrap();
+    // π r² (30 + 10π + 30), Pappus for the quarter arc of radius 20.
+    let v = r["solids"][0]["volume"].as_f64().unwrap();
+    let exact = std::f64::consts::PI * 4.0 * (60.0 + 10.0 * std::f64::consts::PI);
+    assert!((v - exact).abs() < 1e-6 * exact, "{v} vs {exact}");
+    assert!(s.feature_errors().is_empty());
+    assert!(s.display_errors().is_empty(), "{:?}", s.display_errors());
+    // Editing the path down to the first line leaves a cylinder of π r² 30.
+    let id = r["feature"].as_u64().unwrap();
+    let r = s
+        .execute(
+            "feature.edit",
+            &json!({"feature": id, "path_curves": [path[0]]}),
+        )
+        .unwrap();
+    let v = r["solids"][0]["volume"].as_f64().unwrap();
+    assert!((v - std::f64::consts::PI * 4.0 * 30.0).abs() < 1e-6, "{v}");
+    // The design round-trips through a file.
+    let back = chamfera_doc::Document::from_json(&s.doc.to_json().unwrap()).unwrap();
+    assert_eq!(back, s.doc);
+}
+
+#[test]
+fn a_sweep_that_cannot_be_built_changes_nothing() {
+    // A profile of radius 25 cannot bend around the arc of radius 20.
+    let (mut s, path) = sweep_design(25.0);
+    let before = s.doc.clone();
+    let undo = s.undo.len();
+    let e = s
+        .execute(
+            "solid.sweep",
+            &json!({"sketch": 1, "profiles": [{"x": 0, "y": 0}], "path_sketch": 2, "path_curves": path}),
+        )
+        .unwrap_err();
+    assert!(e.to_string().contains("radius"), "{e}");
+    assert_eq!(s.doc, before);
+    assert_eq!(s.undo.len(), undo);
+    // A path curve that is not there, an empty path, a curve twice.
+    for bad in [json!([999]), json!([]), json!([1, 1])] {
+        assert!(
+            s.execute(
+                "solid.sweep",
+                &json!({"sketch": 1, "profiles": [{"x": 0, "y": 0}], "path_sketch": 2, "path_curves": bad}),
+            )
+            .is_err()
+        );
+    }
+    assert_eq!(s.doc, before);
+}
+
+#[test]
+fn picking_one_curve_of_a_path_picks_its_chain() {
+    let (s, path) = sweep_design(2.0);
+    let f = s.doc.sketch(2).unwrap();
+    let ids: Vec<u32> = path.iter().map(|p| *p as u32).collect();
+    for c in &ids {
+        assert_eq!(crate::solids::path_chain(&f.sketch, *c).len(), 3);
+    }
+}
+
+#[test]
+fn lofting_squares_and_circles_gives_frusta() {
+    let mut s = Session::new();
+    for (offset, half) in [(0.0, 10.0), (10.0, 5.0)] {
+        s.execute("sketch.create", &json!({"plane": "xy", "offset": offset}))
+            .unwrap();
+        s.execute(
+            "sketch.rectangle",
+            &json!({"x1": -half, "y1": -half, "x2": half, "y2": half}),
+        )
+        .unwrap();
+        s.execute("sketch.finish", &json!({})).unwrap();
+    }
+    for (offset, r) in [(0.0, 10.0), (10.0, 5.0)] {
+        s.execute(
+            "sketch.create",
+            &json!({"plane": "xz", "offset": offset - 100.0}),
+        )
+        .unwrap();
+        s.execute("sketch.circle", &json!({"cx": 0, "cy": 0, "radius": r}))
+            .unwrap();
+        s.execute("sketch.finish", &json!({})).unwrap();
+    }
+    let r = s
+        .execute(
+            "solid.loft",
+            &json!({"sections": [{"sketch": 1, "x": 0, "y": 0}, {"sketch": 2, "x": 0, "y": 0}]}),
+        )
+        .unwrap();
+    // h/3 (A1 + A2 + √(A1 A2)) = 10/3 (400 + 100 + 200).
+    let v = r["solids"][0]["volume"].as_f64().unwrap();
+    assert!((v - 7000.0 / 3.0).abs() < 1e-9, "{v}");
+    let r = s
+        .execute(
+            "solid.loft",
+            &json!({"sections": [{"sketch": 3, "x": 0, "y": 0}, {"sketch": 4, "x": 0, "y": 0}]}),
+        )
+        .unwrap();
+    // π h/3 (R² + R r + r²) with R = 10, r = 5, h = 10.
+    let v = r["solids"][0]["volume"].as_f64().unwrap();
+    let exact = std::f64::consts::PI * 10.0 / 3.0 * 175.0;
+    assert!((v - exact).abs() < 1e-9 * exact, "{v}");
+    assert!(s.display_errors().is_empty(), "{:?}", s.display_errors());
+    // A square to a circle has no exact surface yet: refused, nothing changes.
+    let before = s.doc.clone();
+    let undo = s.undo.len();
+    assert!(
+        s.execute(
+            "solid.loft",
+            &json!({"sections": [{"sketch": 1, "x": 0, "y": 0}, {"sketch": 3, "x": 0, "y": 0}]}),
+        )
+        .is_err()
+    );
+    assert!(
+        s.execute(
+            "solid.loft",
+            &json!({"sections": [{"sketch": 1, "x": 0, "y": 0}]}),
+        )
+        .is_err()
+    );
+    assert_eq!(s.doc, before);
+    assert_eq!(s.undo.len(), undo);
+    // The sketches are in use by the lofts.
+    assert!(!s.doc.sketch_users(2).is_empty());
+}
+
+#[test]
+fn the_swept_pipe_and_loft_example_has_its_exact_volumes() {
+    let text = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../examples/swept-pipe-and-loft.json"
+    ))
+    .unwrap();
+    let steps: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let mut s = Session::new();
+    for step in steps.as_array().unwrap() {
+        let params = step.get("params").cloned().unwrap_or(json!({}));
+        s.execute(step["command"].as_str().unwrap(), &params)
+            .unwrap();
+    }
+    let pi = std::f64::consts::PI;
+    let v: Vec<f64> = s
+        .solids()
+        .iter()
+        .map(|x| x.body.volume().unwrap())
+        .collect();
+    // Pipe: annulus π(6² - 4²) along 40 + 15π + 40 (Pappus for the bend of radius 30).
+    // Squares 40 -> 20 over 30 and 20 -> 30 over 20: 30/3 (1600 + 400 + 800) +
+    // 20/3 (400 + 900 + 600). Cone r 15 -> 8 over 25: π 25/3 (225 + 120 + 64).
+    let exact = [
+        20.0 * pi * (80.0 + 15.0 * pi),
+        28_000.0 + 38_000.0 / 3.0,
+        pi * 25.0 / 3.0 * 409.0,
+    ];
+    assert_eq!(v.len(), 3);
+    for (a, b) in v.iter().zip(exact) {
+        assert!((a - b).abs() < 1e-6 * b, "{a} vs {b}");
+    }
+    assert!(s.display_errors().is_empty());
 }

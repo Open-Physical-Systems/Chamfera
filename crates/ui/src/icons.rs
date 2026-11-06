@@ -66,6 +66,7 @@ pub enum Icon {
     Line,
     Mass,
     Measure,
+    Loft,
     Mirror,
     MirrorBody,
     Move,
@@ -92,6 +93,7 @@ pub enum Icon {
     Slot,
     Split,
     Spline,
+    Sweep,
     Trim,
     Undo,
     ViewFront,
@@ -103,7 +105,7 @@ pub enum Icon {
 
 impl Icon {
     #[cfg(test)]
-    pub const ALL: [Icon; 80] = [
+    pub const ALL: [Icon; 82] = [
         Icon::Arc,
         Icon::ArcTangent,
         Icon::ArcThreePoint,
@@ -151,6 +153,7 @@ impl Icon {
         Icon::Line,
         Icon::Mass,
         Icon::Measure,
+        Icon::Loft,
         Icon::Mirror,
         Icon::MirrorBody,
         Icon::Move,
@@ -177,6 +180,7 @@ impl Icon {
         Icon::Slot,
         Icon::Split,
         Icon::Spline,
+        Icon::Sweep,
         Icon::Trim,
         Icon::Undo,
         Icon::ViewFront,
@@ -230,6 +234,8 @@ impl Icon {
             Icon::Home => master!("home"),
             Icon::ImportMesh => master!("import_mesh"),
             Icon::Line => master!("line"),
+            Icon::Loft => master!("loft"),
+            Icon::Sweep => master!("sweep"),
             Icon::Mass => master!("mass"),
             Icon::Measure => master!("measure"),
             Icon::New => master!("new"),

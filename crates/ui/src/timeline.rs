@@ -200,6 +200,20 @@ impl ChamferaApp {
                         if sh.faces.len() == 1 { "" } else { "s" }
                     ),
                 ),
+                FeatureKind::Sweep(w) => (
+                    Icon::Sweep,
+                    format!(
+                        "Sweep · from {} along {} curve{} of {}",
+                        sketch_name(w.sketch),
+                        w.path.len(),
+                        if w.path.len() == 1 { "" } else { "s" },
+                        sketch_name(w.path_sketch)
+                    ),
+                ),
+                FeatureKind::Loft(l) => (
+                    Icon::Loft,
+                    format!("Loft · through {} profiles", l.sections.len()),
+                ),
             };
             items.push(Item {
                 id: f.id,
@@ -1016,6 +1030,8 @@ impl ChamferaApp {
             FeatureKind::Mirror(m) => (crate::transform_ui::mirror_details(m), None),
             FeatureKind::Move(m) => (crate::transform_ui::move_details(m), None),
             FeatureKind::Shell(sh) => (sh.thickness.clone(), None),
+            FeatureKind::Sweep(w) => (format!("{} curves", w.path.len()), None),
+            FeatureKind::Loft(l) => (format!("{} profiles", l.sections.len()), None),
         };
         self.timeline.editing = Some(FeatureEdit {
             feature: id,
@@ -1046,6 +1062,8 @@ impl ChamferaApp {
             FeatureKind::Pattern(_) => "Count",
             FeatureKind::Mirror(_) | FeatureKind::Move(_) => "Definition",
             FeatureKind::Shell(_) => "Thickness",
+            FeatureKind::Sweep(_) => "Path",
+            FeatureKind::Loft(_) => "Profiles",
             _ => "Size",
         };
         const WIDTH: f32 = 300.0;
@@ -1059,10 +1077,11 @@ impl ChamferaApp {
         };
         let mut ok = false;
         let mut cancel = false;
-        let icon = if revolve {
-            Icon::Revolve
-        } else {
-            Icon::Extrude
+        let icon = match feature.kind {
+            FeatureKind::Sweep(_) => Icon::Sweep,
+            FeatureKind::Loft(_) => Icon::Loft,
+            _ if revolve => Icon::Revolve,
+            _ => Icon::Extrude,
         };
         let title = format!("{}: {name}", label("feature.edit"));
         egui::Window::new("Edit Feature")

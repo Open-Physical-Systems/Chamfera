@@ -14,8 +14,8 @@ pub use construct::{
 };
 pub use feature::{
     Blend, BlendKind, Extrude, ExtrudeDirection, ExtrudeExtent, ExtrudeTo, ExtrudeValues, Feature,
-    FeatureKind, Hole, HoleKind, HoleSizes, Mirror, MirrorPlane, Move, MoveTransform, Operation,
-    Pattern, PatternLayout, Revolve, Shell,
+    FeatureKind, Hole, HoleKind, HoleSizes, Loft, LoftSection, Mirror, MirrorPlane, Move,
+    MoveTransform, Operation, Pattern, PatternLayout, Revolve, Shell, Sweep,
 };
 pub use imported::ImportedBody;
 pub use joint::{EdgeEnd, Joint, JointKind, JointOrigin, OriginAt};
@@ -51,6 +51,7 @@ use thiserror::Error;
 /// - 16: the timeline: an explicit build order of sketches and features, the rollback
 ///   marker and groups (`timeline`). Older files open in id order with the marker at
 ///   the end, as their timeline showed them.
+/// - 17: sweeps along a path and lofts between profiles.
 /// - 19: projected (linked) sketch curves and ellipses.
 pub const FORMAT_VERSION: u32 = 19;
 /// The tag every design file starts with, so other JSON is not mistaken for a design.

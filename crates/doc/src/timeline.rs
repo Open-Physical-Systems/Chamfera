@@ -78,10 +78,8 @@ fn edge_features(edge: &str) -> Vec<u32> {
 
 /// The sketches and features a feature uses, sorted.
 pub fn kind_dependencies(kind: &FeatureKind) -> Vec<u32> {
-    let mut deps = Vec::new();
-    if let Some(s) = kind.sketch() {
-        deps.push(s);
-    }
+    // Every sketch it uses: a sweep's profile and path, a loft's sections.
+    let mut deps = kind.sketches();
     match kind {
         FeatureKind::Pattern(p) => {
             deps.push(p.source);
@@ -113,6 +111,8 @@ pub fn kind_dependencies(kind: &FeatureKind) -> Vec<u32> {
         // Bodies are named, not numbered: a move (or a mirror of bodies) finds them by
         // name when it is built, and reports a missing one there.
         FeatureKind::Move(_) => {}
+        // Their sketches (profile, path, sections) are listed above.
+        FeatureKind::Sweep(_) | FeatureKind::Loft(_) => {}
     }
     deps.sort_unstable();
     deps.dedup();

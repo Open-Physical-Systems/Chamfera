@@ -38,6 +38,7 @@ mod sketch_shapes;
 mod sketch_ui;
 mod solid_ui;
 mod spline_ui;
+mod sweep_ui;
 mod timeline;
 mod transform_ui;
 mod viewcube;
@@ -485,6 +486,14 @@ impl ChamferaApp {
             self.inspect_click(x, y, w, h);
             return;
         }
+        if self.solid.sweep.is_some()
+            && response.clicked()
+            && let Some(pos) = response.interact_pointer_pos()
+        {
+            let (x, y) = local(pos);
+            self.sweep_click(x, y, w, h);
+            return;
+        }
         if self.solid.shell.is_some()
             && response.clicked()
             && let Some(pos) = response.interact_pointer_pos()
@@ -585,6 +594,9 @@ impl ChamferaApp {
                 style: chamfera_render::OverlayStyle::Highlight,
                 ..picked
             });
+        }
+        if let Some(picked) = self.sweep_overlay() {
+            self.session.scene.overlays.push(picked);
         }
         let picks = self.pick_overlays();
         self.session.scene.overlays.extend(picks);
@@ -819,6 +831,7 @@ impl eframe::App for ChamferaApp {
             self.transform_dialog(&ctx);
             self.inspect_dialog(&ctx);
             self.shell_dialog(&ctx);
+            self.sweep_dialog(&ctx);
             self.feature_dialog(&ctx);
             self.timeline_error_window(&ctx);
             self.construct_dialog(&ctx);

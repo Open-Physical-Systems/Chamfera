@@ -155,8 +155,8 @@ Close runners-up: selection filters and box selection (UI and NAV), splines (nee
 | Mirror | Mirror features or bodies across a plane | branch (`solid/mirror-move`) | P0 | M | engine, kernel |
 | Move / copy body | Translate or rotate a body, by drag handles or values | branch (`solid/mirror-move`: typed values; drag handles missing) | P0 | M | engine, ui |
 | Align | Move a body so one face or edge meets another | missing | P2 | S | engine |
-| Sweep | Profile along a path, with guide rail and twist options | missing | P1 | L | kernel (K12, K10) |
-| Loft | Solid through several profiles, with rails and end conditions | missing | P1 | L | kernel (K12, K10) |
+| Sweep | Profile along a path, with guide rail and twist options | partial: tangent lines and arcs, exact surfaces; no rails, twist or mitred corners | P1 | L | kernel (K12, K10) |
+| Loft | Solid through several profiles, with rails and end conditions | partial: parallel planes, matching lines and coaxial arcs (planes, cones); no rails or end conditions | P1 | L | kernel (K12, K10) |
 | Rib and web | Thin supports from an open sketch line | missing | P2 | M | kernel |
 | Emboss / deboss | Raise or sink sketch text or profiles on a face | missing | P2 | M | kernel |
 | Draft | Tilt faces by an angle from a pull direction | missing | P1 | L | kernel (K12) |
