@@ -563,3 +563,512 @@ fn three_fillets_at_one_corner_meet_in_a_sphere_octant() {
         assert_eq!(faces(&out), 10);
     }
 }
+
+/// The edge between the vertices at `p` and `q` (either way round).
+fn edge_at(b: &Body, p: Point3, q: Point3) -> EdgeId {
+    b.edges()
+        .into_iter()
+        .find(|e| {
+            let [v0, v1] = b.edge_vertices(*e).unwrap();
+            let (a, c) = (b.vertex_point(v0).unwrap(), b.vertex_point(v1).unwrap());
+            (a.coincident(p) && c.coincident(q)) || (a.coincident(q) && c.coincident(p))
+        })
+        .unwrap_or_else(|| panic!("no edge from {p:?} to {q:?}"))
+}
+
+/// The edges of face `name`'s loop `k` (0 the outer loop).
+fn loop_edges(b: &Body, name: &str, k: usize) -> Vec<EdgeId> {
+    let f = face(b, name);
+    let lp = b.face_loops(f).unwrap()[k];
+    b.loop_half_edges(lp)
+        .unwrap()
+        .into_iter()
+        .map(|h| b.half_edge_edge(h).unwrap().unwrap())
+        .collect()
+}
+
+/// The slot of length 2a + 2R and width 2R about the origin: lines y = ±R for
+/// |x| <= a, semicircles of radius R about (±a, 0).
+fn slot_edges(a: f64, r: f64) -> Vec<crate::ProfileEdge> {
+    use crate::ProfileEdge;
+    use std::f64::consts::FRAC_PI_2;
+    vec![
+        ProfileEdge::line(Point2::new(-a, -r), Point2::new(a, -r)),
+        ProfileEdge::Arc {
+            centre: Point2::new(a, 0.0),
+            radius: r,
+            start_angle: -FRAC_PI_2,
+            sweep: PI,
+        },
+        ProfileEdge::line(Point2::new(a, r), Point2::new(-a, r)),
+        ProfileEdge::Arc {
+            centre: Point2::new(-a, 0.0),
+            radius: r,
+            start_angle: FRAC_PI_2,
+            sweep: PI,
+        },
+    ]
+}
+
+#[test]
+fn the_top_rim_of_a_slot_is_filleted_by_cylinders_and_tori() {
+    // The 40 x 20 slot (lines of L = 20, semicircles of R = 10), 10 high.
+    let (l, rr, h) = (20.0, 10.0, 10.0);
+    let b = extrude(
+        &Frame::XY,
+        &Profile::new(slot_edges(l / 2.0, rr), vec![]),
+        h,
+    )
+    .unwrap();
+    let v0 = (2.0 * rr * l + PI * rr * rr) * h;
+    let rim = loop_edges(&b, "top", 0);
+    assert_eq!(rim.len(), 4);
+    for r in [1.0, 2.0, 4.0] {
+        let out = fillet(&b, &rim, r).unwrap();
+        // Along each line the section loses the box edge's (1 - π/4) r². The two
+        // semicircles are half turns about two axes, together one whole turn of the boss
+        // rim's meridian region: the square [R - r, R] x [h - r, h] minus the quarter disc
+        // about (R - r, h - r), area (1 - π/4) r², first moment about ρ = R - r of
+        // r³/2 - r³/3 = r³/6, so by Pappus 2π ((R - r)(1 - π/4) r² + r³/6). The joins are
+        // tangent, so the pieces meet in a common quarter circle and nothing else is cut.
+        let removed = 2.0 * l * (1.0 - PI / 4.0) * r * r
+            + 2.0 * PI * ((rr - r) * (1.0 - PI / 4.0) * r * r + r.powi(3) / 6.0);
+        assert_close("volume", check(&out, 0), v0 - removed);
+        // Top, bottom, four sides and four blend faces.
+        assert_eq!(faces(&out), 10);
+        // The top shrinks to the slot of R - r.
+        assert_close(
+            "top",
+            out.face_area(face(&out, "top")).unwrap(),
+            2.0 * (rr - r) * l + PI * (rr - r) * (rr - r),
+        );
+        let s = surfaces(&out);
+        assert_eq!(
+            s.iter().filter(|s| matches!(s, Surface::Torus(_))).count(),
+            2
+        );
+        assert_eq!(
+            s.iter()
+                .filter(|s| matches!(s, Surface::Cylinder(c) if (c.radius() - r).abs() < 1e-12))
+                .count(),
+            2
+        );
+    }
+    let d = 1.5;
+    let out = chamfer(&b, &rim, d).unwrap();
+    // Lines lose d²/2; the cone pieces form one turn of the boss rim's right triangle of
+    // legs d with its centroid at ρ = R - d/3: 2π (R - d/3) d²/2.
+    let removed = 2.0 * l * d * d / 2.0 + PI * d * d * (rr - d / 3.0);
+    assert_close("volume", check(&out, 0), v0 - removed);
+    assert_eq!(
+        surfaces(&out)
+            .iter()
+            .filter(|s| matches!(s, Surface::Cone(_)))
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn the_rim_of_a_slot_hole_and_of_a_rounded_rectangle_follow_pappus() {
+    // A slot-shaped hole (a = 10, R = 5) through a 60 x 40 x 10 plate: the rim is convex
+    // all round, the arcs are hole rims (the plane face lies outside the circle).
+    let (a, rr, h) = (10.0, 5.0, 10.0);
+    let plate = Profile::new(
+        polygon_edges(&[
+            Point2::new(-30.0, -20.0),
+            Point2::new(30.0, -20.0),
+            Point2::new(30.0, 20.0),
+            Point2::new(-30.0, 20.0),
+        ]),
+        vec![],
+    )
+    .with_hole(slot_edges(a, rr));
+    let b = extrude(&Frame::XY, &plate, h).unwrap();
+    let v0 = 60.0 * 40.0 * h - (4.0 * a * rr + PI * rr * rr) * h;
+    let rim = loop_edges(&b, "top", 1);
+    assert_eq!(rim.len(), 4);
+    let r = 2.0;
+    let out = fillet(&b, &rim, r).unwrap();
+    // Lines: (1 - π/4) r² over 2a each. Arcs: one whole turn of the hole rim's meridian
+    // region, the square [R, R + r] x [h - r, h] minus the quarter disc about
+    // (R + r, h - r), first moment about ρ = R of r³/2 - (π r³/4 - r³/3) (see
+    // `hole_rim_fillet_is_a_torus_and_chamfer_a_cone`).
+    let removed = 2.0 * (2.0 * a) * (1.0 - PI / 4.0) * r * r
+        + 2.0 * PI * (rr * (1.0 - PI / 4.0) * r * r + r.powi(3) * (5.0 / 6.0 - PI / 4.0));
+    assert_close("volume", check(&out, 1), v0 - removed);
+
+    // A rounded rectangle 40 x 30 with corner radius 6, 8 high: four lines and four
+    // quarter arcs about four axes, together one whole turn of the boss rim.
+    let (w, d, rc, h) = (40.0, 30.0, 6.0, 8.0);
+    use crate::ProfileEdge;
+    use std::f64::consts::FRAC_PI_2;
+    let (x0, x1, y0, y1) = (rc, w - rc, rc, d - rc);
+    let rounded = Profile::new(
+        vec![
+            ProfileEdge::line(Point2::new(x0, 0.0), Point2::new(x1, 0.0)),
+            ProfileEdge::Arc {
+                centre: Point2::new(x1, y0),
+                radius: rc,
+                start_angle: -FRAC_PI_2,
+                sweep: FRAC_PI_2,
+            },
+            ProfileEdge::line(Point2::new(w, y0), Point2::new(w, y1)),
+            ProfileEdge::Arc {
+                centre: Point2::new(x1, y1),
+                radius: rc,
+                start_angle: 0.0,
+                sweep: FRAC_PI_2,
+            },
+            ProfileEdge::line(Point2::new(x1, d), Point2::new(x0, d)),
+            ProfileEdge::Arc {
+                centre: Point2::new(x0, y1),
+                radius: rc,
+                start_angle: FRAC_PI_2,
+                sweep: FRAC_PI_2,
+            },
+            ProfileEdge::line(Point2::new(0.0, y1), Point2::new(0.0, y0)),
+            ProfileEdge::Arc {
+                centre: Point2::new(x0, y0),
+                radius: rc,
+                start_angle: PI,
+                sweep: FRAC_PI_2,
+            },
+        ],
+        vec![],
+    );
+    let b = extrude(&Frame::XY, &rounded, h).unwrap();
+    let v0 = (w * d - (4.0 - PI) * rc * rc) * h;
+    let rim = loop_edges(&b, "top", 0);
+    assert_eq!(rim.len(), 8);
+    let lines = 2.0 * (w - 2.0 * rc) + 2.0 * (d - 2.0 * rc);
+    for r in [1.0, 3.0] {
+        let out = fillet(&b, &rim, r).unwrap();
+        let removed = lines * (1.0 - PI / 4.0) * r * r
+            + 2.0 * PI * ((rc - r) * (1.0 - PI / 4.0) * r * r + r.powi(3) / 6.0);
+        assert_close("volume", check(&out, 0), v0 - removed);
+        assert_eq!(faces(&out), 18);
+    }
+    // The bottom rim too: two separate chains on one body.
+    let mut both = rim.clone();
+    both.extend(loop_edges(&b, "bottom", 0));
+    let r = 1.0;
+    let out = fillet(&b, &both, r).unwrap();
+    let removed = lines * (1.0 - PI / 4.0) * r * r
+        + 2.0 * PI * ((rc - r) * (1.0 - PI / 4.0) * r * r + r.powi(3) / 6.0);
+    assert_close("volume", check(&out, 0), v0 - 2.0 * removed);
+}
+
+/// A D: the circle of radius 10 about the origin cut by the chord y = -6 (from (-8, -6)
+/// to (8, -6)), extruded by `h`.
+fn d_shape(h: f64) -> Body {
+    let half = 0.6f64.asin();
+    let p = Profile::new(
+        vec![
+            crate::ProfileEdge::line(Point2::new(-8.0, -6.0), Point2::new(8.0, -6.0)),
+            crate::ProfileEdge::Arc {
+                centre: Point2::ORIGIN,
+                radius: 10.0,
+                start_angle: -half,
+                sweep: PI + 2.0 * half,
+            },
+        ],
+        vec![],
+    );
+    extrude(&Frame::XY, &p, h).unwrap()
+}
+
+/// Twice the signed area of the triangle `a b c`.
+fn tri2(a: (f64, f64), b: (f64, f64), c: (f64, f64)) -> f64 {
+    (b.0 - a.0) * (c.1 - a.1) - (b.1 - a.1) * (c.0 - a.0)
+}
+
+#[test]
+fn a_straight_seam_between_a_plane_and_a_cylinder_is_filleted_by_a_cylinder() {
+    let h = 10.0;
+    let b = d_shape(h);
+    let half = 0.6f64.asin();
+    let v0 = h * (100.0 / 2.0 * (PI + 2.0 * half) + 0.5 * 16.0 * 6.0);
+    let seam = edge_at(&b, Point3::new(8.0, -6.0, 0.0), Point3::new(8.0, -6.0, h));
+    let r = 2.0;
+    let out = fillet(&b, &[seam], r).unwrap();
+    // In the section: the corner P = (8, -6) between the line y = -6 and the circle
+    // x² + y² = 100. The ball centre is r above the line and r inside the circle:
+    // c = (√((10 - r)² - (6 - r)²), -6 + r) = (√48, -4). It touches the line at
+    // T_l = (√48, -6) and the circle at T_c = c · 10 / 8 = (1.25 √48, -5). The removed
+    // region is the triangle T_l P T_c plus the circle's segment over the chord P T_c
+    // (central angle θ = ∠T_c - ∠P) minus the fillet circle's segment over T_l T_c
+    // (central angle π/3: T_l - c = (0, -2), T_c - c = (√3, -1)). A segment of angle θ in
+    // a circle of radius ρ has area ρ² (θ - sin θ) / 2.
+    let s48 = 48f64.sqrt();
+    let (tl, p, tc) = ((s48, -6.0), (8.0, -6.0), (1.25 * s48, -5.0));
+    let theta = (-5.0f64).atan2(1.25 * s48) - (-6.0f64).atan2(8.0);
+    let seg = |rho: f64, t: f64| rho * rho * (t - t.sin()) / 2.0;
+    let area = tri2(tl, p, tc).abs() / 2.0 + seg(10.0, theta) - seg(r, PI / 3.0);
+    assert_close("volume", check(&out, 0), v0 - area * h);
+    let round = face(
+        &out,
+        &format!("fillet of {}", b.edge_name(seam).unwrap().unwrap()),
+    );
+    let Some((Surface::Cylinder(c), true)) = out.face_surface(round).unwrap() else {
+        panic!("the fillet is not an outward cylinder");
+    };
+    assert_close("radius", c.radius(), r);
+    let o = c.frame().origin();
+    assert_close("axis x", o.x, s48);
+    assert_close("axis y", o.y, -4.0);
+    assert!(c.frame().z().cross(chamfera_geom::Vec3::Z).length() < 1e-12);
+
+    let d = 2.0;
+    let out = chamfer(&b, &[seam], d).unwrap();
+    // T_l = (6, -6) and T_c at chord d from P on the circle: the angle grows by
+    // Δ = 2 asin(d / 20). Removed: the triangle plus the circle's segment over P T_c.
+    let delta = 2.0 * (d / 20.0).asin();
+    let tc = (10.0 * (-half + delta).cos(), 10.0 * (-half + delta).sin());
+    let area = tri2((6.0, -6.0), p, tc).abs() / 2.0 + seg(10.0, delta);
+    assert_close("volume", check(&out, 0), v0 - area * h);
+    // A ball too large for the chord face is refused.
+    let big = fillet(&b, &[seam], 9.0);
+    assert!(
+        matches!(big, Err(KernelError::InvalidInput(_))),
+        "{:?}",
+        big.err()
+    );
+}
+
+#[test]
+fn an_extruded_spline_edge_is_filleted_by_its_2d_fillet_extruded() {
+    // The plate under the parabola through (30, 10), (15, 16), (0, 10): equal chords give
+    // the fit parameters 0, ½, 1, so the quadratic is x = 30 (1 - t),
+    // y = 10 + 24 t (1 - t), i.e. y(x) = 10 + k x (30 - x) with k = 24/900. Closed by
+    // the lines (0, 10) - (0, 0) - (30, 0) - (30, 10) and extruded by h = 5.
+    let h = 5.0;
+    let s = chamfera_geom::BSplineCurve2::interpolate(
+        &[
+            Point2::new(30.0, 10.0),
+            Point2::new(15.0, 16.0),
+            Point2::new(0.0, 10.0),
+        ],
+        None,
+        None,
+    )
+    .unwrap();
+    let p = Profile::new(
+        vec![
+            crate::ProfileEdge::line(Point2::new(0.0, 0.0), Point2::new(30.0, 0.0)),
+            crate::ProfileEdge::line(Point2::new(30.0, 0.0), Point2::new(30.0, 10.0)),
+            crate::ProfileEdge::Spline(s),
+            crate::ProfileEdge::line(Point2::new(0.0, 10.0), Point2::new(0.0, 0.0)),
+        ],
+        vec![],
+    );
+    let b = extrude(&Frame::XY, &p, h).unwrap();
+    let k = 24.0 / 900.0;
+    let y = |x: f64| 10.0 + k * x * (30.0 - x);
+    let dy = |x: f64| k * (30.0 - 2.0 * x);
+    // ∫ y dx = 10 x + k (15 x² - x³/3).
+    let big_y = |x: f64| 10.0 * x + k * (15.0 * x * x - x.powi(3) / 3.0);
+    let v0 = big_y(30.0) * h;
+    assert_close("plate", b.volume().unwrap(), v0);
+    let edge = edge_at(&b, Point3::new(30.0, 10.0, 0.0), Point3::new(30.0, 10.0, h));
+    let r = 2.0;
+    let out = fillet(&b, &[edge], r).unwrap();
+    // The ball centre is r left of x = 30 and r below the parabola: from the foot
+    // (s, y(s)) along the inward normal (y'(s), -1)/√(1 + y'²), so
+    // s + r y'(s)/√(1 + y'(s)²) = 30 - r, solved by bisection on s in [20, 30].
+    let cx = |s: f64| s + r * dy(s) / (1.0 + dy(s) * dy(s)).sqrt();
+    let (mut lo, mut hi) = (20.0, 30.0);
+    for _ in 0..200 {
+        let m = 0.5 * (lo + hi);
+        if cx(m) < 30.0 - r {
+            lo = m;
+        } else {
+            hi = m;
+        }
+    }
+    let sf = 0.5 * (lo + hi);
+    let cy = y(sf) - r / (1.0 + dy(sf) * dy(sf)).sqrt();
+    let ccx = 30.0 - r;
+    // The removed region, for s <= x <= 30, lies between the fillet arc
+    // y = cy + √(r² - (x - cx)²) (from the foot on the parabola to (30, cy)) and the
+    // parabola: ∫ y dx - cy (30 - s) - ∫ √(r² - u²) du over u from s - cx to r, with
+    // ∫ √(r² - u²) du = (u √(r² - u²) + r² asin(u / r)) / 2.
+    let disc = |u: f64| 0.5 * (u * (r * r - u * u).max(0.0).sqrt() + r * r * (u / r).asin());
+    let area = big_y(30.0) - big_y(sf) - cy * (30.0 - sf) - (disc(r) - disc(sf - ccx));
+    assert!(area > 0.0 && area < r * r);
+    let got = check(&out, 0);
+    assert!(
+        close(got, v0 - area * h, 1e-9),
+        "volume: got {got}, want {}",
+        v0 - area * h
+    );
+    // The fillet is a cylinder along z; the spline face stays an extrusion.
+    let s = surfaces(&out);
+    assert!(
+        s.iter()
+            .any(|s| matches!(s, Surface::Cylinder(c) if (c.radius() - r).abs() < 1e-12))
+    );
+    assert!(s.iter().any(|s| matches!(s, Surface::Extrusion(_))));
+    // The chamfer is planar.
+    let out = chamfer(&b, &[edge], 1.0).unwrap();
+    check(&out, 0);
+    assert!(out.volume().unwrap() < v0);
+}
+
+/// The area removed per r² by a fillet whose radius grows at `k` per unit length along a
+/// right-angled edge (see `a_variable_radius_fillet_is_a_cone`).
+fn variable_section(k: f64) -> f64 {
+    let k2 = k * k;
+    let ab = (1.0 + k2).sqrt() / (1.0 - k2).powf(1.5);
+    let phi = ((1.0 - k2) / 2.0).sqrt().asin();
+    2.0 / (1.0 - k2) - 0.5 - ab * (phi + phi.sin() * phi.cos())
+}
+
+#[test]
+fn a_variable_radius_fillet_is_a_cone() {
+    // The box edge `top 0` along x (length L = 50) between the top z = 10 and the side
+    // y = 0, radius ρ(x) = r1 + k x with k = (r2 - r1) / L. With y into the top and
+    // w = 10 - z into the side, the balls have centres (x, ρ, ρ) and radii ρ; their
+    // envelope is the cone with apex (-r1/k, 0, 0), axis (1, k, k) and cos²α =
+    // (1 + k²)/(1 + 2k²). Its section by the plane x = const is the conic
+    // y² + w² - 2k² y w - 2ρ (y + w) + ρ² = 0 (tangent to y = 0 at w = ρ and to w = 0 at
+    // y = ρ), which scales with ρ, so the removed volume is A(k) ∫ ρ² dx =
+    // A(k) L (r1² + r1 r2 + r2²)/3. In s = (y+w)/√2, d = (y-w)/√2 with ρ = 1 the conic is
+    // the ellipse (1-k²)(s - s0)² + (1+k²) d² = (1+k²)/(1-k²), s0 = √2/(1-k²), with
+    // semi-axes a = √(1+k²)/(1-k²) and b = 1/√(1-k²); the region between the corner and
+    // the near arc for |d| <= 1/√2 has area
+    // A = 2/(1-k²) - 1/2 - a b (φ + sin φ cos φ), sin φ = √((1-k²)/2), which is 1 - π/4
+    // at k = 0 (the constant fillet).
+    let b = block();
+    let e = edge(&b, "top 0");
+    let (r1, r2, l) = (1.0, 3.0, 50.0);
+    // The formula is symmetric in r1 and r2, so either end may be the first vertex.
+    let out = fillet_variable(&b, e, r1, r2).unwrap();
+    let k = (r2 - r1) / l;
+    let removed = variable_section(k) * l * (r1 * r1 + r1 * r2 + r2 * r2) / 3.0;
+    assert_close("volume", check(&out, 0), 15000.0 - removed);
+    // Not the cylinder's section times the mean square radius: A(k) differs from
+    // 1 - π/4 at second order in k.
+    assert!((variable_section(k) - (1.0 - PI / 4.0)).abs() > 1e-6);
+    let round = face(&out, "fillet of top 0");
+    let Some((Surface::Cone(c), true)) = out.face_surface(round).unwrap() else {
+        panic!("the variable fillet is not an outward cone");
+    };
+    // The apex lies on the edge's line, where the radius would be zero.
+    let apex = c.apex();
+    assert!(
+        apex.y.abs() < 1e-9 && (apex.z - 10.0).abs() < 1e-9,
+        "{apex:?}"
+    );
+    let [v0, _] = b.edge_vertices(e).unwrap();
+    let x0 = b.vertex_point(v0).unwrap().x;
+    let sign = if x0 < 25.0 { 1.0 } else { -1.0 };
+    assert_close("apex", apex.x, x0 - sign * r1 / k);
+    // Equal radii are the constant fillet; hostile radii and other edges are refused.
+    let same = fillet_variable(&b, e, 2.0, 2.0).unwrap();
+    assert_close(
+        "constant",
+        same.volume().unwrap(),
+        15000.0 - (1.0 - PI / 4.0) * 4.0 * 50.0,
+    );
+    for bad in [0.0, -1.0, f64::NAN, 1e300] {
+        assert!(matches!(
+            fillet_variable(&b, e, 1.0, bad),
+            Err(KernelError::InvalidInput(_))
+        ));
+    }
+    assert!(matches!(
+        fillet_variable(&b, e, 1.0, 12.0),
+        Err(KernelError::InvalidInput(_))
+    ));
+    let slot = extrude(
+        &Frame::XY,
+        &Profile::new(slot_edges(10.0, 10.0), vec![]),
+        10.0,
+    )
+    .unwrap();
+    let arc = loop_edges(&slot, "top", 0)[1];
+    assert!(matches!(
+        fillet_variable(&slot, arc, 1.0, 2.0),
+        Err(KernelError::Unsupported(_))
+    ));
+}
+
+#[test]
+fn blends_without_an_exact_surface_are_refused_and_leave_the_body_alone() {
+    // Two equal pipes in a T: the main one along x, the branch along z ending on its axis.
+    let main = extrude(
+        &Frame::YZ.with_origin(Point3::new(-20.0, 0.0, 0.0)).unwrap(),
+        &Profile::circle(Point2::ORIGIN, 5.0),
+        40.0,
+    )
+    .unwrap();
+    let branch = extrude(&Frame::XY, &Profile::circle(Point2::ORIGIN, 5.0), 20.0).unwrap();
+    let t = crate::union(&main, &branch).unwrap();
+    let before = (t.summary(), t.volume().unwrap());
+    let joins: Vec<EdgeId> = t
+        .edges()
+        .into_iter()
+        .filter(|e| {
+            let [a, c] = t.edge_faces(*e).unwrap();
+            let cyl = |f| matches!(t.face_surface(f).unwrap(), Some((Surface::Cylinder(_), _)));
+            a != c && cyl(a) && cyl(c)
+        })
+        .collect();
+    assert!(!joins.is_empty());
+    for e in &joins {
+        for result in [fillet(&t, &[*e], 1.0), chamfer(&t, &[*e], 1.0)] {
+            let Err(KernelError::Unsupported(why)) = result else {
+                panic!("a pipe junction blend was not refused");
+            };
+            assert!(why.contains("NURBS"), "{why}");
+        }
+    }
+    assert_eq!((t.summary(), t.volume().unwrap()), before);
+    // The pipes' own end rims are still plain boss rims.
+    check(&fillet(&t, &[edge(&t, "bottom 0")], 1.0).unwrap(), 0);
+
+    // A cylinder cut by an oblique plane: its rim is an ellipse.
+    let cyl = extrude(&Frame::XY, &Profile::circle(Point2::ORIGIN, 5.0), 20.0).unwrap();
+    let tilted = Frame::from_normal(
+        Point3::new(0.0, 0.0, 15.0),
+        chamfera_geom::Vec3::new(0.3, 0.0, 1.0),
+    )
+    .unwrap();
+    let (low, _) = crate::split_body(&cyl, &tilted, "cut").unwrap();
+    let low = if low.volume().unwrap() > 0.5 * cyl.volume().unwrap() {
+        low
+    } else {
+        crate::split_body(&cyl, &tilted, "cut").unwrap().1
+    };
+    let ellipse = low
+        .edges()
+        .into_iter()
+        .find(|e| {
+            matches!(
+                low.edge_curve(*e).unwrap(),
+                Some((Curve::Ellipse(_) | Curve::EllipticalArc(_), _, _))
+            )
+        })
+        .unwrap();
+    let before = (low.summary(), low.volume().unwrap());
+    let Err(KernelError::Unsupported(why)) = fillet(&low, &[ellipse], 1.0) else {
+        panic!("an elliptical rim fillet was not refused");
+    };
+    assert!(why.contains("NURBS"), "{why}");
+    assert_eq!((low.summary(), low.volume().unwrap()), before);
+
+    // A slot's line filleted alone stops at the tangent join, where the end face is the
+    // curved side: refused, not guessed.
+    let slot = extrude(
+        &Frame::XY,
+        &Profile::new(slot_edges(10.0, 10.0), vec![]),
+        10.0,
+    )
+    .unwrap();
+    let line = loop_edges(&slot, "top", 0)[0];
+    assert!(matches!(
+        fillet(&slot, &[line], 1.0),
+        Err(KernelError::Unsupported(_))
+    ));
+}

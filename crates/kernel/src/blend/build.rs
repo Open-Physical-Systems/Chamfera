@@ -15,8 +15,8 @@
 //! New vertices and edges are identified by what made them ([`VKey`], [`EKey`]), so the
 //! faces that share one find the same entity.
 
-use super::rim::RimBlend;
-use super::{Kind, bounded};
+use super::rim::{AXIS_PARALLEL_TOLERANCE, RimBlend};
+use super::{Kind, bounded, ruled};
 use crate::topology::{ListEdge, ListFace, ListVertex};
 use crate::{
     Body, Circle3, Curve, EdgeId, Ellipse3, FaceId, HalfEdgeId, KernelError, KernelResult,
@@ -83,7 +83,8 @@ pub(super) struct FacePlane {
     pub normal: Vec3,
 }
 
-/// A straight edge between two planar faces.
+/// A straight edge between two faces ruled along it (planes, cylinders along it,
+/// extruded splines along it; see `ruled.rs`).
 #[derive(Debug, Clone, Copy)]
 pub(super) struct LineBlend {
     /// `faces[0]` holds the edge's first half-edge (running from `ends[0]` to `ends[1]`).
@@ -92,22 +93,46 @@ pub(super) struct LineBlend {
     pub points: [Point3; 2],
     /// Unit direction from `ends[0]` to `ends[1]`.
     pub dir: Vec3,
-    /// Unit directions from the edge into each face, perpendicular to it.
-    pub inward: [Vec3; 2],
-    /// Outward unit normals of the faces.
+    /// Outward unit normals of the faces at the edge.
     pub normal: [Vec3; 2],
-    pub setback: f64,
+    /// From the edge to each face's contact line at each end: `contact[end][face]`.
+    pub contact: [[Vec3; 2]; 2],
+    /// From the edge to the ball centre at each end (fillets).
+    pub spine: [Vec3; 2],
+    /// The fillet radius at each end (different for a variable-radius fillet).
+    pub radius: [f64; 2],
     pub convex: bool,
+    /// Both faces planar.
+    pub planar: bool,
 }
 
 impl LineBlend {
-    /// `+1` when the ball (or bevel) is inside the material (convex), `-1` outside.
-    fn side(&self) -> f64 {
-        if self.convex { 1.0 } else { -1.0 }
+    /// True for a variable-radius fillet.
+    fn variable(&self) -> bool {
+        (self.radius[0] - self.radius[1]).abs() > LINEAR_TOLERANCE
     }
-    /// The spine point (fillet axis) level with edge point `p`.
-    fn spine_at(&self, p: Point3, radius: f64) -> Point3 {
-        p + self.inward[0] * self.setback + self.normal[0] * (-self.side() * radius)
+    /// 0 at the edge's first vertex, 1 at its second.
+    fn end_index(&self, v: VertexId) -> usize {
+        usize::from(v != self.ends[0])
+    }
+    /// The index of face `f` in `faces`.
+    fn face_index(&self, f: FaceId) -> Option<usize> {
+        self.faces.iter().position(|g| *g == f)
+    }
+    /// The contact point on face `faces[i]` at end `end`.
+    fn contact_point(&self, end: usize, i: usize) -> Point3 {
+        self.points[end] + self.contact[end][i]
+    }
+    /// The ball centre at end `end`.
+    fn ball(&self, end: usize) -> Point3 {
+        self.points[end] + self.spine[end]
+    }
+    /// The unit direction of the contact line on face `faces[i]`, from end 0 to end 1.
+    fn contact_dir(&self, i: usize) -> KernelResult<Vec3> {
+        unit(
+            self.contact_point(1, i) - self.contact_point(0, i),
+            "a contact line",
+        )
     }
 }
 
@@ -128,7 +153,7 @@ impl EdgeBlend {
     fn ends(&self) -> [VertexId; 2] {
         match self {
             EdgeBlend::Line(l) => l.ends,
-            EdgeBlend::Rim(r) => [r.vertex, r.vertex],
+            EdgeBlend::Rim(r) => r.ends,
         }
     }
     fn convex(&self) -> bool {
@@ -137,20 +162,36 @@ impl EdgeBlend {
             EdgeBlend::Rim(r) => r.convex,
         }
     }
-    /// The inward direction of the edge in face `f` and the setback.
+    /// The offset from the edge to the contact line in face `f` (a constant-size blend
+    /// between planes).
     fn shift_in(&self, f: FaceId) -> Option<Vec3> {
         match self {
-            EdgeBlend::Line(l) => {
-                if l.faces[0] == f {
-                    Some(l.inward[0] * l.setback)
-                } else if l.faces[1] == f {
-                    Some(l.inward[1] * l.setback)
-                } else {
-                    None
-                }
-            }
+            EdgeBlend::Line(l) => l.face_index(f).map(|i| l.contact[0][i]),
             EdgeBlend::Rim(_) => None,
         }
+    }
+    /// The contact point on face `f` at end vertex `v` (at point `vp`).
+    fn contact_at(&self, f: FaceId, v: VertexId, vp: Point3) -> KernelResult<Point3> {
+        match self {
+            EdgeBlend::Line(l) => {
+                let i = l
+                    .face_index(f)
+                    .ok_or_else(|| internal("a blend is not on its face"))?;
+                Ok(l.contact_point(l.end_index(v), i))
+            }
+            EdgeBlend::Rim(r) => r.contact_point(f, vp),
+        }
+    }
+    /// The ball centre at end vertex `v` (at point `vp`).
+    fn ball_at(&self, v: VertexId, vp: Point3) -> KernelResult<Point3> {
+        match self {
+            EdgeBlend::Line(l) => Ok(l.ball(l.end_index(v))),
+            EdgeBlend::Rim(r) => r.ball_at(vp),
+        }
+    }
+    /// A plain blend between planes: constant size, both faces planar.
+    fn planar(&self) -> bool {
+        matches!(self, EdgeBlend::Line(l) if l.planar && !l.variable())
     }
 }
 
@@ -163,6 +204,9 @@ struct VertexBlend {
     faces: Vec<FaceId>,
     /// The ball touching all three faces (fillets where two or three edges meet).
     center: Option<Point3>,
+    /// Where two blends continue each other tangentially: the ball centre there and the
+    /// edges' common tangent, the normal of the plane of their common section.
+    tangent: Option<(Point3, Vec3)>,
 }
 
 /// The blend being built.
@@ -170,6 +214,8 @@ pub(super) struct Blend<'a> {
     body: &'a Body,
     kind: Kind,
     size: f64,
+    /// The radii at the first and last vertex of the one edge of a variable-radius fillet.
+    variable: Option<[f64; 2]>,
     edges: BTreeMap<EdgeId, EdgeBlend>,
     planes: HashMap<FaceId, FacePlane>,
     vertices: BTreeMap<VertexId, VertexBlend>,
@@ -314,11 +360,13 @@ impl<'a> Blend<'a> {
         selected: &BTreeSet<EdgeId>,
         size: f64,
         kind: Kind,
+        variable: Option<[f64; 2]>,
     ) -> KernelResult<Blend<'a>> {
         let mut b = Blend {
             body,
             kind,
             size,
+            variable,
             edges: BTreeMap::new(),
             planes: HashMap::new(),
             vertices: BTreeMap::new(),
@@ -360,58 +408,72 @@ impl<'a> Blend<'a> {
         let Some((curve, _, _)) = body.edge_curve(e)? else {
             return Err(internal(format!("{label} has no curve")));
         };
-        let (pa, pb) = match (pa, pb, curve) {
-            (Some(pa), Some(pb), Curve::Line(_) | Curve::Segment(_)) => (pa, pb),
-            (_, _, Curve::Circle(_) | Curve::Arc(_)) if pa.is_some() != pb.is_some() => {
+        let surface_word = |f: FaceId| -> KernelResult<String> {
+            Ok(match body.face_surface(f)? {
+                Some((Surface::Plane(_), _)) => "a plane",
+                Some((Surface::Cylinder(_), _)) => "a cylinder",
+                Some((Surface::Cone(_), _)) => "a cone",
+                Some((Surface::Sphere(_), _)) => "a sphere",
+                Some((Surface::Torus(_), _)) => "a torus",
+                Some((Surface::Extrusion(_), _)) => "an extruded spline",
+                None => "no surface",
+            }
+            .to_owned())
+        };
+        match curve {
+            Curve::Line(_) | Curve::Segment(_) => {}
+            Curve::Circle(_) | Curve::Arc(_) if pa.is_some() != pb.is_some() => {
+                if self.variable.is_some() {
+                    return Err(unsupported(format!(
+                        "{label}: variable-radius fillets are supported on straight edges between planes only"
+                    )));
+                }
                 return Ok(EdgeBlend::Rim(RimBlend::analyse(
                     body, e, self.kind, self.size,
                 )?));
             }
-            _ => {
+            Curve::Ellipse(_) | Curve::EllipticalArc(_) | Curve::BSpline(_)
+                if pa.is_some() || pb.is_some() =>
+            {
                 return Err(unsupported(format!(
-                    "{label}: only straight edges between two planar faces and circular rims between a plane and a perpendicular cylinder can be blended so far"
+                    "{label} is a curve where a plane meets {} at an angle: the rolling-ball surface along it is neither a cylinder nor a torus but a free-form surface, which needs NURBS blend surfaces the kernel does not have yet",
+                    surface_word(if pa.is_some() { fb } else { fa })?
                 )));
             }
-        };
+            _ => {
+                return Err(unsupported(format!(
+                    "{label} lies between {} and {}: the rolling-ball blend of two curved faces meeting along a curve has no exact surface and needs NURBS blend surfaces the kernel does not have yet (where two equal pipes meet, the faces also touch at two points, where any blend would pinch to nothing)",
+                    surface_word(fa)?,
+                    surface_word(fb)?
+                )));
+            }
+        }
         let ends = body.edge_vertices(e)?;
         let points = [body.vertex_point(ends[0])?, body.vertex_point(ends[1])?];
         let dir = unit(points[1] - points[0], "a straight edge")?;
-        // Face A (first half-edge) lies on the left of `dir` seen from outside, so the
-        // direction into it is n_A × dir; face B's half-edge runs the other way.
-        let inward = [
-            unit(pa.normal.cross(dir), "the direction into a face")?,
-            unit(pb.normal.cross(-dir), "the direction into a face")?,
-        ];
-        // The angle between the faces' inward directions, measured on the side the
-        // ball sits (the material for a convex edge, the empty side for a concave one).
-        let beta = inward[0].angle_to(inward[1]).unwrap_or(0.0);
-        if beta <= ANGULAR_TOLERANCE.sqrt()
-            || std::f64::consts::PI - beta <= ANGULAR_TOLERANCE.sqrt()
-        {
-            return Err(unsupported(format!(
-                "the faces at {label} meet tangentially or fold back; there is no corner to blend"
-            )));
-        }
-        let convex = inward[0].dot(pb.normal) < 0.0;
-        let setback = match self.kind {
-            Kind::Chamfer => self.size,
-            Kind::Fillet => self.size / (0.5 * beta).tan(),
+        let radii = self.variable.unwrap_or([self.size; 2]);
+        let first = ruled::analyse(body, &label, [fa, fb], points[0], dir, self.kind, radii[0])?;
+        let r = if (radii[0] - radii[1]).abs() > LINEAR_TOLERANCE {
+            if !first.planar {
+                return Err(unsupported(format!(
+                    "{label}: variable-radius fillets are supported between two planar faces only"
+                )));
+            }
+            ruled::analyse(body, &label, [fa, fb], points[1], dir, self.kind, radii[1])?
+        } else {
+            first
         };
-        if !(setback.is_finite() && setback > LINEAR_TOLERANCE) {
-            return Err(too_large(
-                self.kind,
-                format!("its setback on {label} is not a usable length"),
-            ));
-        }
         Ok(EdgeBlend::Line(LineBlend {
             faces: [fa, fb],
             ends,
             points,
             dir,
-            inward,
-            normal: [pa.normal, pb.normal],
-            setback,
-            convex,
+            normal: first.normal,
+            contact: [first.contact, r.contact],
+            spine: [first.spine, r.spine],
+            radius: radii,
+            convex: first.convex,
+            planar: first.planar,
         }))
     }
 
@@ -441,7 +503,7 @@ impl<'a> Blend<'a> {
             .filter(|e| self.edges.contains_key(e))
             .collect();
         if let Some(rim) = blended.iter().find_map(|e| match self.edges.get(e) {
-            Some(EdgeBlend::Rim(r)) => Some(*r),
+            Some(EdgeBlend::Rim(r)) if r.closed() => Some(*r),
             _ => None,
         }) {
             let corners = rim.corners(body, &fan)?;
@@ -455,6 +517,7 @@ impl<'a> Blend<'a> {
                     blended,
                     faces,
                     center: None,
+                    tangent: None,
                 },
             );
             return Ok(());
@@ -465,11 +528,29 @@ impl<'a> Blend<'a> {
                 edges.len()
             )));
         }
+        let convexity: BTreeSet<bool> = blended
+            .iter()
+            .filter_map(|e| self.edges.get(e).map(EdgeBlend::convex))
+            .collect();
+        if blended.len() >= 2 && convexity.len() > 1 {
+            return Err(unsupported(format!(
+                "blended edges at {label} are convex and concave; such mixed corners are not supported yet"
+            )));
+        }
+        match blended.as_slice() {
+            [e] => return self.analyse_end(v, *e, &fan, blended.clone(), faces),
+            [a, b] => {
+                if let Some(tangent) = self.tangent_join(v, *a, *b)? {
+                    return self.analyse_tangent_join(v, [*a, *b], tangent, &fan, faces);
+                }
+            }
+            _ => {}
+        }
         let mut planes = Vec::with_capacity(3);
         for f in &faces {
             let Some(p) = self.plane(*f)? else {
                 return Err(unsupported(format!(
-                    "a blend ends at {label}, where {} is not planar; this is not supported yet",
+                    "blends meet at {label}, where {} is not planar; corners of several blends are supported between planes, or where blends continue each other tangentially",
                     face_label(body, *f)?
                 )));
             };
@@ -478,18 +559,17 @@ impl<'a> Blend<'a> {
         for e in &edges {
             if !is_straight(body, *e)? {
                 return Err(unsupported(format!(
-                    "a blend ends at {label}, where {} is curved; this is not supported yet",
+                    "blends meet at {label}, where {} is curved; corners of several blends are supported between straight edges, or where blends continue each other tangentially",
                     edge_label(body, *e)?
                 )));
             }
         }
-        let convexity: BTreeSet<bool> = blended
+        if blended
             .iter()
-            .filter_map(|e| self.edges.get(e).map(EdgeBlend::convex))
-            .collect();
-        if blended.len() >= 2 && convexity.len() > 1 {
+            .any(|e| !self.edges.get(e).is_some_and(EdgeBlend::planar))
+        {
             return Err(unsupported(format!(
-                "blended edges at {label} are convex and concave; such mixed corners are not supported yet"
+                "blends meet at {label} where one of them is not a constant blend between planes"
             )));
         }
         let vp = body.vertex_point(v)?;
@@ -563,6 +643,227 @@ impl<'a> Blend<'a> {
                 blended,
                 faces,
                 center,
+                tangent: None,
+            },
+        );
+        Ok(())
+    }
+
+    /// One blended edge `e` ends at `v`; the third face there (the end face) must be a
+    /// plane. Each face of `e` gets the point where its contact curve meets the end face's
+    /// plane (on the unblended edge between them); the end face gets the blend's end curve.
+    fn analyse_end(
+        &mut self,
+        v: VertexId,
+        e: EdgeId,
+        fan: &[HalfEdgeId],
+        blended: Vec<EdgeId>,
+        faces: Vec<FaceId>,
+    ) -> KernelResult<()> {
+        let body = self.body;
+        let label = vertex_label(body, v)?;
+        let blend = *self
+            .edges
+            .get(&e)
+            .ok_or_else(|| internal("a blended edge vanished"))?;
+        let own = blend.faces();
+        let Some(&end) = faces.iter().find(|f| !own.contains(f)) else {
+            return Err(internal("a blend end has no end face"));
+        };
+        let Some(plane) = self.plane(end)? else {
+            return Err(unsupported(format!(
+                "the blend of {} ends at {label} on {}, which is not planar; a blend can end only on a planar face, or continue tangentially into another blended edge",
+                edge_label(body, e)?,
+                face_label(body, end)?
+            )));
+        };
+        let vp = body.vertex_point(v)?;
+        if let EdgeBlend::Rim(r) = &blend {
+            // An arc's blend ends in its meridian section, so the end face must be the
+            // plane through the axis and the vertex.
+            let off = (r.center() - plane.origin).dot(plane.normal).abs();
+            if r.axis().dot(plane.normal).abs() > AXIS_PARALLEL_TOLERANCE || off > LINEAR_TOLERANCE
+            {
+                return Err(unsupported(format!(
+                    "the blend of the arc {} ends at {label} on {}, which is not a plane through the arc's axis; it can end only there, or continue tangentially into another blended edge",
+                    edge_label(body, e)?,
+                    face_label(body, end)?
+                )));
+            }
+        }
+        for h in fan {
+            let f = body.loop_face(body.half_edge_loop(*h)?)?;
+            let h_in = body.half_edge_prev(*h)?;
+            let (Some(e_in), Some(e_out)) = (body.half_edge_edge(h_in)?, body.half_edge_edge(*h)?)
+            else {
+                return Err(internal(format!("a loop at {label} has no edges")));
+            };
+            if f == end {
+                self.corners.insert(
+                    *h,
+                    Corner::Cap(VKey::OnEdge(e_in, v), VKey::OnEdge(e_out, v)),
+                );
+                continue;
+            }
+            let other = if e_in == e { e_out } else { e_in };
+            let p = match &blend {
+                EdgeBlend::Rim(r) => r.contact_point(f, vp)?,
+                EdgeBlend::Line(l) => {
+                    let i = l
+                        .face_index(f)
+                        .ok_or_else(|| internal("a blend is not on its face"))?;
+                    let q = l.contact_point(l.end_index(v), i);
+                    let d = l.contact_dir(i)?;
+                    let cos = d.dot(plane.normal);
+                    if cos.abs() <= ANGULAR_TOLERANCE.sqrt() {
+                        return Err(unsupported(format!(
+                            "the end face {} of {} is parallel to it",
+                            face_label(body, end)?,
+                            edge_label(body, e)?
+                        )));
+                    }
+                    q + d * ((plane.origin - q).dot(plane.normal) / cos)
+                }
+            };
+            let key = VKey::OnEdge(other, v);
+            self.insert_point(key, p, v)?;
+            self.corners.insert(*h, Corner::One(key));
+        }
+        self.vertices.insert(
+            v,
+            VertexBlend {
+                blended,
+                faces,
+                center: None,
+                tangent: None,
+            },
+        );
+        Ok(())
+    }
+
+    /// The common unit tangent at `v` when blended edges `a` and `b` continue each other
+    /// there: they share a face, their tangents at `v` are parallel and their other two
+    /// faces are tangent to each other at `v` (a G1 join of a profile, such as a slot's
+    /// line meeting its end arc).
+    fn tangent_join(&self, v: VertexId, a: EdgeId, b: EdgeId) -> KernelResult<Option<Vec3>> {
+        let body = self.body;
+        let (Some(ba), Some(bb)) = (self.edges.get(&a), self.edges.get(&b)) else {
+            return Ok(None);
+        };
+        let tangent = |e: EdgeId| -> KernelResult<Option<Vec3>> {
+            let [v0, _] = body.edge_vertices(e)?;
+            let Some((c, t0, t1)) = body.edge_curve(e)? else {
+                return Ok(None);
+            };
+            Ok(c.d1(if v0 == v { t0 } else { t1 }).normalized())
+        };
+        let (Some(ta), Some(tb)) = (tangent(a)?, tangent(b)?) else {
+            return Ok(None);
+        };
+        if ta.cross(tb).length() > AXIS_PARALLEL_TOLERANCE {
+            return Ok(None);
+        }
+        let (fa, fb) = (ba.faces(), bb.faces());
+        let Some(&shared) = fa.iter().find(|f| fb.contains(f)) else {
+            return Ok(None);
+        };
+        let (Some(&oa), Some(&ob)) = (
+            fa.iter().find(|f| **f != shared),
+            fb.iter().find(|f| **f != shared),
+        ) else {
+            return Ok(None);
+        };
+        let vp = body.vertex_point(v)?;
+        let normal = |f: FaceId| -> KernelResult<Option<Vec3>> {
+            let Some((s, same)) = body.face_surface(f)? else {
+                return Ok(None);
+            };
+            let q = s.parameters(vp);
+            let n = s.normal_at(q.u, q.v);
+            Ok(Some(if same { n } else { -n }))
+        };
+        let (Some(na), Some(nb)) = (normal(oa)?, normal(ob)?) else {
+            return Ok(None);
+        };
+        if na.cross(nb).length() > AXIS_PARALLEL_TOLERANCE || na.dot(nb) <= 0.0 {
+            return Ok(None);
+        }
+        Ok(Some(ta))
+    }
+
+    /// Two blends continuing each other tangentially at `v`: both have the same section
+    /// there (the same ball and the same contact points), which becomes their common end
+    /// curve. The shared face's corner is the common contact point on it; the unblended
+    /// edge between the other two faces is cut short at their common contact point.
+    fn analyse_tangent_join(
+        &mut self,
+        v: VertexId,
+        pair: [EdgeId; 2],
+        tangent: Vec3,
+        fan: &[HalfEdgeId],
+        faces: Vec<FaceId>,
+    ) -> KernelResult<()> {
+        let body = self.body;
+        let label = vertex_label(body, v)?;
+        let vp = body.vertex_point(v)?;
+        let mut balls = Vec::with_capacity(2);
+        for e in pair {
+            let b = self
+                .edges
+                .get(&e)
+                .ok_or_else(|| internal("a blended edge vanished"))?;
+            balls.push(b.ball_at(v, vp)?);
+        }
+        if self.kind == Kind::Fillet
+            && let [p, q] = balls[..]
+            && !p.coincident(q)
+        {
+            return Err(unsupported(format!(
+                "the fillets meeting tangentially at {label} have different sections there (faces at different angles); this is not supported yet"
+            )));
+        }
+        for h in fan {
+            let f = body.loop_face(body.half_edge_loop(*h)?)?;
+            let h_in = body.half_edge_prev(*h)?;
+            let (Some(e_in), Some(e_out)) = (body.half_edge_edge(h_in)?, body.half_edge_edge(*h)?)
+            else {
+                return Err(internal(format!("a loop at {label} has no edges")));
+            };
+            let in_blended = self.edges.contains_key(&e_in);
+            let out_blended = self.edges.contains_key(&e_out);
+            let (key, by) = match (in_blended, out_blended) {
+                (true, true) => (VKey::Corner(f, v), e_in),
+                (true, false) => (VKey::OnEdge(e_out, v), e_in),
+                (false, true) => (VKey::OnEdge(e_in, v), e_out),
+                (false, false) => {
+                    return Err(internal(format!(
+                        "a face at the tangent join {label} has no blended edge"
+                    )));
+                }
+            };
+            let b = self
+                .edges
+                .get(&by)
+                .ok_or_else(|| internal("a blended edge vanished"))?;
+            let p = b.contact_at(f, v, vp)?;
+            self.insert_point(key, p, v)?;
+            if in_blended && out_blended {
+                let other = self
+                    .edges
+                    .get(&e_out)
+                    .ok_or_else(|| internal("a blended edge vanished"))?;
+                self.insert_point(key, other.contact_at(f, v, vp)?, v)?;
+            }
+            self.corners.insert(*h, Corner::One(key));
+        }
+        let center = balls.first().copied().unwrap_or(vp);
+        self.vertices.insert(
+            v,
+            VertexBlend {
+                blended: pair.to_vec(),
+                faces,
+                center: None,
+                tangent: Some((center, tangent)),
             },
         );
         Ok(())
@@ -654,16 +955,45 @@ impl<'a> Blend<'a> {
                 continue;
             }
             let (p0, p1) = (self.point_or(&spec, k0)?, self.point_or(&spec, k1)?);
-            let old = body.vertex_point(v1)? - body.vertex_point(v0)?;
-            let new = p1 - p0;
-            if new.dot(old) <= LINEAR_TOLERANCE * old.length() || new.length() <= LINEAR_TOLERANCE {
-                return Err(too_large(
+            let consumed = || {
+                Ok::<_, KernelError>(too_large(
                     self.kind,
                     format!("it would consume {}", edge_label(body, e)?),
-                ));
+                ))
+            };
+            if matches!(curve, Curve::Line(_) | Curve::Segment(_)) {
+                let old = body.vertex_point(v1)? - body.vertex_point(v0)?;
+                let new = p1 - p0;
+                if new.dot(old) <= LINEAR_TOLERANCE * old.length()
+                    || new.length() <= LINEAR_TOLERANCE
+                {
+                    return Err(consumed()?);
+                }
+                let seg = Segment3::new(p0, p1)?;
+                spec.edge(EKey::Orig(e), k0, k1, Curve::Segment(seg), 0.0, 1.0, name)?;
+                continue;
             }
-            let seg = Segment3::new(p0, p1)?;
-            spec.edge(EKey::Orig(e), k0, k1, Curve::Segment(seg), 0.0, 1.0, name)?;
+            // A curved edge keeps its curve over a shorter range.
+            if v0 == v1 {
+                return Err(unsupported(format!(
+                    "a blend would cut the closed edge {}",
+                    edge_label(body, e)?
+                )));
+            }
+            let s0 = if k0 == VKey::Orig(v0) {
+                t0
+            } else {
+                param_on(&curve, t0, t1, p0)?
+            };
+            let s1 = if k1 == VKey::Orig(v1) {
+                t1
+            } else {
+                param_on(&curve, t0, t1, p1)?
+            };
+            if s0.partial_cmp(&s1) != Some(std::cmp::Ordering::Less) || p0.coincident(p1) {
+                return Err(consumed()?);
+            }
+            spec.edge(EKey::Orig(e), k0, k1, curve, s0, s1, name)?;
         }
 
         // Contact edges and end edges of each blend.
@@ -689,7 +1019,7 @@ impl<'a> Blend<'a> {
                         }
                         (Curve::Segment(Segment3::new(p0, p1)?), 0.0, 1.0)
                     }
-                    EdgeBlend::Rim(r) => r.contact_curve(f, self.point(k0)?)?,
+                    EdgeBlend::Rim(r) => r.contact_curve(f, self.point(k0)?, self.point(k1)?)?,
                 };
                 spec.edge(EKey::Contact(*e, f), k0, k1, curve, t0, t1, name)?;
             }
@@ -704,8 +1034,8 @@ impl<'a> Blend<'a> {
                 let (curve, t0, t1, from_x) = self.end_curve(*e, blend, v, px, py)?;
                 let (from, to) = if from_x { (x, y) } else { (y, x) };
                 let name = match blend {
-                    EdgeBlend::Rim(_) => format!("{word} of {label} seam"),
-                    EdgeBlend::Line(_) => {
+                    EdgeBlend::Rim(r) if r.closed() => format!("{word} of {label} seam"),
+                    _ => {
                         format!("{word} of {label} at {}", vertex_label(body, v)?)
                     }
                 };
@@ -770,13 +1100,7 @@ impl<'a> Blend<'a> {
             let (surface, same_sense) = match blend {
                 EdgeBlend::Line(l) => match self.kind {
                     Kind::Chamfer => (plane_of(&spec, &lp)?, true),
-                    Kind::Fillet => {
-                        let c0 = l.spine_at(l.points[0], self.size);
-                        let toward_edge = unit(l.points[0] - c0, "a fillet's spine offset")?;
-                        let frame = Frame::from_normal_and_x(c0, l.dir, -toward_edge)
-                            .ok_or_else(|| internal("a fillet's frame is degenerate"))?;
-                        (Surface::cylinder(frame, self.size)?, l.convex)
-                    }
+                    Kind::Fillet => (fillet_surface(l)?, l.convex),
                 },
                 EdgeBlend::Rim(r) => r.surface()?,
             };
@@ -897,21 +1221,36 @@ impl<'a> Blend<'a> {
         x: Point3,
         y: Point3,
     ) -> KernelResult<(Curve, f64, f64, bool)> {
+        let body = self.body;
+        let vp = body.vertex_point(v)?;
         let line = match blend {
-            EdgeBlend::Rim(r) => return r.seam_curve(x, y),
+            // A closed rim's seam, or an arc's meridian section at its end (on a plane
+            // through its axis, or where it continues tangentially).
+            EdgeBlend::Rim(r) => return r.section_curve(vp, x, y),
             EdgeBlend::Line(l) => l,
         };
         if self.kind == Kind::Chamfer {
             return Ok((Curve::Segment(Segment3::new(x, y)?), 0.0, 1.0, true));
         }
-        let body = self.body;
         let vb = self
             .vertices
             .get(&v)
             .ok_or_else(|| internal("a blend end lost its vertex"))?;
-        let vp = body.vertex_point(v)?;
+        if let Some((p, t)) = vb.tangent {
+            // The common section of two blends continuing each other: the circle of the
+            // ball there, in the plane normal to the edges' common tangent.
+            let r = line.radius[line.end_index(v)];
+            let frame = Frame::from_normal_and_x(p, t, x - p)
+                .ok_or_else(|| internal("a tangent join's section is degenerate"))?;
+            return Conic {
+                frame,
+                rx: r,
+                ry: r,
+            }
+            .arc_between(x, y, vp);
+        }
         let r = self.size;
-        let c0 = line.spine_at(line.points[0], r);
+        let c0 = line.ball(0);
         match vb.blended.len() {
             1 => {
                 // The end face: the one at v that the blended edge does not bound.
@@ -922,6 +1261,9 @@ impl<'a> Blend<'a> {
                     .planes
                     .get(end)
                     .ok_or_else(|| internal("an end face lost its plane"))?;
+                if line.variable() {
+                    return cone_section(line, plane, x, y, vp);
+                }
                 let n = plane.normal;
                 let cos = line.dir.dot(n);
                 if cos.abs() <= ANGULAR_TOLERANCE.sqrt() {
@@ -1016,6 +1358,100 @@ fn section(center: Point3, n: Vec3, dir: Vec3, r: f64) -> KernelResult<Conic> {
         rx: r / cos,
         ry: r,
     })
+}
+
+/// The fillet surface of a straight edge: the cylinder of radius `r` about the spine, or
+/// for a radius changing linearly from `r0` to `r1`, the envelope of the balls whose
+/// centres run along the straight spine from `c0` to `c1`: the cone about that spine with
+/// `sin α = (r1 - r0) / |c1 - c0|`, at distance `r0 / cos α` from the axis level with `c0`
+/// (so that the ball about `c0` touches it). The cone touches each face along the
+/// contact line (both are tangent to every ball), whose foot points run from
+/// `r0 / tan(β/2)` to `r1 / tan(β/2)` and meet at the apex on the edge's line.
+fn fillet_surface(l: &LineBlend) -> KernelResult<Surface> {
+    let c0 = l.ball(0);
+    let toward_edge = unit(l.points[0] - c0, "a fillet's spine offset")?;
+    if !l.variable() {
+        let frame = Frame::from_normal_and_x(c0, l.dir, -toward_edge)
+            .ok_or_else(|| internal("a fillet's frame is degenerate"))?;
+        return Surface::cylinder(frame, l.radius[0]);
+    }
+    let axis = l.ball(1) - c0;
+    let len = axis.length();
+    let sin = (l.radius[1] - l.radius[0]) / len;
+    if !(sin.is_finite() && sin.abs() < 1.0 - ANGULAR_TOLERANCE.sqrt()) {
+        return Err(unsupported(
+            "the fillet's radius changes faster than the edge is long",
+        ));
+    }
+    let alpha = sin.asin();
+    let frame = Frame::from_normal_and_x(c0, unit(axis, "a fillet's spine")?, -toward_edge)
+        .ok_or_else(|| internal("a fillet's frame is degenerate"))?;
+    Surface::cone(frame, l.radius[0] / alpha.cos(), alpha)
+}
+
+/// The end curve of a variable-radius fillet on its end face: the arc between `x` and
+/// `y` of the cone's section by the face's plane (an ellipse, K6).
+fn cone_section(
+    line: &LineBlend,
+    plane: &FacePlane,
+    x: Point3,
+    y: Point3,
+    near: Point3,
+) -> KernelResult<(Curve, f64, f64, bool)> {
+    let cone = fillet_surface(line)?;
+    let frame = Frame::from_normal(plane.origin, plane.normal)
+        .ok_or_else(|| internal("an end face has no plane"))?;
+    let hit = crate::intersect_surfaces(&Surface::Plane(frame), &cone)?;
+    for c in hit.curves() {
+        let conic = match &c.curve {
+            Curve::Ellipse(e) => Conic {
+                frame: *e.frame(),
+                rx: e.rx(),
+                ry: e.ry(),
+            },
+            Curve::Circle(c) => Conic {
+                frame: *c.frame(),
+                rx: c.radius(),
+                ry: c.radius(),
+            },
+            _ => continue,
+        };
+        if let Ok(arc) = conic.arc_between(x, y, near) {
+            return Ok(arc);
+        }
+    }
+    Err(unsupported(
+        "the variable-radius fillet does not end in an ellipse on its end face",
+    ))
+}
+
+/// Radians a point's angle may fall before an edge's start and still count as on it.
+const PARAM_SLACK: f64 = 1e-9;
+
+/// The parameter in `[t0, t1]` of the point `p` of an edge's curve.
+fn param_on(c: &Curve, t0: f64, t1: f64, p: Point3) -> KernelResult<f64> {
+    let angle = |frame: &Frame, rx: f64, ry: f64| {
+        let l = frame.to_local(p);
+        let a = (l.y / ry).atan2(l.x / rx);
+        crate::check::angle_from(a, t0 - PARAM_SLACK).max(t0)
+    };
+    let t = match c {
+        Curve::Line(l) => (p - l.origin()).dot(l.direction()),
+        Curve::Segment(s) => {
+            let d = s.end() - s.start();
+            (p - s.start()).dot(d) / d.dot(d)
+        }
+        Curve::Circle(k) => angle(k.frame(), k.radius(), k.radius()),
+        Curve::Arc(a) => angle(a.circle().frame(), a.circle().radius(), a.circle().radius()),
+        Curve::Ellipse(e) => angle(e.frame(), e.rx(), e.ry()),
+        Curve::EllipticalArc(a) => angle(a.ellipse().frame(), a.ellipse().rx(), a.ellipse().ry()),
+        Curve::BSpline(b) => b.closest_point(p).u,
+    };
+    let t = t.clamp(t0, t1);
+    if !c.point_at(t).coincident(p) {
+        return Err(internal("a blend's new vertex is off the edge it cuts"));
+    }
+    Ok(t)
 }
 
 fn join(a: VKey, b: VKey) -> EKey {
