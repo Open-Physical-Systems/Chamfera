@@ -19,6 +19,7 @@ egui.workspace = true
 eframe.workspace = true
 egui-wgpu.workspace = true
 serde_json.workspace = true
+resvg.workspace = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rfd.workspace = true

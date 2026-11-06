@@ -11,6 +11,7 @@ use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
 
 mod file_ui;
+pub mod icons;
 mod params_ui;
 mod sketch_ui;
 mod solid_ui;
