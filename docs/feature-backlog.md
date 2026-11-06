@@ -150,10 +150,10 @@ Close runners-up: selection filters and box selection (UI and NAV), splines (nee
 | Thread | Cosmetic thread (attribute + drawing note), later modelled thread | missing | P1 | M | doc, kernel |
 | Linear (rectangular) pattern | Features repeated in one or two directions | done | P0 | M | engine, doc |
 | Circular pattern | Features repeated around an axis | done | P0 | M | engine, doc |
-| Pattern buttons in the ribbon | UI for the pattern commands | missing | P0 | S | ui |
+| Pattern buttons in the ribbon | UI for the pattern commands | branch (`solid/mirror-move`) | P0 | S | ui |
 | Pattern on a path, pattern of bodies or faces | Further pattern kinds | missing | P2 | M | engine |
-| Mirror | Mirror features or bodies across a plane | missing | P0 | M | engine, kernel |
-| Move / copy body | Translate or rotate a body, by drag handles or values | missing | P0 | M | engine, ui |
+| Mirror | Mirror features or bodies across a plane | branch (`solid/mirror-move`) | P0 | M | engine, kernel |
+| Move / copy body | Translate or rotate a body, by drag handles or values | branch (`solid/mirror-move`: typed values; drag handles missing) | P0 | M | engine, ui |
 | Align | Move a body so one face or edge meets another | missing | P2 | S | engine |
 | Sweep | Profile along a path, with guide rail and twist options | missing | P1 | L | kernel (K12, K10) |
 | Loft | Solid through several profiles, with rails and end conditions | missing | P1 | L | kernel (K12, K10) |

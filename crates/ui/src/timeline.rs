@@ -108,6 +108,10 @@ impl ChamferaApp {
                         if b.edges.len() == 1 { "" } else { "s" }
                     ),
                 ),
+                FeatureKind::Mirror(m) => {
+                    (Icon::MirrorBody, crate::transform_ui::mirror_details(m))
+                }
+                FeatureKind::Move(m) => (Icon::Move, crate::transform_ui::move_details(m)),
             };
             Item {
                 id: f.id,
@@ -313,6 +317,14 @@ impl ChamferaApp {
             FeatureKind::Revolve(r) => (r.angle.clone(), ExtrudeDirection::Normal),
             FeatureKind::Pattern(p) => (p.count.clone(), ExtrudeDirection::Normal),
             FeatureKind::Blend(b) => (b.size.clone(), ExtrudeDirection::Normal),
+            FeatureKind::Mirror(m) => (
+                crate::transform_ui::mirror_details(m),
+                ExtrudeDirection::Normal,
+            ),
+            FeatureKind::Move(m) => (
+                crate::transform_ui::move_details(m),
+                ExtrudeDirection::Normal,
+            ),
         };
         self.timeline.editing = Some(FeatureEdit {
             feature: item.id,
@@ -340,6 +352,7 @@ impl ChamferaApp {
         let value_label = match &feature.kind {
             FeatureKind::Revolve(_) => "Angle",
             FeatureKind::Pattern(_) => "Count",
+            FeatureKind::Mirror(_) | FeatureKind::Move(_) => "Definition",
             _ => "Size",
         };
         const WIDTH: f32 = 300.0;

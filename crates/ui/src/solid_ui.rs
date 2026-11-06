@@ -46,6 +46,8 @@ pub struct SolidUi {
     pub extrude: Option<ExtrudeTool>,
     /// The Fillet or Chamfer tool.
     pub blend: Option<crate::blend_ui::BlendTool>,
+    /// The Mirror, Move or pattern tool.
+    pub transform: Option<crate::transform_ui::TransformTool>,
     /// Waiting for a click on a flat face to sketch on.
     pub pick_face: bool,
     /// `--extrude`: pick the profile under the viewport's centre on the first frame.
@@ -63,7 +65,9 @@ impl ChamferaApp {
             .iter()
             .any(|s| !s.sketch.profiles().is_empty());
         let has_solids = !self.session.solids().is_empty();
-        let tool_free = self.solid.extrude.is_none() && self.solid.blend.is_none();
+        let tool_free = self.solid.extrude.is_none()
+            && self.solid.blend.is_none()
+            && self.solid.transform.is_none();
         let extruding = self.solid.extrude.as_ref().is_some_and(|t| !t.revolve);
         let revolving = self.solid.extrude.as_ref().is_some_and(|t| t.revolve);
         let mut plane: Option<(&str, &str)> = None;
@@ -274,6 +278,7 @@ impl ChamferaApp {
             self.solid.blend = Some(crate::blend_ui::BlendTool::new(chamfer));
             self.message = Some(("Click the edges to round or bevel".into(), false));
         }
+        self.transform_group(ui, has_solids && tool_free);
         let look = self.look();
         widgets::ribbon_divider(ui, look);
         let mut import = false;

@@ -8,6 +8,7 @@ mod feature;
 mod param;
 mod select;
 mod sketch;
+mod transform;
 mod view;
 
 use crate::{CmdResult, Session};
@@ -38,6 +39,7 @@ pub fn registry() -> Vec<&'static CommandSpec> {
         param::COMMANDS,
         select::COMMANDS,
         sketch::COMMANDS,
+        transform::COMMANDS,
         view::COMMANDS,
     ] {
         all.extend(area.iter());

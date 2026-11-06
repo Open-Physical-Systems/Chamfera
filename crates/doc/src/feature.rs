@@ -141,6 +141,86 @@ pub struct Blend {
 /// Most edges one blend may hold.
 pub const MAX_BLEND_EDGES: usize = 10_000;
 
+/// The plane a mirror reflects in.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum MirrorPlane {
+    /// The XY (top) origin plane, z = 0.
+    Xy,
+    /// The XZ (front) origin plane, y = 0.
+    Xz,
+    /// The YZ (right) origin plane, x = 0.
+    Yz,
+    /// A flat face of a feature's solid, found by name at rebuild (like a sketch on a face).
+    Face { feature: u32, face: String },
+    /// Any plane, by a point on it and its normal (construction planes will refer here).
+    Plane {
+        origin: chamfera_geom::Point3,
+        normal: chamfera_geom::Vec3,
+    },
+}
+
+impl MirrorPlane {
+    /// The origin plane named `xy`, `xz` or `yz`.
+    pub fn origin(name: &str) -> Option<MirrorPlane> {
+        Some(match name {
+            "xy" => MirrorPlane::Xy,
+            "xz" => MirrorPlane::Xz,
+            "yz" => MirrorPlane::Yz,
+            _ => return None,
+        })
+    }
+}
+
+/// Mirror images of bodies or of features' shapes. Mirrored bodies are separate (new body)
+/// or joined to what they touch, so a half joined to its mirror makes a symmetric part.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Mirror {
+    /// Bodies built so far, by name (`Extrude1`), mirrored as they are at this point.
+    #[serde(default)]
+    pub bodies: Vec<String>,
+    /// Features whose own shapes are mirrored (like a pattern of them).
+    #[serde(default)]
+    pub features: Vec<u32>,
+    pub plane: MirrorPlane,
+    #[serde(default)]
+    pub operation: Operation,
+}
+
+/// How a move places bodies.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "transform", rename_all = "snake_case")]
+pub enum MoveTransform {
+    /// Along x, y and z, each an expression such as `10 mm`.
+    Translate { dx: String, dy: String, dz: String },
+    /// Turned by `angle` about the axis through `origin` along `axis` (right hand rule).
+    Rotate {
+        origin: chamfera_geom::Point3,
+        axis: chamfera_geom::Vec3,
+        angle: String,
+    },
+    /// Moved by the vector from `from` to `to`.
+    PointToPoint {
+        from: chamfera_geom::Point3,
+        to: chamfera_geom::Point3,
+    },
+}
+
+/// Moves (or copies) bodies built so far.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Move {
+    /// The bodies, by name.
+    pub bodies: Vec<String>,
+    #[serde(flatten)]
+    pub transform: MoveTransform,
+    /// Keep the originals and add moved copies.
+    #[serde(default)]
+    pub copy: bool,
+}
+
+/// Most bodies or features one mirror or move may name.
+pub const MAX_TRANSFORM_ITEMS: usize = 1_000;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum FeatureKind {
@@ -148,6 +228,8 @@ pub enum FeatureKind {
     Revolve(Revolve),
     Pattern(Pattern),
     Blend(Blend),
+    Mirror(Mirror),
+    Move(Move),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -167,7 +249,10 @@ impl FeatureKind {
         match self {
             FeatureKind::Extrude(e) => Some(e.sketch),
             FeatureKind::Revolve(r) => Some(r.sketch),
-            FeatureKind::Pattern(_) | FeatureKind::Blend(_) => None,
+            FeatureKind::Pattern(_)
+            | FeatureKind::Blend(_)
+            | FeatureKind::Mirror(_)
+            | FeatureKind::Move(_) => None,
         }
     }
 
@@ -176,7 +261,10 @@ impl FeatureKind {
         match self {
             FeatureKind::Extrude(e) => e.operation,
             FeatureKind::Revolve(r) => r.operation,
-            FeatureKind::Pattern(_) | FeatureKind::Blend(_) => Operation::NewBody,
+            FeatureKind::Mirror(m) => m.operation,
+            FeatureKind::Pattern(_) | FeatureKind::Blend(_) | FeatureKind::Move(_) => {
+                Operation::NewBody
+            }
         }
     }
 
@@ -184,7 +272,10 @@ impl FeatureKind {
         match self {
             FeatureKind::Extrude(e) => &e.profiles,
             FeatureKind::Revolve(r) => &r.profiles,
-            FeatureKind::Pattern(_) | FeatureKind::Blend(_) => &[],
+            FeatureKind::Pattern(_)
+            | FeatureKind::Blend(_)
+            | FeatureKind::Mirror(_)
+            | FeatureKind::Move(_) => &[],
         }
     }
 
@@ -197,6 +288,14 @@ impl FeatureKind {
                 BlendKind::Fillet => "Fillet",
                 BlendKind::Chamfer => "Chamfer",
             },
+            FeatureKind::Mirror(_) => "Mirror",
+            FeatureKind::Move(m) => {
+                if m.copy {
+                    "Copy"
+                } else {
+                    "Move"
+                }
+            }
         }
     }
 
@@ -206,6 +305,14 @@ impl FeatureKind {
             FeatureKind::Extrude(e) => vec![e.distance.as_str()],
             FeatureKind::Revolve(r) => vec![r.angle.as_str()],
             FeatureKind::Blend(b) => vec![b.size.as_str()],
+            FeatureKind::Mirror(_) => Vec::new(),
+            FeatureKind::Move(m) => match &m.transform {
+                MoveTransform::Translate { dx, dy, dz } => {
+                    vec![dx.as_str(), dy.as_str(), dz.as_str()]
+                }
+                MoveTransform::Rotate { angle, .. } => vec![angle.as_str()],
+                MoveTransform::PointToPoint { .. } => Vec::new(),
+            },
             FeatureKind::Pattern(p) => match &p.layout {
                 PatternLayout::Linear { spacing, .. } => vec![p.count.as_str(), spacing.as_str()],
                 PatternLayout::Circular { angle, .. } => vec![p.count.as_str(), angle.as_str()],
@@ -221,6 +328,12 @@ impl Document {
         let bad = |reason: String| DocError::BadFeature { reason };
         if let FeatureKind::Pattern(p) = kind {
             return self.check_pattern(p);
+        }
+        if let FeatureKind::Mirror(m) = kind {
+            return self.check_mirror(m);
+        }
+        if let FeatureKind::Move(m) = kind {
+            return self.check_move(m);
         }
         if let FeatureKind::Blend(b) = kind {
             if b.edges.is_empty() || b.edges.len() > MAX_BLEND_EDGES {
@@ -267,7 +380,10 @@ impl Document {
                     return Err(bad("the distance must not be 0".into()));
                 }
             }
-            FeatureKind::Pattern(_) | FeatureKind::Blend(_) => {}
+            FeatureKind::Pattern(_)
+            | FeatureKind::Blend(_)
+            | FeatureKind::Mirror(_)
+            | FeatureKind::Move(_) => {}
             FeatureKind::Revolve(r) => {
                 let a = self.evaluate_feature_value(&r.angle, expr::Dim::ANGLE)?;
                 if !a.is_finite()
@@ -340,6 +456,96 @@ impl Document {
             }
         }
         Ok(())
+    }
+
+    fn check_body_names(&self, bodies: &[String]) -> Result<(), DocError> {
+        if bodies
+            .iter()
+            .any(|b| b.trim().is_empty() || b.chars().count() > 256)
+        {
+            return Err(DocError::BadFeature {
+                reason: "a body name is empty or longer than 256 characters".into(),
+            });
+        }
+        Ok(())
+    }
+
+    fn check_mirror(&self, m: &Mirror) -> Result<(), DocError> {
+        let bad = |reason: String| DocError::BadFeature { reason };
+        let n = m.bodies.len() + m.features.len();
+        if n == 0 || n > MAX_TRANSFORM_ITEMS {
+            return Err(bad(format!(
+                "pick 1 to {MAX_TRANSFORM_ITEMS} bodies or features to mirror"
+            )));
+        }
+        self.check_body_names(&m.bodies)?;
+        for id in &m.features {
+            self.feature(*id)?;
+        }
+        match &m.plane {
+            MirrorPlane::Xy | MirrorPlane::Xz | MirrorPlane::Yz => {}
+            MirrorPlane::Face { feature, face } => {
+                self.feature(*feature)?;
+                if face.is_empty() || face.chars().count() > 256 {
+                    return Err(bad("the mirror face name is empty or too long".into()));
+                }
+            }
+            MirrorPlane::Plane { origin, normal } => {
+                if !origin.is_valid() || normal.normalized().is_none() {
+                    return Err(bad("the mirror plane needs a point and a normal".into()));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The rigid motion a move makes, checked (finite, within the working range).
+    pub fn move_transform(&self, m: &Move) -> Result<chamfera_geom::Transform, DocError> {
+        use chamfera_geom::{MAX_COORDINATE, Transform, Vec3};
+        let bad = |reason: &str| DocError::BadFeature {
+            reason: reason.into(),
+        };
+        let t = match &m.transform {
+            MoveTransform::Translate { dx, dy, dz } => {
+                let mut v = [0.0; 3];
+                for (slot, e) in v.iter_mut().zip([dx, dy, dz]) {
+                    let d = self.evaluate_feature_value(e, expr::Dim::LENGTH)?;
+                    if !d.is_finite() || d.abs() > MAX_COORDINATE {
+                        return Err(bad("each distance must be within the working range"));
+                    }
+                    *slot = d;
+                }
+                Transform::translation(Vec3::new(v[0], v[1], v[2]))
+            }
+            MoveTransform::Rotate {
+                origin,
+                axis,
+                angle,
+            } => {
+                let a = self.evaluate_feature_value(angle, expr::Dim::ANGLE)?;
+                if !origin.is_valid() || !a.is_finite() || a.abs() > 1e6 {
+                    return Err(bad("the rotation needs a point and a finite angle"));
+                }
+                Transform::rotation_about(*origin, *axis, a)
+            }
+            MoveTransform::PointToPoint { from, to } => {
+                if !from.is_valid() || !to.is_valid() {
+                    return Err(bad("both points must be within the working range"));
+                }
+                Transform::translation(*to - *from)
+            }
+        };
+        t.ok_or_else(|| bad("the move needs a non-zero axis and finite values"))
+    }
+
+    fn check_move(&self, m: &Move) -> Result<(), DocError> {
+        if m.bodies.is_empty() || m.bodies.len() > MAX_TRANSFORM_ITEMS {
+            return Err(DocError::BadFeature {
+                reason: format!("pick 1 to {MAX_TRANSFORM_ITEMS} bodies to move"),
+            });
+        }
+        self.check_body_names(&m.bodies)?;
+        self.move_transform(m).map(|_| ())
     }
 
     /// Evaluates a feature's expression against the current parameters.
@@ -426,7 +632,18 @@ impl Document {
             .iter()
             .filter(|f| matches!(&f.kind, FeatureKind::Pattern(p) if p.source == feature))
             .map(|f| f.name.clone());
-        sketches.chain(patterns).collect()
+        let mirrors = self
+            .features
+            .iter()
+            .filter(|f| match &f.kind {
+                FeatureKind::Mirror(m) => {
+                    m.features.contains(&feature)
+                        || matches!(&m.plane, MirrorPlane::Face { feature: g, .. } if *g == feature)
+                }
+                _ => false,
+            })
+            .map(|f| f.name.clone());
+        sketches.chain(patterns).chain(mirrors).collect()
     }
 
     /// Features that use a sketch (so deleting the sketch can be refused).
@@ -503,6 +720,126 @@ mod tests {
         // The parameter is now in use by the extrude.
         assert!(doc.remove_parameter("t").is_err());
         assert_eq!(doc.sketch_users(sketch), vec!["Extrude1"]);
+    }
+
+    #[test]
+    fn mirrors_and_moves_are_checked_and_survive_a_round_trip() {
+        use chamfera_geom::{Point3, Vec3};
+        let (mut doc, sketch) = plate_design();
+        let ext = doc
+            .add_feature(FeatureKind::Extrude(Extrude {
+                sketch,
+                profiles: vec![Point2::new(10.0, 10.0)],
+                distance: "5".into(),
+                direction: ExtrudeDirection::Normal,
+                operation: Operation::NewBody,
+            }))
+            .unwrap();
+        let mirror = FeatureKind::Mirror(Mirror {
+            bodies: vec!["Extrude1".into()],
+            features: vec![],
+            plane: MirrorPlane::Yz,
+            operation: Operation::Join,
+        });
+        assert_eq!(doc.add_feature(mirror).map(|_| ()), Ok(()));
+        let by_feature = FeatureKind::Mirror(Mirror {
+            bodies: vec![],
+            features: vec![ext],
+            plane: MirrorPlane::Face {
+                feature: ext,
+                face: "top".into(),
+            },
+            operation: Operation::NewBody,
+        });
+        doc.add_feature(by_feature).unwrap();
+        // The second mirror uses the extrude's shape and face, so the extrude cannot be
+        // deleted from under it; the first names a body only.
+        assert_eq!(doc.feature_users(ext), vec!["Mirror2"]);
+        let moved = FeatureKind::Move(Move {
+            bodies: vec!["Extrude1".into()],
+            transform: MoveTransform::Translate {
+                dx: "10 mm".into(),
+                dy: "0".into(),
+                dz: "-2".into(),
+            },
+            copy: true,
+        });
+        let id = doc.add_feature(moved).unwrap();
+        assert_eq!(doc.feature(id).unwrap().name, "Copy1");
+        let t = doc
+            .move_transform(&Move {
+                bodies: vec!["a".into()],
+                transform: MoveTransform::Rotate {
+                    origin: Point3::ORIGIN,
+                    axis: Vec3::Z,
+                    angle: "90 deg".into(),
+                },
+                copy: false,
+            })
+            .unwrap();
+        // A quarter turn about z takes (50, 0, 0) to (0, 50, 0).
+        let p = t.apply_point(Point3::new(50.0, 0.0, 0.0));
+        assert!(p.distance(Point3::new(0.0, 50.0, 0.0)) < 1e-9);
+        let back = Document::from_json(&doc.to_json().unwrap()).unwrap();
+        assert_eq!(back, doc);
+        // Bad ones are refused.
+        for bad in [
+            FeatureKind::Mirror(Mirror {
+                bodies: vec![],
+                features: vec![],
+                plane: MirrorPlane::Xy,
+                operation: Operation::NewBody,
+            }),
+            FeatureKind::Mirror(Mirror {
+                bodies: vec!["".into()],
+                features: vec![],
+                plane: MirrorPlane::Xy,
+                operation: Operation::NewBody,
+            }),
+            FeatureKind::Mirror(Mirror {
+                bodies: vec![],
+                features: vec![99],
+                plane: MirrorPlane::Xy,
+                operation: Operation::NewBody,
+            }),
+            FeatureKind::Mirror(Mirror {
+                bodies: vec!["a".into()],
+                features: vec![],
+                plane: MirrorPlane::Plane {
+                    origin: Point3::ORIGIN,
+                    normal: Vec3::ZERO,
+                },
+                operation: Operation::NewBody,
+            }),
+            FeatureKind::Move(Move {
+                bodies: vec!["a".into()],
+                transform: MoveTransform::Translate {
+                    dx: "5 deg".into(),
+                    dy: "0".into(),
+                    dz: "0".into(),
+                },
+                copy: false,
+            }),
+            FeatureKind::Move(Move {
+                bodies: vec!["a".into()],
+                transform: MoveTransform::Rotate {
+                    origin: Point3::ORIGIN,
+                    axis: Vec3::ZERO,
+                    angle: "1".into(),
+                },
+                copy: false,
+            }),
+            FeatureKind::Move(Move {
+                bodies: vec![],
+                transform: MoveTransform::PointToPoint {
+                    from: Point3::ORIGIN,
+                    to: Point3::ORIGIN,
+                },
+                copy: false,
+            }),
+        ] {
+            assert!(doc.add_feature(bad.clone()).is_err(), "{bad:?}");
+        }
     }
 
     #[test]

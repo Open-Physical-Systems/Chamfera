@@ -198,6 +198,14 @@ fn hostile_params_never_panic() {
         json!({"edges": [long], "radius": -1, "distance": "0 mm", "size": "q"}),
         json!({"edges": [], "pick": {"x": 1e300, "y": "a"}, "radius": 1}),
         json!({"pick": {"x": 400, "y": 300, "width": 800, "height": 600}, "radius": 1e9}),
+        json!({"bodies": ["Extrude1", 5, null], "plane": "diagonal", "operation": "join"}),
+        json!({"bodies": [long], "features": [-1, 4294967296u64], "plane": {"feature": 2, "face": long}}),
+        json!({"bodies": "all", "features": "all", "plane": {"origin": {"x": f64::NAN}, "normal": 0}}),
+        json!({"bodies": [], "plane": {"origin": {"x": 0, "y": 0, "z": 0}, "normal": {"x": 0, "y": 0, "z": 0}}}),
+        json!({"plane": "yz", "feature": 2, "dx": 1e300, "dy": "q", "dz": [1], "copy": "yes"}),
+        json!({"feature": 2, "angle": 1e300, "axis": {"x": 0, "y": 0, "z": 0}, "origin": "here"}),
+        json!({"feature": 2, "from": {"x": 1e300, "y": 0, "z": 0}, "to": null, "copy": true}),
+        json!({"bodies": ["Sample bracket"], "dx": "1e7 mm", "angle": "5 mm", "plane": 3}),
     ];
     for c in registry() {
         for p in &hostile {
@@ -1730,4 +1738,288 @@ fn body_import_step_adds_exact_solids_that_undo_save_and_open_keep() {
             .is_err()
     );
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// A box from a rectangle `(x1, y1)..(x2, y2)` on the XY plane extruded by `h`, with the
+/// given operation. Returns the extrude's reply.
+fn box_feature(s: &mut Session, corners: [f64; 4], h: f64, operation: &str) -> serde_json::Value {
+    let [x1, y1, x2, y2] = corners;
+    let sketch = s.execute("sketch.create", &json!({"plane": "xy"})).unwrap()["sketch"]
+        .as_u64()
+        .unwrap();
+    s.execute(
+        "sketch.rectangle",
+        &json!({"x1": x1, "y1": y1, "x2": x2, "y2": y2}),
+    )
+    .unwrap();
+    s.execute("sketch.finish", &json!({})).unwrap();
+    s.execute(
+        "solid.extrude",
+        &json!({"sketch": sketch, "profiles": [{"x": (x1 + x2) / 2.0, "y": (y1 + y2) / 2.0}],
+                "distance": h, "operation": operation}),
+    )
+    .unwrap()
+}
+
+fn solid_box(s: &Session, name: &str) -> chamfera_geom::Aabb {
+    s.solids()
+        .iter()
+        .find(|x| x.name == name)
+        .unwrap_or_else(|| panic!("no solid {name}"))
+        .body
+        .bounding_box()
+        .unwrap()
+}
+
+fn near_box(b: chamfera_geom::Aabb, min: [f64; 3], max: [f64; 3]) -> bool {
+    let p = |q: chamfera_geom::Point3, w: [f64; 3]| {
+        q.distance(chamfera_geom::Point3::new(w[0], w[1], w[2])) < 1e-6
+    };
+    p(b.min, min) && p(b.max, max)
+}
+
+fn has_vertex(b: &chamfera_kernel::Body, p: [f64; 3]) -> bool {
+    let p = chamfera_geom::Point3::new(p[0], p[1], p[2]);
+    b.vertices()
+        .into_iter()
+        .any(|v| b.vertex_point(v).is_ok_and(|q| q.distance(p) < 1e-6))
+}
+
+#[test]
+fn the_mirrored_bracket_example_is_one_symmetric_body() {
+    // examples/mirrored-bracket.json. Half: base 40 x 30 x 6 (7200), a wall x 32..40 30 tall
+    // joined (8 * 30 * 30 = 7200, less its 8 * 30 * 6 = 1440 overlap with the base), a r = 4
+    // hole through the base (16π * 6): 12960 - 96π. Mirrored in x = 0 and joined: twice
+    // that, one body spanning x -40..40.
+    let text = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../examples/mirrored-bracket.json"
+    ))
+    .unwrap();
+    let steps: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let mut s = Session::new();
+    for step in steps.as_array().unwrap() {
+        let params = step.get("params").cloned().unwrap_or(json!({}));
+        s.execute(step["command"].as_str().unwrap(), &params)
+            .unwrap();
+    }
+    assert_eq!(s.solids().len(), 1);
+    let v = s.solids()[0].body.volume().unwrap();
+    let want = 2.0 * (12_960.0 - 96.0 * std::f64::consts::PI);
+    assert!((v - want).abs() < 1e-6, "{v} vs {want}");
+    let b = s.solids()[0].body.bounding_box().unwrap();
+    assert!(near_box(b, [-40.0, 0.0, 0.0], [40.0, 30.0, 30.0]));
+    assert!(s.solids()[0].scene_id.is_some());
+}
+
+#[test]
+fn mirroring_a_box_about_the_yz_plane_puts_it_on_the_other_side() {
+    // Box x 0..50, y 0..30, z 0..10 (15000); its mirror in x = 0 is x -50..0, same volume.
+    let mut s = Session::new();
+    box_feature(&mut s, [0.0, 0.0, 50.0, 30.0], 10.0, "new_body");
+    let r = s
+        .execute(
+            "solid.mirror",
+            &json!({"bodies": ["Extrude1"], "plane": "yz"}),
+        )
+        .unwrap();
+    assert_eq!(s.solids().len(), 2);
+    assert!((exact_volume(&r) - 15_000.0).abs() < 1e-6);
+    let mirror = solid_box(&s, "Mirror1");
+    assert!(near_box(mirror, [-50.0, 0.0, 0.0], [0.0, 30.0, 10.0]));
+    // The original is untouched and both are shown.
+    let original = solid_box(&s, "Extrude1");
+    assert!(near_box(original, [0.0, 0.0, 0.0], [50.0, 30.0, 10.0]));
+    assert!(s.solids().iter().all(|x| x.scene_id.is_some()));
+    // Edit the plane to XZ (y = 0): y 0..30 becomes y -30..0; undo restores the YZ mirror.
+    let id = r["feature"].as_u64().unwrap();
+    s.execute("feature.edit", &json!({"feature": id, "plane": "xz"}))
+        .unwrap();
+    let edited = solid_box(&s, "Mirror1");
+    assert!(near_box(edited, [0.0, -30.0, 0.0], [50.0, 0.0, 10.0]));
+    s.execute("edit.undo", &json!({})).unwrap();
+    let undone = solid_box(&s, "Mirror1");
+    assert!(near_box(undone, [-50.0, 0.0, 0.0], [0.0, 30.0, 10.0]));
+    // A move's key on a mirror, or a missing body, is refused and adds nothing.
+    let wrong_key = s.execute("feature.edit", &json!({"feature": id, "dx": 5}));
+    assert!(wrong_key.is_err());
+    let missing = s.execute("solid.mirror", &json!({"bodies": ["Nope"], "plane": "yz"}));
+    assert!(missing.is_err());
+    assert_eq!(s.doc.features.len(), 2);
+}
+
+#[test]
+fn a_mirror_joined_to_its_original_makes_one_symmetric_body_of_twice_the_volume() {
+    // Two 15000 boxes touching along x = 0 join into one 100 x 30 x 10 block: 30000.
+    let mut s = Session::new();
+    box_feature(&mut s, [0.0, 0.0, 50.0, 30.0], 10.0, "new_body");
+    let r = s
+        .execute(
+            "solid.mirror",
+            &json!({"bodies": ["Extrude1"], "plane": "yz", "operation": "join"}),
+        )
+        .unwrap();
+    assert_eq!(s.solids().len(), 1, "touching halves join into one body");
+    assert!((exact_volume(&r) - 30_000.0).abs() < 1e-6);
+    let solid = &s.solids()[0];
+    let b = solid.body.bounding_box().unwrap();
+    assert!(near_box(b, [-50.0, 0.0, 0.0], [50.0, 30.0, 10.0]));
+    assert!(solid.scene_id.is_some(), "the joined body tessellates");
+    // It exports: the STEP file holds a solid, and the STL mesh spans the whole block.
+    let dir = std::env::temp_dir().join(format!("chamfera-mirror-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let step = dir.join("mirror.step");
+    s.execute(
+        "design.export_step",
+        &json!({"path": step.to_str().unwrap()}),
+    )
+    .unwrap();
+    let text = std::fs::read_to_string(&step).unwrap();
+    assert!(text.contains("MANIFOLD_SOLID_BREP"));
+    let stl = dir.join("mirror.stl");
+    s.execute("design.export_stl", &json!({"path": stl.to_str().unwrap()}))
+        .unwrap();
+    let mesh = chamfera_io::stl::read(&std::fs::read(&stl).unwrap()).unwrap();
+    let b = mesh.bounds().unwrap();
+    assert!((b.min.x + 50.0).abs() < 1e-3 && (b.max.x - 50.0).abs() < 1e-3);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn an_asymmetric_l_shape_mirrors_its_bounding_box() {
+    // L = 40 x 10 foot (x 0..40, y 0..10) joined with a 10 x 20 leg (x 0..10, y 10..30),
+    // 5 thick: (400 + 200) * 5 = 3000. Mirrored in the plane x = 60, x -> 120 - x: x 0..40
+    // becomes 80..120, and the leg's outer corner (0, 30) goes to (120, 30).
+    let mut s = Session::new();
+    box_feature(&mut s, [0.0, 0.0, 40.0, 10.0], 5.0, "new_body");
+    box_feature(&mut s, [0.0, 10.0, 10.0, 30.0], 5.0, "join");
+    assert_eq!(s.solids().len(), 1);
+    let r = s
+        .execute(
+            "solid.mirror",
+            &json!({"bodies": ["Extrude1"],
+                    "plane": {"origin": {"x": 60, "y": 0, "z": 0}, "normal": {"x": 1, "y": 0, "z": 0}}}),
+        )
+        .unwrap();
+    assert!((exact_volume(&r) - 3_000.0).abs() < 1e-6);
+    let b = solid_box(&s, "Mirror1");
+    assert!(near_box(b, [80.0, 0.0, 0.0], [120.0, 30.0, 5.0]));
+    // The leg's inner corner (10, 30) goes to (110, 30); nothing lands at (90, 30).
+    let m = &s
+        .solids()
+        .iter()
+        .find(|x| x.name == "Mirror1")
+        .unwrap()
+        .body;
+    assert!(has_vertex(m, [110.0, 30.0, 0.0]));
+    assert!(has_vertex(m, [120.0, 30.0, 5.0]));
+    assert!(!has_vertex(m, [90.0, 30.0, 0.0]));
+}
+
+#[test]
+fn mirroring_a_cut_feature_drills_the_symmetric_hole() {
+    // Plate x -50..50, y -15..15, 10 thick (30000); a r = 3 hole at (20, 0) cut through,
+    // mirrored as a feature in x = 0 with cut: two holes, 30000 - 2 * 9π * 10.
+    let mut s = Session::new();
+    box_feature(&mut s, [-50.0, -15.0, 50.0, 15.0], 10.0, "new_body");
+    let sk = s.execute("sketch.create", &json!({"plane": "xy"})).unwrap()["sketch"]
+        .as_u64()
+        .unwrap();
+    s.execute("sketch.circle", &json!({"cx": 20, "cy": 0, "radius": 3}))
+        .unwrap();
+    s.execute("sketch.finish", &json!({})).unwrap();
+    let cut = s
+        .execute(
+            "solid.extrude",
+            &json!({"sketch": sk, "profiles": [{"x": 20, "y": 0}], "distance": 10, "operation": "cut"}),
+        )
+        .unwrap()["feature"]
+        .as_u64()
+        .unwrap();
+    s.execute(
+        "solid.mirror",
+        &json!({"features": [cut], "plane": "yz", "operation": "cut"}),
+    )
+    .unwrap();
+    assert_eq!(s.solids().len(), 1);
+    let v = s.solids()[0].body.volume().unwrap();
+    let want = 30_000.0 - 180.0 * std::f64::consts::PI;
+    assert!((v - want).abs() < 1e-6, "{v}");
+    // The cut is used by the mirror, so it cannot be deleted.
+    let delete = s.execute("feature.delete", &json!({"feature": cut}));
+    assert!(delete.is_err());
+}
+
+#[test]
+fn moving_and_copying_bodies_shift_and_turn_them() {
+    // Box x 0..50, y 0..30, z 0..10.
+    let mut s = Session::new();
+    box_feature(&mut s, [0.0, 0.0, 50.0, 30.0], 10.0, "new_body");
+    // dx = 10 shifts the box to x 10..60; it stays one body with the same volume.
+    let r = s
+        .execute("solid.move", &json!({"bodies": ["Extrude1"], "dx": 10}))
+        .unwrap();
+    assert_eq!(s.solids().len(), 1);
+    assert!((exact_volume(&r) - 15_000.0).abs() < 1e-6);
+    let b = solid_box(&s, "Extrude1");
+    assert!(near_box(b, [10.0, 0.0, 0.0], [60.0, 30.0, 10.0]));
+    let mv = r["feature"].as_u64().unwrap();
+    // Edited to dz = 5 only (dx and dy default to 0): z 5..15.
+    s.execute("feature.edit", &json!({"feature": mv, "dz": "5 mm"}))
+        .unwrap();
+    let b = solid_box(&s, "Extrude1");
+    assert!(near_box(b, [0.0, 0.0, 5.0], [50.0, 30.0, 15.0]));
+    s.execute("feature.delete", &json!({"feature": mv}))
+        .unwrap();
+    // A quarter turn about z through the origin, copied: the corner (50, 0) goes to
+    // (0, 50) and (0, 30) to (-30, 0), so the copy spans x -30..0, y 0..50.
+    s.execute(
+        "solid.move",
+        &json!({"bodies": ["Extrude1"], "angle": 90, "copy": true}),
+    )
+    .unwrap();
+    assert_eq!(s.solids().len(), 2, "the copy keeps the original");
+    let b = solid_box(&s, "Extrude1");
+    assert!(near_box(b, [0.0, 0.0, 0.0], [50.0, 30.0, 10.0]));
+    let b = solid_box(&s, "Copy1");
+    assert!(near_box(b, [-30.0, 0.0, 0.0], [0.0, 50.0, 10.0]));
+    let c = &s.solids().iter().find(|x| x.name == "Copy1").unwrap().body;
+    assert!(has_vertex(c, [0.0, 50.0, 0.0]));
+    // Point to point: from (0, 0, 0) to (0, 0, 20) lifts the original to z 20..30.
+    s.execute(
+        "solid.move",
+        &json!({"bodies": ["Extrude1"], "from": {"x": 0, "y": 0, "z": 0}, "to": {"x": 0, "y": 0, "z": 20}}),
+    )
+    .unwrap();
+    let b = solid_box(&s, "Extrude1");
+    assert!(near_box(b, [0.0, 0.0, 20.0], [50.0, 30.0, 30.0]));
+    // Nothing to move, no transform, or a zero axis is refused.
+    assert!(s.execute("solid.move", &json!({"dx": 5})).is_err());
+    let none = s.execute("solid.move", &json!({"bodies": ["Extrude1"]}));
+    assert!(none.is_err());
+    let zero_axis = s.execute(
+        "solid.move",
+        &json!({"bodies": ["Extrude1"], "angle": 5, "axis": {"x": 0, "y": 0, "z": 0}}),
+    );
+    assert!(zero_axis.is_err());
+}
+
+#[test]
+fn a_mirror_or_move_without_bodies_uses_the_selected_body() {
+    let mut s = Session::new();
+    box_feature(&mut s, [0.0, 0.0, 50.0, 30.0], 10.0, "new_body");
+    assert!(s.execute("solid.mirror", &json!({"plane": "yz"})).is_err());
+    let body = s.solids()[0].scene_id.unwrap();
+    s.scene.selection = Some(chamfera_render::Hit {
+        body,
+        triangle: 0,
+        point: chamfera_geom::Point3::ORIGIN,
+        distance: 1.0,
+    });
+    let r = s
+        .execute("solid.move", &json!({"dy": -30, "copy": true}))
+        .unwrap();
+    assert_eq!(r["definition"]["bodies"], json!(["Extrude1"]));
+    let b = solid_box(&s, "Copy1");
+    assert!(near_box(b, [0.0, -30.0, 0.0], [50.0, 0.0, 10.0]));
 }
