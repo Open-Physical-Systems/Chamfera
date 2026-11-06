@@ -87,11 +87,44 @@ pub struct Revolve {
     pub operation: Operation,
 }
 
+/// Where a pattern puts its copies.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "layout", rename_all = "snake_case")]
+pub enum PatternLayout {
+    /// `count` copies along `direction`, `spacing` apart (the first is the original).
+    Linear {
+        direction: chamfera_geom::Vec3,
+        spacing: String,
+    },
+    /// `count` copies around the axis through `origin` along `axis`, spread evenly over
+    /// `angle` (360 deg: a full circle, the last copy not on top of the first).
+    Circular {
+        origin: chamfera_geom::Point3,
+        axis: chamfera_geom::Vec3,
+        angle: String,
+    },
+}
+
+/// Copies of an earlier feature's shape, each doing that feature's operation (a pattern
+/// of a cut drills more holes; of a join, adds more bosses).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Pattern {
+    pub source: u32,
+    /// How many, including the original: an expression such as `4` or `holes`.
+    pub count: String,
+    #[serde(flatten)]
+    pub layout: PatternLayout,
+}
+
+/// Most copies one pattern may make.
+pub const MAX_PATTERN_COUNT: f64 = 1000.0;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum FeatureKind {
     Extrude(Extrude),
     Revolve(Revolve),
+    Pattern(Pattern),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -106,17 +139,21 @@ pub struct Feature {
 }
 
 impl FeatureKind {
-    pub fn sketch(&self) -> u32 {
+    /// The sketch the feature's profiles come from (patterns have none).
+    pub fn sketch(&self) -> Option<u32> {
         match self {
-            FeatureKind::Extrude(e) => e.sketch,
-            FeatureKind::Revolve(r) => r.sketch,
+            FeatureKind::Extrude(e) => Some(e.sketch),
+            FeatureKind::Revolve(r) => Some(r.sketch),
+            FeatureKind::Pattern(_) => None,
         }
     }
 
+    /// The operation; a pattern repeats its source's (see the rebuild).
     pub fn operation(&self) -> Operation {
         match self {
             FeatureKind::Extrude(e) => e.operation,
             FeatureKind::Revolve(r) => r.operation,
+            FeatureKind::Pattern(_) => Operation::NewBody,
         }
     }
 
@@ -124,6 +161,7 @@ impl FeatureKind {
         match self {
             FeatureKind::Extrude(e) => &e.profiles,
             FeatureKind::Revolve(r) => &r.profiles,
+            FeatureKind::Pattern(_) => &[],
         }
     }
 
@@ -131,6 +169,7 @@ impl FeatureKind {
         match self {
             FeatureKind::Extrude(_) => "Extrude",
             FeatureKind::Revolve(_) => "Revolve",
+            FeatureKind::Pattern(_) => "Pattern",
         }
     }
 
@@ -139,6 +178,10 @@ impl FeatureKind {
         match self {
             FeatureKind::Extrude(e) => vec![e.distance.as_str()],
             FeatureKind::Revolve(r) => vec![r.angle.as_str()],
+            FeatureKind::Pattern(p) => match &p.layout {
+                PatternLayout::Linear { spacing, .. } => vec![p.count.as_str(), spacing.as_str()],
+                PatternLayout::Circular { angle, .. } => vec![p.count.as_str(), angle.as_str()],
+            },
         }
     }
 }
@@ -148,7 +191,13 @@ impl Document {
     /// profile of that sketch, its expressions evaluate with the right unit.
     pub fn check_feature(&self, kind: &FeatureKind) -> Result<(), DocError> {
         let bad = |reason: String| DocError::BadFeature { reason };
-        let f = self.sketch(kind.sketch())?;
+        if let FeatureKind::Pattern(p) = kind {
+            return self.check_pattern(p);
+        }
+        let Some(sketch) = kind.sketch() else {
+            return Err(bad("the feature has no sketch".into()));
+        };
+        let f = self.sketch(sketch)?;
         let seeds = kind.profiles();
         if seeds.is_empty() {
             return Err(bad("select at least one profile".into()));
@@ -174,6 +223,7 @@ impl Document {
                     return Err(bad("the distance must not be 0".into()));
                 }
             }
+            FeatureKind::Pattern(_) => {}
             FeatureKind::Revolve(r) => {
                 let a = self.evaluate_feature_value(&r.angle, expr::Dim::ANGLE)?;
                 if !a.is_finite()
@@ -192,6 +242,56 @@ impl Document {
                             r.axis
                         )));
                     }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The number of copies a pattern makes, checked (2 to [`MAX_PATTERN_COUNT`]).
+    pub fn pattern_count(&self, p: &Pattern) -> Result<usize, DocError> {
+        let n = self.evaluate_feature_value(&p.count, expr::Dim::NONE)?;
+        if !(n.is_finite() && n.fract() == 0.0 && (2.0..=MAX_PATTERN_COUNT).contains(&n)) {
+            return Err(DocError::BadFeature {
+                reason: format!("the count must be a whole number from 2 to {MAX_PATTERN_COUNT}"),
+            });
+        }
+        Ok(n as usize)
+    }
+
+    fn check_pattern(&self, p: &Pattern) -> Result<(), DocError> {
+        let bad = |reason: String| DocError::BadFeature { reason };
+        let source = self.feature(p.source)?;
+        if matches!(source.kind, FeatureKind::Pattern(_)) {
+            return Err(bad("pattern a feature, not another pattern".into()));
+        }
+        self.pattern_count(p)?;
+        match &p.layout {
+            PatternLayout::Linear { direction, spacing } => {
+                if direction.normalized().is_none() {
+                    return Err(bad("the direction has no length".into()));
+                }
+                let s = self.evaluate_feature_value(spacing, expr::Dim::LENGTH)?;
+                if !s.is_finite() || s.abs() <= chamfera_geom::LINEAR_TOLERANCE {
+                    return Err(bad("the spacing must not be 0".into()));
+                }
+            }
+            PatternLayout::Circular {
+                origin,
+                axis,
+                angle,
+            } => {
+                if !origin.is_valid() || axis.normalized().is_none() {
+                    return Err(bad("the axis needs a point and a direction".into()));
+                }
+                let a = self.evaluate_feature_value(angle, expr::Dim::ANGLE)?;
+                if !a.is_finite()
+                    || a.abs() <= chamfera_geom::ANGULAR_TOLERANCE
+                    || a.abs() > std::f64::consts::TAU + chamfera_geom::ANGULAR_TOLERANCE
+                {
+                    return Err(bad(
+                        "the angle must be above 0 and at most 360 degrees".into()
+                    ));
                 }
             }
         }
@@ -269,20 +369,27 @@ impl Document {
         Ok(self.features.remove(i))
     }
 
-    /// Sketches attached to a face of a feature (so deleting the feature can be refused).
+    /// Sketches attached to a face of a feature, and patterns of it (so deleting the
+    /// feature can be refused).
     pub fn feature_users(&self, feature: u32) -> Vec<String> {
-        self.sketches
+        let sketches = self
+            .sketches
             .iter()
             .filter(|s| s.attached.as_ref().is_some_and(|a| a.feature == feature))
-            .map(|s| s.name.clone())
-            .collect()
+            .map(|s| s.name.clone());
+        let patterns = self
+            .features
+            .iter()
+            .filter(|f| matches!(&f.kind, FeatureKind::Pattern(p) if p.source == feature))
+            .map(|f| f.name.clone());
+        sketches.chain(patterns).collect()
     }
 
     /// Features that use a sketch (so deleting the sketch can be refused).
     pub fn sketch_users(&self, sketch: u32) -> Vec<String> {
         self.features
             .iter()
-            .filter(|f| f.kind.sketch() == sketch)
+            .filter(|f| f.kind.sketch() == Some(sketch))
             .map(|f| f.name.clone())
             .collect()
     }

@@ -42,6 +42,7 @@ mod build;
 mod euler;
 mod geometry;
 mod measure;
+mod transform;
 mod uv;
 mod validate;
 

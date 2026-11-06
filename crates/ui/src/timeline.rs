@@ -88,6 +88,10 @@ impl ChamferaApp {
                     Icon::Revolve,
                     format!("Revolve {} · from {}", r.angle, sketch_name(r.sketch)),
                 ),
+                FeatureKind::Pattern(p) => (
+                    Icon::Extrude,
+                    format!("Pattern × {} of feature {}", p.count, p.source),
+                ),
             };
             Item {
                 id: f.id,
@@ -291,6 +295,7 @@ impl ChamferaApp {
         let (distance, direction) = match &f.kind {
             FeatureKind::Extrude(e) => (e.distance.clone(), e.direction),
             FeatureKind::Revolve(r) => (r.angle.clone(), ExtrudeDirection::Normal),
+            FeatureKind::Pattern(p) => (p.count.clone(), ExtrudeDirection::Normal),
         };
         self.timeline.editing = Some(FeatureEdit {
             feature: item.id,
