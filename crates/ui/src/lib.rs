@@ -25,6 +25,8 @@ const SHOT_TIMEOUT_SECS: f64 = 30.0;
 static SHOT_FAILED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 mod icons;
 mod params_ui;
+mod search;
+mod shortcuts;
 mod sketch_select;
 mod sketch_ui;
 mod solid_ui;
@@ -61,6 +63,8 @@ pub struct Options {
     /// Show a selection box with these viewport corners (x1, y1, x2, y2) as if it were
     /// being dragged, for screenshots of the window and crossing styles.
     pub select_box: Option<[f32; 4]>,
+    /// Open the search palette at start with this query typed.
+    pub search: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -119,6 +123,7 @@ pub struct ChamferaApp {
     file: file_ui::FileUi,
     browser: browser::BrowserUi,
     timeline: timeline::TimelineUi,
+    search: search::SearchUi,
     /// The browser's file picker, downloads and local storage.
     #[cfg(target_arch = "wasm32")]
     web: web::WebFiles,
@@ -196,6 +201,7 @@ impl ChamferaApp {
             file: file_ui::FileUi::default(),
             browser: browser::BrowserUi::default(),
             timeline: timeline::TimelineUi::default(),
+            search: search::SearchUi::default(),
             #[cfg(target_arch = "wasm32")]
             web: web::WebFiles::default(),
             ctx_close: false,
@@ -226,6 +232,10 @@ impl ChamferaApp {
         }
         app.zoom = options.zoom;
         app.box_preview = options.select_box;
+        if let Some(q) = &options.search {
+            app.run_action(shortcuts::Action::Search);
+            app.search.query = q.chars().take(120).collect();
+        }
         app
     }
 
@@ -615,6 +625,9 @@ impl eframe::App for ChamferaApp {
             ctx.set_zoom_factor(z.clamp(0.5, 4.0));
         }
         self.apply_theme(&ctx);
+        // Keys first, so the palette and the shortcuts take theirs before anything else.
+        self.search_keys(&ctx);
+        self.shortcut_keys(&ctx);
         let chrome = egui::Frame::new()
             .fill(color(self.theme.chrome))
             .inner_margin(egui::Margin::symmetric(widgets::S3 as i8, 0));
@@ -659,6 +672,8 @@ impl eframe::App for ChamferaApp {
             self.feature_dialog(&ctx);
         }
         self.unsaved_dialog(&ctx);
+        self.shortcuts_window(&ctx);
+        self.search_window(&ctx);
         self.file_shortcuts(&ctx);
         #[cfg(target_arch = "wasm32")]
         self.browser_files(&ctx);
