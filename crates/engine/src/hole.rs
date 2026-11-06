@@ -250,7 +250,9 @@ pub(crate) fn build_hole(
     let mut tools = Vec::new();
     for (k, c) in centres.iter().enumerate() {
         let tool = hole_tool(&plane, *c, &sizes, depth, through, feature, k)?;
-        result = match chamfera_kernel::subtract(&result, &tool) {
+        result = match crate::perf::timed(crate::perf::Phase::Booleans, || {
+            chamfera_kernel::subtract(&result, &tool)
+        }) {
             Ok(b) => b,
             Err(KernelError::EmptyResult) => {
                 return Err("the holes would remove the whole body".into());

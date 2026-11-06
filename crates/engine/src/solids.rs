@@ -10,8 +10,8 @@ use chamfera_doc::{
     Blend, BlendKind, Extrude, ExtrudeDirection, FeatureKind, Loft, Operation, Revolve, Sweep,
 };
 use chamfera_geom::{Point2, Point3};
-use chamfera_kernel::{Body, EdgeId, Line2, Profile, ProfileEdge, TessOptions, tessellate};
-use chamfera_sketch::{Curve, ProfileLoop, Region, Sketch};
+use chamfera_kernel::{Body, EdgeId, Line2, Profile, ProfileEdge, TessOptions};
+use chamfera_sketch::{Curve, EllipseArc, ProfileLoop, Region, Sketch};
 use std::collections::BTreeMap;
 
 /// A solid built by a feature.
@@ -43,14 +43,16 @@ pub fn edge_ref(body: &Body, e: EdgeId) -> Option<String> {
 
 /// Gives every edge of a feature's new body its full name, like [`name_faces`].
 pub(crate) fn name_edges(body: &mut Body, feature: u32) {
-    for edge in body.edges() {
-        let role = body.edge_name(edge).ok().flatten().map(str::to_owned);
-        if let Some(role) = role
-            && split_face_key(&role).is_none()
-        {
-            let _ = body.set_edge_name(edge, &face_key(feature, &role));
+    crate::perf::naming(|| {
+        for edge in body.edges() {
+            let role = body.edge_name(edge).ok().flatten().map(str::to_owned);
+            if let Some(role) = role
+                && split_face_key(&role).is_none()
+            {
+                let _ = body.set_edge_name(edge, &face_key(feature, &role));
+            }
         }
-    }
+    });
 }
 
 /// Fillets or chamfers the named edges of the bodies built so far. Every name must still
@@ -222,14 +224,16 @@ pub fn split_face_key(name: &str) -> Option<(u32, &str)> {
 
 /// Gives every face of a feature's new body its full name (see [`face_key`]).
 pub(crate) fn name_faces(body: &mut Body, feature: u32) {
-    for face in body.faces() {
-        let role = body.face_name(face).ok().flatten().map(str::to_owned);
-        if let Some(role) = role
-            && split_face_key(&role).is_none()
-        {
-            let _ = body.set_face_name(face, &face_key(feature, &role));
+    crate::perf::naming(|| {
+        for face in body.faces() {
+            let role = body.face_name(face).ok().flatten().map(str::to_owned);
+            if let Some(role) = role
+                && split_face_key(&role).is_none()
+            {
+                let _ = body.set_face_name(face, &face_key(feature, &role));
+            }
         }
-    }
+    });
 }
 
 /// True when `body` has a face that `feature` made (it made or changed the body).
@@ -297,8 +301,35 @@ pub struct Built {
     pub exploded: BTreeMap<u32, crate::motion::Exploded>,
 }
 
+/// An ellipse or elliptical arc of a sketch as exact profile edges: its rational
+/// B-spline (so swept sides are extrusion surfaces, elliptic cylinders), a whole ellipse
+/// as two halves as the kernel wants every loop edge to have two ends.
+pub(crate) fn ellipse_edges(sketch: &Sketch, curve: &Curve) -> Result<Vec<ProfileEdge>, String> {
+    let e = sketch
+        .ellipse_arc_of(curve)
+        .ok_or_else(|| "an ellipse of the profile has no size".to_owned())?;
+    let halves = if e.is_full() {
+        let half = std::f64::consts::PI;
+        vec![
+            EllipseArc { sweep: half, ..e },
+            EllipseArc {
+                t0: e.t0 + half,
+                sweep: half,
+                ..e
+            },
+        ]
+    } else {
+        vec![e]
+    };
+    halves
+        .iter()
+        .map(|h| h.to_nurbs().map(ProfileEdge::Spline))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("an ellipse of the profile: {e}"))
+}
+
 /// A sketch loop as exact kernel profile edges: lines stay lines, arcs and circles stay
-/// arcs and circles, in the loop's direction.
+/// arcs and circles, ellipses become their exact rational splines, in the loop's direction.
 fn loop_edges(sketch: &Sketch, l: &ProfileLoop) -> Result<Vec<ProfileEdge>, String> {
     let gone = || "a curve of the profile is gone".to_owned();
     l.segments
@@ -348,7 +379,14 @@ fn loop_edges(sketch: &Sketch, l: &ProfileLoop) -> Result<Vec<ProfileEdge>, Stri
                     return Ok(pieces);
                 }
                 Curve::Ellipse { .. } | Curve::EllipticalArc { .. } => {
-                    return Err("ellipses in a profile cannot be swept into solids yet".into());
+                    let mut pieces = ellipse_edges(sketch, curve)?;
+                    if seg.reversed {
+                        pieces.reverse();
+                        for p in &mut pieces {
+                            *p = p.reversed();
+                        }
+                    }
+                    return Ok(pieces);
                 }
             };
             Ok(vec![if seg.reversed { edge.reversed() } else { edge }])
@@ -393,12 +431,12 @@ mod booleans {
     use chamfera_kernel::{Body, KernelError};
 
     pub fn union(a: &Body, b: &Body) -> Result<Body, String> {
-        chamfera_kernel::union(a, b).map_err(|e| format!("join: {e}"))
+        crate::perf::boolean(|| chamfera_kernel::union(a, b)).map_err(|e| format!("join: {e}"))
     }
 
     /// `None` when nothing is left.
     pub fn subtract(a: &Body, b: &Body) -> Result<Option<Body>, String> {
-        match chamfera_kernel::subtract(a, b) {
+        match crate::perf::boolean(|| chamfera_kernel::subtract(a, b)) {
             Ok(body) => Ok(Some(body)),
             Err(KernelError::EmptyResult) => Ok(None),
             Err(e) => Err(format!("cut: {e}")),
@@ -407,7 +445,7 @@ mod booleans {
 
     /// `None` when they don't overlap.
     pub fn intersect(a: &Body, b: &Body) -> Result<Option<Body>, String> {
-        match chamfera_kernel::intersect(a, b) {
+        match crate::perf::boolean(|| chamfera_kernel::intersect(a, b)) {
             Ok(body) => Ok(Some(body)),
             Err(KernelError::EmptyResult) => Ok(None),
             Err(e) => Err(format!("intersect: {e}")),
@@ -877,7 +915,7 @@ fn build_extrude(
             let mut two =
                 chamfera_kernel::extrude_tapered(&start, profile, back, taper).map_err(k)?;
             prefix_names(&mut two, BACK_SIDE);
-            chamfera_kernel::union(&one, &two)
+            crate::perf::boolean(|| chamfera_kernel::union(&one, &two))
                 .map_err(|x| format!("extrude: joining the two tapered sides: {x}"))
         })
         .collect()
@@ -1107,299 +1145,147 @@ fn build_loft(doc: &chamfera_doc::Document, l: &Loft) -> Result<Vec<Body>, Strin
         .map_err(|x| format!("loft: {x}"))
 }
 
+/// What a rebuild carries from one timeline item to the next: the bodies built so far and
+/// what the items found out about them. A rebuild keeps a copy after each item (a
+/// checkpoint, see [`crate::perf`]) so the next one can start there.
+#[derive(Debug, Default, Clone)]
+pub(crate) struct Progress {
+    made: Vec<(u32, String, Body)>,
+    /// Each built feature's own shapes (before they were combined), for patterns.
+    tools: BTreeMap<u32, (Vec<Body>, Operation)>,
+    /// Everything but the solids (worked out after the walk).
+    built: Built,
+    /// Sketches that follow a face, plane or projected edges, as they ended up: the
+    /// rebuild moves them in the design, so starting from a checkpoint moves them again.
+    followed: BTreeMap<u32, chamfera_doc::SketchFeature>,
+}
+
+/// About how many bytes one cached flat pattern or sheet is counted as.
+const SHEET_BYTES: usize = 64 * 1024;
+
+impl Progress {
+    /// About how many bytes the checkpoint holds (for the cache's limit).
+    pub(crate) fn approx_bytes(&self) -> usize {
+        let bodies = self
+            .made
+            .iter()
+            .map(|m| m.2.approx_bytes().saturating_add(m.1.len()))
+            .chain(
+                self.tools
+                    .values()
+                    .flat_map(|(b, _)| b.iter().map(Body::approx_bytes)),
+            )
+            .fold(0usize, usize::saturating_add);
+        let sketches = self
+            .followed
+            .values()
+            .map(|s| serde_json::to_vec(s).map_or(SHEET_BYTES, |v| v.len()))
+            .fold(0usize, usize::saturating_add);
+        let b = &self.built;
+        let messages = [&b.errors, &b.broken, &b.sketch_errors]
+            .into_iter()
+            .flat_map(|m| m.values().map(String::len))
+            .fold(0usize, usize::saturating_add);
+        let sheets = b
+            .sheet
+            .sheets
+            .len()
+            .saturating_add(b.sheet.flats.len())
+            .saturating_mul(SHEET_BYTES);
+        bodies
+            .saturating_add(sketches)
+            .saturating_add(messages)
+            .saturating_add(sheets)
+            .saturating_add(
+                b.constructs
+                    .len()
+                    .saturating_add(b.edited.len())
+                    .saturating_mul(256),
+            )
+    }
+}
+
+/// The kind of a timeline item, for reports: `sketch`, or the feature's kind.
+fn item_kind(doc: &chamfera_doc::Document, id: u32) -> String {
+    if doc.sketch(id).is_ok() {
+        return "sketch".into();
+    }
+    doc.feature(id)
+        .ok()
+        .and_then(|f| serde_json::to_value(&f.kind).ok())
+        .and_then(|v| v.get("kind").and_then(|k| k.as_str()).map(str::to_owned))
+        .unwrap_or_default()
+}
+
 impl Session {
-    /// Rebuilds every feature, in timeline order, and replaces the solid bodies in the
-    /// scene. Meshes and other bodies (imported STL) are left alone.
+    /// Rebuilds the timeline, in order, and replaces the solid bodies in the scene.
+    /// Meshes and other bodies (imported STL) are left alone. Items whose definition and
+    /// inputs are unchanged since an earlier rebuild are not built again (see
+    /// [`crate::perf`]); the result is the same as building everything.
     pub fn rebuild(&mut self) {
         // A preview shows what a tool would make of the design as it was.
         self.scene.previews.clear();
-        let mut built = Built::default();
-        let mut made: Vec<(u32, String, Body)> = Vec::new();
-        // Each built feature's own shapes (before they were combined), for patterns.
-        let mut tools: BTreeMap<u32, (Vec<Body>, Operation)> = BTreeMap::new();
         // Items after the timeline marker are not built.
         let order = self.doc.timeline_order();
         let marker = self.doc.marker();
-        for id in order.into_iter().take(marker) {
-            // A sketch drawn on a face follows that face, as built at this point.
-            if self.doc.sketch(id).is_ok() {
-                if let Err(e) = self.follow_attached_sketch(id, &made, &built.constructs) {
-                    built.sketch_errors.insert(id, e);
-                }
-                continue;
-            }
-            let Ok(feature) = self.doc.feature(id).cloned() else {
-                continue;
-            };
-            let feature = &feature;
-            if self.doc.is_suppressed(feature) {
-                continue;
-            }
-            // Every sketch the feature uses (a sweep's path, a loft's sections too) was
-            // followed in timeline order before it.
-            if let Some((sketch, e)) = feature
-                .kind
-                .sketches()
-                .into_iter()
-                .find_map(|s| built.sketch_errors.get(&s).map(|e| (s, e.clone())))
-            {
-                let name = feature_name(&self.doc, sketch);
-                built.errors.insert(feature.id, format!("{name}: {e}"));
-                if let Some(r) = self
-                    .doc
-                    .sketch(sketch)
-                    .ok()
-                    .and_then(|s| s.attached.clone())
-                {
-                    built.broken.insert(
-                        feature.id,
-                        format!(
-                            "face {:?} of {}",
-                            r.face,
-                            feature_name(&self.doc, r.feature)
-                        ),
-                    );
-                }
-                continue;
-            }
-            if let FeatureKind::Construct(c) = &feature.kind {
-                match crate::construct::build(&self.doc, feature.id, c, &made, &built.constructs) {
-                    Ok(g) => {
-                        built.constructs.insert(feature.id, g);
-                    }
-                    Err(e) => {
-                        built.errors.insert(feature.id, e);
-                    }
-                }
-                continue;
-            }
-            if let FeatureKind::Pattern(p) = &feature.kind {
-                if !tools.contains_key(&p.source) {
-                    built
-                        .broken
-                        .insert(feature.id, feature_name(&self.doc, p.source));
-                }
-                let copies = pattern_copies(&self.doc, p, feature.id, &tools, &built.constructs);
-                match copies {
-                    Ok((bodies, Operation::NewBody)) => {
-                        for (k, b) in bodies.into_iter().enumerate() {
-                            made.push((feature.id, format!("{} ({})", feature.name, k + 2), b));
-                        }
-                    }
-                    Ok((bodies, op)) => {
-                        let mut next = made.clone();
-                        match apply_operation(&mut next, &bodies, op) {
-                            Ok(()) => made = next,
-                            Err(e) => {
-                                built.errors.insert(feature.id, e);
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        built.errors.insert(feature.id, e);
-                    }
-                }
-                continue;
-            }
-            if let FeatureKind::Mirror(m) = &feature.kind {
-                let result =
-                    mirror_bodies(&self.doc, m, feature.id, &made, &tools).and_then(|bodies| {
-                        tools.insert(feature.id, (bodies.clone(), m.operation));
-                        let mut next = made.clone();
-                        if m.operation == Operation::NewBody {
-                            let n = bodies.len();
-                            for (k, b) in bodies.into_iter().enumerate() {
-                                let name = if n == 1 {
-                                    feature.name.clone()
-                                } else {
-                                    format!("{} ({})", feature.name, k + 1)
-                                };
-                                next.push((feature.id, name, b));
-                            }
-                        } else {
-                            apply_operation(&mut next, &bodies, m.operation)?;
-                        }
-                        Ok(next)
-                    });
-                match result {
-                    Ok(next) => made = next,
-                    Err(e) => {
-                        built.errors.insert(feature.id, e);
-                    }
-                }
-                continue;
-            }
-            if let FeatureKind::Move(m) = &feature.kind {
-                match move_bodies(&self.doc, m, feature, &made) {
-                    Ok(next) => made = next,
-                    Err(e) => {
-                        built.errors.insert(feature.id, e);
-                    }
-                }
-                continue;
-            }
-            if let FeatureKind::Blend(b) = &feature.kind {
-                match build_blend(&self.doc, b, feature.id, &made) {
-                    Ok(next) => made = next,
-                    Err(e) => {
-                        if let Some(r) = missing_edge(&self.doc, b, feature.id, &made) {
-                            built.broken.insert(feature.id, r);
-                        }
-                        built.errors.insert(feature.id, e);
-                    }
-                }
-                continue;
-            }
-            if let FeatureKind::Hole(h) = &feature.kind {
-                match crate::hole::build_hole(&self.doc, h, feature.id, &made) {
-                    Ok((next, cuts)) => {
-                        made = next;
-                        tools.insert(feature.id, (cuts, Operation::Cut));
-                    }
-                    Err(e) => {
-                        built.errors.insert(feature.id, e);
-                    }
-                }
-                continue;
-            }
-            let face_edit = match &feature.kind {
-                FeatureKind::OffsetFace(o) => Some(crate::face_edit::build_offset_face(
-                    &self.doc, o, feature.id, &made,
-                )),
-                FeatureKind::DeleteFace(d) => Some(crate::face_edit::build_delete_face(
-                    &self.doc, d, feature.id, &made,
-                )),
-                FeatureKind::MoveFace(m) => Some(crate::face_edit::build_move_face(
-                    &self.doc, m, feature.id, &made,
-                )),
-                _ => None,
-            };
-            if let Some(result) = face_edit {
-                match result {
-                    Ok((next, changed)) => {
-                        made = next;
-                        built.edited.insert(feature.id, changed);
-                    }
-                    Err(e) => {
-                        built.errors.insert(feature.id, e);
-                    }
-                }
-                continue;
-            }
-            if let FeatureKind::Surface(sf) = &feature.kind {
-                match crate::surface::build(&self.doc, feature, sf, &made, &built.constructs) {
-                    Ok(next) => made = next,
-                    Err(e) => {
-                        built.errors.insert(feature.id, e);
-                    }
-                }
-                continue;
-            }
-            if feature.kind.is_body_tool() {
-                match crate::body_tools::build(&self.doc, feature, &made, &built.constructs) {
-                    Ok(next) => made = next,
-                    Err(e) => {
-                        built.errors.insert(feature.id, e);
-                    }
-                }
-                continue;
-            }
-            if let FeatureKind::Shell(sh) = &feature.kind {
-                match build_shell(&self.doc, sh, feature.id, &made) {
-                    Ok(next) => made = next,
-                    Err(e) => {
-                        built.errors.insert(feature.id, e);
-                    }
-                }
-                continue;
-            }
-            if crate::sheet::is_sheet_feature(&feature.kind) {
-                let mut next = made.clone();
-                match crate::sheet::build_feature(&self.doc, feature, &mut next, &mut built.sheet) {
-                    Ok(()) => made = next,
-                    Err(e) => {
-                        built.errors.insert(feature.id, e);
-                    }
-                }
-                continue;
-            }
-            let result = match &feature.kind {
-                FeatureKind::Extrude(e) => {
-                    let bodies: Vec<&Body> = made.iter().map(|m| &m.2).collect();
-                    build_extrude(&self.doc, feature.id, e, &bodies)
-                }
-                FeatureKind::Sweep(s) => build_sweep(&self.doc, s),
-                FeatureKind::Loft(l) => build_loft(&self.doc, l),
-                FeatureKind::Revolve(r) => build_revolve(&self.doc, r, &built.constructs),
-                FeatureKind::Pattern(_)
-                | FeatureKind::Construct(_)
-                | FeatureKind::Blend(_)
-                | FeatureKind::Shell(_)
-                | FeatureKind::Mirror(_)
-                | FeatureKind::Move(_)
-                | FeatureKind::Combine(_)
-                | FeatureKind::SplitBody(_)
-                | FeatureKind::SplitFace(_)
-                | FeatureKind::Thicken(_)
-                | FeatureKind::Remove(_)
-                | FeatureKind::Surface(_)
-                | FeatureKind::Hole(_)
-                | FeatureKind::SheetBase(_)
-                | FeatureKind::SheetFlange(_)
-                | FeatureKind::SheetUnfold(_) => continue,
-                FeatureKind::OffsetFace(_)
-                | FeatureKind::DeleteFace(_)
-                | FeatureKind::MoveFace(_) => continue,
-            };
-            let operation = feature.kind.operation();
-            let result = result.map(|bodies| {
-                bodies
-                    .into_iter()
-                    .map(|mut b| {
-                        name_faces(&mut b, feature.id);
-                        name_edges(&mut b, feature.id);
-                        b
-                    })
-                    .collect::<Vec<_>>()
-            });
-            if let Ok(bodies) = &result {
-                tools.insert(feature.id, (bodies.clone(), operation));
-            }
-            match result {
-                Ok(bodies) if operation == Operation::NewBody => {
-                    let n = bodies.len();
-                    for (k, body) in bodies.into_iter().enumerate() {
-                        let name = if n == 1 {
-                            feature.name.clone()
-                        } else {
-                            format!("{} ({})", feature.name, k + 1)
-                        };
-                        made.push((feature.id, name, body));
-                    }
-                }
-                Ok(tools) => {
-                    // Work on a copy so a failure leaves the bodies built so far intact.
-                    let mut next = made.clone();
-                    match apply_operation(&mut next, &tools, operation) {
-                        Ok(()) => made = next,
-                        Err(e) => {
-                            built.errors.insert(feature.id, e);
-                        }
-                    }
-                }
-                Err(e) => {
-                    if e.contains("no longer closed")
-                        && let Some(sketch) = feature.kind.sketch()
-                    {
-                        built.broken.insert(
-                            feature.id,
-                            format!("a profile of {}", feature_name(&self.doc, sketch)),
-                        );
-                    }
-                    built.errors.insert(feature.id, e);
+        let items: Vec<u32> = order.into_iter().take(marker).collect();
+        let keys = if self.caches.enabled {
+            crate::perf::item_keys(&self.doc, &items)
+        } else {
+            None
+        };
+        // Start after the last item built before with the same key, if any.
+        let mut start = 0;
+        let mut progress = Progress::default();
+        if let Some(keys) = &keys
+            && let Some((i, p)) = keys
+                .iter()
+                .enumerate()
+                .rev()
+                .find(|(_, k)| self.caches.checkpoints.contains(k))
+                .and_then(|(i, k)| Some((i, self.caches.checkpoints.get(k)?.clone())))
+        {
+            start = i + 1;
+            progress = p;
+            for (id, s) in &progress.followed {
+                if let Ok(f) = self.doc.sketch_mut(*id) {
+                    *f = s.clone();
                 }
             }
         }
+        self.caches.stats.last_reused = start;
+        self.caches.stats.last_built = items.len().saturating_sub(start);
+        let timing = crate::perf::timing();
+        for (i, &id) in items.iter().enumerate().skip(start) {
+            let clock = crate::perf::Stopwatch::start();
+            if timing {
+                crate::perf::take_phases();
+            }
+            self.build_item(id, &mut progress);
+            if timing {
+                let total_ms = clock.ms();
+                let (booleans_ms, naming_ms) = crate::perf::take_phases();
+                self.timings.push(crate::perf::FeatureTiming {
+                    id,
+                    name: feature_name(&self.doc, id),
+                    kind: item_kind(&self.doc, id),
+                    kernel_ms: (total_ms - booleans_ms - naming_ms).max(0.0),
+                    booleans_ms,
+                    naming_ms,
+                    tessellation_ms: 0.0,
+                    total_ms,
+                });
+            }
+            if let Some(key) = keys.as_ref().and_then(|k| k.get(i)) {
+                let bytes = progress.approx_bytes();
+                self.caches
+                    .checkpoints
+                    .insert(*key, progress.clone(), bytes);
+            }
+        }
+        let Progress {
+            made, mut built, ..
+        } = progress;
         // Replace the scene's solid bodies.
         let old: Vec<u32> = self
             .built
@@ -1441,7 +1327,16 @@ impl Session {
             // A solid that cannot be shown is still built: its measures and export work.
             let mut faces = Vec::new();
             let mut edges = Vec::new();
-            let scene_id = match tessellate(&body, &options) {
+            let clock = crate::perf::Stopwatch::start();
+            let mesh = self.caches.tessellate(&body, &options);
+            if timing {
+                let ms = clock.ms();
+                if let Some(t) = self.timings.iter_mut().rev().find(|t| t.id == feature) {
+                    t.tessellation_ms += ms;
+                    t.total_ms += ms;
+                }
+            }
+            let scene_id = match mesh {
                 Ok(mut m) => {
                     if let Some(e) = built.exploded.get(&component) {
                         for p in &mut m.mesh.positions {
@@ -1484,6 +1379,7 @@ impl Session {
             });
         }
         self.show_imported(&mut built);
+        self.sync_meshes();
         for x in &built.solids {
             if let Some(id) = x.scene_id
                 && reselect.contains(&x.feature)
@@ -1495,6 +1391,300 @@ impl Session {
         self.built = built;
         // Toolpaths follow the model.
         self.regenerate_cam();
+    }
+
+    /// Builds one timeline item onto `progress`. A feature that cannot be built keeps its
+    /// error and leaves the bodies as they were.
+    fn build_item(&mut self, id: u32, progress: &mut Progress) {
+        let Progress {
+            made,
+            tools,
+            built,
+            followed,
+        } = progress;
+        // A sketch drawn on a face follows that face, as built at this point.
+        if let Ok(s) = self.doc.sketch(id) {
+            let follows = s.attached.is_some()
+                || s.on_plane.is_some()
+                || s.projections.iter().any(|p| p.linked);
+            if let Err(e) = self.follow_attached_sketch(id, made, &built.constructs) {
+                built.sketch_errors.insert(id, e);
+            }
+            if follows && let Ok(s) = self.doc.sketch(id) {
+                followed.insert(id, s.clone());
+            }
+            return;
+        }
+        let Ok(feature) = self.doc.feature(id).cloned() else {
+            return;
+        };
+        let feature = &feature;
+        if self.doc.is_suppressed(feature) {
+            return;
+        }
+        // Every sketch the feature uses (a sweep's path, a loft's sections too) was
+        // followed in timeline order before it.
+        if let Some((sketch, e)) = feature
+            .kind
+            .sketches()
+            .into_iter()
+            .find_map(|s| built.sketch_errors.get(&s).map(|e| (s, e.clone())))
+        {
+            let name = feature_name(&self.doc, sketch);
+            built.errors.insert(feature.id, format!("{name}: {e}"));
+            if let Some(r) = self
+                .doc
+                .sketch(sketch)
+                .ok()
+                .and_then(|s| s.attached.clone())
+            {
+                built.broken.insert(
+                    feature.id,
+                    format!(
+                        "face {:?} of {}",
+                        r.face,
+                        feature_name(&self.doc, r.feature)
+                    ),
+                );
+            }
+            return;
+        }
+        if let FeatureKind::Construct(c) = &feature.kind {
+            match crate::construct::build(&self.doc, feature.id, c, made, &built.constructs) {
+                Ok(g) => {
+                    built.constructs.insert(feature.id, g);
+                }
+                Err(e) => {
+                    built.errors.insert(feature.id, e);
+                }
+            }
+            return;
+        }
+        if let FeatureKind::Pattern(p) = &feature.kind {
+            if !tools.contains_key(&p.source) {
+                built
+                    .broken
+                    .insert(feature.id, feature_name(&self.doc, p.source));
+            }
+            let copies = pattern_copies(&self.doc, p, feature.id, tools, &built.constructs);
+            match copies {
+                Ok((bodies, Operation::NewBody)) => {
+                    for (k, b) in bodies.into_iter().enumerate() {
+                        made.push((feature.id, format!("{} ({})", feature.name, k + 2), b));
+                    }
+                }
+                Ok((bodies, op)) => {
+                    let mut next = made.clone();
+                    match apply_operation(&mut next, &bodies, op) {
+                        Ok(()) => *made = next,
+                        Err(e) => {
+                            built.errors.insert(feature.id, e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    built.errors.insert(feature.id, e);
+                }
+            }
+            return;
+        }
+        if let FeatureKind::Mirror(m) = &feature.kind {
+            let result = mirror_bodies(&self.doc, m, feature.id, made, tools).and_then(|bodies| {
+                tools.insert(feature.id, (bodies.clone(), m.operation));
+                let mut next = made.clone();
+                if m.operation == Operation::NewBody {
+                    let n = bodies.len();
+                    for (k, b) in bodies.into_iter().enumerate() {
+                        let name = if n == 1 {
+                            feature.name.clone()
+                        } else {
+                            format!("{} ({})", feature.name, k + 1)
+                        };
+                        next.push((feature.id, name, b));
+                    }
+                } else {
+                    apply_operation(&mut next, &bodies, m.operation)?;
+                }
+                Ok(next)
+            });
+            match result {
+                Ok(next) => *made = next,
+                Err(e) => {
+                    built.errors.insert(feature.id, e);
+                }
+            }
+            return;
+        }
+        if let FeatureKind::Move(m) = &feature.kind {
+            match move_bodies(&self.doc, m, feature, made) {
+                Ok(next) => *made = next,
+                Err(e) => {
+                    built.errors.insert(feature.id, e);
+                }
+            }
+            return;
+        }
+        if let FeatureKind::Blend(b) = &feature.kind {
+            match build_blend(&self.doc, b, feature.id, made) {
+                Ok(next) => *made = next,
+                Err(e) => {
+                    if let Some(r) = missing_edge(&self.doc, b, feature.id, made) {
+                        built.broken.insert(feature.id, r);
+                    }
+                    built.errors.insert(feature.id, e);
+                }
+            }
+            return;
+        }
+        if let FeatureKind::Hole(h) = &feature.kind {
+            match crate::hole::build_hole(&self.doc, h, feature.id, made) {
+                Ok((next, cuts)) => {
+                    *made = next;
+                    tools.insert(feature.id, (cuts, Operation::Cut));
+                }
+                Err(e) => {
+                    built.errors.insert(feature.id, e);
+                }
+            }
+            return;
+        }
+        let face_edit = match &feature.kind {
+            FeatureKind::OffsetFace(o) => Some(crate::face_edit::build_offset_face(
+                &self.doc, o, feature.id, made,
+            )),
+            FeatureKind::DeleteFace(d) => Some(crate::face_edit::build_delete_face(
+                &self.doc, d, feature.id, made,
+            )),
+            FeatureKind::MoveFace(m) => Some(crate::face_edit::build_move_face(
+                &self.doc, m, feature.id, made,
+            )),
+            _ => None,
+        };
+        if let Some(result) = face_edit {
+            match result {
+                Ok((next, changed)) => {
+                    *made = next;
+                    built.edited.insert(feature.id, changed);
+                }
+                Err(e) => {
+                    built.errors.insert(feature.id, e);
+                }
+            }
+            return;
+        }
+        if let FeatureKind::Surface(sf) = &feature.kind {
+            match crate::surface::build(&self.doc, feature, sf, made, &built.constructs) {
+                Ok(next) => *made = next,
+                Err(e) => {
+                    built.errors.insert(feature.id, e);
+                }
+            }
+            return;
+        }
+        if feature.kind.is_body_tool() {
+            match crate::body_tools::build(&self.doc, feature, made, &built.constructs) {
+                Ok(next) => *made = next,
+                Err(e) => {
+                    built.errors.insert(feature.id, e);
+                }
+            }
+            return;
+        }
+        if let FeatureKind::Shell(sh) = &feature.kind {
+            match build_shell(&self.doc, sh, feature.id, made) {
+                Ok(next) => *made = next,
+                Err(e) => {
+                    built.errors.insert(feature.id, e);
+                }
+            }
+            return;
+        }
+        if crate::sheet::is_sheet_feature(&feature.kind) {
+            let mut next = made.clone();
+            match crate::sheet::build_feature(&self.doc, feature, &mut next, &mut built.sheet) {
+                Ok(()) => *made = next,
+                Err(e) => {
+                    built.errors.insert(feature.id, e);
+                }
+            }
+            return;
+        }
+        let result = match &feature.kind {
+            FeatureKind::Extrude(e) => {
+                let bodies: Vec<&Body> = made.iter().map(|m| &m.2).collect();
+                build_extrude(&self.doc, feature.id, e, &bodies)
+            }
+            FeatureKind::Sweep(s) => build_sweep(&self.doc, s),
+            FeatureKind::Loft(l) => build_loft(&self.doc, l),
+            FeatureKind::Revolve(r) => build_revolve(&self.doc, r, &built.constructs),
+            FeatureKind::Pattern(_)
+            | FeatureKind::Construct(_)
+            | FeatureKind::Blend(_)
+            | FeatureKind::Shell(_)
+            | FeatureKind::Mirror(_)
+            | FeatureKind::Move(_)
+            | FeatureKind::Combine(_)
+            | FeatureKind::SplitBody(_)
+            | FeatureKind::SplitFace(_)
+            | FeatureKind::Thicken(_)
+            | FeatureKind::Remove(_)
+            | FeatureKind::Surface(_)
+            | FeatureKind::Hole(_)
+            | FeatureKind::SheetBase(_)
+            | FeatureKind::SheetFlange(_)
+            | FeatureKind::SheetUnfold(_) => return,
+            FeatureKind::OffsetFace(_) | FeatureKind::DeleteFace(_) | FeatureKind::MoveFace(_) => {
+                return;
+            }
+        };
+        let operation = feature.kind.operation();
+        let result = result.map(|bodies| {
+            bodies
+                .into_iter()
+                .map(|mut b| {
+                    name_faces(&mut b, feature.id);
+                    name_edges(&mut b, feature.id);
+                    b
+                })
+                .collect::<Vec<_>>()
+        });
+        if let Ok(bodies) = &result {
+            tools.insert(feature.id, (bodies.clone(), operation));
+        }
+        match result {
+            Ok(bodies) if operation == Operation::NewBody => {
+                let n = bodies.len();
+                for (k, body) in bodies.into_iter().enumerate() {
+                    let name = if n == 1 {
+                        feature.name.clone()
+                    } else {
+                        format!("{} ({})", feature.name, k + 1)
+                    };
+                    made.push((feature.id, name, body));
+                }
+            }
+            Ok(tools) => {
+                // Work on a copy so a failure leaves the bodies built so far intact.
+                let mut next = made.clone();
+                match apply_operation(&mut next, &tools, operation) {
+                    Ok(()) => *made = next,
+                    Err(e) => {
+                        built.errors.insert(feature.id, e);
+                    }
+                }
+            }
+            Err(e) => {
+                if e.contains("no longer closed")
+                    && let Some(sketch) = feature.kind.sketch()
+                {
+                    built.broken.insert(
+                        feature.id,
+                        format!("a profile of {}", feature_name(&self.doc, sketch)),
+                    );
+                }
+                built.errors.insert(feature.id, e);
+            }
+        }
     }
 
     /// Moves an attached sketch's plane onto its face or construction plane, and its

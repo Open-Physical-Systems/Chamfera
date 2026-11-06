@@ -32,6 +32,8 @@ doc::Document (parameters, timeline) --recompute--> sketch solver + kernel ops -
                                                     tessellate (display/export only)
 ```
 
+A rebuild does not start from nothing: after each timeline item the session keeps a checkpoint of the bodies built so far, keyed by a hash of the item's definition, the parameter values it reads and the key of the item before it, and starts the next rebuild after the last item whose key is unchanged; meshes are kept by the exact body. Both caches are bounded LRUs and give the same result as a full rebuild, bit for bit (`crates/engine/src/perf.rs`, tests in `perf_tests.rs`, numbers in `docs/performance.md`).
+
 ## Rendering
 Materials are part of `body.appearance` (`crates/doc/src/appearance.rs`, format 34: metallic, roughness, transmission, IOR); the library is `crates/render/src/material.rs` and the lighting presets (sky gradient, key, fill and rim disc lights, a floor) `crates/render/src/environment.rs`, so the viewport's realistic style (`crates/gpu/src/realistic.rs`, `realistic.wgsl`: GGX, a key-light shadow map) and the path tracer (`chamfera-raytrace`, L3: BVH, Lambert + GGX, smooth dielectric, MIS towards the lights, progressive on std threads) show the same scene. The environment is view state (`render.environment`). Commands: `render.*` (`crates/engine/src/cmd/render.rs`); the session holds the last started render (`Session::render_job`), which the RENDER workspace (`crates/ui/src/render_ui.rs`) steps on a worker thread and shows as it refines.
 

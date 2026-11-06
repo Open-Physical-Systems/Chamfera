@@ -7,6 +7,7 @@ mod cam;
 mod component;
 mod config;
 mod construct;
+mod debug;
 mod design;
 pub mod drawing;
 mod dxf;
@@ -55,6 +56,7 @@ pub fn registry() -> Vec<&'static CommandSpec> {
         component::COMMANDS,
         config::COMMANDS,
         construct::COMMANDS,
+        debug::COMMANDS,
         design::COMMANDS,
         drawing::COMMANDS,
         dxf::COMMANDS,

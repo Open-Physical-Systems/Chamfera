@@ -143,7 +143,8 @@ fn curve_edges(f: &SketchFeature, id: u32) -> Result<Vec<ProfileEdge>, String> {
             }
         }
         Curve::Ellipse { .. } | Curve::EllipticalArc { .. } => {
-            return Err("ellipses cannot be swept into surfaces yet".into());
+            crate::solids::ellipse_edges(&f.sketch, curve)
+                .map_err(|e| format!("curve {id}: {e}"))?
         }
     })
 }

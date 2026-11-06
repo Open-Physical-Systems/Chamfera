@@ -465,6 +465,32 @@ fn yes() -> bool {
     true
 }
 
+/// What a simulated stock mesh shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StockStyle {
+    /// The stock left (`theme.stock`).
+    Stock,
+    /// Stock cut below the part (`theme.gouge`).
+    Gouge,
+}
+
+impl StockStyle {
+    pub fn color(self, theme: &Theme) -> Rgba {
+        match self {
+            StockStyle::Stock => theme.stock,
+            StockStyle::Gouge => theme.gouge,
+        }
+    }
+}
+
+/// A simulated stock's surface, shaded like a body. Display only.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StockMesh {
+    pub style: StockStyle,
+    pub mesh: TriMesh,
+}
+
 /// Most overlay lines plus points one scene holds (hostile-input limit).
 pub const MAX_OVERLAY_ITEMS: usize = 2_000_000;
 
@@ -490,6 +516,10 @@ pub struct Scene {
     /// See-through fills (construction planes), drawn before the overlays.
     #[serde(default)]
     pub fills: Vec<Fill>,
+    /// A stock simulation (`cam.simulate`): while it shows, it stands in for the bodies,
+    /// which are not drawn.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stock: Vec<StockMesh>,
     /// The ground grid's fixed spacing in mm, or `None` for the automatic grid that
     /// follows the zoom (`view.grid`). A view setting, not part of the design.
     #[serde(default)]
@@ -543,6 +573,7 @@ impl Scene {
             .filter(|b| b.visible)
             .filter_map(|b| b.mesh.bounds())
             .chain(self.previews.iter().filter_map(TriMesh::bounds))
+            .chain(self.stock.iter().filter_map(|s| s.mesh.bounds()))
             .chain(overlays)
             .reduce(Aabb::union)
     }

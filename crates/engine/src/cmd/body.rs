@@ -1,4 +1,6 @@
-//! `body.*`: bodies in the scene. In M1 these are mesh bodies (imported STL or a sample).
+//! `body.*`: bodies in the scene. Imported meshes (STL, OBJ, 3MF) and solids (STEP) are
+//! part of the design: saved with it and undone like any change. The sample part is
+//! shown for the session only.
 
 use super::CommandSpec;
 use crate::{CmdResult, CommandError, Session, params};
@@ -29,21 +31,21 @@ pub static COMMANDS: &[CommandSpec] = &[
         label: "Insert Mesh (3MF)",
         params: "path: string (required) - a .3mf file; each build item becomes a mesh body, \
                  in mm",
-        mutates: false,
+        mutates: true,
         run: import_3mf,
     },
     CommandSpec {
         id: "body.import_3mf_bytes",
         label: "Insert Mesh (3MF)",
         params: "data: string (required) - the .3mf file's contents, base64",
-        mutates: false,
+        mutates: true,
         run: import_3mf_bytes,
     },
     CommandSpec {
         id: "body.import_obj",
         label: "Insert Mesh (OBJ)",
         params: "path: string (required) - an .obj file, in mm; its faces become one mesh body",
-        mutates: false,
+        mutates: true,
         run: import_obj,
     },
     CommandSpec {
@@ -51,13 +53,13 @@ pub static COMMANDS: &[CommandSpec] = &[
         label: "Insert Mesh (OBJ)",
         params: "data: string (required) - the .obj file's contents, base64\n\
                  name: string (optional) - the body's name; default \"Mesh\"",
-        mutates: false,
+        mutates: true,
         run: import_obj_bytes,
     },
     CommandSpec {
         id: "body.import_step",
         label: "Insert STEP Solids",
-        params: "path: string (required) - a .step/.stp file (AP203, AP214, AP242); its B-rep solids become exact bodies, solids it cannot import yet are listed in `skipped`",
+        params: "path: string (required) - a .step/.stp file (AP203, AP214, AP242); its B-rep solids become exact bodies, solids it cannot import yet are listed in `skipped`; a name a body already has gets a number (`Extrude1 (2)`)",
         mutates: true,
         run: import_step,
     },
@@ -65,7 +67,7 @@ pub static COMMANDS: &[CommandSpec] = &[
         id: "body.import_stl",
         label: "Insert Mesh (STL)",
         params: "path: string (required) - an .stl file, binary or ASCII, in mm",
-        mutates: false,
+        mutates: true,
         run: import_stl,
     },
     CommandSpec {
@@ -73,7 +75,7 @@ pub static COMMANDS: &[CommandSpec] = &[
         label: "Insert Mesh (STL)",
         params: "data: string (required) - the .stl file's contents (binary or ASCII, in mm), \
                  base64\nname: string (optional) - the body's name; default \"Mesh\"",
-        mutates: false,
+        mutates: true,
         run: import_stl_bytes,
     },
     CommandSpec {
@@ -86,8 +88,9 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         id: "body.remove",
         label: "Remove Body",
-        params: "body: integer (required) - the body id",
-        mutates: false,
+        params: "body: integer (required) - the body id; an imported mesh leaves the design \
+                 (undoable), other bodies are hidden from the scene until the next rebuild",
+        mutates: true,
         run: remove,
     },
     CommandSpec {
@@ -96,7 +99,7 @@ pub static COMMANDS: &[CommandSpec] = &[
         params: "body: integer (required) - the body id; a solid takes its feature's name, \
                  so rename that feature instead\n\
                  name: string (required) - the new name, 1 to 80 characters",
-        mutates: false,
+        mutates: true,
         run: rename,
     },
     CommandSpec {
@@ -134,12 +137,36 @@ fn summary(s: &Session, id: u32) -> Value {
     }
 }
 
+/// Adds a session-only mesh body (the sample).
 fn add(s: &mut Session, name: &str, mesh: TriMesh) -> CmdResult {
     let id = s
         .scene
         .add(name, mesh)
         .ok_or_else(|| CommandError::Unavailable("the scene holds no more bodies".into()))?;
     Ok(summary(s, id))
+}
+
+/// Adds an imported mesh to the design (saved and undone with it) under a name no
+/// other body has, and shows it.
+fn add_mesh(s: &mut Session, name: &str, mesh: TriMesh) -> CmdResult {
+    if s.scene.bodies.len() >= chamfera_render::MAX_BODIES {
+        return Err(CommandError::Unavailable(
+            "the scene holds no more bodies".into(),
+        ));
+    }
+    let name = s.doc.unique_body_name(name);
+    let id = s.doc.add_imported_mesh(&name, mesh)?;
+    if !s.sync_meshes() {
+        return Err(CommandError::Unavailable(
+            "the scene holds no more bodies".into(),
+        ));
+    }
+    let scene = s
+        .mesh_scene
+        .get(&id)
+        .copied()
+        .ok_or_else(|| CommandError::Unavailable("the mesh could not be shown".into()))?;
+    Ok(summary(s, scene))
 }
 
 fn import_stl(s: &mut Session, p: &Value) -> CmdResult {
@@ -154,7 +181,7 @@ fn import_stl(s: &mut Session, p: &Value) -> CmdResult {
         .chars()
         .take(64)
         .collect::<String>();
-    add(s, &name, mesh)
+    add_mesh(s, &name, mesh)
 }
 
 fn import_stl_bytes(s: &mut Session, p: &Value) -> CmdResult {
@@ -166,7 +193,7 @@ fn import_stl_bytes(s: &mut Session, p: &Value) -> CmdResult {
         .filter(|n| !n.is_empty())
         .unwrap_or("Mesh");
     let name: String = name.chars().filter(|c| !c.is_control()).take(64).collect();
-    add(s, &name, mesh)
+    add_mesh(s, &name, mesh)
 }
 
 /// A body name from a file name: no extension, no control characters, at most 64
@@ -191,7 +218,7 @@ fn import_obj(s: &mut Session, p: &Value) -> CmdResult {
     let bytes = chamfera_io::read_limited(file, chamfera_io::obj::MAX_OBJ_BYTES)?;
     let mesh = chamfera_io::obj::read(&bytes)?;
     let name = body_name(file.file_name().and_then(|n| n.to_str()), "obj");
-    add(s, &name, mesh)
+    add_mesh(s, &name, mesh)
 }
 
 fn import_obj_bytes(s: &mut Session, p: &Value) -> CmdResult {
@@ -199,7 +226,7 @@ fn import_obj_bytes(s: &mut Session, p: &Value) -> CmdResult {
         super::design::decode_base64(params::req_str(p, "data")?, chamfera_io::obj::MAX_OBJ_BYTES)?;
     let mesh = chamfera_io::obj::read(&bytes)?;
     let name = body_name(params::opt_str(p, "name")?, "obj");
-    add(s, &name, mesh)
+    add_mesh(s, &name, mesh)
 }
 
 /// Adds each build item of a 3MF file as a mesh body; all or none.
@@ -216,7 +243,7 @@ fn add_3mf(s: &mut Session, bytes: &[u8]) -> CmdResult {
     for item in items {
         triangles += item.mesh.triangles.len();
         let name = body_name(Some(&item.name), "3mf");
-        bodies.push(add(s, &name, item.mesh)?);
+        bodies.push(add_mesh(s, &name, item.mesh)?);
     }
     let name = bodies
         .first()
@@ -270,8 +297,10 @@ fn import_step(s: &mut Session, p: &Value) -> CmdResult {
             why.join(" | ")
         )));
     }
+    // A name a body already has gets a number, so names keep telling bodies apart.
     let mut ids = Vec::new();
     for (name, body) in report.solids {
+        let name = s.doc.unique_body_name(&name);
         ids.push(s.doc.add_imported(&name, body)?);
     }
     s.rebuild();
@@ -349,7 +378,10 @@ fn rename(s: &mut Session, p: &Value) -> CmdResult {
             solid.name, solid.feature
         )));
     }
-    if let Some(b) = s.scene.body_mut(id) {
+    if let Some(mesh) = s.mesh_of_scene(id) {
+        s.doc.rename_imported_mesh(mesh, &name)?;
+        s.sync_meshes();
+    } else if let Some(b) = s.scene.body_mut(id) {
         b.name = name;
     }
     Ok(summary(s, id))
@@ -357,6 +389,10 @@ fn rename(s: &mut Session, p: &Value) -> CmdResult {
 
 fn remove(s: &mut Session, p: &Value) -> CmdResult {
     let id = body_id(s, p)?;
+    if let Some(mesh) = s.mesh_of_scene(id) {
+        s.doc.remove_imported_mesh(mesh)?;
+        s.sync_meshes();
+    }
     s.scene.bodies.retain(|b| b.id != id);
     s.scene.deselect(|b| b == id);
     Ok(json!({ "removed": id }))

@@ -26,6 +26,9 @@ mod naming_tests;
 mod params;
 #[cfg(test)]
 mod params_tests;
+pub mod perf;
+#[cfg(test)]
+mod perf_tests;
 pub mod pick_filter;
 pub mod projection;
 pub mod render;
@@ -68,9 +71,12 @@ pub type CmdResult = Result<Value, CommandError>;
 #[derive(Debug, Default)]
 pub struct Session {
     pub doc: Document,
-    /// Bodies on screen. In M1 these are mesh bodies (imported STL, samples). They are not
-    /// saved in the design yet and are not part of undo.
+    /// Bodies on screen: the solids the design builds, its imported solids and meshes
+    /// (all saved and undone with the design), and the sample part (session only).
     pub scene: Scene,
+    /// The scene body showing each imported mesh of the design, by the mesh's id. Kept
+    /// across rebuilds so a mesh keeps its scene id ([`Session::sync_meshes`]).
+    pub(crate) mesh_scene: std::collections::BTreeMap<u32, u32>,
     /// The view. Not part of the design or of undo.
     pub camera: Camera,
     /// The sketch being edited (`sketch.create`, `sketch.edit`), if any.
@@ -81,6 +87,11 @@ pub struct Session {
     pub selected_edges: Vec<String>,
     /// Solids built from the timeline (worked out again after every change).
     built: solids::Built,
+    /// Checkpoints and meshes of earlier rebuilds, to rebuild only what changed. Not part
+    /// of the design or of undo.
+    pub(crate) caches: perf::Caches,
+    /// Per-item times of the rebuilds since timing was switched on (`debug.timings`).
+    pub(crate) timings: Vec<perf::FeatureTiming>,
     /// Toolpaths worked out from the CAM section, and whether they are shown.
     pub(crate) cam: cam::CamState,
     /// What a joint drag, the motion study's time and an exploded view show. Display
@@ -143,13 +154,15 @@ impl Session {
         // the rebuild.
         // Solids follow the design: rebuild after anything that may have changed it.
         // solid.* and feature.* rebuild themselves; a failed command was rolled back, so
-        // the solids must follow the restored design.
+        // the solids must follow the restored design. The body commands that change
+        // imported meshes show the change themselves ([`Session::sync_meshes`]); a
+        // rebuild would also bring back a solid's scene body that `body.remove` hid.
         let rebuilt_itself = id.starts_with("solid.")
             || id.starts_with("feature.")
             || id.starts_with("component.")
             || id.starts_with("joint.")
             || id.starts_with("construct.")
-            || id == "body.import_step";
+            || (id.starts_with("body.") && id != "body.appearance");
         if (spec.mutates && (result.is_err() || !rebuilt_itself))
             || (id.starts_with("edit.") && result.is_ok())
             || (id.starts_with("design.") && result.is_ok() && id != "design.save")
@@ -249,6 +262,7 @@ impl Session {
         self.path = None;
         self.doc = doc;
         self.scene = Scene::default();
+        self.mesh_scene.clear();
         self.view_state = motion::AssemblyView::default();
         self.undo.clear();
         self.redo.clear();

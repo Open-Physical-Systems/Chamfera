@@ -359,11 +359,11 @@ Close runners-up: selection filters and box selection (UI and NAV), splines (nee
 | 2D contour | Follow a profile, with lead-in/out and tabs | done (no tabs yet) | P2 | M | cam |
 | 2D pocket | Clear a closed region | done (vertical walls, islands) | P2 | M | cam |
 | Drilling | Drill, peck, tap cycles at hole positions | done (drill, peck; no tapping) | P2 | M | cam |
-| 2D adaptive clearing | Constant tool engagement roughing | missing | P2 | L | cam |
-| 3D roughing and finishing | Adaptive, parallel, scallop, contour, pencil passes | missing | P2 | L | cam |
+| 2D adaptive clearing | Constant tool engagement roughing | done (offset passes with a measured engagement limit, trochoidal slots where it would be exceeded, helix entry; not medial-axis) | P2 | L | cam |
+| 3D roughing and finishing | Adaptive, parallel, scallop, contour, pencil passes | partial (exact drop-cutter for flat, ball, bull-nose tools; adaptive roughing, parallel with scallop stepover, waterline; no pencil or scallop-offset passes) | P2 | L | cam |
 | Multi-axis | 3+2 and simultaneous 4 and 5 axis | missing | P2 | L | cam |
 | Turning | Lathe operations | missing | P2 | L | cam |
-| Simulation | Show the tool removing stock; collision and gouge checks | missing | P2 | L | cam, gpu |
+| Simulation | Show the tool removing stock; collision and gouge checks | partial (dexel heightfield up to 1024 per side, time slider, removed and rest volume, gouges in their own colour; no holder or machine collisions) | P2 | L | cam, gpu |
 | Post processors as data | G-code output for Grbl first, then LinuxCNC and others | done (LinuxCNC and GRBL dialects in code, not data yet) | P2 | M | cam, io |
 | Additive (3D-print) setup | Orient, support and slice | missing | P2 | L | cam |
 

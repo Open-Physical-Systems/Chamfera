@@ -2,6 +2,7 @@
 //! every pair of faces, trim the intersection curves to both faces, split edges at every
 //! new vertex, and split each face into pieces along its cuts.
 
+use super::patch_box::revolution_face_box;
 use super::registry::Registry;
 use super::span::{Carrier, Span, crossings, internal};
 use super::trace::{Region, Side, Use, regions, trace};
@@ -95,7 +96,8 @@ impl Loaded<'_> {
 /// How far a face can bulge beyond the box of its edges: nothing for a plane (a planar
 /// region lies in the convex hull of its boundary); on a cylinder or cone a face point
 /// is at most `2 ρ_max` from a boundary point at the same height (heights of a face's
-/// points are within its boundary's range); spheres and tori use their whole box.
+/// points are within its boundary's range); spheres and tori use the box of the
+/// parameter ranges the face covers (`patch_box.rs`).
 fn face_box(body: &Body, f: FaceId, surface: &Surface) -> KernelResult<Aabb> {
     let mut b: Option<Aabb> = None;
     let mut rho_max: f64 = 0.0;
@@ -131,21 +133,20 @@ fn face_box(body: &Body, f: FaceId, surface: &Surface) -> KernelResult<Aabb> {
                 frustum_box(surface, &b, |z| r0 + z * k),
             );
         }
-        Surface::Sphere(s) => {
-            let r = s.radius();
-            let o = s.frame().origin();
-            b = b.union(Aabb {
+        Surface::Sphere(_) | Surface::Torus(_) => {
+            let r = match surface {
+                Surface::Sphere(s) => s.radius(),
+                Surface::Torus(t) => t.major_radius().abs() + t.minor_radius(),
+                _ => 0.0,
+            };
+            let o = surface.frame().origin();
+            let whole = Aabb {
                 min: o + Vec3::new(-r, -r, -r),
                 max: o + Vec3::new(r, r, r),
-            });
-        }
-        Surface::Torus(t) => {
-            let r = t.major_radius().abs() + t.minor_radius();
-            let o = t.frame().origin();
-            b = b.union(Aabb {
-                min: o + Vec3::new(-r, -r, -r),
-                max: o + Vec3::new(r, r, r),
-            });
+            };
+            // The box of the parameter ranges the face covers, else the whole surface's.
+            let patch = revolution_face_box(body, f, surface).map_or(whole, |p| meet(p, whole));
+            b = b.union(patch);
         }
     }
     Ok(grow(b, LINEAR_TOLERANCE))

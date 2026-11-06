@@ -160,6 +160,7 @@ pub const GROUPS: &[Group] = &[
     group(Tab::Drawing, "EXPORT"),
     group(Tab::Manufacture, "SETUP"),
     group(Tab::Manufacture, "2D"),
+    group(Tab::Manufacture, "3D"),
     group(Tab::Manufacture, "ACTIONS"),
     group(Tab::Render, "MATERIALS"),
     group(Tab::Render, "SCENE"),
@@ -1139,6 +1140,34 @@ pub const TOOLS: &[RibbonTool] = &[
         "Drill",
         "Drill every vertical hole of the model",
     ),
+    // MANUFACTURE > 3D
+    tool(
+        M,
+        "3D",
+        Action::Tool("cam.op.adaptive"),
+        Icon::CamAdaptive,
+        "Adaptive Clearing",
+        "Rough the stock down to the part, the tool's engagement held under a limit",
+    )
+    .primary()
+    .short("Adaptive"),
+    tool(
+        M,
+        "3D",
+        Action::Tool("cam.op.parallel"),
+        Icon::CamParallel,
+        "Parallel",
+        "Finish curved surfaces in straight passes, the tool dropped onto the model",
+    )
+    .primary(),
+    tool(
+        M,
+        "3D",
+        Action::Tool("cam.op.waterline"),
+        Icon::CamWaterline,
+        "Waterline",
+        "Finish steep walls in level contours, one at each height",
+    ),
     // MANUFACTURE > ACTIONS
     tool(
         M,
@@ -1160,6 +1189,15 @@ pub const TOOLS: &[RibbonTool] = &[
     )
     .primary()
     .short("Post"),
+    tool(
+        M,
+        "ACTIONS",
+        Action::Tool("cam.simulate"),
+        Icon::CamSimulate,
+        "Simulate",
+        "Cut the stock along the toolpaths, with a time slider; gouges show in red",
+    )
+    .primary(),
     // RENDER > MATERIALS
     tool(
         R,
@@ -1376,6 +1414,9 @@ fn cam_op(id: &str) -> Option<&'static str> {
         "cam.op.contour" => "contour",
         "cam.op.pocket" => "pocket",
         "cam.op.drill" => "drill",
+        "cam.op.adaptive" => "adaptive",
+        "cam.op.parallel" => "parallel",
+        "cam.op.waterline" => "waterline",
         _ => return None,
     })
 }
@@ -1637,6 +1678,7 @@ impl ChamferaApp {
                 "inspect.interference" => self.motion.interference.is_some(),
                 "view.explode" => self.motion.explode.is_some(),
                 "cam.tool_add" => self.cam.tool_dialog.is_some(),
+                "cam.simulate" => self.cam.sim_panel.is_some(),
                 "sheet.base" => self.sheet_metal.base.is_some(),
                 "sheet.flange" => self.sheet_metal.flange.is_some(),
                 "sheet.rules" => self.sheet_metal.rules.is_some(),
@@ -1819,7 +1861,7 @@ impl ChamferaApp {
                     _ if cam_op(id).is_some() && cam.tools.is_empty() => {
                         format!("{name}: add a tool first")
                     }
-                    "cam.generate" | "cam.post" if cam.operations.is_empty() => {
+                    "cam.generate" | "cam.post" | "cam.simulate" if cam.operations.is_empty() => {
                         format!("{name}: add an operation first")
                     }
                     _ => return None,
@@ -1879,6 +1921,7 @@ impl ChamferaApp {
             "cam.tool_add" => self.open_cam_tool_dialog(),
             "cam.generate" => self.generate_toolpaths(),
             "cam.post" => self.post_dialog("linuxcnc"),
+            "cam.simulate" => self.toggle_simulation(),
             "solid.remove" => {
                 self.run("solid.remove", json!({}));
             }
@@ -2372,7 +2415,7 @@ mod tests {
             "body.rename",
             "body.visibility",
             "cam.list",
-            "cam.op_add", // the 2D operation tools
+            "cam.op_add", // the operation tools
             "cam.op_delete",
             "cam.op_edit", // the Manufacture tree
             "cam.show",

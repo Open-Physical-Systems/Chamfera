@@ -1,11 +1,58 @@
-//! Imported solid bodies (STEP) in the scene: shown and measured like the timeline's
-//! solids, but not rebuilt from features.
+//! Imported bodies in the scene: solids (STEP), shown and measured like the timeline's
+//! solids but not rebuilt from features, and meshes (STL, OBJ, 3MF).
 
 use crate::Session;
 use crate::solids::{Built, Solid, face_key};
-use chamfera_kernel::{TessOptions, tessellate};
+use chamfera_kernel::TessOptions;
 
 impl Session {
+    /// Makes the scene show the design's imported meshes: a body for each new one, the
+    /// bodies of removed ones dropped, renamed ones renamed. A mesh already shown keeps
+    /// its scene body (and id, visibility and appearance) through rebuilds. Returns
+    /// false when the scene is full.
+    pub(crate) fn sync_meshes(&mut self) -> bool {
+        let wanted: std::collections::BTreeSet<u32> =
+            self.doc.meshes.iter().map(|m| m.id).collect();
+        let stale: Vec<(u32, u32)> = self
+            .mesh_scene
+            .iter()
+            .filter(|(id, scene)| !wanted.contains(id) || self.scene.body(**scene).is_none())
+            .map(|(id, scene)| (*id, *scene))
+            .collect();
+        for (id, scene) in stale {
+            self.mesh_scene.remove(&id);
+            self.scene.bodies.retain(|b| b.id != scene);
+            self.scene.deselect(|b| b == scene);
+        }
+        let mut room = true;
+        for m in &self.doc.meshes {
+            match self.mesh_scene.get(&m.id) {
+                Some(scene) => {
+                    if let Some(b) = self.scene.body_mut(*scene)
+                        && b.name != m.name
+                    {
+                        b.name.clone_from(&m.name);
+                    }
+                }
+                None => match self.scene.add(&m.name, (*m.mesh.0).clone()) {
+                    Some(scene) => {
+                        self.mesh_scene.insert(m.id, scene);
+                    }
+                    None => room = false,
+                },
+            }
+        }
+        room
+    }
+
+    /// The design's mesh shown by scene body `scene`, if it is one.
+    pub(crate) fn mesh_of_scene(&self, scene: u32) -> Option<u32> {
+        self.mesh_scene
+            .iter()
+            .find(|(_, s)| **s == scene)
+            .map(|(id, _)| *id)
+    }
+
     /// Adds the design's imported bodies to `built` and to the scene, after the
     /// timeline's solids. Each becomes a [`Solid`] whose `feature` is the imported
     /// body's id, so export, measures and face picking treat it like a built solid. Its
@@ -35,7 +82,7 @@ impl Session {
                 let _ = body.set_face_name(face, &face_key(imported.id, &role));
             }
             let mut faces = Vec::new();
-            let scene_id = match tessellate(&body, &options) {
+            let scene_id = match self.caches.tessellate(&body, &options) {
                 Ok(m) => {
                     faces = m.face_of_triangle;
                     let id = self.scene.add(&imported.name, m.mesh);

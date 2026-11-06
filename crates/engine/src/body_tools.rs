@@ -57,9 +57,9 @@ fn combine(c: &Combine, made: &[(u32, String, Body)]) -> Result<Made, String> {
     for &i in &tools {
         let (_, name, tool) = made.get(i).ok_or("a tool is missing")?;
         acc = match c.operation {
-            Operation::Join => chamfera_kernel::union(&acc, tool),
-            Operation::Cut => chamfera_kernel::subtract(&acc, tool),
-            Operation::Intersect => chamfera_kernel::intersect(&acc, tool),
+            Operation::Join => crate::perf::boolean(|| chamfera_kernel::union(&acc, tool)),
+            Operation::Cut => crate::perf::boolean(|| chamfera_kernel::subtract(&acc, tool)),
+            Operation::Intersect => crate::perf::boolean(|| chamfera_kernel::intersect(&acc, tool)),
             Operation::NewBody => {
                 return Err("combine joins, cuts or intersects".into());
             }
