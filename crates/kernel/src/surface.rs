@@ -1,4 +1,6 @@
-//! Analytic surfaces (rung K3): plane, cylinder, cone, sphere and torus.
+//! Analytic surfaces (rung K3): plane, cylinder, cone, sphere and torus; and surfaces of
+//! linear extrusion of a B-spline (rung K10, `extrusion.rs`), the side faces of
+//! extruded splines, which the tables below do not cover.
 //!
 //! Every surface lives in a [`Frame`] and is parametrised by `(u, v)`. Formulas follow the
 //! usual differential geometry of surfaces of revolution (do Carmo, *Differential Geometry
@@ -32,8 +34,11 @@
 //! revolving an arc whose centre is near or beyond the axis needs.
 
 use crate::check;
+use crate::extrusion::Extrusion;
 use crate::{KernelError, KernelResult};
-use chamfera_geom::{ANGULAR_TOLERANCE, Frame, LINEAR_TOLERANCE, MAX_COORDINATE, Point3, Vec3};
+use chamfera_geom::{
+    ANGULAR_TOLERANCE, BSplineCurve2, Frame, LINEAR_TOLERANCE, MAX_COORDINATE, Point3, Vec3,
+};
 use serde::{Deserialize, Serialize};
 use std::f64::consts::{FRAC_PI_2, TAU};
 
@@ -177,7 +182,7 @@ impl Torus {
 
 /// The surface a face lies on. A face also has an orientation flag saying whether its
 /// outward normal is the surface normal or its opposite.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(try_from = "SurfaceData", into = "SurfaceData")]
 pub enum Surface {
     /// The plane through the frame's origin; its normal is the frame's z axis.
@@ -186,10 +191,13 @@ pub enum Surface {
     Cone(Cone),
     Sphere(Sphere),
     Torus(Torus),
+    /// A planar B-spline swept along its plane's normal (rung K10, `extrusion.rs`): the
+    /// side face of an extruded spline.
+    Extrusion(Extrusion),
 }
 
 /// The serialized form of a [`Surface`]: the constructor arguments.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 enum SurfaceData {
     Plane(Frame),
@@ -210,6 +218,10 @@ enum SurfaceData {
         frame: Frame,
         major_radius: f64,
         minor_radius: f64,
+    },
+    Extrusion {
+        frame: Frame,
+        curve: BSplineCurve2,
     },
 }
 
@@ -235,6 +247,10 @@ impl From<Surface> for SurfaceData {
                 major_radius: t.major_radius,
                 minor_radius: t.minor_radius,
             },
+            Surface::Extrusion(e) => SurfaceData::Extrusion {
+                frame: e.frame,
+                curve: e.curve,
+            },
         }
     }
 }
@@ -258,6 +274,9 @@ impl TryFrom<SurfaceData> for Surface {
                 major_radius,
                 minor_radius,
             } => Surface::Torus(Torus::new(frame, major_radius, minor_radius)?),
+            SurfaceData::Extrusion { frame, curve } => {
+                Surface::Extrusion(Extrusion::new(frame, curve)?)
+            }
         })
     }
 }
@@ -395,13 +414,14 @@ impl Surface {
             Surface::Cone(c) => &c.frame,
             Surface::Sphere(s) => &s.frame,
             Surface::Torus(t) => &t.frame,
+            Surface::Extrusion(e) => &e.frame,
         }
     }
 
-    /// The meridian of a surface of revolution (`None` for a plane).
+    /// The meridian of a surface of revolution (`None` for a plane or an extrusion).
     pub(crate) fn meridian(&self) -> Option<Meridian> {
         match *self {
-            Surface::Plane(_) => None,
+            Surface::Plane(_) | Surface::Extrusion(_) => None,
             Surface::Cylinder(c) => Some(Meridian::Line {
                 r: c.radius,
                 s: 0.0,
@@ -423,10 +443,11 @@ impl Surface {
         }
     }
 
-    /// The period of `u` (2π on every curved surface; none on a plane).
+    /// The period of `u` (2π on every surface of revolution; none on a plane or an
+    /// extrusion).
     pub fn period_u(&self) -> Option<f64> {
         match self {
-            Surface::Plane(_) => None,
+            Surface::Plane(_) | Surface::Extrusion(_) => None,
             _ => Some(TAU),
         }
     }
@@ -440,7 +461,9 @@ impl Surface {
     /// The range of `v` (one period `[0, 2π)` on a torus).
     pub fn v_range(&self) -> (f64, f64) {
         match self {
-            Surface::Plane(_) | Surface::Cylinder(_) => (f64::NEG_INFINITY, f64::INFINITY),
+            Surface::Plane(_) | Surface::Cylinder(_) | Surface::Extrusion(_) => {
+                (f64::NEG_INFINITY, f64::INFINITY)
+            }
             Surface::Cone(c) => {
                 if c.half_angle > 0.0 {
                     (c.apex_v(), f64::INFINITY)
@@ -457,6 +480,7 @@ impl Surface {
     pub fn point_at(&self, u: f64, v: f64) -> Point3 {
         match (self, self.meridian()) {
             (Surface::Plane(f), _) => f.origin() + f.x() * u + f.y() * v,
+            (Surface::Extrusion(e), _) => e.point_at(u, v),
             (_, Some(m)) => {
                 let f = self.frame();
                 let (s, c) = u.sin_cos();
@@ -468,6 +492,9 @@ impl Surface {
 
     /// The partial derivatives `(S_u, S_v)` at `(u, v)`.
     pub fn derivatives(&self, u: f64, v: f64) -> (Vec3, Vec3) {
+        if let Surface::Extrusion(e) = self {
+            return e.derivatives(u, v);
+        }
         let f = self.frame();
         match self.meridian() {
             None => (f.x(), f.y()),
@@ -485,6 +512,9 @@ impl Surface {
     /// (on the axis) it is the limit from the side where `ρ > 0` along the meridian at
     /// `u`: `±z` at a sphere's pole, the generator's normal at a cone's apex.
     pub fn normal_at(&self, u: f64, v: f64) -> Vec3 {
+        if let Surface::Extrusion(e) = self {
+            return e.normal_at(u, v);
+        }
         let f = self.frame();
         match self.meridian() {
             None => f.z(),
@@ -506,6 +536,9 @@ impl Surface {
     /// The parameters of the point of the surface nearest to `p` (`u` in `[0, 2π)` on a
     /// curved surface, `v` in [`Surface::v_range`]). `p` must be valid.
     pub fn parameters(&self, p: Point3) -> SurfaceParameters {
+        if let Surface::Extrusion(e) = self {
+            return e.parameters(p);
+        }
         let l = self.frame().to_local(p);
         let rho_p = l.x.hypot(l.y);
         let singular = rho_p <= LINEAR_TOLERANCE;
@@ -519,6 +552,10 @@ impl Surface {
                 };
             }
             Surface::Cylinder(_) => (u, l.z),
+            Surface::Extrusion(e) => {
+                let q = e.parameters(p);
+                (q.u, q.v)
+            }
             Surface::Cone(c) => {
                 let (s, co) = c.half_angle.sin_cos();
                 // Projection onto the generator in the half-plane of `u`; the nearest point
@@ -552,11 +589,14 @@ impl Surface {
 
     /// The point of the surface nearest to `p`.
     pub fn closest_point(&self, p: Point3) -> KernelResult<SurfacePoint> {
+        if let Surface::Extrusion(e) = self {
+            return e.closest_point(p);
+        }
         check::point3("point", p)?;
         let q = self.parameters(p);
         let point = self.point_at(q.u, q.v);
         let unique = match self {
-            Surface::Plane(_) => true,
+            Surface::Plane(_) | Surface::Extrusion(_) => true,
             Surface::Sphere(s) => s.frame.origin().distance(p) > LINEAR_TOLERANCE,
             Surface::Torus(t) => {
                 // On the axis every tube circle is equally near.

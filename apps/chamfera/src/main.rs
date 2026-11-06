@@ -2,8 +2,9 @@
 //!
 //! ```text
 //! chamfera [part.stl ...] [--sample] [--theme light|dark] [--script steps.json]
-//!          [--parameters] [--drawing] [--extrude] [--hole] [--box X1,Y1,X2,Y2] [--search QUERY]
-//!          [--context-menu X,Y] [--size WxH] [--zoom F] [--screenshot shot.png]
+//!          [--parameters] [--drawing] [--extrude] [--extrude-with JSON] [--hole]
+//!          [--box X1,Y1,X2,Y2] [--search QUERY] [--context-menu X,Y] [--size WxH]
+//!          [--zoom F] [--screenshot shot.png]
 //!          [--sketch-input "tool line; click 0,0; hover 30,12; type 25"]
 //! ```
 
@@ -13,8 +14,9 @@
 use std::process::ExitCode;
 
 const USAGE: &str = "usage: chamfera [part.stl ...] [--sample] [--theme light|dark] \
-[--script steps.json] [--parameters] [--drawing] [--extrude] [--hole] [--box X1,Y1,X2,Y2] [--search QUERY] \
-[--context-menu X,Y] [--size WxH] [--zoom F] [--screenshot shot.png] \
+[--script steps.json] [--parameters] [--drawing] [--extrude] [--extrude-with JSON] [--hole] \
+[--box X1,Y1,X2,Y2] [--search QUERY] [--context-menu X,Y] [--size WxH] [--zoom F] \
+[--screenshot shot.png] \
 [--sketch-input \"tool line; click X,Y; hover X,Y; shift; type 25; tab\"]";
 
 fn main() -> ExitCode {
@@ -26,6 +28,16 @@ fn main() -> ExitCode {
             "--parameters" => options.parameters = true,
             "--drawing" => options.drawing = true,
             "--extrude" => options.extrude = true,
+            "--extrude-with" => match args
+                .next()
+                .map(|j| serde_json::from_str::<serde_json::Value>(&j))
+            {
+                Some(Ok(v)) if v.is_object() => {
+                    options.extrude = true;
+                    options.extrude_with = Some(v);
+                }
+                _ => return fail("--extrude-with takes a JSON object of solid.extrude options"),
+            },
             "--hole" => options.hole = true,
             "--box" => match args.next().as_deref().and_then(parse_box) {
                 Some(b) => options.select_box = Some(b),

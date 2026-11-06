@@ -42,12 +42,17 @@ pub struct Theme {
     pub body: Rgba,
     pub body_selected: Rgba,
     pub edge: Rgba,
+    /// The shape a tool would make (the extrude preview), drawn translucent over the
+    /// model: its alpha is how much of the model shows through.
+    pub preview_body: Rgba,
     // sketches
     /// Sketch geometry that can still move (under-constrained).
     pub sketch: Rgba,
     /// Sketch geometry fixed by its constraints.
     pub sketch_constrained: Rgba,
     pub sketch_construction: Rgba,
+    /// Model edges projected into a sketch (fixed, linked to their source).
+    pub sketch_projected: Rgba,
     /// Geometry being drawn, before it is created.
     pub sketch_preview: Rgba,
     /// What the pointer is over, or what is picked.
@@ -99,6 +104,9 @@ pub struct Theme {
     // the view cube
     pub cube_face: Rgba,
     pub cube_edge: Rgba,
+    // assemblies
+    /// Component tints, mixed lightly into the body colour (`body_colour`).
+    pub component_tints: [Rgba; 6],
     /// The drawing workspace: the area around the sheet, the paper, and its lines.
     pub sheet_backdrop: Rgba,
     pub sheet_paper: Rgba,
@@ -111,6 +119,22 @@ pub struct Theme {
 }
 
 impl Theme {
+    /// The colour of a body: the plain body colour, or with a component tint mixed in
+    /// (a quarter of the tint, so shading and edges still read as one material).
+    pub fn body_colour(&self, tint: Option<u8>) -> Rgba {
+        let Some(i) = tint else {
+            return self.body;
+        };
+        let t = self.component_tints[usize::from(i) % self.component_tints.len()];
+        let mix = |a: u8, b: u8| ((u16::from(a) * 3 + u16::from(b)) / 4) as u8;
+        Rgba(
+            mix(self.body.0, t.0),
+            mix(self.body.1, t.1),
+            mix(self.body.2, t.2),
+            self.body.3,
+        )
+    }
+
     pub fn light() -> Theme {
         Theme {
             mode: ThemeMode::Light,
@@ -124,9 +148,11 @@ impl Theme {
             body: Rgba(176, 184, 196, 255),
             body_selected: Rgba(64, 140, 230, 255),
             edge: Rgba(40, 46, 56, 255),
+            preview_body: Rgba(30, 112, 214, 110),
             sketch: Rgba(30, 100, 220, 255),
             sketch_constrained: Rgba(20, 24, 30, 255),
             sketch_construction: Rgba(214, 120, 30, 255),
+            sketch_projected: Rgba(150, 60, 200, 255),
             sketch_preview: Rgba(30, 100, 220, 140),
             highlight: Rgba(240, 160, 20, 255),
             measure: Rgba(0, 140, 112, 255),
@@ -155,6 +181,14 @@ impl Theme {
             error: Rgba(196, 44, 44, 255),
             cube_face: Rgba(236, 240, 245, 240),
             cube_edge: Rgba(128, 137, 150, 255),
+            component_tints: [
+                Rgba(70, 130, 220, 255),
+                Rgba(226, 132, 40, 255),
+                Rgba(60, 170, 110, 255),
+                Rgba(196, 80, 160, 255),
+                Rgba(200, 176, 50, 255),
+                Rgba(60, 170, 190, 255),
+            ],
             sheet_backdrop: Rgba(214, 219, 226, 255),
             sheet_paper: Rgba(255, 255, 255, 255),
             sheet_line: Rgba(20, 24, 30, 255),
@@ -179,9 +213,11 @@ impl Theme {
             body: Rgba(150, 158, 170, 255),
             body_selected: Rgba(84, 160, 255, 255),
             edge: Rgba(18, 20, 24, 255),
+            preview_body: Rgba(84, 160, 255, 110),
             sketch: Rgba(96, 170, 255, 255),
             sketch_constrained: Rgba(236, 240, 246, 255),
             sketch_construction: Rgba(240, 150, 60, 255),
+            sketch_projected: Rgba(200, 140, 255, 255),
             sketch_preview: Rgba(96, 170, 255, 140),
             highlight: Rgba(255, 190, 60, 255),
             measure: Rgba(70, 216, 178, 255),
@@ -210,6 +246,14 @@ impl Theme {
             error: Rgba(240, 100, 100, 255),
             cube_face: Rgba(54, 58, 66, 235),
             cube_edge: Rgba(112, 120, 132, 255),
+            component_tints: [
+                Rgba(90, 150, 240, 255),
+                Rgba(240, 150, 60, 255),
+                Rgba(80, 190, 130, 255),
+                Rgba(210, 100, 180, 255),
+                Rgba(220, 196, 70, 255),
+                Rgba(80, 190, 210, 255),
+            ],
             sheet_backdrop: Rgba(24, 26, 30, 255),
             sheet_paper: Rgba(38, 42, 48, 255),
             sheet_line: Rgba(232, 236, 242, 255),

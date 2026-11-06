@@ -13,7 +13,7 @@ pub const MAX_FEATURES: usize = 10_000;
 /// Most profiles one feature may use.
 pub const MAX_FEATURE_PROFILES: usize = 1_000;
 
-/// Which way an extrude goes from its sketch plane.
+/// Which way an extrude goes from its start plane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ExtrudeDirection {
@@ -24,6 +24,73 @@ pub enum ExtrudeDirection {
     Reversed,
     /// Half each way.
     Symmetric,
+    /// `distance` along the normal and `distance2` against it.
+    TwoSides,
+}
+
+impl ExtrudeDirection {
+    pub fn parse(s: &str) -> Option<ExtrudeDirection> {
+        Some(match s {
+            "normal" => ExtrudeDirection::Normal,
+            "reversed" => ExtrudeDirection::Reversed,
+            "symmetric" => ExtrudeDirection::Symmetric,
+            "two_sides" => ExtrudeDirection::TwoSides,
+            _ => return None,
+        })
+    }
+
+    pub fn key(self) -> &'static str {
+        match self {
+            ExtrudeDirection::Normal => "normal",
+            ExtrudeDirection::Reversed => "reversed",
+            ExtrudeDirection::Symmetric => "symmetric",
+            ExtrudeDirection::TwoSides => "two_sides",
+        }
+    }
+}
+
+/// How far an extrude goes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ExtrudeExtent {
+    /// By `distance` (and `distance2` for two sides).
+    #[default]
+    Distance,
+    /// Past every body built before it (from their bounding boxes), so a cut goes
+    /// through everything.
+    ThroughAll,
+    /// Up to the flat face or plane in `to`, which must be parallel to the profile's
+    /// plane. The direction follows the object.
+    ToObject,
+}
+
+impl ExtrudeExtent {
+    pub fn parse(s: &str) -> Option<ExtrudeExtent> {
+        Some(match s {
+            "distance" => ExtrudeExtent::Distance,
+            "through_all" => ExtrudeExtent::ThroughAll,
+            "to_object" => ExtrudeExtent::ToObject,
+            _ => return None,
+        })
+    }
+
+    pub fn key(self) -> &'static str {
+        match self {
+            ExtrudeExtent::Distance => "distance",
+            ExtrudeExtent::ThroughAll => "through_all",
+            ExtrudeExtent::ToObject => "to_object",
+        }
+    }
+}
+
+/// What a to-object extrude goes up to.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExtrudeTo {
+    /// A flat face of an earlier feature's solid, by name, found again at every rebuild.
+    Face(crate::FaceRef),
+    /// A fixed plane (such as a construction plane's frame).
+    Plane(chamfera_geom::Frame),
 }
 
 /// What a feature's new shape does to the bodies it overlaps.
@@ -62,17 +129,74 @@ impl Operation {
     }
 }
 
+/// Pull sketch profiles straight out. Every option after `operation` came in format 13
+/// and defaults to what older designs did: by distance, from the sketch plane, no taper.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Extrude {
     pub sketch: u32,
     /// A point inside each profile to extrude (sketch coordinates).
     pub profiles: Vec<Point2>,
-    /// The distance, an expression such as `10 mm` or `thickness * 2`.
+    /// The distance, an expression such as `10 mm` or `thickness * 2` (side one for two
+    /// sides; unused for through all and to object).
     pub distance: String,
     #[serde(default)]
     pub direction: ExtrudeDirection,
     #[serde(default)]
     pub operation: Operation,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub extent: ExtrudeExtent,
+    /// The second side's distance, against the normal (two sides only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub distance2: Option<String>,
+    /// Where the extrude starts: this far from the sketch plane along its normal
+    /// (negative: the other way). `None` starts on the sketch plane.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_offset: Option<String>,
+    /// The draft angle of the side faces, an angle expression: positive narrows the
+    /// profile away from the start plane, negative widens it. `None` is no taper.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub taper: Option<String>,
+    /// The face or plane a to-object extrude goes up to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to: Option<ExtrudeTo>,
+}
+
+fn is_default<T: Default + PartialEq>(v: &T) -> bool {
+    *v == T::default()
+}
+
+impl Default for Extrude {
+    /// No sketch or profiles yet, 10 mm along the normal as a new body.
+    fn default() -> Self {
+        Extrude {
+            sketch: 0,
+            profiles: Vec::new(),
+            distance: "10 mm".into(),
+            direction: ExtrudeDirection::Normal,
+            operation: Operation::NewBody,
+            extent: ExtrudeExtent::Distance,
+            distance2: None,
+            start_offset: None,
+            taper: None,
+            to: None,
+        }
+    }
+}
+
+/// The steepest extrude taper, in degrees (side faces at 90 degrees would lie flat).
+pub const MAX_TAPER_DEGREES: f64 = 89.0;
+
+/// An extrude's evaluated options (see [`Document::extrude_values`]).
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct ExtrudeValues {
+    /// mm; 0 when the extent does not use it.
+    pub distance: f64,
+    /// mm, two sides only.
+    pub distance2: f64,
+    /// mm along the sketch plane's normal.
+    pub start_offset: f64,
+    /// Radians; positive narrows.
+    pub taper: f64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -149,6 +273,27 @@ pub struct Blend {
 
 /// Most edges one blend may hold.
 pub const MAX_BLEND_EDGES: usize = 10_000;
+
+/// Most curves one sweep path may hold.
+pub const MAX_SWEEP_PATH_CURVES: usize = 1_000;
+/// Most profiles one loft may join.
+pub const MAX_LOFT_SECTIONS: usize = 1_000;
+
+/// A profile swept along a path: lines and arcs of another sketch, joined end to end and
+/// meeting tangentially, starting on the profile's plane.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Sweep {
+    /// The sketch the profiles come from.
+    pub sketch: u32,
+    /// A point inside each profile to sweep (sketch coordinates).
+    pub profiles: Vec<Point2>,
+    /// The sketch the path is drawn in.
+    pub path_sketch: u32,
+    /// The path's curves (ids in `path_sketch`), in any order.
+    pub path: Vec<u32>,
+    #[serde(default)]
+    pub operation: Operation,
+}
 
 /// The shape of a hole's mouth.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -280,6 +425,21 @@ pub struct Mirror {
     pub operation: Operation,
 }
 
+/// One profile of a loft: a point inside it in its sketch.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct LoftSection {
+    pub sketch: u32,
+    pub profile: Point2,
+}
+
+/// A solid through profiles on parallel planes, in order.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Loft {
+    pub sections: Vec<LoftSection>,
+    #[serde(default)]
+    pub operation: Operation,
+}
+
 /// How a move places bodies.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "transform", rename_all = "snake_case")]
@@ -338,6 +498,8 @@ pub enum FeatureKind {
     /// A construction plane, axis or point.
     Construct(crate::construct::Construction),
     Blend(Blend),
+    Sweep(Sweep),
+    Loft(Loft),
     Hole(Hole),
     Mirror(Mirror),
     Move(Move),
@@ -356,11 +518,14 @@ pub struct Feature {
 }
 
 impl FeatureKind {
-    /// The sketch the feature's profiles come from (patterns have none).
+    /// The sketch the feature's profiles come from (patterns have none; a loft's first
+    /// profile's).
     pub fn sketch(&self) -> Option<u32> {
         match self {
             FeatureKind::Extrude(e) => Some(e.sketch),
             FeatureKind::Revolve(r) => Some(r.sketch),
+            FeatureKind::Sweep(s) => Some(s.sketch),
+            FeatureKind::Loft(l) => l.sections.first().map(|s| s.sketch),
             FeatureKind::Hole(h) => h.sketch,
             FeatureKind::Pattern(_)
             | FeatureKind::Construct(_)
@@ -371,11 +536,26 @@ impl FeatureKind {
         }
     }
 
+    /// Every sketch the feature uses (a sweep's path sketch and every loft profile's
+    /// sketch too), without repeats.
+    pub fn sketches(&self) -> Vec<u32> {
+        let mut out: Vec<u32> = match self {
+            FeatureKind::Sweep(s) => vec![s.sketch, s.path_sketch],
+            FeatureKind::Loft(l) => l.sections.iter().map(|s| s.sketch).collect(),
+            other => other.sketch().into_iter().collect(),
+        };
+        let mut seen = std::collections::BTreeSet::new();
+        out.retain(|s| seen.insert(*s));
+        out
+    }
+
     /// The operation; a pattern repeats its source's (see the rebuild).
     pub fn operation(&self) -> Operation {
         match self {
             FeatureKind::Extrude(e) => e.operation,
             FeatureKind::Revolve(r) => r.operation,
+            FeatureKind::Sweep(s) => s.operation,
+            FeatureKind::Loft(l) => l.operation,
             FeatureKind::Hole(_) => Operation::Cut,
             FeatureKind::Mirror(m) => m.operation,
             FeatureKind::Pattern(_)
@@ -386,17 +566,21 @@ impl FeatureKind {
         }
     }
 
+    /// The seeds of the profiles in [`FeatureKind::sketch`] (a loft's are in its
+    /// sections).
     pub fn profiles(&self) -> &[Point2] {
         match self {
             FeatureKind::Extrude(e) => &e.profiles,
             FeatureKind::Revolve(r) => &r.profiles,
+            FeatureKind::Sweep(s) => &s.profiles,
             FeatureKind::Pattern(_)
             | FeatureKind::Hole(_)
             | FeatureKind::Construct(_)
             | FeatureKind::Blend(_)
             | FeatureKind::Shell(_)
             | FeatureKind::Mirror(_)
-            | FeatureKind::Move(_) => &[],
+            | FeatureKind::Move(_)
+            | FeatureKind::Loft(_) => &[],
         }
     }
 
@@ -405,6 +589,8 @@ impl FeatureKind {
             FeatureKind::Extrude(_) => "Extrude",
             FeatureKind::Revolve(_) => "Revolve",
             FeatureKind::Pattern(_) => "Pattern",
+            FeatureKind::Sweep(_) => "Sweep",
+            FeatureKind::Loft(_) => "Loft",
             FeatureKind::Hole(_) => "Hole",
             FeatureKind::Construct(c) => c.kind().label(),
             FeatureKind::Blend(b) => match b.blend {
@@ -426,9 +612,14 @@ impl FeatureKind {
     /// The expressions this feature evaluates.
     fn expressions(&self) -> Vec<&str> {
         match self {
-            FeatureKind::Extrude(e) => vec![e.distance.as_str()],
+            FeatureKind::Extrude(e) => std::iter::once(e.distance.as_str())
+                .chain(e.distance2.as_deref())
+                .chain(e.start_offset.as_deref())
+                .chain(e.taper.as_deref())
+                .collect(),
             FeatureKind::Revolve(r) => vec![r.angle.as_str()],
             FeatureKind::Blend(b) => vec![b.size.as_str()],
+            FeatureKind::Sweep(_) | FeatureKind::Loft(_) => Vec::new(),
             FeatureKind::Hole(h) => std::iter::once(&h.diameter)
                 .chain(
                     [
@@ -498,6 +689,9 @@ impl Document {
             }
             return Ok(());
         }
+        if let FeatureKind::Loft(l) = kind {
+            return self.check_loft(l);
+        }
         if let FeatureKind::Shell(s) = kind {
             if s.faces.len() > MAX_SHELL_FACES {
                 return Err(bad(format!("open at most {MAX_SHELL_FACES} faces")));
@@ -537,19 +731,16 @@ impl Document {
             }
         }
         match kind {
-            FeatureKind::Extrude(e) => {
-                let d = self.evaluate_feature_value(&e.distance, expr::Dim::LENGTH)?;
-                if !d.is_finite() || d.abs() <= chamfera_geom::LINEAR_TOLERANCE {
-                    return Err(bad("the distance must not be 0".into()));
-                }
-            }
+            FeatureKind::Extrude(e) => self.check_extrude(e)?,
             FeatureKind::Pattern(_)
             | FeatureKind::Hole(_)
             | FeatureKind::Construct(_)
             | FeatureKind::Blend(_)
             | FeatureKind::Shell(_)
             | FeatureKind::Mirror(_)
-            | FeatureKind::Move(_) => {}
+            | FeatureKind::Move(_)
+            | FeatureKind::Loft(_) => {}
+            FeatureKind::Sweep(s) => self.check_sweep_path(s)?,
             FeatureKind::Revolve(r) => {
                 let a = self.evaluate_feature_value(&r.angle, expr::Dim::ANGLE)?;
                 if !a.is_finite()
@@ -576,6 +767,133 @@ impl Document {
             }
         }
         Ok(())
+    }
+
+    /// A sweep's path: 1 to [`MAX_SWEEP_PATH_CURVES`] distinct lines or arcs of its path
+    /// sketch. Whether they join up is the kernel's to say when the sweep is built.
+    fn check_sweep_path(&self, s: &Sweep) -> Result<(), DocError> {
+        let bad = |reason: String| DocError::BadFeature { reason };
+        let f = self.sketch(s.path_sketch)?;
+        if s.path.is_empty() || s.path.len() > MAX_SWEEP_PATH_CURVES {
+            return Err(bad(format!(
+                "pick 1 to {MAX_SWEEP_PATH_CURVES} lines or arcs for the path"
+            )));
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        for id in &s.path {
+            if !seen.insert(*id) {
+                return Err(bad(format!("the path uses curve {id} twice")));
+            }
+            match f.sketch.curve(chamfera_sketch::CurveId(*id)) {
+                Some(chamfera_sketch::Curve::Line { .. } | chamfera_sketch::Curve::Arc { .. }) => {}
+                Some(_) => {
+                    return Err(bad(format!(
+                        "curve {id} of {} is not a line or an arc",
+                        f.name
+                    )));
+                }
+                None => return Err(bad(format!("{} has no curve {id}", f.name))),
+            }
+        }
+        Ok(())
+    }
+
+    /// A loft: 2 to [`MAX_LOFT_SECTIONS`] profiles, each inside a closed region of its
+    /// sketch. Whether they can be joined is the kernel's to say.
+    fn check_loft(&self, l: &Loft) -> Result<(), DocError> {
+        let bad = |reason: String| DocError::BadFeature { reason };
+        if l.sections.len() < 2 || l.sections.len() > MAX_LOFT_SECTIONS {
+            return Err(bad(format!(
+                "pick 2 to {MAX_LOFT_SECTIONS} profiles, in order"
+            )));
+        }
+        for s in &l.sections {
+            let f = self.sketch(s.sketch)?;
+            if !s.profile.is_valid() {
+                return Err(bad("a profile point is not a finite coordinate".into()));
+            }
+            if f.sketch.region_at(s.profile).is_none() {
+                return Err(bad(format!(
+                    "no closed profile of {} contains ({:.3}, {:.3})",
+                    f.name, s.profile.x, s.profile.y
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// The values of an extrude's options, checked: (distance, second distance, start
+    /// offset, taper in radians). Distances are only checked (and only non-zero) where
+    /// the extent uses them; missing options are 0.
+    pub fn extrude_values(&self, e: &Extrude) -> Result<ExtrudeValues, DocError> {
+        let bad = |reason: String| DocError::BadFeature { reason };
+        let length = |src: &str| self.evaluate_feature_value(src, expr::Dim::LENGTH);
+        let tol = chamfera_geom::LINEAR_TOLERANCE;
+        let by_distance = e.extent == ExtrudeExtent::Distance;
+        let mut v = ExtrudeValues::default();
+        if by_distance {
+            v.distance = length(&e.distance)?;
+            if !v.distance.is_finite()
+                || v.distance.abs() <= tol
+                || v.distance.abs() > chamfera_geom::MAX_COORDINATE
+            {
+                return Err(bad(format!(
+                    "the distance must not be 0 and at most {} mm",
+                    chamfera_geom::MAX_COORDINATE
+                )));
+            }
+        }
+        if by_distance && e.direction == ExtrudeDirection::TwoSides {
+            let Some(d2) = &e.distance2 else {
+                return Err(bad("two sides needs a second distance".into()));
+            };
+            v.distance2 = length(d2)?;
+            let ok = |d: f64| d.is_finite() && d > tol && d <= chamfera_geom::MAX_COORDINATE;
+            if !ok(v.distance) || !ok(v.distance2) {
+                return Err(bad(format!(
+                    "both distances of two sides must be above 0 and at most {} mm",
+                    chamfera_geom::MAX_COORDINATE
+                )));
+            }
+        }
+        if let Some(s) = &e.start_offset {
+            v.start_offset = length(s)?;
+            if !v.start_offset.is_finite() || v.start_offset.abs() > chamfera_geom::MAX_COORDINATE {
+                return Err(bad(format!(
+                    "the start offset must be at most {} mm",
+                    chamfera_geom::MAX_COORDINATE
+                )));
+            }
+        }
+        if let Some(t) = &e.taper {
+            v.taper = self.evaluate_feature_value(t, expr::Dim::ANGLE)?;
+            if !v.taper.is_finite() || v.taper.abs().to_degrees() >= MAX_TAPER_DEGREES {
+                return Err(bad(format!(
+                    "the taper must be less than {MAX_TAPER_DEGREES} degrees either way"
+                )));
+            }
+        }
+        if e.extent == ExtrudeExtent::ToObject {
+            match &e.to {
+                None => return Err(bad("pick the face or plane to extrude up to".into())),
+                Some(ExtrudeTo::Face(r)) => {
+                    self.feature(r.feature)?;
+                    if r.face.is_empty() || r.face.chars().count() > 512 {
+                        return Err(bad("the face name is empty or too long".into()));
+                    }
+                }
+                Some(ExtrudeTo::Plane(f)) => {
+                    if !f.origin().is_valid() {
+                        return Err(bad("the plane lies outside the working range".into()));
+                    }
+                }
+            }
+        }
+        Ok(v)
+    }
+
+    fn check_extrude(&self, e: &Extrude) -> Result<(), DocError> {
+        self.extrude_values(e).map(|_| ())
     }
 
     /// The number of copies a pattern makes, checked (2 to [`MAX_PATTERN_COUNT`]).
@@ -866,6 +1184,7 @@ impl Document {
             });
         }
         self.check_feature(&kind)?;
+        self.check_new_item_dependencies(&crate::timeline::kind_dependencies(&kind))?;
         let id = self
             .last_feature_id
             .checked_add(1)
@@ -882,6 +1201,8 @@ impl Document {
             suppressed: false,
             kind,
         });
+        self.timeline_insert(id);
+        self.assembly.adopt(id);
         Ok(id)
     }
 
@@ -905,12 +1226,14 @@ impl Document {
             .iter()
             .position(|f| f.id == id)
             .ok_or(DocError::NoSuchFeature(id))?;
-        Ok(self.features.remove(i))
+        let f = self.features.remove(i);
+        self.timeline_remove();
+        Ok(f)
     }
 
     /// Sketches attached to a face of a feature or drawn on a construction plane, patterns
-    /// of it, and constructions and revolves that use it (so deleting the feature can be
-    /// refused).
+    /// of it, constructions and revolves that use it, and extrudes up to one of its faces
+    /// (so deleting the feature can be refused).
     pub fn feature_users(&self, feature: u32) -> Vec<String> {
         let sketches = self
             .sketches
@@ -938,10 +1261,14 @@ impl Document {
                     m.features.contains(&feature)
                         || matches!(&m.plane, MirrorPlane::Face { feature: g, .. } if *g == feature)
                 }
-                FeatureKind::Extrude(_)
-                | FeatureKind::Blend(_)
+                FeatureKind::Extrude(e) => {
+                    matches!(&e.to, Some(ExtrudeTo::Face(r)) if r.feature == feature)
+                }
+                FeatureKind::Blend(_)
                 | FeatureKind::Shell(_)
-                | FeatureKind::Move(_) => false,
+                | FeatureKind::Move(_)
+                | FeatureKind::Sweep(_)
+                | FeatureKind::Loft(_) => false,
             })
             .map(|f| f.name.clone());
         sketches.chain(features).collect()
@@ -951,7 +1278,7 @@ impl Document {
     pub fn sketch_users(&self, sketch: u32) -> Vec<String> {
         self.features
             .iter()
-            .filter(|f| f.kind.sketch() == Some(sketch))
+            .filter(|f| f.kind.sketches().contains(&sketch))
             .map(|f| f.name.clone())
             .collect()
     }
@@ -1001,6 +1328,7 @@ mod tests {
             distance: "t * 2".into(),
             direction: ExtrudeDirection::Normal,
             operation: Operation::NewBody,
+            ..Extrude::default()
         });
         let id = doc.add_feature(ok).unwrap();
         assert_eq!(doc.feature(id).unwrap().name, "Extrude1");
@@ -1015,6 +1343,7 @@ mod tests {
                 distance: distance.into(),
                 direction: ExtrudeDirection::Normal,
                 operation: Operation::NewBody,
+                ..Extrude::default()
             });
             assert!(doc.add_feature(bad).is_err(), "{seed:?} {distance}");
         }
@@ -1034,6 +1363,7 @@ mod tests {
                 distance: "5".into(),
                 direction: ExtrudeDirection::Normal,
                 operation: Operation::NewBody,
+                ..Extrude::default()
             }))
             .unwrap();
         let mirror = FeatureKind::Mirror(Mirror {
@@ -1152,9 +1482,140 @@ mod tests {
             distance: "12.5".into(),
             direction: ExtrudeDirection::Symmetric,
             operation: Operation::Cut,
+            ..Extrude::default()
         }))
         .unwrap();
         let back = Document::from_json(&doc.to_json().unwrap()).unwrap();
         assert_eq!(back, doc);
+    }
+
+    fn extrude(sketch: u32) -> Extrude {
+        Extrude {
+            sketch,
+            profiles: vec![Point2::new(10.0, 10.0)],
+            ..Extrude::default()
+        }
+    }
+
+    #[test]
+    fn extrude_options_round_trip_and_older_extrudes_read_as_before() {
+        let (mut doc, sketch) = plate_design();
+        let first = doc
+            .add_feature(FeatureKind::Extrude(extrude(sketch)))
+            .unwrap();
+        doc.add_feature(FeatureKind::Extrude(Extrude {
+            direction: ExtrudeDirection::TwoSides,
+            distance2: Some("4 mm".into()),
+            start_offset: Some("-2 mm".into()),
+            taper: Some("5 deg".into()),
+            ..extrude(sketch)
+        }))
+        .unwrap();
+        doc.add_feature(FeatureKind::Extrude(Extrude {
+            extent: ExtrudeExtent::ToObject,
+            to: Some(ExtrudeTo::Face(crate::FaceRef {
+                feature: first,
+                face: "top".into(),
+            })),
+            ..extrude(sketch)
+        }))
+        .unwrap();
+        doc.add_feature(FeatureKind::Extrude(Extrude {
+            extent: ExtrudeExtent::ThroughAll,
+            operation: Operation::Cut,
+            ..extrude(sketch)
+        }))
+        .unwrap();
+        let back = Document::from_json(&doc.to_json().unwrap()).unwrap();
+        assert_eq!(back, doc);
+        // The extrude up to its top face uses feature 1.
+        assert_eq!(doc.feature_users(first), vec!["Extrude3"]);
+        // An extrude as format 12 and older wrote it: no options, which mean by
+        // distance from the sketch plane, without a taper.
+        let old: Extrude = serde_json::from_str(
+            r#"{"sketch":1,"profiles":[{"x":1,"y":1}],"distance":"10 mm","direction":"symmetric"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            old,
+            Extrude {
+                sketch: 1,
+                profiles: vec![Point2::new(1.0, 1.0)],
+                direction: ExtrudeDirection::Symmetric,
+                ..Extrude::default()
+            }
+        );
+        // And a plain extrude still writes only those fields.
+        let text = serde_json::to_string(&old).unwrap();
+        for key in ["extent", "distance2", "start_offset", "taper", "\"to\""] {
+            assert!(!text.contains(key), "{text}");
+        }
+    }
+
+    #[test]
+    fn bad_extrude_options_are_refused() {
+        let (mut doc, sketch) = plate_design();
+        let bad = [
+            // Two sides without a second distance, or with a zero or negative one.
+            Extrude {
+                direction: ExtrudeDirection::TwoSides,
+                ..extrude(sketch)
+            },
+            Extrude {
+                direction: ExtrudeDirection::TwoSides,
+                distance2: Some("0".into()),
+                ..extrude(sketch)
+            },
+            Extrude {
+                direction: ExtrudeDirection::TwoSides,
+                distance2: Some("-3".into()),
+                ..extrude(sketch)
+            },
+            // A taper of 89 degrees or more, or one in mm.
+            Extrude {
+                taper: Some("89 deg".into()),
+                ..extrude(sketch)
+            },
+            Extrude {
+                taper: Some("5 mm".into()),
+                ..extrude(sketch)
+            },
+            // A start offset that is an angle or out of range.
+            Extrude {
+                start_offset: Some("5 deg".into()),
+                ..extrude(sketch)
+            },
+            Extrude {
+                start_offset: Some("1e9 mm".into()),
+                ..extrude(sketch)
+            },
+            // To object without an object, or with a missing feature.
+            Extrude {
+                extent: ExtrudeExtent::ToObject,
+                ..extrude(sketch)
+            },
+            Extrude {
+                extent: ExtrudeExtent::ToObject,
+                to: Some(ExtrudeTo::Face(crate::FaceRef {
+                    feature: 99,
+                    face: "top".into(),
+                })),
+                ..extrude(sketch)
+            },
+        ];
+        for e in bad {
+            assert!(
+                doc.add_feature(FeatureKind::Extrude(e.clone())).is_err(),
+                "{e:?}"
+            );
+        }
+        assert!(doc.features.is_empty());
+        // Through all needs no distance at all.
+        doc.add_feature(FeatureKind::Extrude(Extrude {
+            extent: ExtrudeExtent::ThroughAll,
+            distance: "0".into(),
+            ..extrude(sketch)
+        }))
+        .unwrap();
     }
 }

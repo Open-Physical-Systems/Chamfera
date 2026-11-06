@@ -340,6 +340,9 @@ pub struct SceneBody {
     pub name: String,
     pub mesh: TriMesh,
     pub visible: bool,
+    /// A component tint: an index into the theme's `component_tints`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tint: Option<u8>,
 }
 
 /// What a click picked.
@@ -358,6 +361,8 @@ pub enum OverlayStyle {
     Sketch,
     Constrained,
     Construction,
+    /// Model edges projected into the sketch.
+    Projected,
     Preview,
     Highlight,
     /// A measure result: the line between two closest points.
@@ -374,6 +379,7 @@ impl OverlayStyle {
             OverlayStyle::Sketch => theme.sketch,
             OverlayStyle::Constrained => theme.sketch_constrained,
             OverlayStyle::Construction => theme.sketch_construction,
+            OverlayStyle::Projected => theme.sketch_projected,
             OverlayStyle::Preview => theme.sketch_preview,
             OverlayStyle::Highlight => theme.highlight,
             OverlayStyle::Measure => theme.measure,
@@ -442,6 +448,10 @@ pub struct Scene {
     /// Drawn over everything, in order.
     #[serde(default)]
     pub overlays: Vec<Overlay>,
+    /// Shapes a tool would make (the extrude preview), drawn translucent in the theme's
+    /// `preview_body` colour over the bodies. Not picked; display only.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub previews: Vec<TriMesh>,
     /// See-through fills (construction planes), drawn before the overlays.
     #[serde(default)]
     pub fills: Vec<Fill>,
@@ -461,6 +471,7 @@ impl Scene {
             name: name.to_owned(),
             mesh,
             visible: true,
+            tint: None,
         });
         Some(id)
     }
@@ -473,7 +484,7 @@ impl Scene {
         self.bodies.iter_mut().find(|b| b.id == id)
     }
 
-    /// Bounds of the visible bodies and the overlays.
+    /// Bounds of the visible bodies, the previews and the overlays.
     pub fn bounds(&self) -> Option<Aabb> {
         let overlay_points = self
             .overlays
@@ -486,6 +497,7 @@ impl Scene {
             .iter()
             .filter(|b| b.visible)
             .filter_map(|b| b.mesh.bounds())
+            .chain(self.previews.iter().filter_map(TriMesh::bounds))
             .chain(overlays)
             .reduce(Aabb::union)
     }

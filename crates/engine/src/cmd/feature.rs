@@ -2,7 +2,10 @@
 
 use super::CommandSpec;
 use crate::{CmdResult, CommandError, Session, params};
-use chamfera_doc::{Blend, BlendKind, Extrude, ExtrudeDirection, FeatureKind, Operation, Revolve};
+use chamfera_doc::{
+    Blend, BlendKind, Extrude, ExtrudeDirection, ExtrudeExtent, ExtrudeTo, FaceRef, FeatureKind,
+    Loft, LoftSection, Operation, Revolve, Sweep,
+};
 use chamfera_geom::Point2;
 use serde_json::{Value, json};
 
@@ -20,9 +23,12 @@ pub static COMMANDS: &[CommandSpec] = &[
         params: "feature: integer (required)\n\
                  distance: string or number (optional) - new extrude or offset plane distance\n\
                  angle: string or number (optional) - new angle of a plane at an angle\n\
-                 direction: string (optional) - normal, reversed or symmetric\n\
+                 direction: string (optional) - normal, reversed, symmetric or two_sides\n\
+                 extent, distance2, to, start_offset, taper: (optional) - extrude options as for solid.extrude (0 removes an offset or taper)\n\
                  operation: string (optional) - new_body, join, cut or intersect\n\
                  size: string or number (optional) - new fillet radius or chamfer distance\n\
+                 path_curves: list of integers (optional) - new sweep path curves\n\
+                 sections: list of {sketch, x, y} (optional) - new loft profiles, in order\n\
                  points, kind, diameter, depth, through_all, cb_diameter, cb_depth, cs_diameter,\n\
                  cs_angle, tip_angle (optional) - a hole's new values, as for solid.hole\n\
                  plane: string or object (optional) - a mirror's new plane, as in solid.mirror\n\
@@ -77,11 +83,24 @@ pub static COMMANDS: &[CommandSpec] = &[
         label: "Extrude",
         params: "sketch: integer (required)\n\
                  profiles: list of {x, y} (required) - a point inside each profile, in sketch mm\n\
-                 distance: string or number (required) - such as 10, \"10 mm\" or \"thickness * 2\"\n\
-                 direction: string (optional) - normal (default), reversed or symmetric\n\
+                 distance: string or number (required for the distance extent) - such as 10, \"10 mm\" or \"thickness * 2\"\n\
+                 direction: string (optional) - normal (default), reversed, symmetric or two_sides\n\
+                 distance2: string or number (optional) - the second side's distance, for two_sides\n\
+                 extent: string (optional) - distance (default), through_all (past every body) or to_object\n\
+                 to: object (optional) - for to_object: {feature, face}, {plane: {origin, normal}} or {pick: {x, y, width, height}}; a parallel flat face or plane\n\
+                 start_offset: string or number (optional) - start this far from the sketch plane along its normal\n\
+                 taper: string or number (optional) - draft angle, a plain number is degrees; positive narrows\n\
                  operation: string (optional) - new_body (default), join, cut or intersect",
         mutates: true,
         run: extrude,
+    },
+    CommandSpec {
+        id: "solid.extrude_preview",
+        label: "Extrude Preview",
+        params: "the parameters of solid.extrude - shows the shape it would make, translucent, without changing the design\n\
+                 clear: boolean (optional) - true removes the preview instead",
+        mutates: false,
+        run: extrude_preview,
     },
     CommandSpec {
         id: "solid.revolve",
@@ -103,6 +122,15 @@ pub static COMMANDS: &[CommandSpec] = &[
                  radius: string or number (required) - such as 2 or \"2 mm\"",
         mutates: true,
         run: fillet,
+    },
+    CommandSpec {
+        id: "solid.loft",
+        label: "Loft",
+        params: "sections: list of {sketch, x, y} (required) - a point inside each profile, in order, \
+                 2 or more, on parallel planes\n\
+                 operation: string (optional) - new_body (default), join, cut or intersect",
+        mutates: true,
+        run: loft,
     },
     CommandSpec {
         id: "solid.shell",
@@ -136,11 +164,30 @@ pub static COMMANDS: &[CommandSpec] = &[
         run: pattern_linear,
     },
     CommandSpec {
+        id: "solid.path_at",
+        label: "Path Under Cursor",
+        params: "x, y, width, height: number (required) - pixel and viewport size",
+        mutates: false,
+        run: path_at,
+    },
+    CommandSpec {
         id: "solid.profile_at",
         label: "Profile Under Cursor",
         params: "x, y, width, height: number (required) - pixel and viewport size",
         mutates: false,
         run: profile_at,
+    },
+    CommandSpec {
+        id: "solid.sweep",
+        label: "Sweep",
+        params: "sketch: integer (required) - the profile's sketch\n\
+                 profiles: list of {x, y} (required) - a point inside each profile, in sketch mm\n\
+                 path_sketch: integer (required) - the sketch the path is drawn in\n\
+                 path_curves: list of integers (required) - its lines and arcs, joined tangentially, \
+                 starting on the profile's plane\n\
+                 operation: string (optional) - new_body (default), join, cut or intersect",
+        mutates: true,
+        run: sweep,
     },
 ];
 
@@ -159,17 +206,14 @@ fn distance(p: &Value) -> Result<Option<String>, CommandError> {
 }
 
 fn direction(p: &Value) -> Result<Option<ExtrudeDirection>, CommandError> {
-    Ok(match params::opt_str(p, "direction")? {
-        None => None,
-        Some("normal") => Some(ExtrudeDirection::Normal),
-        Some("reversed") => Some(ExtrudeDirection::Reversed),
-        Some("symmetric") => Some(ExtrudeDirection::Symmetric),
-        Some(o) => {
-            return Err(bad(format!(
-                "unknown direction {o:?}: use normal, reversed or symmetric"
-            )));
-        }
-    })
+    match params::opt_str(p, "direction")? {
+        None => Ok(None),
+        Some(o) => ExtrudeDirection::parse(o).map(Some).ok_or_else(|| {
+            bad(format!(
+                "unknown direction {o:?}: use normal, reversed, symmetric or two_sides"
+            ))
+        }),
+    }
 }
 
 pub(super) fn operation(p: &Value) -> Result<Option<Operation>, CommandError> {
@@ -231,16 +275,142 @@ pub(super) fn feature_reply(s: &Session, id: u32) -> Value {
     })
 }
 
-fn extrude(s: &mut Session, p: &Value) -> CmdResult {
-    let sketch = params::req_id(p, "sketch")?;
-    let distance = distance(p)?.ok_or_else(|| bad("`distance` is required"))?;
-    let kind = FeatureKind::Extrude(Extrude {
-        sketch,
+/// The parameter names the extrude options use (besides `sketch`, `profiles`,
+/// `distance`, `direction` and `operation`).
+const EXTRUDE_OPTIONS: [&str; 5] = ["extent", "distance2", "start_offset", "taper", "to"];
+
+/// What a to-object extrude goes up to: `{feature, face}`, `{plane: {origin, normal}}`
+/// or `{pick: {x, y, width, height}}` (the flat face under that pixel).
+fn extrude_to(s: &Session, v: &Value) -> Result<ExtrudeTo, CommandError> {
+    if !v.is_object() {
+        return Err(bad(
+            "`to` must be {feature, face}, {plane: {origin, normal}} or {pick: {x, y, width, height}}",
+        ));
+    }
+    if let Some(pick) = v.get("pick") {
+        let (x, y, w, h) = params::pixel(pick)?;
+        let (feature, face, _) = s.face_at(x, y, w, h).ok_or_else(|| {
+            CommandError::Unavailable("there is no flat solid face under that pixel".into())
+        })?;
+        return Ok(ExtrudeTo::Face(FaceRef { feature, face }));
+    }
+    if let Some(plane) = v.get("plane") {
+        let o = vec3(plane, "origin")?;
+        let n = vec3(plane, "normal")?;
+        let origin = chamfera_geom::Point3::new(o.x, o.y, o.z);
+        let frame = chamfera_geom::Frame::from_normal_and_x(origin, n, chamfera_geom::Vec3::X)
+            .or_else(|| chamfera_geom::Frame::from_normal_and_x(origin, n, chamfera_geom::Vec3::Y))
+            .ok_or_else(|| bad("the plane needs a point in range and a normal with a length"))?;
+        return Ok(ExtrudeTo::Plane(frame));
+    }
+    let feature = params::req_id(v, "feature")?;
+    let face = params::req_str(v, "face")?;
+    // `2:top` is accepted as well as `top`.
+    let face = match crate::solids::split_face_key(face) {
+        Some((f, role)) if f == feature => role.to_owned(),
+        _ => face.to_owned(),
+    };
+    Ok(ExtrudeTo::Face(FaceRef { feature, face }))
+}
+
+/// Sets the extrude options present in `p` on `e` (for `solid.extrude` and
+/// `feature.edit`). A 0 start offset or taper removes it.
+fn extrude_options(s: &Session, p: &Value, e: &mut Extrude) -> Result<(), CommandError> {
+    if let Some(d) = distance(p)? {
+        e.distance = d;
+    }
+    if let Some(d) = direction(p)? {
+        e.direction = d;
+    }
+    if let Some(o) = operation(p)? {
+        e.operation = o;
+    }
+    let to = match p.get("to") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(extrude_to(s, v)?),
+    };
+    match params::opt_str(p, "extent")? {
+        Some(x) => {
+            e.extent = ExtrudeExtent::parse(x).ok_or_else(|| {
+                bad(format!(
+                    "unknown extent {x:?}: use distance, through_all or to_object"
+                ))
+            })?;
+        }
+        None if to.is_some() => e.extent = ExtrudeExtent::ToObject,
+        None => {}
+    }
+    if let Some(t) = to {
+        e.to = Some(t);
+    }
+    if let Some(d) = expression(p, "distance2", "mm")? {
+        e.distance2 = Some(d);
+    }
+    let zero = |x: &str| matches!(x.trim(), "0" | "0 mm" | "0 deg");
+    if let Some(o) = expression(p, "start_offset", "mm")? {
+        e.start_offset = (!zero(&o)).then_some(o);
+    }
+    if let Some(t) = expression(p, "taper", "deg")? {
+        e.taper = (!zero(&t)).then_some(t);
+    }
+    Ok(())
+}
+
+/// The extrude `solid.extrude` and `solid.extrude_preview` describe.
+fn new_extrude(s: &Session, p: &Value) -> Result<Extrude, CommandError> {
+    let mut e = Extrude {
+        sketch: params::req_id(p, "sketch")?,
         profiles: seeds(p)?,
-        distance,
-        direction: direction(p)?.unwrap_or_default(),
-        operation: operation(p)?.unwrap_or_default(),
-    });
+        ..Extrude::default()
+    };
+    extrude_options(s, p, &mut e)?;
+    let by_distance = e.extent == ExtrudeExtent::Distance;
+    if by_distance && distance(p)?.is_none() {
+        return Err(bad("`distance` is required"));
+    }
+    Ok(e)
+}
+
+/// Builds the extrude `p` describes after every solid, tessellates it into the scene's
+/// translucent previews and replies with its exact volume and bounds; the design does not
+/// change.
+fn extrude_preview(s: &mut Session, p: &Value) -> CmdResult {
+    s.scene.previews.clear();
+    if matches!(p.get("clear"), Some(Value::Bool(true))) {
+        return Ok(json!({ "cleared": true }));
+    }
+    let e = new_extrude(s, p)?;
+    let bodies = s.extrude_shapes(&e).map_err(CommandError::Unavailable)?;
+    let mut volume = 0.0;
+    let mut bounds: Option<chamfera_geom::Aabb> = None;
+    let mut triangles = 0;
+    for b in &bodies {
+        volume += b
+            .volume()
+            .map_err(|x| CommandError::Unavailable(x.to_string()))?;
+        if let Some(bb) = b.bounding_box() {
+            bounds = Some(match bounds {
+                Some(a) => a.union(bb),
+                None => bb,
+            });
+        }
+        let mesh = chamfera_kernel::tessellate(b, &chamfera_kernel::TessOptions::default())
+            .map_err(|x| CommandError::Unavailable(format!("the preview cannot be shown: {x}")))?;
+        triangles += mesh.mesh.triangles.len();
+        s.scene.previews.push(mesh.mesh);
+    }
+    let pt = |q: chamfera_geom::Point3| json!([q.x, q.y, q.z]);
+    Ok(json!({
+        "volume": volume,
+        "bodies": bodies.len(),
+        "triangles": triangles,
+        "bounds": bounds.map(|b| json!({ "min": pt(b.min), "max": pt(b.max) })),
+    }))
+}
+
+fn extrude(s: &mut Session, p: &Value) -> CmdResult {
+    let kind = FeatureKind::Extrude(new_extrude(s, p)?);
+    s.scene.previews.clear();
     let id = s.doc.add_feature(kind)?;
     s.rebuild();
     if let Some(e) = s.feature_errors().get(&id) {
@@ -280,6 +450,73 @@ fn revolve(s: &mut Session, p: &Value) -> CmdResult {
         return Err(CommandError::Unavailable(e.clone()));
     }
     Ok(feature_reply(s, id))
+}
+
+/// A list of curve ids.
+fn ids(p: &Value, key: &str) -> Result<Vec<u32>, CommandError> {
+    let list = p
+        .get(key)
+        .and_then(Value::as_array)
+        .ok_or_else(|| bad(format!("`{key}` must be a list of curve ids")))?;
+    if list.len() > chamfera_doc::feature::MAX_SWEEP_PATH_CURVES {
+        return Err(bad(format!("`{key}` has too many curves")));
+    }
+    list.iter()
+        .map(|v| {
+            v.as_u64()
+                .and_then(|n| u32::try_from(n).ok())
+                .ok_or_else(|| bad(format!("`{key}` must hold curve ids (whole numbers)")))
+        })
+        .collect()
+}
+
+/// A loft's profiles: `[{sketch, x, y}, ...]`.
+fn sections(p: &Value) -> Result<Vec<LoftSection>, CommandError> {
+    let list = p
+        .get("sections")
+        .and_then(Value::as_array)
+        .ok_or_else(|| bad("`sections` must be a list of {sketch, x, y}"))?;
+    if list.len() > chamfera_doc::feature::MAX_LOFT_SECTIONS {
+        return Err(bad("too many sections"));
+    }
+    list.iter()
+        .map(|v| {
+            let sketch = params::req_id(v, "sketch")?;
+            let profile = Point2::new(params::req_f64(v, "x")?, params::req_f64(v, "y")?);
+            if !profile.is_valid() {
+                return Err(bad("a profile point is outside the working range"));
+            }
+            Ok(LoftSection { sketch, profile })
+        })
+        .collect()
+}
+
+fn add_feature(s: &mut Session, kind: FeatureKind) -> CmdResult {
+    let id = s.doc.add_feature(kind)?;
+    s.rebuild();
+    if let Some(e) = s.feature_errors().get(&id) {
+        return Err(CommandError::Unavailable(e.clone()));
+    }
+    Ok(feature_reply(s, id))
+}
+
+fn sweep(s: &mut Session, p: &Value) -> CmdResult {
+    let kind = FeatureKind::Sweep(Sweep {
+        sketch: params::req_id(p, "sketch")?,
+        profiles: seeds(p)?,
+        path_sketch: params::req_id(p, "path_sketch")?,
+        path: ids(p, "path_curves")?,
+        operation: operation(p)?.unwrap_or_default(),
+    });
+    add_feature(s, kind)
+}
+
+fn loft(s: &mut Session, p: &Value) -> CmdResult {
+    let kind = FeatureKind::Loft(Loft {
+        sections: sections(p)?,
+        operation: operation(p)?.unwrap_or_default(),
+    });
+    add_feature(s, kind)
 }
 
 /// The edges a fillet or chamfer names: a list, or the one under a pixel.
@@ -520,6 +757,8 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
         match &mut kind {
             FeatureKind::Extrude(e) => e.operation = o,
             FeatureKind::Revolve(r) => r.operation = o,
+            FeatureKind::Sweep(w) => w.operation = o,
+            FeatureKind::Loft(l) => l.operation = o,
             FeatureKind::Pattern(_) => {
                 return Err(bad("a pattern does what the feature it repeats does"));
             }
@@ -569,25 +808,24 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
             sh.faces = f;
         }
     }
+    let extrude_keys = EXTRUDE_OPTIONS
+        .iter()
+        .any(|k| !matches!(p.get(*k), None | Some(Value::Null)));
     match &mut kind {
-        FeatureKind::Extrude(e) => {
-            if let Some(d) = new_distance {
-                e.distance = d;
-            }
-            if let Some(d) = new_direction {
-                e.direction = d;
-            }
-        }
+        FeatureKind::Extrude(e) => extrude_options(s, p, e)?,
         FeatureKind::Construct(chamfera_doc::Construction::PlaneOffset { distance, .. })
-            if new_direction.is_none() =>
+            if new_direction.is_none() && !extrude_keys =>
         {
             if let Some(d) = new_distance {
                 *distance = d;
             }
         }
-        _ if new_distance.is_some() || new_direction.is_some() => {
+        // A move's `to` (point to point) was applied by edit_transform above.
+        FeatureKind::Move(_) if new_distance.is_none() && new_direction.is_none() => {}
+        _ if new_distance.is_some() || new_direction.is_some() || extrude_keys => {
             return Err(bad(
-                "distance belongs to extrudes and offset planes, direction to extrudes",
+                "distance belongs to extrudes and offset planes; direction, extent, distance2, \
+                 start_offset, taper and to to extrudes",
             ));
         }
         _ => {}
@@ -604,6 +842,18 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
             return Err(bad("angle belongs to planes at an angle"));
         }
         _ => {}
+    }
+    if p.get("path_curves").is_some_and(|v| !v.is_null()) {
+        let FeatureKind::Sweep(w) = &mut kind else {
+            return Err(bad("path_curves belong to sweeps"));
+        };
+        w.path = ids(p, "path_curves")?;
+    }
+    if p.get("sections").is_some_and(|v| !v.is_null()) {
+        let FeatureKind::Loft(l) = &mut kind else {
+            return Err(bad("sections belong to lofts"));
+        };
+        l.sections = sections(p)?;
     }
     s.doc.check_feature(&kind)?;
     let f = s.doc.feature_mut(id)?;
@@ -635,7 +885,9 @@ fn delete(s: &mut Session, p: &Value) -> CmdResult {
 fn rename(s: &mut Session, p: &Value) -> CmdResult {
     let id = params::req_id(p, "feature")?;
     let name = params::req_display_name(p, "name")?;
-    s.doc.feature_mut(id)?.name = name;
+    s.doc.feature(id)?;
+    s.doc.rename_item(id, &name)?;
+    // Bodies are named after their features.
     s.rebuild();
     Ok(feature_reply(s, id))
 }
@@ -645,6 +897,16 @@ fn list(s: &mut Session, p: &Value) -> CmdResult {
     let ids: Vec<u32> = s.doc.features.iter().map(|f| f.id).collect();
     let features: Vec<Value> = ids.into_iter().map(|id| feature_reply(s, id)).collect();
     Ok(json!({ "features": features }))
+}
+
+fn path_at(s: &mut Session, p: &Value) -> CmdResult {
+    let (x, y, w, h) = params::pixel(p)?;
+    Ok(match s.path_at(x, y, w, h) {
+        Some((sketch, curve, chain)) => json!({
+            "sketch": sketch, "curve": curve, "chain": chain,
+        }),
+        None => json!({ "sketch": null }),
+    })
 }
 
 fn profile_at(s: &mut Session, p: &Value) -> CmdResult {

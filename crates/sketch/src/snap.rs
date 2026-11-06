@@ -259,8 +259,11 @@ impl Sketch {
         let centres: BTreeSet<PointId> = self
             .curves()
             .filter_map(|(_, c)| match c {
-                Curve::Circle { centre, .. } | Curve::Arc { centre, .. } => Some(*centre),
-                Curve::Line { .. } => None,
+                Curve::Circle { centre, .. }
+                | Curve::Arc { centre, .. }
+                | Curve::Ellipse { centre, .. }
+                | Curve::EllipticalArc { centre, .. } => Some(*centre),
+                Curve::Line { .. } | Curve::Spline { .. } => None,
             })
             .collect();
         let mut origin_taken = false;
@@ -354,6 +357,9 @@ impl Sketch {
                 Curve::Circle { .. } | Curve::Arc { .. } => {
                     Some(Constraint::PointOnCircle { point, curve })
                 }
+                // No point-on-ellipse or point-on-spline constraint yet: the snap only places the
+                // point.
+                Curve::Ellipse { .. } | Curve::EllipticalArc { .. } | Curve::Spline { .. } => None,
             }
         };
         let line = line.filter(|l| self.curve(*l).is_some_and(Curve::is_line));

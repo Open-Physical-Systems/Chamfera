@@ -14,6 +14,7 @@ use egui::{Color32, PointerButton, Rect, Sense, Vec2};
 use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
 
+mod assembly_ui;
 mod blend_ui;
 mod browser;
 mod chrome;
@@ -34,8 +35,11 @@ mod search;
 mod shell_ui;
 mod shortcuts;
 mod sketch_select;
+mod sketch_shapes;
 mod sketch_ui;
 mod solid_ui;
+mod spline_ui;
+mod sweep_ui;
 mod timeline;
 mod transform_ui;
 mod viewcube;
@@ -65,6 +69,9 @@ pub struct Options {
     /// Open the Extrude tool at start and pick the profile under the viewport's centre,
     /// as a click there would.
     pub extrude: bool,
+    /// Extrude options for the tool `extrude` opens, as `solid.extrude` parameters (such as
+    /// `{"taper": 5, "direction": "two_sides", "distance2": 4}`).
+    pub extrude_with: Option<Value>,
     /// Open the Hole tool at start, on the design's last hole feature if it has one.
     pub hole: bool,
     /// The window's inner size in points, instead of the default 1400 x 900.
@@ -108,6 +115,8 @@ struct Drawn {
     fills: Vec<chamfera_render::Fill>,
     theme: ThemeMode,
     size: (u32, u32),
+    /// How many times the tool preview was rebuilt, and how many shapes it shows.
+    previews: (u64, usize),
 }
 
 enum Shot {
@@ -124,6 +133,8 @@ pub struct ChamferaApp {
     icons: icons::Icons,
     gpu: Option<ViewGpu>,
     drawn: Option<Drawn>,
+    /// Counts rebuilds of the extrude preview, so a changed preview is drawn again.
+    preview_version: u64,
     /// Viewport size in points; commands work in these units.
     viewport: Vec2,
     /// Where the viewport is on screen, for placing dialogs beside the model.
@@ -138,6 +149,7 @@ pub struct ChamferaApp {
     sketch: sketch_ui::SketchUi,
     params: params_ui::ParamsUi,
     solid: solid_ui::SolidUi,
+    assembly: assembly_ui::AssemblyUi,
     drawing: drawing_ui::DrawingUi,
     construct: construct_ui::ConstructUi,
     file: file_ui::FileUi,
@@ -209,6 +221,7 @@ impl ChamferaApp {
             icons: icons::Icons::default(),
             gpu,
             drawn: None,
+            preview_version: 0,
             viewport: Vec2::new(1280.0, 800.0),
             viewport_rect: Rect::from_min_size(egui::pos2(260.0, 120.0), Vec2::new(1280.0, 800.0)),
             // A start-up script sets its own view.
@@ -220,6 +233,7 @@ impl ChamferaApp {
             sketch: sketch_ui::SketchUi::default(),
             params: params_ui::ParamsUi::default(),
             solid: solid_ui::SolidUi::default(),
+            assembly: assembly_ui::AssemblyUi::default(),
             drawing: drawing_ui::DrawingUi::default(),
             construct: construct_ui::ConstructUi::default(),
             file: file_ui::FileUi::default(),
@@ -254,7 +268,11 @@ impl ChamferaApp {
         app.params.open = options.parameters;
         app.drawing.active = options.drawing;
         if options.extrude {
-            app.solid.extrude = Some(solid_ui::ExtrudeTool::default());
+            let mut tool = solid_ui::ExtrudeTool::default();
+            if let Some(p) = &options.extrude_with {
+                tool.apply(p);
+            }
+            app.solid.extrude = Some(tool);
             app.solid.pick_centre = true;
         }
         if options.hole {
@@ -401,6 +419,14 @@ impl ChamferaApp {
                 self.run("view.zoom", p);
             }
         }
+        if self.picking_extrude_target()
+            && response.clicked()
+            && let Some(pos) = response.interact_pointer_pos()
+        {
+            let (x, y) = local(pos);
+            self.extrude_target_click(x, y, w, h);
+            return;
+        }
         if self.construct.tool.is_some()
             && response.clicked()
             && let Some(pos) = response.interact_pointer_pos()
@@ -416,6 +442,17 @@ impl ChamferaApp {
             let (x, y) = local(pos);
             self.face_click(x, y, w, h);
             return;
+        }
+        if self.assembly.joint.is_some() {
+            let at = response.hover_pos().map(local);
+            self.joint_hover(at, w, h);
+            if response.clicked()
+                && let Some(pos) = response.interact_pointer_pos()
+            {
+                let (x, y) = local(pos);
+                self.joint_click(x, y, w, h);
+                return;
+            }
         }
         if self.solid.hole.is_some() {
             let at = response.hover_pos().map(local);
@@ -453,6 +490,14 @@ impl ChamferaApp {
         {
             let (x, y) = local(pos);
             self.inspect_click(x, y, w, h);
+            return;
+        }
+        if self.solid.sweep.is_some()
+            && response.clicked()
+            && let Some(pos) = response.interact_pointer_pos()
+        {
+            let (x, y) = local(pos);
+            self.sweep_click(x, y, w, h);
             return;
         }
         if self.solid.shell.is_some()
@@ -545,6 +590,8 @@ impl ChamferaApp {
         }
         let blends = self.blend_overlays();
         self.session.scene.overlays.extend(blends);
+        let joints = self.joint_overlays();
+        self.session.scene.overlays.extend(joints);
         let holes = self.hole_overlays();
         self.session.scene.overlays.extend(holes);
         self.inspect_overlays();
@@ -553,6 +600,9 @@ impl ChamferaApp {
                 style: chamfera_render::OverlayStyle::Highlight,
                 ..picked
             });
+        }
+        if let Some(picked) = self.sweep_overlay() {
+            self.session.scene.overlays.push(picked);
         }
         let picks = self.pick_overlays();
         self.session.scene.overlays.extend(picks);
@@ -576,6 +626,7 @@ impl ChamferaApp {
             fills: self.session.scene.fills.clone(),
             theme: self.theme.mode,
             size,
+            previews: (self.preview_version, self.session.scene.previews.len()),
         };
         if let (Some(gpu), Some(rs)) = (self.gpu.as_mut(), frame.wgpu_render_state())
             && self.drawn.as_ref() != Some(&now)
@@ -787,15 +838,19 @@ impl eframe::App for ChamferaApp {
             self.parameters_window(&ctx);
             self.extrude_dialog(&ctx);
             self.blend_dialog(&ctx);
+            self.joint_dialog(&ctx);
             self.hole_dialog(&ctx);
             self.transform_dialog(&ctx);
             self.inspect_dialog(&ctx);
             self.shell_dialog(&ctx);
+            self.sweep_dialog(&ctx);
             self.feature_dialog(&ctx);
+            self.timeline_error_window(&ctx);
             self.construct_dialog(&ctx);
             self.rename_dialog(&ctx);
             self.properties_window(&ctx);
         }
+        self.rename_box(&ctx);
         self.unsaved_dialog(&ctx);
         self.shortcuts_window(&ctx);
         self.search_window(&ctx);

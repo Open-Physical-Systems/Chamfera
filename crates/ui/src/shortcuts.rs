@@ -20,6 +20,8 @@ pub enum Action {
     FinishSketch,
     Extrude,
     Revolve,
+    Sweep,
+    Loft,
     Fillet,
     Chamfer,
     Parameters,
@@ -141,7 +143,7 @@ const fn row(action: Action, keys: Keys, context: &'static str, handler: Handler
 }
 
 /// Every default shortcut. Keys are unique (`no_two_shortcuts_share_a_key`).
-pub const SHORTCUTS: [Shortcut; 22] = [
+pub const SHORTCUTS: [Shortcut; 23] = [
     row(
         Action::Search,
         Keys::CtrlSpaceThen(Key::F),
@@ -264,6 +266,12 @@ pub const SHORTCUTS: [Shortcut; 22] = [
         Handler::Elsewhere,
     ),
     row(
+        Action::Command("timeline.rename"),
+        Keys::key(Key::F2),
+        "Timeline, Browser",
+        Handler::Elsewhere,
+    ),
+    row(
         Action::ShowShortcuts,
         Keys::ctrl(Key::Slash),
         "Anywhere",
@@ -310,6 +318,8 @@ pub fn action_label(action: Action) -> String {
         Action::FinishSketch => label("sketch.finish").into(),
         Action::Extrude => label("solid.extrude").into(),
         Action::Revolve => label("solid.revolve").into(),
+        Action::Sweep => label("solid.sweep").into(),
+        Action::Loft => label("solid.loft").into(),
         Action::Fillet => label("solid.fillet").into(),
         Action::Chamfer => label("solid.chamfer").into(),
         Action::Parameters => "Parameters".into(),
