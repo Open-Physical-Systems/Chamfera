@@ -352,8 +352,9 @@ impl ChamferaApp {
             .map_or(0.0, |s| s.iter().filter_map(|x| x["volume"].as_f64()).sum());
         self.message = Some((
             format!(
-                "{} · volume {v:.2} mm³",
-                r["name"].as_str().unwrap_or(label(command))
+                "{} · volume {}",
+                r["name"].as_str().unwrap_or(label(command)),
+                self.units().volume(v),
             ),
             false,
         ));

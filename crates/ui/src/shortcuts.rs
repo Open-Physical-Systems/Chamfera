@@ -46,6 +46,7 @@ pub enum Action {
     Sample,
     ShowShortcuts,
     Search,
+    Preferences,
     /// A registry command with no tool of its own.
     Command(&'static str),
 }
@@ -143,7 +144,7 @@ const fn row(action: Action, keys: Keys, context: &'static str, handler: Handler
 }
 
 /// Every default shortcut. Keys are unique (`no_two_shortcuts_share_a_key`).
-pub const SHORTCUTS: [Shortcut; 23] = [
+pub const SHORTCUTS: [Shortcut; 24] = [
     row(
         Action::Search,
         Keys::CtrlSpaceThen(Key::F),
@@ -277,6 +278,12 @@ pub const SHORTCUTS: [Shortcut; 23] = [
         "Anywhere",
         Handler::Here,
     ),
+    row(
+        Action::Preferences,
+        Keys::ctrl(Key::Comma),
+        "Anywhere",
+        Handler::Elsewhere,
+    ),
 ];
 
 /// Keys kept free for tools that are planned, so nothing else takes them.
@@ -342,6 +349,7 @@ pub fn action_label(action: Action) -> String {
         Action::ImportStl => format!("{}…", label("body.import_stl")),
         Action::Sample => label("body.sample").into(),
         Action::ShowShortcuts => "Keyboard Shortcuts".into(),
+        Action::Preferences => "Preferences".into(),
         Action::Search => "Search Tools and Commands".into(),
         Action::Command(id) => label(id).into(),
     }

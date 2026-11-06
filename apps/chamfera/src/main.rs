@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! chamfera [part.stl ...] [--sample] [--theme light|dark] [--script steps.json]
-//!          [--parameters] [--drawing] [--extrude] [--extrude-with JSON] [--hole]
+//!          [--parameters] [--preferences PAGE] [--drawing] [--extrude] [--extrude-with JSON] [--hole]
 //!          [--box X1,Y1,X2,Y2] [--search QUERY] [--context-menu X,Y] [--size WxH]
 //!          [--zoom F] [--screenshot shot.png]
 //!          [--sketch-input "tool line; click 0,0; hover 30,12; type 25"]
@@ -14,7 +14,8 @@
 use std::process::ExitCode;
 
 const USAGE: &str = "usage: chamfera [part.stl ...] [--sample] [--theme light|dark] \
-[--script steps.json] [--parameters] [--drawing] [--extrude] [--extrude-with JSON] [--hole] \
+[--script steps.json] [--parameters] [--preferences PAGE] [--drawing] [--extrude] \
+[--extrude-with JSON] [--hole] \
 [--box X1,Y1,X2,Y2] [--search QUERY] [--context-menu X,Y] [--size WxH] [--zoom F] \
 [--screenshot shot.png] \
 [--sketch-input \"tool line; click X,Y; hover X,Y; shift; type 25; tab\"]";
@@ -26,6 +27,12 @@ fn main() -> ExitCode {
         match a.as_str() {
             "--sample" => options.sample = true,
             "--parameters" => options.parameters = true,
+            "--preferences" => match args.next() {
+                Some(page) => options.preferences = Some(page),
+                None => {
+                    return fail("--preferences takes a page: general, navigation, units or grid");
+                }
+            },
             "--drawing" => options.drawing = true,
             "--extrude" => options.extrude = true,
             "--extrude-with" => match args

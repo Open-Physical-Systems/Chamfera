@@ -268,6 +268,14 @@ fn hostile_params_never_panic() {
         json!({"x1": 0, "y1": 0, "x2": 0, "y2": 0, "width": 1, "height": 1, "mode": "crossing", "add": "yes"}),
         json!({"x": 400, "y": 300, "width": 800, "height": 600, "mode": "toggle"}),
         json!({"x": 400, "y": 300, "width": 800, "height": 600, "mode": "flip"}),
+        json!({"length": "in", "precision": 3, "angle_precision": 1, "spacing": 5}),
+        json!({"length": "furlong", "precision": 9, "angle_precision": -1, "spacing": 0}),
+        json!({"length": 25.4, "precision": 2.5, "angle_precision": "2", "spacing": 1e300}),
+        json!({"length": "", "precision": 1e300, "spacing": "auto"}),
+        json!({"yaw": 0.1, "pitch": 0.1, "pivot": {"x": 1e300, "y": 0, "z": 0}}),
+        json!({"yaw": 0.1, "pitch": 0.1, "pivot": {"x": "a", "y": null}}),
+        json!({"yaw": 0.1, "pitch": 0.1, "pivot": [1, 2, 3]}),
+        json!({"yaw": 0.1, "pitch": 5.0, "pivot": {"x": 1e6, "y": -1e6, "z": 1e6}}),
         json!({"sketch": 1, "profiles": [{"x": 10, "y": 10}], "distance": 5, "taper": 1e308,
             "start_offset": -1e308, "distance2": f64::NAN, "direction": "two_sides"}),
         json!({"sketch": 1, "profiles": [{"x": 10, "y": 10}], "extent": "through_all",
@@ -3187,6 +3195,96 @@ fn picked_edges_follow_the_pick_modes() {
     assert_eq!(pick(bx, by + 3.0, "add"), json!([front, back]));
     assert_eq!(pick(fx, fy - 3.0, "toggle"), json!([back]));
     assert_eq!(pick(bx, by + 3.0, "remove"), json!([]));
+}
+
+#[test]
+fn ten_in_an_inch_design_is_254_mm_and_units_change_only_labels() {
+    let mut s = Session::new();
+    s.execute("design.new", &json!({"length": "in"})).unwrap();
+    s.execute(
+        "param.set",
+        &json!({"name": "w", "expression": "10", "unit": "length"}),
+    )
+    .unwrap();
+    // 10 in × 25.4 mm/in = 254 mm.
+    assert!((s.doc.parameters["w"].value - 254.0).abs() < 1e-9);
+    assert_eq!(s.doc.units.length(s.doc.parameters["w"].value), "10.00 in");
+    // Back to mm: the stored "10" becomes "10 in", so w stays 254 mm.
+    let r = s
+        .execute("design.units", &json!({"length": "mm", "precision": 3}))
+        .unwrap();
+    assert_eq!(
+        r,
+        json!({"length": "mm", "precision": 3, "angle_precision": 2})
+    );
+    assert!((s.doc.parameters["w"].value - 254.0).abs() < 1e-9);
+    assert_eq!(s.doc.units.length(12.3456), "12.346 mm");
+    // It is one undo step, and a bad unit changes nothing.
+    assert!(
+        s.execute("design.units", &json!({"length": "furlong"}))
+            .is_err()
+    );
+    assert!(s.execute("design.units", &json!({"precision": 9})).is_err());
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.doc.units.length.symbol(), "in");
+    assert_eq!(s.doc.parameters["w"].expression.as_deref(), Some("10"));
+}
+
+#[test]
+fn orbit_about_a_pivot_keeps_the_pivot_where_it_was_relative_to_the_eye() {
+    let mut s = Session::new();
+    s.camera.target = chamfera_geom::Point3::new(0.0, 0.0, 0.0);
+    let pivot = chamfera_geom::Point3::new(30.0, 0.0, 0.0);
+    let before = s.camera.basis();
+    let rel = pivot - s.camera.eye();
+    let coords = (
+        rel.dot(before.right),
+        rel.dot(before.up),
+        rel.dot(before.forward),
+    );
+    s.execute(
+        "view.orbit",
+        &json!({"yaw": 0.3, "pitch": 0.1, "pivot": {"x": 30, "y": 0, "z": 0}}),
+    )
+    .unwrap();
+    // A rigid turn about the pivot: the pivot has the same camera-frame coordinates as
+    // before, so it stays on the same pixel.
+    let after = s.camera.basis();
+    let rel = pivot - s.camera.eye();
+    let now = (
+        rel.dot(after.right),
+        rel.dot(after.up),
+        rel.dot(after.forward),
+    );
+    assert!((now.0 - coords.0).abs() < 1e-9 && (now.1 - coords.1).abs() < 1e-9);
+    assert!((now.2 - coords.2).abs() < 1e-9);
+    // Without a pivot the target stays put.
+    let t = s.camera.target;
+    s.execute("view.orbit", &json!({"yaw": 0.3, "pitch": 0.0}))
+        .unwrap();
+    assert!((s.camera.target - t).length() < 1e-12);
+}
+
+#[test]
+fn the_grid_spacing_is_a_view_setting() {
+    let mut s = Session::new();
+    s.execute("view.grid", &json!({"spacing": 5})).unwrap();
+    assert_eq!(s.scene.grid_spacing, Some(5.0));
+    s.execute("view.grid", &json!({})).unwrap();
+    assert_eq!(s.scene.grid_spacing, None);
+    assert!(s.execute("view.grid", &json!({"spacing": 0})).is_err());
+    assert!(!s.has_unsaved_changes());
+    // view.point_at on an empty scene gives the point on the centre ray at the target.
+    let r = s
+        .execute(
+            "view.point_at",
+            &json!({"x": 400, "y": 300, "width": 800, "height": 600}),
+        )
+        .unwrap();
+    let p = &r["point"];
+    let t = s.camera.target;
+    assert!((p["x"].as_f64().unwrap() - t.x).abs() < 1e-6);
+    assert!((p["z"].as_f64().unwrap() - t.z).abs() < 1e-6);
 }
 
 // ---------------------------------------------------------------- extrude options

@@ -605,16 +605,38 @@ pub fn evaluate(src: &str, names: &impl Names) -> Result<Quantity, ExprError> {
 /// Evaluates an expression that must be a length (mm) or angle (radians); a plain number
 /// means mm or degrees.
 pub fn evaluate_as(src: &str, expected: Dim, names: &impl Names) -> Result<f64, ExprError> {
+    evaluate_as_in(src, expected, 1.0, names)
+}
+
+/// [`evaluate_as`] in a design whose length unit is `length_mm` mm: a plain number for a
+/// length means that unit (25.4 in an inch design, so `10` is 254 mm).
+pub fn evaluate_as_in(
+    src: &str,
+    expected: Dim,
+    length_mm: f64,
+    names: &impl Names,
+) -> Result<f64, ExprError> {
     let q = evaluate(src, names)?;
     if q.dim == expected {
         return Ok(q.value);
     }
     if q.dim == Dim::NONE {
-        return Ok(if expected == Dim::ANGLE {
+        let scale = if length_mm.is_finite() && length_mm > 0.0 {
+            length_mm
+        } else {
+            1.0
+        };
+        let v = if expected == Dim::ANGLE {
             q.value.to_radians()
+        } else if expected == Dim::LENGTH {
+            q.value * scale
         } else {
             q.value
-        });
+        };
+        if !v.is_finite() {
+            return Err(ExprError::NotFinite);
+        }
+        return Ok(v);
     }
     Err(ExprError::WrongUnit {
         expected: expected.describe(),
