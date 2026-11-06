@@ -192,52 +192,6 @@ pub(crate) fn mass_rows(u: DisplayUnits, r: &Value) -> Vec<(String, String)> {
 }
 
 impl ChamferaApp {
-    /// The INSPECT ribbon group: Measure and Mass Properties.
-    pub(crate) fn inspect_group(&mut self, ui: &mut egui::Ui, has_solids: bool, free: bool) {
-        let look = self.look();
-        let open = self.solid.inspect.as_ref().map(|t| t.mode);
-        let mut toggle: Option<InspectMode> = None;
-        widgets::ribbon_group(ui, look, "INSPECT", false, |ui| {
-            for (mode, icon, id, tip) in [
-                (
-                    InspectMode::Measure,
-                    Icon::Measure,
-                    "inspect.measure",
-                    "Measure\nClick two vertices, edges or faces: distance, angle, length, area",
-                ),
-                (
-                    InspectMode::Mass,
-                    Icon::Mass,
-                    "inspect.mass",
-                    "Mass Properties\nVolume, mass, centre of mass and inertia of a solid",
-                ),
-            ] {
-                let on = open == Some(mode);
-                if widgets::tool_button(
-                    ui,
-                    look,
-                    icon,
-                    label(id),
-                    has_solids && (free || on),
-                    on,
-                    false,
-                )
-                .on_hover_text(if has_solids {
-                    tip
-                } else {
-                    "Build a solid first"
-                })
-                .clicked()
-                {
-                    toggle = Some(mode);
-                }
-            }
-        });
-        if let Some(mode) = toggle {
-            self.open_inspect(mode);
-        }
-    }
-
     /// Opens (or closes, when it is open) an INSPECT tool.
     pub(crate) fn open_inspect(&mut self, mode: InspectMode) {
         if self.solid.inspect.as_ref().is_some_and(|t| t.mode == mode) {
@@ -518,7 +472,7 @@ impl ChamferaApp {
                                 widgets::field_label(ui, look, "Density");
                                 let edit = ui
                                     .add_sized(
-                                        [140.0, 24.0],
+                                        widgets::FIELD,
                                         egui::TextEdit::singleline(&mut tool.density)
                                             .hint_text("1"),
                                     )
@@ -544,6 +498,11 @@ impl ChamferaApp {
                                 ui.end_row();
                             }
                         });
+                });
+                widgets::dialog_footer(ui, look, |ui| {
+                    if widgets::primary_button(ui, look, "Close", true).clicked() {
+                        close = true;
+                    }
                 });
             });
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) && !ctx.egui_wants_keyboard_input() {

@@ -24,26 +24,6 @@ impl Default for ShellTool {
     }
 }
 
-/// The Shell button of the SOLID ribbon's MODIFY group; true when clicked to open it.
-pub(crate) fn ribbon_button(ui: &mut egui::Ui, look: Look, has_solids: bool, free: bool) -> bool {
-    widgets::tool_button(
-        ui,
-        look,
-        Icon::Shell,
-        label("solid.shell"),
-        has_solids && free,
-        false,
-        false,
-    )
-    .on_hover_text(if has_solids {
-        "Shell\nHollow a solid to walls of a thickness, with the faces you click removed"
-    } else {
-        "Build a solid first"
-    })
-    .clicked()
-        && free
-}
-
 impl ChamferaApp {
     /// Opens the Shell tool.
     pub(crate) fn open_shell_tool(&mut self) {
@@ -120,7 +100,7 @@ impl ChamferaApp {
                             ui.end_row();
                             widgets::field_label(ui, look, "Thickness");
                             let edit = ui.add_sized(
-                                [180.0, 26.0],
+                                widgets::FIELD,
                                 egui::TextEdit::singleline(&mut tool.thickness)
                                     .hint_text("2 mm")
                                     .align(egui::Align2::LEFT_CENTER),

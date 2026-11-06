@@ -56,7 +56,7 @@ pub struct Entry {
 }
 
 /// The command a UI action runs, so the palette does not list it twice.
-fn command_of(action: Action) -> Option<&'static str> {
+pub(crate) fn command_of_action(action: Action) -> Option<&'static str> {
     Some(match action {
         Action::SketchTool(t) => match t {
             Tool::Select => return None,
@@ -109,7 +109,7 @@ fn command_of(action: Action) -> Option<&'static str> {
         Action::ExportStl => "design.export_stl",
         Action::ImportStl => "body.import_stl",
         Action::Sample => "body.sample",
-        Action::Command(id) => id,
+        Action::Command(id) | Action::Tool(id) => id,
         Action::SaveAs
         | Action::Cancel
         | Action::ShowShortcuts
@@ -163,6 +163,12 @@ fn ui_actions() -> Vec<Action> {
         Action::Preferences,
         Action::ShowShortcuts,
     ]);
+    // Every ribbon tool, so the palette and the ribbon list the same tools.
+    for t in crate::ribbon::TOOLS {
+        if !v.contains(&t.action) {
+            v.push(t.action);
+        }
+    }
     v
 }
 
@@ -170,7 +176,7 @@ fn ui_actions() -> Vec<Action> {
 /// tool of its own.
 fn all_actions() -> Vec<Action> {
     let mut v = ui_actions();
-    let covered: Vec<&str> = v.iter().filter_map(|a| command_of(*a)).collect();
+    let covered: Vec<&str> = v.iter().filter_map(|a| command_of_action(*a)).collect();
     let rest: Vec<Action> = registry()
         .into_iter()
         .filter(|c| !covered.contains(&c.id))
@@ -209,6 +215,7 @@ fn context_of(action: Action) -> &'static str {
         | Action::Preferences => "File",
         Action::Undo | Action::Redo | Action::Cancel => "Edit",
         Action::ShowShortcuts | Action::Search => "Help",
+        Action::Tool(id) => crate::ribbon::by_id(id).map_or("Command", |t| t.tab.context()),
         Action::Command(id) => match id.split('.').next() {
             Some("sketch") => "Sketch",
             Some("solid" | "feature" | "param") => "Solid",
@@ -254,6 +261,7 @@ pub(crate) fn icon_of(action: Action) -> Icon {
         Action::Sample => Icon::Body,
         Action::Preferences => Icon::Parameters,
         Action::ShowShortcuts | Action::Search => Icon::Select,
+        Action::Tool(id) => crate::ribbon::by_id(id).map_or(Icon::Origin, |t| t.icon),
         Action::Command(id) => match id.split('.').next() {
             Some("sketch") => Icon::Sketch,
             Some("solid" | "feature" | "body") => Icon::Body,
@@ -350,10 +358,11 @@ impl ChamferaApp {
 
     /// Why `action` cannot run now, in words, or `None` when it can.
     pub(crate) fn unavailable(&self, action: Action) -> Option<String> {
+        if let Action::Tool(id) = action {
+            return self.tool_unavailable(id);
+        }
         let sketching = self.session.active_sketch.is_some();
-        let tool_free = self.solid.extrude.is_none()
-            && self.solid.blend.is_none()
-            && self.solid.sweep.is_none();
+        let tool_free = !self.tool_open();
         let has_solids = !self.session.solids().is_empty();
         let name = shortcuts::action_label(action);
         let desktop = cfg!(not(target_arch = "wasm32"));
@@ -439,15 +448,11 @@ impl ChamferaApp {
     /// that can run now, items of the workspace in use (Sketch while sketching, else
     /// Solid) and recently used items; commands with no tool of their own come later.
     pub(crate) fn search_results(&self, query: &str) -> Vec<Entry> {
-        let workspace = if self.session.active_sketch.is_some() {
-            "Sketch"
-        } else {
-            "Solid"
-        };
+        let workspace = self.ribbon_tab().context();
         let mut scored: Vec<(i32, Entry)> = Vec::new();
         for action in all_actions() {
             let e = self.entry(action);
-            let by_id = command_of(action)
+            let by_id = command_of_action(action)
                 .and_then(|id| score(query, id))
                 .map(|s| s - 100);
             let Some(s) = score(query, &e.label).max(by_id) else {
@@ -575,6 +580,7 @@ impl ChamferaApp {
             Action::Preferences => self.prefs_ui.open = true,
             Action::Search => self.open_search(),
             Action::Command(id) => self.run_command_item(id),
+            Action::Tool(id) => self.run_tool(id),
         }
     }
 
@@ -960,6 +966,11 @@ impl ChamferaApp {
                             .color(look.c(|t| t.text_muted)),
                     );
                 });
+                widgets::dialog_footer(ui, look, |ui| {
+                    if widgets::primary_button(ui, look, "Close", true).clicked() {
+                        close = true;
+                    }
+                });
             });
         let esc = ctx.input(|i| i.key_pressed(Key::Escape)) && !ctx.egui_wants_keyboard_input();
         if close || esc {
@@ -1116,7 +1127,10 @@ mod tests {
 
     #[test]
     fn every_registry_command_is_in_the_palette() {
-        let listed: Vec<&str> = all_actions().into_iter().filter_map(command_of).collect();
+        let listed: Vec<&str> = all_actions()
+            .into_iter()
+            .filter_map(command_of_action)
+            .collect();
         for c in registry() {
             assert!(listed.contains(&c.id), "{} is missing", c.id);
         }

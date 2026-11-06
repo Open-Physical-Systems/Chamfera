@@ -126,7 +126,7 @@ impl Kind {
     }
 
     /// True when the tool needs a solid to pick from.
-    fn needs_solid(self) -> bool {
+    pub(crate) fn needs_solid(self) -> bool {
         matches!(
             self,
             Kind::PlaneTangent
@@ -137,7 +137,7 @@ impl Kind {
         )
     }
 
-    fn tip(self) -> &'static str {
+    pub(crate) fn tip(self) -> &'static str {
         match self {
             Kind::PlaneOffset => "A plane parallel to a plane or flat face, a distance away",
             Kind::PlaneAngle => "A plane through a line, turned by an angle",
@@ -292,61 +292,6 @@ impl ChamferaApp {
             .into_iter()
             .filter(|(id, _)| self.session.constructs().contains_key(id))
             .collect()
-    }
-
-    /// The CONSTRUCT ribbon group: Plane, Axis and Point, each with its menu of tools.
-    pub(crate) fn construct_group(&mut self, ui: &mut egui::Ui) {
-        let look = self.look();
-        let free = self.construct.tool.is_none() && self.solid.extrude.is_none();
-        let has_solids = !self.session.solids().is_empty();
-        let open_kind = self.construct.tool.as_ref().map(|t| t.kind);
-        let groups: [(Icon, &str, &str, &[Kind]); 3] = [
-            (
-                Icon::ConstructPlaneOffset,
-                "Plane",
-                "Construction plane\nOffset, at an angle, midplane, through points",
-                &Kind::PLANES,
-            ),
-            (
-                Icon::ConstructAxis,
-                "Axis",
-                "Construction axis\nThrough a cylinder, along an edge, through points",
-                &Kind::AXES,
-            ),
-            (
-                Icon::ConstructPoint,
-                "Point",
-                "Construction point\nAt a vertex, a centre or coordinates",
-                &Kind::POINTS,
-            ),
-        ];
-        let mut buttons = Vec::new();
-        widgets::ribbon_group(ui, look, "CONSTRUCT", false, |ui| {
-            for (icon, text, tip, kinds) in groups {
-                let active = open_kind.is_some_and(|k| kinds.contains(&k));
-                let r = widgets::tool_button(ui, look, icon, text, free || active, active, true)
-                    .on_hover_text(tip);
-                buttons.push((r, kinds));
-            }
-        });
-        let mut open = None;
-        for (r, kinds) in &buttons {
-            egui::Popup::menu(r).show(|ui| {
-                for k in kinds.iter() {
-                    let enabled = free && (has_solids || !k.needs_solid());
-                    if widgets::menu_item(ui, look, k.icon(), label(k.command()), enabled)
-                        .on_hover_text(k.tip())
-                        .clicked()
-                    {
-                        ui.close();
-                        open = Some(*k);
-                    }
-                }
-            });
-        }
-        if let Some(k) = open {
-            self.open_construct(k);
-        }
     }
 
     pub(crate) fn open_construct(&mut self, kind: Kind) {
@@ -572,7 +517,7 @@ impl ChamferaApp {
                                 };
                                 egui::ComboBox::from_id_salt(("construct input", i))
                                     .selected_text(shown)
-                                    .width(196.0)
+                                    .width(widgets::FIELD_WIDTH)
                                     .show_ui(ui, |ui| {
                                         for (value, text) in choices {
                                             let chosen = current_value.as_ref() == Some(value);
@@ -598,7 +543,7 @@ impl ChamferaApp {
                                 |ui: &mut egui::Ui, name: &str, text: &mut String, hint: &str| {
                                     widgets::field_label(ui, look, name);
                                     let r = ui.add_sized(
-                                        [196.0, 26.0],
+                                        widgets::FIELD,
                                         egui::TextEdit::singleline(text)
                                             .hint_text(hint)
                                             .align(egui::Align2::LEFT_CENTER),
@@ -727,7 +672,7 @@ impl ChamferaApp {
                             if let Some((what, value)) = edit.value.as_mut() {
                                 widgets::field_label(ui, look, what);
                                 let r = ui.add_sized(
-                                    [180.0, 26.0],
+                                    widgets::FIELD,
                                     egui::TextEdit::singleline(value)
                                         .align(egui::Align2::LEFT_CENTER),
                                 );

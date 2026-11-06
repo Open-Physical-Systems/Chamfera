@@ -157,7 +157,7 @@ pub(crate) fn feature_summary(kind: &FeatureKind) -> Option<(Icon, String)> {
 fn field(ui: &mut egui::Ui, look: Look, name: &str, value: &mut String, hint: &str) -> bool {
     widgets::field_label(ui, look, name);
     let edit = ui.add_sized(
-        [180.0, 26.0],
+        widgets::FIELD,
         egui::TextEdit::singleline(value)
             .hint_text(hint)
             .align(egui::Align2::LEFT_CENTER),
@@ -172,124 +172,22 @@ impl ChamferaApp {
         self.sheet_metal.base.is_some() || self.sheet_metal.flange.is_some()
     }
 
-    /// The SHEET METAL ribbon.
-    pub(crate) fn sheet_toolbar(&mut self, ui: &mut egui::Ui) {
-        let look = self.look();
-        let has_profiles = self
+    /// Base Flange: waits for a click inside a closed profile, with the first rule.
+    pub(crate) fn open_base_flange(&mut self) {
+        let rule = self
             .session
             .doc
-            .sketches
-            .iter()
-            .any(|s| !s.sketch.profiles().is_empty());
-        let has_sheet = !self.session.sheets().is_empty();
-        let has_flat = !self.session.flat_patterns().is_empty();
-        let free = !self.sheet_tool_open();
-        let (mut base, mut flange, mut flat, mut export, mut rules) =
-            (false, false, false, false, false);
-        widgets::ribbon_group(ui, look, "CREATE", false, |ui| {
-            base = widgets::tool_button(
-                ui,
-                look,
-                Icon::SheetBase,
-                label("sheet.base"),
-                has_profiles && free,
-                self.sheet_metal.base.is_some(),
-                false,
-            )
-            .on_hover_text(if has_profiles {
-                "Base Flange\nThicken a closed sketch profile into sheet metal"
-            } else {
-                "Base Flange\nDraw a closed profile in a sketch first"
-            })
-            .clicked();
-            flange = widgets::tool_button(
-                ui,
-                look,
-                Icon::SheetFlange,
-                label("sheet.flange"),
-                has_sheet && free,
-                self.sheet_metal.flange.is_some(),
-                false,
-            )
-            .on_hover_text(if has_sheet {
-                "Flange\nBend a wall up from a straight edge of the sheet"
-            } else {
-                "Flange\nMake a base flange first"
-            })
-            .clicked();
-        });
-        widgets::ribbon_group(ui, look, "FLAT PATTERN", false, |ui| {
-            flat = widgets::tool_button(
-                ui,
-                look,
-                Icon::SheetUnfold,
-                label("sheet.flat_pattern"),
-                has_sheet && free,
-                false,
-                false,
-            )
-            .on_hover_text(
-                "Flat Pattern\nUnfold the sheet by its bend allowances, shown beside the part",
-            )
-            .clicked();
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                export = widgets::tool_button(
-                    ui,
-                    look,
-                    Icon::Export,
-                    "Export DXF",
-                    has_flat && free,
-                    false,
-                    false,
-                )
-                .on_hover_text(if has_flat {
-                    "Export the flat pattern's outline as DXF"
-                } else {
-                    "Make a flat pattern first"
-                })
-                .clicked();
-            }
-            #[cfg(target_arch = "wasm32")]
-            let _ = (&mut export, has_flat);
-        });
-        widgets::ribbon_group(ui, look, "SETUP", false, |ui| {
-            rules = widgets::tool_button(
-                ui,
-                look,
-                Icon::Parameters,
-                "Rules",
-                free,
-                self.sheet_metal.rules.is_some(),
-                false,
-            )
-            .on_hover_text("Sheet Metal Rules\nThickness, bend radius, K-factor and relief")
-            .clicked();
-        });
-        if base && free && has_profiles {
-            let rule = self
-                .session
-                .doc
-                .sheet_rules
-                .first()
-                .map_or_else(|| "Default".to_owned(), |r| r.name.clone());
-            self.sheet_metal.base = Some(BaseTool { rule });
-            self.message = Some(("Click inside a closed profile".into(), false));
-        }
-        if flange && free && has_sheet {
-            self.sheet_metal.flange = Some(FlangeTool::new());
-            self.message = Some(("Click a straight edge of the sheet".into(), false));
-        }
-        if flat && free {
-            self.make_flat_pattern();
-        }
-        #[cfg(not(target_arch = "wasm32"))]
-        if export && free {
-            self.export("DXF flat pattern", &["dxf"], "sheet.export_flat");
-        }
-        if rules && free {
-            self.open_rules();
-        }
+            .sheet_rules
+            .first()
+            .map_or_else(|| "Default".to_owned(), |r| r.name.clone());
+        self.sheet_metal.base = Some(BaseTool { rule });
+        self.message = Some(("Click inside a closed profile".into(), false));
+    }
+
+    /// Flange: waits for a click on a straight edge of the sheet.
+    pub(crate) fn open_flange(&mut self) {
+        self.sheet_metal.flange = Some(FlangeTool::new());
+        self.message = Some(("Click a straight edge of the sheet".into(), false));
     }
 
     /// A start-up script that used sheet metal commands opens the SHEET METAL tab, and
@@ -337,7 +235,7 @@ impl ChamferaApp {
         }
     }
 
-    fn open_rules(&mut self) {
+    pub(crate) fn open_rules(&mut self) {
         let form = match self.session.doc.sheet_rules.first() {
             Some(r) => RuleForm::from_rule(r),
             None => RuleForm::from_rule(&chamfera_doc::SheetRule::default_named("Default")),
@@ -488,7 +386,7 @@ impl ChamferaApp {
                             } else {
                                 egui::ComboBox::from_id_salt("sheet base rule")
                                     .selected_text(tool.rule.clone())
-                                    .width(180.0)
+                                    .width(widgets::FIELD_WIDTH)
                                     .show_ui(ui, |ui| {
                                         for n in &names {
                                             ui.selectable_value(&mut tool.rule, n.clone(), n);
@@ -556,7 +454,7 @@ impl ChamferaApp {
                             widgets::field_label(ui, look, "Position");
                             egui::ComboBox::from_id_salt("flange position")
                                 .selected_text(position_name(tool.position))
-                                .width(180.0)
+                                .width(widgets::FIELD_WIDTH)
                                 .show_ui(ui, |ui| {
                                     for p in [
                                         FlangePosition::Inside,
@@ -577,7 +475,7 @@ impl ChamferaApp {
                                     FlangeSide::Same => "Toward the face",
                                     FlangeSide::Opposite => "Flipped",
                                 })
-                                .width(180.0)
+                                .width(widgets::FIELD_WIDTH)
                                 .show_ui(ui, |ui| {
                                     ui.selectable_value(
                                         &mut tool.side,
@@ -667,7 +565,7 @@ impl ChamferaApp {
                             widgets::field_label(ui, look, "Rule");
                             egui::ComboBox::from_id_salt("sheet rule pick")
                                 .selected_text(form.name.clone())
-                                .width(180.0)
+                                .width(widgets::FIELD_WIDTH)
                                 .show_ui(ui, |ui| {
                                     for r in &rules {
                                         if ui
@@ -686,7 +584,7 @@ impl ChamferaApp {
                             widgets::field_label(ui, look, "Relief");
                             egui::ComboBox::from_id_salt("sheet relief")
                                 .selected_text(relief_name(form.relief))
-                                .width(180.0)
+                                .width(widgets::FIELD_WIDTH)
                                 .show_ui(ui, |ui| {
                                     for r in [
                                         ReliefShape::Rectangular,

@@ -35,16 +35,36 @@ token in `crates/render/src/theme.rs`; every measurement below is a constant in
 - **App bar** (`chrome`): the app icon, the File and View menus (flat until hovered),
   Save, Undo and Redo as icon buttons, and the design's name centred, with an orange dot
   while there are unsaved changes.
-- **Ribbon** (`chrome`): workspace tabs (SOLID; SKETCH appears while a sketch is edited and
-  is then the active tab), then tool groups. A tool is a 26-point icon over an 11.5-point
-  label. A group's caption sits under its tools; a chevron in the caption means it opens a
-  list of everything in the group. Groups are split by hairlines. The tools scroll sideways
-  when the window is narrower than the ribbon.
-  - SOLID: CREATE (Create Sketch with a plane list, Extrude, Revolve), MODIFY (Parameters),
-    INSERT (Insert Mesh, Insert Sample Part).
-  - SKETCH: SELECT, CREATE (Line, Rectangle, Circle, Arc), CONSTRAINTS (Sketch Dimension and
-    the ten geometric constraints as a two-row grid of small icons), MODIFY (Construction,
-    Delete), FINISH SKETCH.
+- **Ribbon** (`chrome`, tools in `ribbon.rs`): at the left the workspace switcher, a
+  `panel_alt` tile with the workspace's icon and name over a chevron (Design, Drawing,
+  Manufacture). Beside it the workspace's tabs (Design: SOLID and SHEET METAL, plus SKETCH
+  while a sketch is edited, which is then the active tab; Drawing: DRAWING; Manufacture:
+  MANUFACTURE), then the tool groups of the shown tab. A tool is a 26-point icon over an
+  11.5-point label. Each group shows its most used tools as big buttons; its caption, under
+  them, has a chevron and opens a list of every tool in the group (with the shortcut on
+  the right and the open tool marked by an accent bar). Groups are split by hairlines.
+  When the window is too narrow, groups collapse from the right to their first tool and
+  the caption list, so nothing is clipped (CREATE is the last to collapse); the row only
+  scrolls when even that does not fit.
+  - Every tool is one row of `ribbon::TOOLS`: its action, tab, group, whether it is a big
+    button, icon, name, short label and what it does. The buttons, the caption lists and
+    the search palette all read it.
+  - SOLID: CREATE (Create Sketch with a plane list, Extrude, Revolve, Hole; Sweep, Loft,
+    patterns, Mirror, Thicken), MODIFY (Press Pull, Fillet, Chamfer; Shell, Offset Face,
+    Delete Face, Combine, Split Body, Split Face, Remove, Move, Parameters), ASSEMBLE
+    (New Component, Joint; Ground), CONSTRUCT (Offset Plane; every plane, axis and point),
+    INSPECT (Measure; Mass Properties), INSERT (Insert Mesh; Insert Sample Part).
+  - SHEET METAL: CREATE (Base Flange, Flange), FLAT PATTERN (Flat Pattern, Export DXF),
+    SETUP (Rules).
+  - SKETCH: SELECT, CREATE (Line, Rectangle, Circle, Arc, Polygon, Spline; the other
+    shapes, Project, Offset, Mirror, patterns), CONSTRAINTS (Dimension and the ten
+    geometric constraints as a two-row grid of small icons), MODIFY (Trim, Extend, Fillet;
+    Chamfer, Split, Split All Crossings, Construction, Delete), INSERT (Insert DXF; Export
+    DXF), FINISH SKETCH.
+  - DRAWING: SHEET, VIEWS, DIMENSIONS, EXPORT. MANUFACTURE: SETUP, 2D, ACTIONS.
+- **Tooltips**: the name and the shortcut on the first line ("Extrude (E)"), what the tool
+  does on the second; a disabled tool adds a third line saying what to do first ("Draw a
+  closed profile in a sketch first").
 - **Browser** (`panel`, 248 wide, resizable 180-420): a tree. The design is the root; the
   sections Origin (folded at first), Sketches and Bodies fold with chevrons and show their
   counts. Rows are 26 tall, indented 14 per level, with a 16-point icon. The active sketch
@@ -63,8 +83,9 @@ token in `crates/render/src/theme.rs`; every measurement below is a constant in
   otherwise the navigation hint. Messages follow (errors in red with the error icon). The
   right side shows the selection and the body count.
 - **Dialogs** (`panel`, 8 radius, hairline, soft shadow): a title row (icon, title, close),
-  a padded body with a muted label column 84 wide so fields line up, and a footer on
-  `chrome` with the buttons right-aligned: the primary (accent fill) rightmost, secondary
+  a padded body with a muted label column 84 wide and fields 180 wide (`widgets::FIELD`)
+  so fields line up, and a footer on `chrome` with the buttons right-aligned: the primary
+  (accent fill: OK, or Close for panels that only show results) rightmost, secondary
   (outlined) to its left. Tool dialogs (Extrude, Revolve, Edit Feature) open on the
   viewport's right side under the view cube, away from the model in the middle; Parameters
   opens at the viewport's top-left; Unsaved changes is modal, centred over a dimmed window.
@@ -157,5 +178,6 @@ are taken with the app itself, for example:
 chamfera --theme dark --size 1000x680 --script examples/boss-on-plate.json --screenshot shot.png
 chamfera --script examples/parametric-plate.json --parameters --screenshot shot.png
 chamfera --script plate-sketch.json --extrude --screenshot shot.png   # Extrude dialog
+chamfera --ribbon-menu MODIFY ...                                      # a group's list open
 chamfera --zoom 2 ...                                                  # check at 2x
 ```

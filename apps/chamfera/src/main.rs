@@ -4,7 +4,7 @@
 //! chamfera [part.stl ...] [--sample] [--theme light|dark] [--script steps.json]
 //!          [--parameters] [--preferences PAGE] [--drawing] [--extrude] [--extrude-with JSON]
 //!          [--hole] [--box X1,Y1,X2,Y2] [--search QUERY] [--context-menu X,Y]
-//!          [--press-pull X,Y,D] [--size WxH]
+//!          [--press-pull X,Y,D] [--ribbon-menu GROUP] [--size WxH]
 //!          [--zoom F] [--screenshot shot.png]
 //!          [--sketch-input "tool line; click 0,0; hover 30,12; type 25"]
 //! ```
@@ -17,7 +17,8 @@ use std::process::ExitCode;
 const USAGE: &str = "usage: chamfera [part.stl ...] [--sample] [--theme light|dark] \
 [--script steps.json] [--parameters] [--preferences PAGE] [--drawing] [--extrude] \
 [--extrude-with JSON] [--hole] \
-[--box X1,Y1,X2,Y2] [--search QUERY] [--context-menu X,Y] [--press-pull X,Y,D] [--size WxH] \
+[--box X1,Y1,X2,Y2] [--search QUERY] [--context-menu X,Y] [--press-pull X,Y,D] \
+[--ribbon-menu GROUP] [--size WxH] \
 [--zoom F] \
 [--screenshot shot.png] \
 [--sketch-input \"tool line; click X,Y; hover X,Y; shift; type 25; tab\"]";
@@ -55,6 +56,12 @@ fn main() -> ExitCode {
             "--search" => match args.next() {
                 Some(q) => options.search = Some(q),
                 None => return fail(USAGE),
+            },
+            "--ribbon-menu" => match args.next() {
+                Some(g) => options.ribbon_menu = Some(g),
+                None => {
+                    return fail("--ribbon-menu takes a ribbon group's caption, such as MODIFY");
+                }
             },
             "--press-pull" => match args.next().as_deref().and_then(parse_press_pull) {
                 Some(p) => options.press_pull = Some(p),

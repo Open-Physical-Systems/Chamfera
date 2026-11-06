@@ -312,13 +312,19 @@ impl ChamferaApp {
         );
         child.spacing_mut().item_spacing.x = 4.0;
         if widgets::icon_button(&mut child, look, Icon::Home, 26.0, 18.0, true, false)
-            .on_hover_text(format!("{}  (H)", label("view.home")))
+            .on_hover_text(crate::shortcuts::tip(
+                &format!("{}\nGo back to the start view", label("view.home")),
+                crate::shortcuts::Action::Home,
+            ))
             .clicked()
         {
             home = true;
         }
         if widgets::icon_button(&mut child, look, Icon::Fit, 26.0, 18.0, true, false)
-            .on_hover_text(format!("{}: show the whole model  (F)", label("view.fit")))
+            .on_hover_text(crate::shortcuts::tip(
+                &format!("{}\nShow the whole model", label("view.fit")),
+                crate::shortcuts::Action::Fit,
+            ))
             .clicked()
         {
             fit = true;

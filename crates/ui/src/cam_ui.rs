@@ -175,101 +175,33 @@ impl ChamferaApp {
         self.session.doc.cam.tools.last().map(|t| t.id)
     }
 
-    /// The Manufacture ribbon.
-    pub(crate) fn cam_toolbar(&mut self, ui: &mut egui::Ui) {
-        let look = self.look();
-        let has_model = !self.session.solids().is_empty();
-        let has_tool = !self.session.doc.cam.tools.is_empty();
-        let has_ops = !self.session.doc.cam.operations.is_empty();
-        let mut setup = false;
-        let mut tool = false;
-        let mut op: Option<&'static str> = None;
-        widgets::ribbon_group(ui, look, "SETUP", false, |ui| {
-            setup = widgets::tool_button(
-                ui,
-                look,
-                Icon::CamSetup,
-                label("cam.setup"),
-                has_model,
-                false,
-                false,
-            )
-            .on_hover_text("Setup\nStock from the model's box, part zero at the stock's top corner")
-            .clicked();
-            tool = widgets::tool_button(
-                ui,
-                look,
-                Icon::CamTool,
-                label("cam.tool_add"),
-                true,
-                self.cam.tool_dialog.is_some(),
-                false,
-            )
-            .on_hover_text("Add Tool\nA mill or drill with its feeds and speeds")
-            .clicked();
-        });
-        widgets::ribbon_divider(ui, look);
-        widgets::ribbon_group(ui, look, "2D", false, |ui| {
-            for (kind, text, icon) in KINDS {
-                let active = self.cam.dialog.as_ref().is_some_and(|d| d.kind == kind);
-                if widgets::tool_button(ui, look, icon, text, has_model && has_tool, active, false)
-                    .on_hover_text(match kind {
-                        "facing" => "Facing\nFlatten the stock top down to the model's top",
-                        "contour" => "2D Contour\nRun round a face's outline or a chain of edges",
-                        "pocket" => "2D Pocket\nClear a flat-bottomed pocket: click its floor",
-                        _ => "Drill\nDrill every vertical hole of the model",
-                    })
-                    .clicked()
-                {
-                    op = Some(kind);
-                }
-            }
-        });
-        widgets::ribbon_divider(ui, look);
-        let mut generate = false;
-        let mut post = false;
-        widgets::ribbon_group(ui, look, "ACTIONS", false, |ui| {
-            generate = widgets::tool_button(
-                ui,
-                look,
-                Icon::CamGenerate,
-                "Generate",
-                has_ops,
-                false,
-                false,
-            )
-            .on_hover_text("Generate Toolpaths\nWork every toolpath out again and show its time")
-            .clicked();
-            post = widgets::tool_button(ui, look, Icon::CamPost, "Post", has_ops, false, false)
-                .on_hover_text("Post G-code\nWrite the setup's toolpaths as G-code")
-                .clicked();
-        });
-        if setup && let Some(r) = self.run("cam.setup", json!({})) {
+    /// Setup: stock from the model's box, part zero at the stock's top corner.
+    pub(crate) fn cam_setup(&mut self) {
+        if let Some(r) = self.run("cam.setup", json!({})) {
             self.message = Some((
                 format!("Added {}", r["name"].as_str().unwrap_or("a setup")),
                 false,
             ));
         }
-        if tool {
-            self.cam.tool_dialog = Some(ToolDialog {
-                kind: "flat_end_mill",
-                diameter: "6 mm".into(),
-                feed: "600".into(),
-                rpm: "10000".into(),
-            });
-        }
-        if let Some(kind) = op {
-            self.cam.dialog = Some(OpDialog::new(kind, self.last_tool()));
-        }
-        if generate {
-            self.generate_toolpaths();
-        }
-        if post {
-            self.post_dialog("linuxcnc");
-        }
     }
 
-    fn generate_toolpaths(&mut self) {
+    /// Add Tool: opens its dialog with a 6 mm flat end mill filled in.
+    pub(crate) fn open_cam_tool_dialog(&mut self) {
+        self.cam.tool_dialog = Some(ToolDialog {
+            kind: "flat_end_mill",
+            diameter: "6 mm".into(),
+            feed: "600".into(),
+            rpm: "10000".into(),
+        });
+    }
+
+    /// Opens the dialog for a new operation of this kind (`facing`, `contour`, `pocket`,
+    /// `drill`), with the last tool of the library.
+    pub(crate) fn open_cam_op(&mut self, kind: &'static str) {
+        self.cam.dialog = Some(OpDialog::new(kind, self.last_tool()));
+    }
+
+    pub(crate) fn generate_toolpaths(&mut self) {
         if let Some(r) = self.run("cam.generate", json!({})) {
             let errors = r["errors"].as_u64().unwrap_or(0);
             let minutes = r["minutes"].as_f64().unwrap_or(0.0);
@@ -382,7 +314,10 @@ impl ChamferaApp {
                                         true,
                                         false,
                                     )
-                                    .on_hover_text(label("cam.op_delete"))
+                                    .on_hover_text(format!(
+                                        "{}\nRemove it from the setup",
+                                        label("cam.op_delete")
+                                    ))
                                     .clicked()
                                     {
                                         delete = Some(o.id);
@@ -393,7 +328,11 @@ impl ChamferaApp {
                                         Icon::Eye
                                     };
                                     if widgets::icon_button(ui, look, eye, 22.0, 14.0, true, false)
-                                        .on_hover_text("Suppress or restore")
+                                        .on_hover_text(if o.suppressed {
+                                            "Restore\nGenerate and post this operation again"
+                                        } else {
+                                            "Suppress\nSkip this operation when generating and posting"
+                                        })
                                         .clicked()
                                     {
                                         toggle = Some((o.id, !o.suppressed));
@@ -586,7 +525,7 @@ impl ChamferaApp {
                                 .map_or("Pick a tool", |t| t.1.as_str());
                             egui::ComboBox::from_id_salt("cam tool")
                                 .selected_text(current)
-                                .width(190.0)
+                                .width(widgets::FIELD_WIDTH)
                                 .show_ui(ui, |ui| {
                                     for (id, text) in &tools {
                                         ui.selectable_value(&mut d.tool, Some(*id), text);
@@ -636,7 +575,7 @@ impl ChamferaApp {
                             if matches!(d.kind, "facing" | "pocket") {
                                 widgets::field_label(ui, look, "Stepover %");
                                 ui.add_sized(
-                                    [190.0, 26.0],
+                                    widgets::FIELD,
                                     egui::TextEdit::singleline(&mut d.stepover),
                                 );
                                 ui.end_row();
@@ -644,7 +583,7 @@ impl ChamferaApp {
                             if d.kind != "drill" {
                                 widgets::field_label(ui, look, "Stepdown");
                                 ui.add_sized(
-                                    [190.0, 26.0],
+                                    widgets::FIELD,
                                     egui::TextEdit::singleline(&mut d.stepdown),
                                 );
                                 ui.end_row();
@@ -661,7 +600,7 @@ impl ChamferaApp {
                             if d.kind == "drill" {
                                 widgets::field_label(ui, look, "Peck");
                                 ui.add_sized(
-                                    [190.0, 26.0],
+                                    widgets::FIELD,
                                     egui::TextEdit::singleline(&mut d.peck).hint_text("none (G81)"),
                                 );
                                 ui.end_row();
@@ -738,7 +677,7 @@ impl ChamferaApp {
                             widgets::field_label(ui, look, "Kind");
                             egui::ComboBox::from_id_salt("cam tool kind")
                                 .selected_text(t.kind.replace('_', " "))
-                                .width(170.0)
+                                .width(widgets::FIELD_WIDTH)
                                 .show_ui(ui, |ui| {
                                     for k in
                                         ["flat_end_mill", "ball_end_mill", "drill", "chamfer_mill"]
@@ -753,7 +692,7 @@ impl ChamferaApp {
                                 ("Spindle rpm", &mut t.rpm),
                             ] {
                                 widgets::field_label(ui, look, text);
-                                ui.add_sized([170.0, 26.0], egui::TextEdit::singleline(field));
+                                ui.add_sized(widgets::FIELD, egui::TextEdit::singleline(field));
                                 ui.end_row();
                             }
                         });
