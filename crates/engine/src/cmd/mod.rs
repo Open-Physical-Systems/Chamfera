@@ -4,6 +4,7 @@ mod app;
 mod body;
 mod design;
 mod edit;
+mod feature;
 mod param;
 mod select;
 mod sketch;
@@ -33,6 +34,7 @@ pub fn registry() -> Vec<&'static CommandSpec> {
         body::COMMANDS,
         design::COMMANDS,
         edit::COMMANDS,
+        feature::COMMANDS,
         param::COMMANDS,
         select::COMMANDS,
         sketch::COMMANDS,

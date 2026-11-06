@@ -5,13 +5,14 @@
 //! in `chamfera_render::Theme`. All camera input goes through `navigate`.
 
 use chamfera_engine::{Session, registry};
-use chamfera_render::{Camera, Hit, Theme, ThemeMode};
+use chamfera_render::{Camera, Hit, Overlay, Theme, ThemeMode};
 use egui::{Color32, PointerButton, Rect, Sense, UiBuilder, Vec2};
 use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
 
 mod params_ui;
 mod sketch_ui;
+mod solid_ui;
 
 /// How the app starts.
 #[derive(Debug, Clone, Default)]
@@ -75,6 +76,7 @@ pub struct ChamferaApp {
     shot_image: Arc<Mutex<Option<Arc<egui::ColorImage>>>>,
     sketch: sketch_ui::SketchUi,
     params: params_ui::ParamsUi,
+    solid: solid_ui::SolidUi,
 }
 
 /// A command's label, so menus show the same words as the command list.
@@ -129,6 +131,7 @@ impl ChamferaApp {
             shot_image: Arc::new(Mutex::new(None)),
             sketch: sketch_ui::SketchUi::default(),
             params: params_ui::ParamsUi::default(),
+            solid: solid_ui::SolidUi::default(),
         };
         if options.sample {
             app.run("body.sample", json!({}));
@@ -378,6 +381,7 @@ impl ChamferaApp {
                 ui.label(text);
             });
         }
+        self.timeline(ui);
     }
 
     fn status_bar(&mut self, ui: &mut egui::Ui) {
@@ -471,6 +475,14 @@ impl ChamferaApp {
                 self.run("view.zoom", p);
             }
         }
+        if self.solid.extrude.is_some()
+            && response.clicked()
+            && let Some(pos) = response.interact_pointer_pos()
+        {
+            let (x, y) = local(pos);
+            self.extrude_click(x, y, w, h);
+            return;
+        }
         let used_by_sketch =
             self.session.active_sketch.is_some() && self.sketch_input(ui, response, rect);
         if !used_by_sketch
@@ -515,6 +527,12 @@ impl ChamferaApp {
             .retain(|o| o.style != chamfera_render::OverlayStyle::Preview);
         if let Some(preview) = self.sketch_preview() {
             self.session.scene.overlays.push(preview);
+        }
+        if let Some(picked) = self.extrude_overlay() {
+            self.session.scene.overlays.push(Overlay {
+                style: chamfera_render::OverlayStyle::Preview,
+                ..picked
+            });
         }
         let ppp = ui.ctx().pixels_per_point();
         let size = (
@@ -686,6 +704,8 @@ impl eframe::App for ChamferaApp {
         egui::Panel::top("menu").show(ui, |ui| self.menu_bar(ui));
         if self.session.active_sketch.is_some() {
             egui::Panel::top("sketch toolbar").show(ui, |ui| self.sketch_toolbar(ui));
+        } else {
+            egui::Panel::top("solid toolbar").show(ui, |ui| self.solid_toolbar(ui));
         }
         egui::Panel::bottom("status").show(ui, |ui| self.status_bar(ui));
         egui::Panel::left("browser")
@@ -695,6 +715,7 @@ impl eframe::App for ChamferaApp {
             .show(ui, |ui| self.browser(ui));
         egui::CentralPanel::no_frame().show(ui, |ui| self.viewport(ui, frame));
         self.parameters_window(&ctx);
+        self.extrude_dialog(&ctx);
         self.screenshot_step(&ctx);
     }
 }

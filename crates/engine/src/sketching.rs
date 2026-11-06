@@ -113,6 +113,7 @@ impl Session {
                             style,
                             lines,
                             points,
+                            on_top: active,
                         },
                     )),
                 };

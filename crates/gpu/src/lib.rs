@@ -95,6 +95,9 @@ pub struct ViewRenderer {
     grid: wgpu::RenderPipeline,
     overlay_lines: wgpu::RenderPipeline,
     overlay_points: wgpu::RenderPipeline,
+    /// The same, hidden by bodies in front (finished sketches).
+    overlay_lines_depth: wgpu::RenderPipeline,
+    overlay_points_depth: wgpu::RenderPipeline,
     targets: Option<Targets>,
     bodies: HashMap<u32, GpuBody>,
 }
@@ -301,6 +304,30 @@ impl ViewRenderer {
             bias: no_bias,
             blend: Some(wgpu::BlendState::ALPHA_BLENDING),
         });
+        let overlay_lines_depth = make(Spec {
+            label: "overlay lines (depth tested)",
+            layout: &base_layout,
+            vs: "line_vs",
+            fs: "line_fs",
+            buffers: &line_buffers,
+            topology: wgpu::PrimitiveTopology::LineList,
+            depth_write: false,
+            compare: wgpu::CompareFunction::LessEqual,
+            bias: no_bias,
+            blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+        });
+        let overlay_points_depth = make(Spec {
+            label: "overlay points (depth tested)",
+            layout: &base_layout,
+            vs: "point_vs",
+            fs: "line_fs",
+            buffers: &point_buffers,
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            depth_write: false,
+            compare: wgpu::CompareFunction::LessEqual,
+            bias: no_bias,
+            blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+        });
         ViewRenderer {
             globals,
             globals_bind,
@@ -311,6 +338,8 @@ impl ViewRenderer {
             grid,
             overlay_lines,
             overlay_points,
+            overlay_lines_depth,
+            overlay_points_depth,
             targets: None,
             bodies: HashMap::new(),
         }
@@ -493,7 +522,8 @@ impl ViewRenderer {
             usage: wgpu::BufferUsages::VERTEX,
         });
 
-        let (overlay_lines, overlay_points) = overlay_vertices(frame.scene, frame.theme);
+        let (depth_lines, depth_points) = overlay_vertices(frame.scene, frame.theme, false);
+        let (overlay_lines, overlay_points) = overlay_vertices(frame.scene, frame.theme, true);
         let vertex_buffer = |label, data: &[LineVertex]| {
             (!data.is_empty()).then(|| {
                 device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -505,6 +535,8 @@ impl ViewRenderer {
         };
         let overlay_line_buf = vertex_buffer("overlay lines", &overlay_lines);
         let overlay_point_buf = vertex_buffer("overlay points", &overlay_points);
+        let depth_line_buf = vertex_buffer("overlay lines (depth)", &depth_lines);
+        let depth_point_buf = vertex_buffer("overlay points (depth)", &depth_points);
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("viewport"),
@@ -562,6 +594,16 @@ impl ViewRenderer {
                 pass.set_vertex_buffer(0, grid_buf.slice(..));
                 pass.draw(0..grid.len() as u32, 0..1);
             }
+            if let Some(buf) = &depth_line_buf {
+                pass.set_pipeline(&self.overlay_lines_depth);
+                pass.set_vertex_buffer(0, buf.slice(..));
+                pass.draw(0..depth_lines.len() as u32, 0..1);
+            }
+            if let Some(buf) = &depth_point_buf {
+                pass.set_pipeline(&self.overlay_points_depth);
+                pass.set_vertex_buffer(0, buf.slice(..));
+                pass.draw(0..6, 0..depth_points.len() as u32);
+            }
             if let Some(buf) = &overlay_line_buf {
                 pass.set_pipeline(&self.overlay_lines);
                 pass.set_vertex_buffer(0, buf.slice(..));
@@ -577,13 +619,18 @@ impl ViewRenderer {
     }
 }
 
-/// Overlay line vertices (pairs) and point instances, in drawing order, capped at
-/// [`MAX_OVERLAY_ITEMS`]. Points with invalid coordinates are skipped.
-fn overlay_vertices(scene: &Scene, theme: &Theme) -> (Vec<LineVertex>, Vec<LineVertex>) {
+/// Overlay line vertices (pairs) and point instances of the overlays drawn on top (or
+/// not), in drawing order, capped at [`MAX_OVERLAY_ITEMS`]. Points with invalid
+/// coordinates are skipped.
+fn overlay_vertices(
+    scene: &Scene,
+    theme: &Theme,
+    on_top: bool,
+) -> (Vec<LineVertex>, Vec<LineVertex>) {
     let mut lines = Vec::new();
     let mut points = Vec::new();
     let mut budget = MAX_OVERLAY_ITEMS;
-    for o in &scene.overlays {
+    for o in scene.overlays.iter().filter(|o| o.on_top == on_top) {
         let color = o.style.color(theme).linear();
         for [a, b] in o.lines.iter().take(budget) {
             if a.is_valid() && b.is_valid() {

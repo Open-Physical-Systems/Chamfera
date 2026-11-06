@@ -374,13 +374,21 @@ impl OverlayStyle {
     }
 }
 
-/// Lines and points drawn over the model, never hidden by bodies: sketches, previews
-/// and highlights. Display only.
+/// Lines and points drawn over the model: sketches, previews and highlights. Display
+/// only.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Overlay {
     pub style: OverlayStyle,
     pub lines: Vec<[Point3; 2]>,
     pub points: Vec<Point3>,
+    /// Drawn over everything (the sketch being edited, previews). When false, bodies in
+    /// front hide it (finished sketches).
+    #[serde(default = "yes")]
+    pub on_top: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 /// Most overlay lines plus points one scene holds (hostile-input limit).
