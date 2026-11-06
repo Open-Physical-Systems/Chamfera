@@ -289,6 +289,13 @@ impl ChamferaApp {
                 if can_edit && row.double_clicked() {
                     self.edit_sketch(id);
                 }
+                // F2 on the row renames the sketch (in a box over the row).
+                if row.hovered()
+                    && !ui.ctx().egui_wants_keyboard_input()
+                    && ui.input(|i| i.key_pressed(egui::Key::F2))
+                {
+                    self.start_rename(id, row.rect, false);
+                }
                 let entries = vec![
                     Entry::Item {
                         text: label("sketch.edit").into(),
@@ -313,6 +320,8 @@ impl ChamferaApp {
                 self.row_menu(&row, &entries);
             }
         }
+
+        self.browser_components(ui);
 
         let bodies: Vec<(u32, String, bool)> = self
             .session

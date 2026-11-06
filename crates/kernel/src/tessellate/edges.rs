@@ -70,6 +70,7 @@ pub(super) fn segment_count(
             let e = a.ellipse();
             ellipse_step(e.rx(), e.ry(), tol, angle)
         }
+        Curve::BSpline(c) => crate::extrusion::spline_step(c, t0, t1, tol, angle),
     };
     let n = (span / step).ceil();
     if !(n.is_finite() && step > 0.0) || n > options.max_triangles as f64 {

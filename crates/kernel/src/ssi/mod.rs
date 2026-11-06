@@ -73,7 +73,7 @@ use chamfera_geom::{ANGULAR_TOLERANCE, Frame, LINEAR_TOLERANCE, Point3, Vec3};
 use std::f64::consts::TAU;
 
 /// A curve along which two surfaces meet.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct IntersectionCurve {
     pub curve: Curve,
     /// The parameter range of `curve` that lies on both surfaces: `(0, 2π)` for a circle
@@ -103,6 +103,9 @@ pub enum UnsupportedIntersection {
     /// Two curved surfaces that are not coaxial (other than the cylinder pairs above),
     /// and no bounding sphere proves them apart.
     NonCoaxial,
+    /// A surface of linear extrusion of a B-spline (K10 surfaces have no intersections
+    /// yet).
+    Spline,
 }
 
 impl std::fmt::Display for UnsupportedIntersection {
@@ -122,6 +125,9 @@ impl std::fmt::Display for UnsupportedIntersection {
             }
             UnsupportedIntersection::NonCoaxial => {
                 "these curved surfaces are not coaxial; their intersection needs NURBS curves (K10)"
+            }
+            UnsupportedIntersection::Spline => {
+                "a spline surface's intersections are not supported yet (K10)"
             }
         })
     }
@@ -188,6 +194,9 @@ impl SurfaceIntersection {
 pub fn intersect_surfaces(a: &Surface, b: &Surface) -> KernelResult<SurfaceIntersection> {
     use Surface as S;
     match (a, b) {
+        (S::Extrusion(_), _) | (_, S::Extrusion(_)) => Ok(SurfaceIntersection::Unsupported(
+            UnsupportedIntersection::Spline,
+        )),
         (S::Plane(p), S::Plane(q)) => plane::plane_plane(p, q),
         (S::Plane(p), other) | (other, S::Plane(p)) => plane::plane_surface(p, other),
         (S::Cylinder(c), S::Cylinder(d)) => cylinders::cylinder_cylinder(c, d),

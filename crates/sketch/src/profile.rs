@@ -3,6 +3,7 @@
 //! Lines and arcs form a planar graph whose vertices are their endpoints; endpoints are the
 //! same vertex when they are the same point, are joined by a coincident constraint, or lie
 //! within `LINEAR_TOLERANCE` of each other. Circles are closed loops on their own.
+//! Elliptical arcs join like arcs; full ellipses, like circles, are loops on their own.
 //!
 //! 1. Bridges (edges whose removal disconnects the graph) cannot bound a region, so they
 //!    are dropped; this also drops dangling segments.
@@ -21,15 +22,18 @@
 //! of another (a T-junction): a junction counts only where curves share an endpoint, and
 //! crossing curves give undefined, though never panicking, results. The split tool
 //! (`ToolOp::Split`, `sketch.split`) cuts such drawings into pieces first. Arcs are measured exactly; signed
-//! areas use Green's theorem on each line and arc.
+//! areas use Green's theorem on each line, arc and elliptical arc.
 
 use crate::constraint::Constraint;
+use crate::ellipse::EllipseArc;
 use crate::entity::Curve;
 use crate::entity::{CurveId, PointId};
 use crate::sketch::Sketch;
-use chamfera_geom::{LINEAR_TOLERANCE, Point2, Vec2};
+use crate::spline::{ray_crossings, spline_polyline};
+use chamfera_geom::{BSplineCurve2, LINEAR_TOLERANCE, Point2, Vec2};
 use std::collections::BTreeMap;
 use std::f64::consts::{FRAC_PI_2, PI, TAU};
+use std::sync::Arc;
 
 /// Faces with less area than this (mm²) are slivers between coincident curves, not regions.
 const MIN_AREA: f64 = LINEAR_TOLERANCE;
@@ -68,7 +72,7 @@ const PROBE_FRACTION: f64 = 0.381_966;
 /// A sweep this close to a full turn is a full circle (radians).
 const ANGLE_EPS: f64 = 1e-12;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 enum Geo {
     Line {
         a: Point2,
@@ -80,6 +84,13 @@ enum Geo {
         a0: f64,
         sweep: f64,
     },
+    /// A spline from `a` (its first point) to `b` (its last; `a` again when closed).
+    Spline {
+        curve: Arc<BSplineCurve2>,
+        a: Point2,
+        b: Point2,
+    },
+    Ellipse(EllipseArc),
 }
 
 impl Geo {
@@ -96,6 +107,22 @@ impl Geo {
                 0.5 * (r * r * sweep + r * c.x * (a1.sin() - a0.sin())
                     - r * c.y * (a1.cos() - a0.cos()))
             }
+            // Gauss-Legendre quadrature of the same integrand on each knot span.
+            Geo::Spline { ref curve, .. } => {
+                let (lo, hi) = curve.domain();
+                curve.area_term(lo, hi).unwrap_or(0.0)
+            }
+            // p = c + a cos t u + b sin t v with u × v = 1: p × p' = ab
+            // - a sin t (c × u) + b cos t (c × v), which integrates to
+            // ab Δ + a (c × u)(cos t1 - cos t0) + b (c × v)(sin t1 - sin t0).
+            Geo::Ellipse(e) => {
+                let (t0, t1) = (e.t0, e.t0 + e.sweep);
+                let c = e.centre - Point2::ORIGIN;
+                let (cu, cv) = (c.cross(e.axis), c.cross(e.minor_axis()));
+                0.5 * (e.a * e.b * e.sweep
+                    + e.a * cu * (t1.cos() - t0.cos())
+                    + e.b * cv * (t1.sin() - t0.sin()))
+            }
         };
         if reversed { -fwd } else { fwd }
     }
@@ -110,6 +137,11 @@ impl Geo {
                 let t = a0 + sweep * f;
                 c + Vec2::new(t.cos(), t.sin()) * r
             }
+            Geo::Spline { ref curve, .. } => {
+                let (lo, hi) = curve.domain();
+                curve.point_at(lo + (hi - lo) * f)
+            }
+            Geo::Ellipse(e) => e.point_at(e.t0 + e.sweep * f),
         }
     }
 
@@ -127,6 +159,40 @@ impl Geo {
                     (Vec2::new(t.sin(), -t.cos()).angle(), -1.0 / r)
                 } else {
                     (Vec2::new(-a0.sin(), a0.cos()).angle(), 1.0 / r)
+                }
+            }
+            Geo::Spline { ref curve, .. } => {
+                // Signed curvature κ = (C' × C'') / |C'|³; running backwards flips both
+                // the tangent and the sign of κ.
+                let (lo, hi) = curve.domain();
+                let u = if reversed { hi } else { lo };
+                let d = curve.derivatives(u, 2);
+                let (d1, d2) = (
+                    d.get(1).copied().unwrap_or(Vec2::X),
+                    d.get(2).copied().unwrap_or(Vec2::ZERO),
+                );
+                let speed = d1.length();
+                let k = if speed > 0.0 {
+                    d1.cross(d2) / (speed * speed * speed)
+                } else {
+                    0.0
+                };
+                if reversed {
+                    ((-d1).angle(), -k)
+                } else {
+                    (d1.angle(), k)
+                }
+            }
+            // Curvature of the ellipse at t: ab / |p'(t)|³.
+            Geo::Ellipse(e) => {
+                let t = if reversed { e.t0 + e.sweep } else { e.t0 };
+                let d = e.tangent_at(t);
+                let l = d.length().max(LINEAR_TOLERANCE);
+                let k = e.a * e.b / (l * l * l);
+                if reversed {
+                    ((-d).angle(), -k)
+                } else {
+                    (d.angle(), k)
                 }
             }
         }
@@ -169,8 +235,54 @@ impl Geo {
                 }
                 count
             }
+            Geo::Spline { ref curve, a, b } => ray_crossings(curve, a, b, p),
+            Geo::Ellipse(e) => ellipse_crossings(&e, p),
         }
     }
+}
+
+/// Ray crossings for an ellipse arc, split like a circular arc into pieces monotone in y.
+///
+/// `y(t) = cy + a cos t uy + b sin t vy = cy + K cos(t - φ)` with
+/// `K = |(a uy, b vy)|`, `φ = atan2(b vy, a uy)`, so y turns at `t = φ + kπ`. In a piece
+/// where `sin(t - φ) ≥ 0` the crossing is at `t = φ + acos(h)`, else `φ - acos(h)`, with
+/// `h = (p.y - cy) / K`.
+fn ellipse_crossings(e: &EllipseArc, p: Point2) -> usize {
+    let (ky, kx) = (e.b * e.minor_axis().y, e.a * e.axis.y);
+    let big_k = ky.hypot(kx);
+    if !(big_k.is_finite() && big_k > 0.0) {
+        return 0;
+    }
+    let phi = ky.atan2(kx);
+    let end = e.t0 + e.sweep;
+    let full = e.is_full();
+    let y_of = |t: f64| {
+        let t = if full && t >= end { e.t0 } else { t };
+        e.point_at(t).y
+    };
+    let mut t0 = e.t0;
+    let mut count = 0;
+    let mut guard = 0;
+    while t0 < end && guard < 8 {
+        guard += 1;
+        let k = ((t0 - phi) / PI).floor() + 1.0;
+        let t1 = (phi + k * PI).min(end);
+        let (y0, y1) = (y_of(t0), y_of(t1));
+        if (y0 > p.y) != (y1 > p.y) {
+            let h = ((p.y - e.centre.y) / big_k).clamp(-1.0, 1.0);
+            let mid = 0.5 * (t0 + t1);
+            let t = if (mid - phi).sin() >= 0.0 {
+                phi + h.acos()
+            } else {
+                phi - h.acos()
+            };
+            if e.point_at(t).x > p.x {
+                count += 1;
+            }
+        }
+        t0 = t1;
+    }
+    count
 }
 
 fn line_crosses(a: Point2, b: Point2, p: Point2) -> bool {
@@ -327,7 +439,23 @@ impl Sketch {
                     end,
                     construction: false,
                     ..
+                }
+                | Curve::EllipticalArc {
+                    start,
+                    end,
+                    construction: false,
+                    ..
                 } => endpoints.extend([*start, *end]),
+                Curve::Spline {
+                    points,
+                    closed: false,
+                    construction: false,
+                    ..
+                } => {
+                    if let (Some(s), Some(e)) = (points.first(), points.last()) {
+                        endpoints.extend([*s, *e]);
+                    }
+                }
                 _ => {}
             }
         }
@@ -407,6 +535,56 @@ impl Sketch {
                             u,
                             v,
                             geo,
+                        });
+                    }
+                }
+                Curve::EllipticalArc { start, end, .. } => {
+                    let (Some(u), Some(v), Some(geo)) = (
+                        vertex(&mut parent, *start),
+                        vertex(&mut parent, *end),
+                        self.ellipse_arc_of(c),
+                    ) else {
+                        continue;
+                    };
+                    if u != v {
+                        edges.push(Edge {
+                            curve: id,
+                            u,
+                            v,
+                            geo: Geo::Ellipse(geo),
+                        });
+                    }
+                }
+                Curve::Ellipse { .. } => {
+                    if let Some(geo) = self.ellipse_arc_of(c) {
+                        circles.push((id, Geo::Ellipse(geo)));
+                    }
+                }
+                Curve::Spline { points, closed, .. } => {
+                    let Some(curve) = self.spline_of(c) else {
+                        continue;
+                    };
+                    let (Some(first), Some(last)) = (points.first(), points.last()) else {
+                        continue;
+                    };
+                    let (Some(a), Some(b)) = (self.point(*first), self.point(*last)) else {
+                        continue;
+                    };
+                    let curve = Arc::new(curve);
+                    if *closed {
+                        // A closed spline is a loop of its own, like a circle; both its
+                        // ends are the curve's start.
+                        let s = curve.point_at(curve.domain().0);
+                        circles.push((id, Geo::Spline { curve, a: s, b: s }));
+                    } else if let (Some(u), Some(v)) =
+                        (vertex(&mut parent, *first), vertex(&mut parent, *last))
+                        && u != v
+                    {
+                        edges.push(Edge {
+                            curve: id,
+                            u,
+                            v,
+                            geo: Geo::Spline { curve, a, b },
                         });
                     }
                 }
@@ -495,7 +673,7 @@ impl Sketch {
                     *v = true;
                 }
                 let Some(e) = kept.get(h / 2) else { break };
-                segments.push((e.curve, e.geo, h % 2 == 1));
+                segments.push((e.curve, e.geo.clone(), h % 2 == 1));
                 match next(h) {
                     Some(n) if n == h0 => {
                         closed = true;
@@ -532,12 +710,12 @@ impl Sketch {
                 continue;
             }
             faces.push(Traced {
-                segments: vec![(*id, *geo, false)],
+                segments: vec![(*id, geo.clone(), false)],
                 area,
                 piece,
             });
             boundaries.push(Traced {
-                segments: vec![(*id, *geo, true)],
+                segments: vec![(*id, geo.clone(), true)],
                 area: -area,
                 piece,
             });
@@ -546,7 +724,7 @@ impl Sketch {
         // Holes go to the smallest face of another piece that contains them.
         let mut holes: Vec<Vec<Traced>> = (0..faces.len()).map(|_| Vec::new()).collect();
         for b in boundaries {
-            let Some(&(_, geo, _)) = b.segments.first() else {
+            let Some((_, geo, _)) = b.segments.first() else {
                 continue;
             };
             let probe = geo.point_at_fraction(PROBE_FRACTION);
@@ -891,6 +1069,16 @@ impl Sketch {
                             c + Vec2::new(a.cos(), a.sin()) * r
                         })
                         .collect()
+                }
+                Some(c @ Curve::Spline { .. }) => match self.spline_of(c) {
+                    Some(curve) => spline_polyline(&curve),
+                    None => return Vec::new(),
+                },
+                Some(c @ (Curve::Ellipse { .. } | Curve::EllipticalArc { .. })) => {
+                    match self.ellipse_arc_of(c) {
+                        Some(e) => e.polyline(LOOP_SEGMENTS_PER_TURN as usize),
+                        None => return Vec::new(),
+                    }
                 }
                 None => return Vec::new(),
             };

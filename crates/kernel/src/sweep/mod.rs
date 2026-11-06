@@ -30,7 +30,8 @@
 //! [`Body::validate`]; any failure returns a [`KernelError`] and no body.
 //!
 //! # Surfaces of the side faces
-//! Extrude: a line sweeps a plane, an arc or circle a cylinder. Revolve, by the profile
+//! Extrude: a line sweeps a plane, an arc or circle a cylinder; with a taper
+//! ([`extrude_tapered`], see `taper.rs`) a tilted plane and a cone. Revolve, by the profile
 //! edge's position relative to the axis: a line parallel to it a cylinder, perpendicular
 //! to it a plane (a disc or annulus), oblique a cone; an arc centred on the axis a sphere,
 //! any other arc a torus (spindle or lemon-shaped when the arc's centre is near or beyond
@@ -56,8 +57,11 @@
 //!
 //! The engine prefixes these with the feature's id.
 
+mod taper;
 #[cfg(test)]
 mod tests;
+
+pub use taper::MAX_TAPER;
 
 use crate::profile::{CheckedLoop, CheckedProfile, ProfileEdge};
 use crate::topology::{Body, Curve, EdgeId, FaceId, HalfEdgeId, Surface, VertexId};
@@ -80,22 +84,67 @@ fn internal(msg: impl Into<String>) -> KernelError {
 /// plane, `top`, and `side i` (planes for lines, cylinders for arcs and circles); see the
 /// module documentation for every name.
 pub fn extrude(frame: &Frame, profile: &Profile, distance: f64) -> KernelResult<Body> {
-    if !(distance.is_finite()
-        && distance.abs() > LINEAR_TOLERANCE
-        && distance.abs() <= 2.0 * MAX_COORDINATE)
-    {
-        return Err(invalid(format!(
-            "`distance` must be a finite length with {LINEAR_TOLERANCE} < |distance| <= {} mm",
-            2.0 * MAX_COORDINATE
-        )));
-    }
+    check_distance(distance)?;
     let (frame, profile) = if distance > 0.0 {
         (*frame, profile.check()?)
     } else {
         (frame.flipped(), profile.mirrored().check()?)
     };
     let motion = Motion::Translate(frame.z() * distance.abs());
-    build_swept(&frame, &profile, &motion, &Names::extrude())
+    build_swept(&frame, &profile, &motion, &Names::extrude(), None)
+}
+
+/// [`extrude`] with a taper (draft) of `taper` radians: a positive angle shrinks the
+/// profile toward the far end, a negative one grows it, every edge moving by
+/// `|distance| tan(taper)` (see `taper.rs`). Side faces are tilted planes for lines and
+/// cones for arcs and circles; names are those of [`extrude`]. `|taper|` must be below
+/// [`MAX_TAPER`]; a taper within [`ANGULAR_TOLERANCE`] of zero is a plain extrusion.
+///
+/// Refused: a taper that makes an edge or the whole profile vanish, a loop overlap itself
+/// or another loop, or a loop turn inside out, anywhere along the height; and, as
+/// [`KernelError::Unsupported`], a profile with a sharp corner at an arc.
+pub fn extrude_tapered(
+    frame: &Frame,
+    profile: &Profile,
+    distance: f64,
+    taper: f64,
+) -> KernelResult<Body> {
+    if !(taper.is_finite() && taper.abs() < MAX_TAPER) {
+        return Err(invalid(format!(
+            "`taper` must be a finite angle with |taper| < {MAX_TAPER} radians (89 degrees)"
+        )));
+    }
+    if taper.abs() <= ANGULAR_TOLERANCE {
+        return extrude(frame, profile, distance);
+    }
+    check_distance(distance)?;
+    let (frame, profile) = if distance > 0.0 {
+        (*frame, profile.check()?)
+    } else {
+        (frame.flipped(), profile.mirrored().check()?)
+    };
+    let d = distance.abs() * taper.tan();
+    // Part-way offsets too: a collision there would not always show at the far end.
+    for f in [0.25, 0.5, 0.75] {
+        taper::offset_profile(&profile, d * f)?;
+    }
+    let far = taper::offset_profile(&profile, d)?;
+    let motion = Motion::Translate(frame.z() * distance.abs());
+    build_swept(&frame, &profile, &motion, &Names::extrude(), Some(&far))
+}
+
+fn check_distance(distance: f64) -> KernelResult<()> {
+    if distance.is_finite()
+        && distance.abs() > LINEAR_TOLERANCE
+        && distance.abs() <= 2.0 * MAX_COORDINATE
+    {
+        Ok(())
+    } else {
+        Err(invalid(format!(
+            "`distance` must be a finite length with {LINEAR_TOLERANCE} < |distance| <= {} mm",
+            2.0 * MAX_COORDINATE
+        )))
+    }
 }
 
 /// `profile` extruded by `distance` (its absolute value) centred on the sketch plane:
@@ -159,7 +208,7 @@ pub fn revolve(frame: &Frame, profile: &Profile, axis: &Line2, angle: f64) -> Ke
     if full {
         build_full_revolve(&frame, &checked, &rev)
     } else {
-        build_swept(&frame, &checked, &motion, &Names::revolve())
+        build_swept(&frame, &checked, &motion, &Names::revolve(), None)
     }
 }
 
@@ -655,6 +704,7 @@ fn place(
 /// edge's direction.
 fn profile_curve(frame: &Frame, e: &ProfileEdge) -> KernelResult<(Curve, f64, f64)> {
     match *e {
+        ProfileEdge::Spline(ref c) => crate::extrusion::profile_spline_curve(frame, c),
         ProfileEdge::Line { a, b } => Ok((
             Curve::Segment(Segment3::new(frame.from_plane(a), frame.from_plane(b))?),
             0.0,
@@ -676,7 +726,15 @@ fn profile_curve(frame: &Frame, e: &ProfileEdge) -> KernelResult<(Curve, f64, f6
 /// The surface swept by profile edge `e`, and whether its normal is the outward one.
 /// `frame` is the canonical sketch frame (the sweep moves the profile along its normal).
 fn side_surface(frame: &Frame, motion: &Motion, e: &ProfileEdge) -> KernelResult<(Surface, bool)> {
-    let s = match (motion, *e) {
+    let s = match (motion, e.clone()) {
+        (Motion::Translate(d), ProfileEdge::Spline(c)) => {
+            crate::extrusion::extruded_side(frame, *d, &c)?
+        }
+        (Motion::Rotate { .. }, ProfileEdge::Spline(_)) => {
+            return Err(KernelError::Unsupported(
+                "revolving a spline (surfaces of revolution of splines come later)".into(),
+            ));
+        }
         (Motion::Translate(d), ProfileEdge::Line { a, b }) => {
             let t = frame.vector_from_plane(b - a);
             let n = t.cross(*d);
@@ -718,7 +776,50 @@ fn side_surface(frame: &Frame, motion: &Motion, e: &ProfileEdge) -> KernelResult
             }
         }
     };
-    Ok((s, same_sense(frame, motion, e, &s)))
+    let sense = same_sense(frame, motion, e, &s);
+    Ok((s, sense))
+}
+
+/// The surface swept by profile edge `e` of a tapered extrusion whose far copy is `far`
+/// (on `far_frame`), and whether its normal is the outward one: a tilted plane for a
+/// line, a cone (a cylinder when the radius does not change) for an arc.
+fn tapered_side_surface(
+    frame: &Frame,
+    far_frame: &Frame,
+    motion: &Motion,
+    e: &ProfileEdge,
+    far: &ProfileEdge,
+) -> KernelResult<(Surface, bool)> {
+    let s = match (e.clone(), far.clone()) {
+        (ProfileEdge::Line { a, b }, ProfileEdge::Line { a: fa, .. }) => {
+            let t = frame.vector_from_plane(b - a);
+            let p = frame.from_plane(a);
+            let n = t.cross(far_frame.from_plane(fa) - p);
+            Surface::Plane(
+                Frame::from_normal_and_x(p, n, t)
+                    .ok_or_else(|| invalid("a tapered side face has no plane"))?,
+            )
+        }
+        (
+            ProfileEdge::Arc { centre, radius, .. },
+            ProfileEdge::Arc {
+                radius: far_radius, ..
+            },
+        ) => {
+            let f = Frame::from_normal_and_x(frame.from_plane(centre), frame.z(), frame.x())
+                .ok_or_else(|| invalid("a tapered side face has no cone"))?;
+            let h = (far_frame.origin() - frame.origin()).dot(frame.z());
+            let half_angle = (far_radius - radius).atan2(h);
+            if half_angle.abs() <= ANGULAR_TOLERANCE {
+                Surface::cylinder(f, radius)?
+            } else {
+                Surface::cone(f, radius, half_angle)?
+            }
+        }
+        _ => return Err(internal("a tapered edge changed kind")),
+    };
+    let sense = same_sense(frame, motion, e, &s);
+    Ok((s, sense))
 }
 
 /// Whether the surface normal at the middle of profile edge `e` is the outward normal
@@ -731,14 +832,36 @@ fn same_sense(frame: &Frame, motion: &Motion, e: &ProfileEdge, s: &Surface) -> b
     s.normal_at(q.u, q.v).dot(outward) > 0.0
 }
 
-/// Builds an extrusion or a partial revolve.
+/// Builds an extrusion or a partial revolve. `taper` is a tapered extrusion's far
+/// profile (loop by loop and edge by edge the moved copy of `profile`), drawn on the far
+/// frame instead of `profile` itself.
 fn build_swept(
     frame: &Frame,
     profile: &CheckedProfile,
     motion: &Motion,
     names: &Names,
+    taper: Option<&CheckedProfile>,
 ) -> KernelResult<Body> {
     let far_frame = motion.far_frame(frame)?;
+    let far_loops: Vec<&CheckedLoop> = match taper {
+        Some(t) => t.loops().collect(),
+        None => profile.loops().collect(),
+    };
+    if far_loops.len() != profile.holes.len() + 1 {
+        return Err(internal("the far profile has other loops"));
+    }
+    // The far position of vertex k of loop li.
+    let far_point = |li: usize, l: &CheckedLoop, k: usize| -> KernelResult<Point3> {
+        match taper {
+            Some(_) => {
+                let fl = far_loops
+                    .get(li)
+                    .ok_or_else(|| internal("the far profile lost a loop"))?;
+                Ok(far_frame.from_plane(fl.vertex(k)))
+            }
+            None => Ok(motion.moved(frame, l.vertex(k))),
+        }
+    };
     let mut body = Body::new();
 
     // The outer loop: lamina, then sweep the far cap.
@@ -746,8 +869,8 @@ fn build_swept(
     let n = outer.len();
     let near_pts: Vec<Point3> = (0..n).map(|k| frame.from_plane(outer.vertex(k))).collect();
     let far_pts: Vec<Point3> = (0..n)
-        .map(|k| motion.moved(frame, outer.vertex(k)))
-        .collect();
+        .map(|k| far_point(0, outer, k))
+        .collect::<KernelResult<_>>()?;
     if !far_pts.iter().chain(near_pts.iter()).all(|p| p.is_valid()) {
         return Err(invalid(format!(
             "the swept solid must lie within ±{MAX_COORDINATE} mm"
@@ -772,7 +895,7 @@ fn build_swept(
     }
 
     // Holes: drawn into the far cap, swept back to the near end, made rings there.
-    for hole in &profile.holes {
+    for (hi, hole) in profile.holes.iter().enumerate() {
         let m = hole.len();
         let mut t = LoopTopology::new(m);
         // Drawing order: counter-clockwise, i.e. hole vertices 0, m-1, m-2, ..., 1. In
@@ -781,8 +904,8 @@ fn build_swept(
         let order: Vec<usize> = (0..m).map(|i| (m - i) % m).collect();
         let far: Vec<Point3> = order
             .iter()
-            .map(|k| motion.moved(frame, hole.vertex(*k)))
-            .collect();
+            .map(|k| far_point(hi + 1, hole, *k))
+            .collect::<KernelResult<_>>()?;
         let near: Vec<Point3> = order
             .iter()
             .map(|k| frame.from_plane(hole.vertex(*k)))
@@ -844,11 +967,18 @@ fn build_swept(
     body.set_face_surface(far_cap, Surface::Plane(far_frame), true)?;
     body.set_face_name(far_cap, names.far_cap)?;
 
-    for (l, t) in profile.loops().zip(topo.iter()) {
+    for (li, (l, t)) in profile.loops().zip(topo.iter()).enumerate() {
         let n = l.len();
+        let fl = *far_loops
+            .get(li)
+            .ok_or_else(|| internal("the far profile lost a loop"))?;
+        if fl.len() != n {
+            return Err(internal("a far loop has other edges"));
+        }
         for k in 0..n {
             let e = &l.edges[k];
-            let pe = e.edge;
+            let pe = e.edge.clone();
+            let far_pe = fl.edges[k].edge.clone();
             let vs = e.vertex_source;
             let near_v = need(t.near_v[k], "a near vertex")?;
             let near_e = need(t.near_e[k], "a near edge")?;
@@ -862,7 +992,14 @@ fn build_swept(
             }
             // The strut swept by vertex k.
             if let Some(s) = t.strut[k] {
-                let (c, t0, t1) = motion.strut(frame, l.vertex(k))?;
+                let (c, t0, t1) = match taper {
+                    Some(_) => {
+                        let a = frame.from_plane(l.vertex(k));
+                        let b = far_point(li, l, k)?;
+                        (Curve::Segment(Segment3::new(a, b)?), 0.0, 1.0)
+                    }
+                    None => motion.strut(frame, l.vertex(k))?,
+                };
                 place(&mut body, s, c, t0, t1, Along::From(near_v))?;
                 body.set_edge_name(s, &label(l, "sweep", vs))?;
             }
@@ -878,7 +1015,7 @@ fn build_swept(
             place(&mut body, near_e, c, t0, t1, near_along)?;
             match (t.far_e[k], side) {
                 (Some(fe), Some(s)) => {
-                    let (c, t0, t1) = profile_curve(&far_frame, &pe)?;
+                    let (c, t0, t1) = profile_curve(&far_frame, &far_pe)?;
                     let along = if n == 1 {
                         let [h0, h1] = body.edge_half_edges(fe)?;
                         let in_side = half_in(&body, fe, s)?;
@@ -889,7 +1026,10 @@ fn build_swept(
                     place(&mut body, fe, c, t0, t1, along)?;
                     body.set_edge_name(near_e, &label(l, names.near, e.source))?;
                     body.set_edge_name(fe, &label(l, names.far, e.source))?;
-                    let (surface, sense) = side_surface(frame, motion, &pe)?;
+                    let (surface, sense) = match taper {
+                        Some(_) => tapered_side_surface(frame, &far_frame, motion, &pe, &far_pe)?,
+                        None => side_surface(frame, motion, &pe)?,
+                    };
                     body.set_face_surface(s, surface, sense)?;
                     body.set_face_name(s, &label(l, "side", e.source))?;
                 }

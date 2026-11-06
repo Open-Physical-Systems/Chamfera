@@ -193,10 +193,13 @@ pub(super) fn edit_transform(kind: &mut FeatureKind, p: &Value) -> Result<(), Co
     if !matches!(kind, FeatureKind::Mirror(_) | FeatureKind::Move(_)) {
         // `angle` is shared with planes at an angle, which feature.edit handles itself.
         let given = |k: &str| p.get(k).is_some_and(|v| !v.is_null());
+        // So is `to`, which an extrude's options use.
+        let extrude = matches!(kind, FeatureKind::Extrude(_));
         if [
             "plane", "dx", "dy", "dz", "axis", "origin", "from", "to", "copy",
         ]
         .into_iter()
+        .filter(|k| !(extrude && *k == "to"))
         .any(given)
         {
             return Err(bad(

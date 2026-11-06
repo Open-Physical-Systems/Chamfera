@@ -639,6 +639,15 @@ impl<'a> View<'a> {
             _ => Err(err(format!("#{id} should be a simple instance"))),
         }
     }
+    /// `#id` exists, as a simple or a complex instance (a rational B-spline curve is a
+    /// complex one).
+    fn exists(&self, id: u64) -> Result<(), IoError> {
+        self.ex
+            .data
+            .get(&id)
+            .map(|_| ())
+            .ok_or_else(|| err(format!("#{id} is missing")))
+    }
 }
 
 fn param(ps: &[Param], i: usize, of: u64) -> Result<&Param, IoError> {
@@ -739,7 +748,7 @@ fn solid(v: &View<'_>, id: u64) -> Result<SolidSummary, IoError> {
                         let a = as_ref(param(ep, 1, e)?, e)?;
                         let z = as_ref(param(ep, 2, e)?, e)?;
                         as_bool(param(ep, 4, e)?, e)?;
-                        v.get_any(as_ref(param(ep, 3, e)?, e)?)?;
+                        v.exists(as_ref(param(ep, 3, e)?, e)?)?;
                         for vx in [a, z] {
                             if let std::collections::btree_map::Entry::Vacant(slot) =
                                 vertices.entry(vx)
@@ -794,6 +803,27 @@ fn solid(v: &View<'_>, id: u64) -> Result<SolidSummary, IoError> {
 /// degenerate torus `major < minor`).
 fn surface_summary(v: &View<'_>, id: u64, same_sense: bool) -> Result<SurfaceSummary, IoError> {
     let (name, ps) = v.get_any(id)?;
+    if name == "SURFACE_OF_LINEAR_EXTRUSION" {
+        // The swept curve must be an entity; the axis a VECTOR of a DIRECTION.
+        v.exists(as_ref(param(ps, 1, id)?, id)?)?;
+        let vec = as_ref(param(ps, 2, id)?, id)?;
+        let vp = v.get(vec, "VECTOR")?;
+        let d = as_ref(param(vp, 1, vec)?, vec)?;
+        let dp = v.get(d, "DIRECTION")?;
+        let axis = match as_list(param(dp, 1, d)?, d)? {
+            [x, y, z] => [as_real(x, d)?, as_real(y, d)?, as_real(z, d)?],
+            _ => return Err(err(format!("#{d} should have three coordinates"))),
+        };
+        return Ok(SurfaceSummary {
+            entity: name.to_owned(),
+            origin: [0.0; 3],
+            axis,
+            ref_direction: [0.0; 3],
+            values: vec![as_real(param(vp, 2, vec)?, vec)?],
+            select_outer: None,
+            same_sense,
+        });
+    }
     let Some(&(_, count)) = SURFACES.iter().find(|(n, _)| *n == name) else {
         return Err(err(format!("#{id} is a {name}, not a surface we know")));
     };

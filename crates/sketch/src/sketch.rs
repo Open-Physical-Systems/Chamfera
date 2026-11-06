@@ -14,7 +14,7 @@ use std::f64::consts::TAU;
 
 /// Most points a sketch may hold.
 pub const MAX_POINTS: usize = 10_000;
-/// Most curves (lines, circles, arcs) a sketch may hold.
+/// Most curves (lines, circles, arcs, ellipses) a sketch may hold.
 pub const MAX_CURVES: usize = 10_000;
 /// Most constraints and dimensions a sketch may hold.
 pub const MAX_CONSTRAINTS: usize = 20_000;
@@ -56,6 +56,8 @@ pub enum SketchError {
     BadNextId,
     #[error("{0} is not a dimension and has no value")]
     NotADimension(ConstraintId),
+    #[error("{0}")]
+    BadSpline(String),
 }
 
 /// A 2D sketch: points, curves and the constraints between them.
@@ -200,7 +202,10 @@ impl Sketch {
             Curve::Arc { centre, start, .. } => {
                 Some(self.point(*start)?.distance(self.point(*centre)?))
             }
-            Curve::Line { .. } => None,
+            Curve::Line { .. }
+            | Curve::Ellipse { .. }
+            | Curve::EllipticalArc { .. }
+            | Curve::Spline { .. } => None,
         }
     }
 
@@ -267,6 +272,42 @@ impl Sketch {
         })
     }
 
+    /// Adds an ellipse about `centre` with semi-axes to `major` and `minor`. The minor point
+    /// need not be square to the major axis yet; the next solve puts it there.
+    pub fn add_ellipse(
+        &mut self,
+        centre: PointId,
+        major: PointId,
+        minor: PointId,
+    ) -> Result<CurveId, SketchError> {
+        self.insert_curve(Curve::Ellipse {
+            centre,
+            major,
+            minor,
+            construction: false,
+        })
+    }
+
+    /// Adds an arc of an ellipse, counter-clockwise from `start` to `end`. The ends need
+    /// not be on the ellipse yet; the next solve puts them there.
+    pub fn add_elliptical_arc(
+        &mut self,
+        centre: PointId,
+        major: PointId,
+        minor: PointId,
+        start: PointId,
+        end: PointId,
+    ) -> Result<CurveId, SketchError> {
+        self.insert_curve(Curve::EllipticalArc {
+            centre,
+            major,
+            minor,
+            start,
+            end,
+            construction: false,
+        })
+    }
+
     /// Marks a curve as construction geometry (or back).
     pub fn set_construction(&mut self, id: CurveId, construction: bool) -> Result<(), SketchError> {
         let curve = self
@@ -278,7 +319,7 @@ impl Sketch {
     }
 
     /// Moves a point without solving (for example while building a sketch). Refused if it
-    /// would put an arc's start on its centre.
+    /// would put an arc's start on its centre, or give an ellipse a semi-axis of no length.
     pub fn move_point(&mut self, id: PointId, at: Point2) -> Result<(), SketchError> {
         check_point2("point", at)?;
         let old = self.point(id).ok_or(SketchError::UnknownPoint(id))?;
@@ -286,7 +327,9 @@ impl Sketch {
         let arcs_ok = self
             .curves
             .values()
-            .filter(|c| matches!(c, Curve::Arc { .. }) && c.points().contains(&id))
+            .filter(|c| {
+                (matches!(c, Curve::Arc { .. }) || c.is_elliptical()) && c.points().contains(&id)
+            })
             .try_for_each(|c| self.check_curve(c));
         if let Err(e) = arcs_ok {
             self.points.insert(id, old);
@@ -481,6 +524,38 @@ impl Sketch {
                     _ => 0.0,
                 };
                 check_radius("arc radius", r)?;
+            }
+            Curve::Spline { points, closed, .. } => {
+                crate::spline::check_points(points, *closed)?;
+            }
+            Curve::Ellipse {
+                centre,
+                major,
+                minor,
+                ..
+            }
+            | Curve::EllipticalArc {
+                centre,
+                major,
+                minor,
+                ..
+            } => {
+                let ids = curve.points();
+                let distinct = ids
+                    .iter()
+                    .enumerate()
+                    .all(|(i, p)| !ids.iter().skip(i + 1).any(|q| q == p));
+                if !distinct {
+                    return Err(SketchError::SameEntityTwice {
+                        what: "an ellipse's points",
+                    });
+                }
+                let axis = |p: &PointId| match (self.point(*centre), self.point(*p)) {
+                    (Some(c), Some(q)) => c.distance(q),
+                    _ => 0.0,
+                };
+                check_radius("ellipse major semi-axis", axis(major))?;
+                check_radius("ellipse minor semi-axis", axis(minor))?;
             }
         }
         Ok(())

@@ -168,6 +168,11 @@ fn section(frame: &Frame, l: &CheckedLoop, n: Vec3) -> Section {
                 a: frame.from_plane(e.edge.start()),
                 sweep: sweep.abs(),
             },
+            // Refused by `loft` before it gets here; a chord keeps this total.
+            ProfileEdge::Spline(_) => Edge3::Line {
+                a: frame.from_plane(e.edge.start()),
+                b: frame.from_plane(e.edge.end()),
+            },
         });
         source.push(e.source);
     }
@@ -310,6 +315,15 @@ pub fn loft(sections: &[(Frame, Profile)]) -> KernelResult<Body> {
         if !c.holes.is_empty() {
             return Err(unsupported(format!(
                 "lofting a profile with holes (profile {i})"
+            )));
+        }
+        if c.outer
+            .edges
+            .iter()
+            .any(|e| matches!(e.edge, ProfileEdge::Spline(_)))
+        {
+            return Err(unsupported(format!(
+                "lofting a profile with spline edges (profile {i})"
             )));
         }
         loops.push(section(f, &c.outer, n));

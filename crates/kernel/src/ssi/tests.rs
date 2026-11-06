@@ -107,22 +107,22 @@ fn both(a: &Surface, b: &Surface) -> SurfaceIntersection {
 }
 
 fn circle_of(c: &IntersectionCurve) -> Circle3 {
-    match c.curve {
-        Curve::Circle(c) => c,
+    match &c.curve {
+        Curve::Circle(c) => *c,
         other => panic!("expected a circle, got {other:?}"),
     }
 }
 
 fn ellipse_of(c: &IntersectionCurve) -> Ellipse3 {
-    match c.curve {
-        Curve::Ellipse(e) => e,
+    match &c.curve {
+        Curve::Ellipse(e) => *e,
         other => panic!("expected an ellipse, got {other:?}"),
     }
 }
 
 fn line_of(c: &IntersectionCurve) -> Line3 {
-    match c.curve {
-        Curve::Line(l) => l,
+    match &c.curve {
+        Curve::Line(l) => *l,
         other => panic!("expected a line, got {other:?}"),
     }
 }
@@ -1011,7 +1011,7 @@ fn implicit_value(s: &Surface, p: Point3) -> Option<f64> {
             let q = all + big * big - a * a;
             Some(q * q - 4.0 * big * big * rho2)
         }
-        Surface::Cone(_) => None,
+        Surface::Cone(_) | Surface::Extrusion(_) => None,
     }
 }
 

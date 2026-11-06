@@ -277,9 +277,22 @@ fn reach(p: &CheckedProfile, c: Point2) -> f64 {
     p.outer
         .edges
         .iter()
-        .map(|e| match e.edge {
+        .map(|e| match &e.edge {
             ProfileEdge::Line { a, b } => a.distance(c).max(b.distance(c)),
             ProfileEdge::Arc { centre, radius, .. } => centre.distance(c) + radius,
+            // The curve lies in its control points' box (convex hull property).
+            ProfileEdge::Spline(s) => {
+                let (lo, hi) = s.hull_box();
+                [
+                    Point2::new(lo.x, lo.y),
+                    Point2::new(hi.x, lo.y),
+                    Point2::new(lo.x, hi.y),
+                    Point2::new(hi.x, hi.y),
+                ]
+                .into_iter()
+                .map(|q| q.distance(c))
+                .fold(0.0, f64::max)
+            }
         })
         .fold(0.0, f64::max)
 }
