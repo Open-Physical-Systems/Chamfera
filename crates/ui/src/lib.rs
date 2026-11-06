@@ -278,8 +278,16 @@ impl ChamferaApp {
             renderer: chamfera_gpu::ViewRenderer::new(&rs.device),
             texture: None,
         });
-        let mut app = ChamferaApp::with_gpu(gpu, &options, prefs::load());
-        app.prefs_store = true;
+        // Screenshots neither read nor write the user's preferences or Assistant key, so
+        // they show no recent files or key and look the same on every machine.
+        let shot = options.screenshot.is_some();
+        let prefs = if shot {
+            prefs::Preferences::default()
+        } else {
+            prefs::load()
+        };
+        let mut app = ChamferaApp::with_gpu(gpu, &options, prefs);
+        app.prefs_store = !shot;
         app.welcome.open = welcome_ui::shows_at_start(&options, app.prefs.show_welcome);
         // Autosave and the recovery question, except in screenshots, which must neither
         // write recovery files nor show another run's work.
@@ -290,7 +298,7 @@ impl ChamferaApp {
             app.recovery.dir = recovery_ui::default_dir();
             app.recovery_scan();
         }
-        if app.assistant.transport.is_none() {
+        if app.assistant.transport.is_none() && !shot {
             app.assistant.load_key();
         }
         if app.gpu.is_none() {

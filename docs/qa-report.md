@@ -266,3 +266,54 @@ every part) are written to `target/qa/shots/` by
   work against hand values get a 0.01% error and may chase a bug that is not there.
 - **Hole points cannot take expressions**, and patterns cannot be patterned: a parametric
   bolt grid needs a constrained sketch of points (part 1), which is far from obvious.
+
+## User guide pass (2026-11-07)
+
+Writing `docs/user-guide/` meant doing every step it describes in the real app (screenshots
+with `chamfera --script ... --screenshot` and the start-up options) or with the commands, and
+checking the numbers by hand. Where a step did not work as a user would expect, the guide
+describes what the app does today and the problem is listed here.
+
+### Sketching, solids, construction, getting started
+1. Right-click menus grey out Press Pull and Measure with "Press Pull is planned" / "Measure is planned", although both tools exist (`chamfera --script examples/boss-on-plate.json --context-menu 600,300` on a face, `330,350` on an edge; `crates/ui/src/context_menu.rs`).
+2. The heads-up length field shows its unit twice before you type ("40.00 mm mm", the value running over the field's name): `--script examples/sketch-snaps.json --sketch-input "tool line; click 0,0; hover 40,1"`. `heads_up` in `sketch_ui.rs` appends a hard-coded " mm" to a value that already has its unit (an inch design likely shows "in mm").
+3. The Revolve and Circular Pattern dialogs cannot use a construction axis (only sketch lines, or X, Y, Z through the origin; Move likewise, and Mirror only the origin planes); `axis_feature` works from a script.
+4. solid.thicken on a split face's whole name thickens one piece: a 40 x 20 x 10 block's top split at x = 20, `{faces: ["2:top"], thickness: 2}` gives 800 mm³, not 1600, with no warning (fillet and shell take every piece).
+5. Two 40 x 40 rectangles overlapping by 20 x 20, before Split All Crossings: sketch.get lists a profile of area 0.0 with one hole, plus one of 1600.
+6. Construction planes have no eye toggle in the Browser; only suppressing hides one, which also changes what is built on it.
+7. There is no sketch Point tool in the ribbon (sketch.point is script only), and Insert DXF in the interface has no units or scale choice.
+
+### Surfaces, sheet metal, assemblies, inspect, drawings, render
+1. surface.trim replies "solids": [] (no trimmed body, no area); status bar ends in an empty list.
+2. body.list gives surface bodies a volume (-2091.7 for a trimmed cylinder, 4183.5 for a half-pipe sweep); expected null.
+3. Properties window says "Solid (exact)" for a surface body and Volume "could not be measured" (from the code).
+4. Edit Feature only edits a surface extrude's distance; surface revolve angle, sweep and patch are view-only (feature.edit {angle} works by script).
+5. Trim Surface dialog trims by planes only; trimming by a body or face is script-only.
+6. Sheet metal Rules dialog: Thickness "3 in" or "abc" is skipped silently, the old value kept, "Sheet metal rule saved" shown.
+7. Sheet metal status messages always use mm, whatever the design's units.
+8. Projection (first angle) moves placed views off the sheet without a warning (front 100,100; top 150,200; right 220,30: top goes to y about 0, right to x about -20).
+9. Drawing sheets cannot be edited in the app: views, dimensions and annotations cannot be moved or deleted; sheet size and scale cannot be changed (New Sheet is always A3 1:1); only undo goes back.
+10. Only the newest sheet is shown; earlier sheets cannot be shown again.
+11. The title block date is the UTC date (2026-11-06 for a sheet made at 02:13 local on 2026-11-07).
+12. drawing.list reports "hatched_area": -0.0 for views without a section.
+13. A planar joint between a plate's top face (centre 30,30) and an r 5 puck's bottom face places the puck at (25,30): the face centre is averaged from vertices, and a circle has only its seam vertex.
+14. No UI for joint limits, deleting a joint, renaming or moving a component; a linked copy made from the Browser lands inside the original with no way to move it.
+15. The display bar ignores a section set by view.section (shows "XY 0.0 mm"); touching the offset box replaces the cut with an XY one.
+16. Section defaults confuse: the default XY cut at 0 leaves only the footprint of a part standing on XY; the XZ normal is -Y, so +25 cuts at Y = -25.
+17. Mass Properties takes an unreadable density ("7.85 g/cm3") as 1, with no error.
+18. A linked copy is placed from the original's un-jointed position and reuses its body names.
+19. The Explode slider stops at factor 5 although view.explode takes 20; reopening the panel resets it to 2.
+20. chamfera-cli run prints no replies when a step fails, only the error (the agent-tools skill says one reply per line).
+21. Mass Properties shows inertia as 9.8125e0 with noise like 2.57e-16, and inertia and mass have no units.
+
+### Manufacture, parameters, timeline, history, files, Assistant, preferences
+1. Comparing versions panics the GPU renderer, both in the app and in the windowless snapshot: `chamfera --script examples/version-history.json --screenshot x.png` (in an empty folder) and `chamfera-cli snapshot --script ...` both fail validation with "the buffer bound at binding index 0 is bound with size 16 where the shader expects 32".
+2. Screenshot runs read the user's real preferences and Assistant key, and could save the preferences: they followed the user's theme, preset and recent list (now also on the welcome panel), and the Assistant page showed the key's last four characters. **Fixed** (`docs/user-guide`): with `--screenshot` the app uses default preferences, never saves them and loads no key.
+3. Preferences > Assistant is wider than the window: the body and footer stick out about 100 px past the title bar's close button (`chamfera --preferences assistant`).
+4. design.open on a non-design file shows a parser message: "not a Chamfera design: invalid type: integer `999`, expected struct Document at line 1 column 3" (examples/dxf-plate.dxf).
+5. The `--preferences` error message lists general, navigation, units or grid, but leaves out assistant, which works.
+6. The ribbon's Post button always writes LinuxCNC; GRBL is only in the File menu, with no hint in the ribbon.
+7. The Add Tool dialog has no bull nose mill, although the 3D operations take one; only cam.tool_add with a corner radius adds it.
+8. Suppressing the only feature in a configuration makes config.activate reply "volume": -0.0.
+9. No check that a drill and its hole match: a flat end mill is taken for Drill, and a 5 mm drill in a 6 mm hole gets no warning.
+10. The Assistant's recorded demo runs "Extrude thickness" before "Finish Sketch".
