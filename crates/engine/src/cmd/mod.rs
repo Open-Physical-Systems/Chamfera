@@ -11,6 +11,7 @@ mod inspect;
 mod param;
 mod select;
 mod sketch;
+mod timeline;
 mod transform;
 mod view;
 
@@ -45,6 +46,7 @@ pub fn registry() -> Vec<&'static CommandSpec> {
         param::COMMANDS,
         select::COMMANDS,
         sketch::COMMANDS,
+        timeline::COMMANDS,
         transform::COMMANDS,
         view::COMMANDS,
     ] {

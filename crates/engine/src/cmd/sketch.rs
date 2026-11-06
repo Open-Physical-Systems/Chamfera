@@ -481,6 +481,14 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
     Ok(json!({ "sketch": id }))
 }
 
+fn rename(s: &mut Session, p: &Value) -> CmdResult {
+    let id = params::req_id(p, "sketch")?;
+    let name = params::req_display_name(p, "name")?;
+    s.doc.sketch(id)?;
+    s.doc.rename_item(id, &name)?;
+    Ok(json!({ "sketch": id, "name": s.doc.sketch(id)?.name }))
+}
+
 fn finish(s: &mut Session, p: &Value) -> CmdResult {
     params::none(p)?;
     let id = active_id(s)?;
@@ -952,13 +960,6 @@ fn plane_point(s: &mut Session, p: &Value) -> CmdResult {
         .sketch_plane_point(x, y, w, h)
         .ok_or_else(|| CommandError::Unavailable("the sketch plane is seen edge-on".into()))?;
     Ok(json!({ "x": at.x, "y": at.y }))
-}
-
-fn rename(s: &mut Session, p: &Value) -> CmdResult {
-    let id = params::req_id(p, "sketch")?;
-    let name = params::req_display_name(p, "name")?;
-    s.doc.sketch_mut(id)?.name = name.clone();
-    Ok(json!({ "sketch": id, "name": name }))
 }
 
 fn select(s: &mut Session, p: &Value) -> CmdResult {

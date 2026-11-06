@@ -802,10 +802,12 @@ impl eframe::App for ChamferaApp {
             self.inspect_dialog(&ctx);
             self.shell_dialog(&ctx);
             self.feature_dialog(&ctx);
+            self.timeline_error_window(&ctx);
             self.construct_dialog(&ctx);
             self.rename_dialog(&ctx);
             self.properties_window(&ctx);
         }
+        self.rename_box(&ctx);
         self.unsaved_dialog(&ctx);
         self.shortcuts_window(&ctx);
         self.search_window(&ctx);

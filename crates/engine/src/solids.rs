@@ -104,6 +104,28 @@ fn build_blend(
     Ok(next)
 }
 
+/// The first edge a blend names that no body built so far has, as `edge "2:top 0" of
+/// Extrude1`.
+fn missing_edge(
+    doc: &chamfera_doc::Document,
+    b: &Blend,
+    made: &[(u32, String, Body)],
+) -> Option<String> {
+    let have: std::collections::BTreeSet<String> = made
+        .iter()
+        .flat_map(|(_, _, body)| body.edges().into_iter().filter_map(|e| edge_ref(body, e)))
+        .collect();
+    let gone = b.edges.iter().find(|e| !have.contains(*e))?;
+    let owner = gone
+        .split_whitespace()
+        .find_map(|w| w.split_once(':'))
+        .and_then(|(id, _)| id.parse::<u32>().ok());
+    Some(match owner {
+        Some(f) => format!("edge {gone:?} of {}", feature_name(doc, f)),
+        None => format!("edge {gone:?}"),
+    })
+}
+
 /// Hollows the bodies built so far (rung K12). A body is shelled when it has one of the
 /// named open faces; with no faces named, every body is hollowed closed. Every name must
 /// still be found.
@@ -200,6 +222,7 @@ pub fn body_has_feature(body: &Body, feature: u32) -> bool {
 /// The plane of the face `r.face` of feature `r.feature`, from bodies built so far in this
 /// rebuild (whichever body it ended up in after joins and cuts).
 fn attached_plane(
+    doc: &chamfera_doc::Document,
     made: &[(u32, String, Body)],
     r: &chamfera_doc::FaceRef,
 ) -> Result<chamfera_geom::Frame, String> {
@@ -213,9 +236,15 @@ fn attached_plane(
         }
     }
     Err(format!(
-        "the face {:?} it is drawn on is gone (feature {} changed or failed)",
-        r.face, r.feature
+        "the face {:?} it is drawn on is gone ({} changed, failed or is not built)",
+        r.face,
+        feature_name(doc, r.feature)
     ))
+}
+
+/// A feature's name, for messages.
+fn feature_name(doc: &chamfera_doc::Document, id: u32) -> String {
+    doc.item_name(id).unwrap_or_else(|| format!("feature {id}"))
 }
 
 /// What the last rebuild produced.
@@ -226,6 +255,11 @@ pub struct Built {
     pub errors: BTreeMap<u32, String>,
     /// Features whose solids were built but cannot be shown yet, and why.
     pub display_errors: BTreeMap<u32, String>,
+    /// For a feature that failed because something it refers to changed upstream: that
+    /// reference, such as `face "top" of Extrude1`.
+    pub broken: BTreeMap<u32, String>,
+    /// Sketches on a face that could not follow it, and why.
+    pub sketch_errors: BTreeMap<u32, String>,
     /// Construction planes, axes and points, by feature id.
     pub constructs: BTreeMap<u32, crate::construct::Constructed>,
 }
@@ -652,6 +686,7 @@ fn named_body<'a>(made: &'a [(u32, String, Body)], name: &str) -> Result<&'a Bod
 
 /// The mirror plane as a point and a normal.
 fn mirror_plane(
+    doc: &chamfera_doc::Document,
     plane: &chamfera_doc::MirrorPlane,
     made: &[(u32, String, Body)],
 ) -> Result<(Point3, chamfera_geom::Vec3), String> {
@@ -662,6 +697,7 @@ fn mirror_plane(
         MirrorPlane::Xz => Frame::XZ,
         MirrorPlane::Yz => Frame::YZ,
         MirrorPlane::Face { feature, face } => attached_plane(
+            doc,
             made,
             &chamfera_doc::FaceRef {
                 feature: *feature,
@@ -676,12 +712,13 @@ fn mirror_plane(
 /// The mirror images a mirror makes: of the named bodies as built so far, then of the
 /// listed features' own shapes. Each is renamed as copy `k` of the mirror.
 fn mirror_bodies(
+    doc: &chamfera_doc::Document,
     m: &chamfera_doc::Mirror,
     mirror_id: u32,
     made: &[(u32, String, Body)],
     tools: &BTreeMap<u32, (Vec<Body>, Operation)>,
 ) -> Result<Vec<Body>, String> {
-    let (point, normal) = mirror_plane(&m.plane, made)?;
+    let (point, normal) = mirror_plane(doc, &m.plane, made)?;
     let mut sources: Vec<&Body> = Vec::new();
     for name in &m.bodies {
         sources.push(named_body(made, name)?);
@@ -872,16 +909,44 @@ impl Session {
         let mut made: Vec<(u32, String, Body)> = Vec::new();
         // Each built feature's own shapes (before they were combined), for patterns.
         let mut tools: BTreeMap<u32, (Vec<Body>, Operation)> = BTreeMap::new();
-        let features = self.doc.features.clone();
-        for feature in &features {
+        // Items after the timeline marker are not built.
+        let order = self.doc.timeline_order();
+        let marker = self.doc.marker();
+        for id in order.into_iter().take(marker) {
+            // A sketch drawn on a face follows that face, as built at this point.
+            if self.doc.sketch(id).is_ok() {
+                if let Err(e) = self.follow_attached_sketch(id, &made, &built.constructs) {
+                    built.sketch_errors.insert(id, e);
+                }
+                continue;
+            }
+            let Ok(feature) = self.doc.feature(id).cloned() else {
+                continue;
+            };
+            let feature = &feature;
             if feature.suppressed {
                 continue;
             }
-            // A sketch drawn on a face follows that face (built earlier in the timeline).
             if let Some(sketch) = feature.kind.sketch()
-                && let Err(e) = self.follow_attached_sketch(sketch, &made, &built.constructs)
+                && let Some(e) = built.sketch_errors.get(&sketch)
             {
-                built.errors.insert(feature.id, e);
+                let name = feature_name(&self.doc, sketch);
+                built.errors.insert(feature.id, format!("{name}: {e}"));
+                if let Some(r) = self
+                    .doc
+                    .sketch(sketch)
+                    .ok()
+                    .and_then(|s| s.attached.clone())
+                {
+                    built.broken.insert(
+                        feature.id,
+                        format!(
+                            "face {:?} of {}",
+                            r.face,
+                            feature_name(&self.doc, r.feature)
+                        ),
+                    );
+                }
                 continue;
             }
             if let FeatureKind::Construct(c) = &feature.kind {
@@ -896,6 +961,11 @@ impl Session {
                 continue;
             }
             if let FeatureKind::Pattern(p) = &feature.kind {
+                if !tools.contains_key(&p.source) {
+                    built
+                        .broken
+                        .insert(feature.id, feature_name(&self.doc, p.source));
+                }
                 let copies = pattern_copies(&self.doc, p, feature.id, &tools, &built.constructs);
                 match copies {
                     Ok((bodies, Operation::NewBody)) => {
@@ -919,24 +989,25 @@ impl Session {
                 continue;
             }
             if let FeatureKind::Mirror(m) = &feature.kind {
-                let result = mirror_bodies(m, feature.id, &made, &tools).and_then(|bodies| {
-                    tools.insert(feature.id, (bodies.clone(), m.operation));
-                    let mut next = made.clone();
-                    if m.operation == Operation::NewBody {
-                        let n = bodies.len();
-                        for (k, b) in bodies.into_iter().enumerate() {
-                            let name = if n == 1 {
-                                feature.name.clone()
-                            } else {
-                                format!("{} ({})", feature.name, k + 1)
-                            };
-                            next.push((feature.id, name, b));
+                let result =
+                    mirror_bodies(&self.doc, m, feature.id, &made, &tools).and_then(|bodies| {
+                        tools.insert(feature.id, (bodies.clone(), m.operation));
+                        let mut next = made.clone();
+                        if m.operation == Operation::NewBody {
+                            let n = bodies.len();
+                            for (k, b) in bodies.into_iter().enumerate() {
+                                let name = if n == 1 {
+                                    feature.name.clone()
+                                } else {
+                                    format!("{} ({})", feature.name, k + 1)
+                                };
+                                next.push((feature.id, name, b));
+                            }
+                        } else {
+                            apply_operation(&mut next, &bodies, m.operation)?;
                         }
-                    } else {
-                        apply_operation(&mut next, &bodies, m.operation)?;
-                    }
-                    Ok(next)
-                });
+                        Ok(next)
+                    });
                 match result {
                     Ok(next) => made = next,
                     Err(e) => {
@@ -958,6 +1029,9 @@ impl Session {
                 match build_blend(&self.doc, b, feature.id, &made) {
                     Ok(next) => made = next,
                     Err(e) => {
+                        if let Some(r) = missing_edge(&self.doc, b, &made) {
+                            built.broken.insert(feature.id, r);
+                        }
                         built.errors.insert(feature.id, e);
                     }
                 }
@@ -1035,20 +1109,17 @@ impl Session {
                     }
                 }
                 Err(e) => {
+                    if e.contains("no longer closed")
+                        && let Some(sketch) = feature.kind.sketch()
+                    {
+                        built.broken.insert(
+                            feature.id,
+                            format!("a profile of {}", feature_name(&self.doc, sketch)),
+                        );
+                    }
                     built.errors.insert(feature.id, e);
                 }
             }
-        }
-        // Sketches on faces or construction planes that no feature uses yet follow too.
-        let attached: Vec<u32> = self
-            .doc
-            .sketches
-            .iter()
-            .filter(|s| s.attached.is_some() || s.on_plane.is_some() || !s.projections.is_empty())
-            .map(|s| s.id)
-            .collect();
-        for id in attached {
-            let _ = self.follow_attached_sketch(id, &made, &built.constructs);
         }
         // Replace the scene's solid bodies.
         let old: Vec<u32> = self
@@ -1108,7 +1179,7 @@ impl Session {
             return Ok(());
         };
         let plane = match (f.attached.clone(), f.on_plane) {
-            (Some(r), _) => Some(attached_plane(made, &r)?),
+            (Some(r), _) => Some(attached_plane(&self.doc, made, &r)?),
             (None, Some(id)) => match constructs.get(&id) {
                 Some(crate::construct::Constructed::Plane { frame, .. }) => Some(*frame),
                 _ => {
@@ -1283,6 +1354,17 @@ impl Session {
     /// tessellation exists).
     pub fn display_errors(&self) -> &BTreeMap<u32, String> {
         &self.built.display_errors
+    }
+
+    /// The reference that broke for each feature that failed because of an upstream
+    /// change, such as `face "top" of Extrude1`.
+    pub fn broken_references(&self) -> &BTreeMap<u32, String> {
+        &self.built.broken
+    }
+
+    /// Sketches on a face that could not follow it in the last rebuild, and why.
+    pub fn sketch_errors(&self) -> &BTreeMap<u32, String> {
+        &self.built.sketch_errors
     }
 
     /// The profile under pixel `(x, y)`: the nearest sketch plane the ray meets where a

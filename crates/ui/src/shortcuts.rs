@@ -141,7 +141,7 @@ const fn row(action: Action, keys: Keys, context: &'static str, handler: Handler
 }
 
 /// Every default shortcut. Keys are unique (`no_two_shortcuts_share_a_key`).
-pub const SHORTCUTS: [Shortcut; 22] = [
+pub const SHORTCUTS: [Shortcut; 23] = [
     row(
         Action::Search,
         Keys::CtrlSpaceThen(Key::F),
@@ -261,6 +261,12 @@ pub const SHORTCUTS: [Shortcut; 22] = [
         Action::SaveAs,
         Keys::ctrl_shift(Key::S),
         "Anywhere",
+        Handler::Elsewhere,
+    ),
+    row(
+        Action::Command("timeline.rename"),
+        Keys::key(Key::F2),
+        "Timeline, Browser",
         Handler::Elsewhere,
     ),
     row(

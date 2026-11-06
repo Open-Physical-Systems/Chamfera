@@ -299,10 +299,10 @@ Close runners-up: selection filters and box selection (UI and NAV), splines (nee
 | Ribbon with workspaces and tabs | Tool groups by task | done | P0 | M | ui |
 | Browser (model tree) | Bodies, sketches, parameters; show/hide, context menu | done | P0 | M | ui |
 | Browser: origin, construction, components folders | Tree items for planes, axes and components | missing | P0 | S | ui |
-| Timeline | Features in order; edit, suppress, delete from the context menu | done | P0 | M | ui, doc |
-| Rollback marker | Drag to roll back and insert features earlier | missing | P0 | M | doc, ui |
-| Reorder features | Drag features in the timeline | missing | P1 | M | doc |
-| Timeline groups | Collapse several features into a group | missing | P2 | S | doc, ui |
+| Timeline | Features in order; edit, suppress, delete, rename (F2), show error and broken reference from the context menu | done | P0 | M | ui, doc |
+| Rollback marker | Drag to roll back and insert features earlier | branch (`timeline/rollback`) | P0 | M | doc, ui |
+| Reorder features | Drag features in the timeline | branch (`timeline/rollback`) | P1 | M | doc |
+| Timeline groups | Collapse several features into a group | branch (`timeline/rollback`) | P2 | S | doc, ui |
 | Command search | A search box (on a key) that finds any command by name and runs it | missing | P0 | S | ui |
 | Keyboard shortcuts | Single keys for line, rectangle, circle, extrude, fillet, measure, dimension, trim, offset, and so on; editable | missing | P0 | S | ui (now only file, undo, fit, home) |
 | Radial context menu | Right-click menu laid out around the cursor with the common commands | missing | P1 | M | ui |

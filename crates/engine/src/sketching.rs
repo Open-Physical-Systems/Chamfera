@@ -94,11 +94,21 @@ impl Session {
             self.sketch_selection.clear();
         }
         let mut overlays = Vec::new();
+        // Sketches after the timeline marker are not shown, like the features there.
+        let built = self.doc.built_items();
         for f in &self.doc.sketches {
             let active = Some(f.id) == self.active_sketch;
-            // A finished sketch that a feature has used is hidden, as CAD users expect:
-            // its curves lie on the solid's edges and seams. Editing it shows it again.
-            if !active && !self.doc.sketch_users(f.id).is_empty() {
+            if !active && !built.contains(&f.id) {
+                continue;
+            }
+            // A finished sketch that a built feature has used is hidden, as CAD users
+            // expect: its curves lie on the solid's edges and seams. Editing it shows it.
+            let used = self
+                .doc
+                .features
+                .iter()
+                .any(|x| x.kind.sketch() == Some(f.id) && built.contains(&x.id));
+            if !active && used {
                 continue;
             }
             let dof = if active {

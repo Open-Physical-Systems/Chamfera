@@ -1063,6 +1063,7 @@ impl Document {
             });
         }
         self.check_feature(&kind)?;
+        self.check_new_item_dependencies(&crate::timeline::kind_dependencies(&kind))?;
         let id = self
             .last_feature_id
             .checked_add(1)
@@ -1079,6 +1080,7 @@ impl Document {
             suppressed: false,
             kind,
         });
+        self.timeline_insert(id);
         Ok(id)
     }
 
@@ -1102,7 +1104,9 @@ impl Document {
             .iter()
             .position(|f| f.id == id)
             .ok_or(DocError::NoSuchFeature(id))?;
-        Ok(self.features.remove(i))
+        let f = self.features.remove(i);
+        self.timeline_remove();
+        Ok(f)
     }
 
     /// Sketches attached to a face of a feature or drawn on a construction plane, patterns

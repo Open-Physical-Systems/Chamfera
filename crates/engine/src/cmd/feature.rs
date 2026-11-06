@@ -774,7 +774,9 @@ fn delete(s: &mut Session, p: &Value) -> CmdResult {
 fn rename(s: &mut Session, p: &Value) -> CmdResult {
     let id = params::req_id(p, "feature")?;
     let name = params::req_display_name(p, "name")?;
-    s.doc.feature_mut(id)?.name = name;
+    s.doc.feature(id)?;
+    s.doc.rename_item(id, &name)?;
+    // Bodies are named after their features.
     s.rebuild();
     Ok(feature_reply(s, id))
 }
