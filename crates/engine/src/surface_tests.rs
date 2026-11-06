@@ -15,7 +15,10 @@ fn id(v: &Value, key: &str) -> u64 {
 
 /// A sketch on xy with the 50 x 30 rectangle from the origin; returns the sketch id.
 fn rect_sketch(s: &mut Session) -> u64 {
-    let sketch = id(&s.execute("sketch.create", &json!({"plane": "xy"})).unwrap(), "sketch");
+    let sketch = id(
+        &s.execute("sketch.create", &json!({"plane": "xy"})).unwrap(),
+        "sketch",
+    );
     s.execute(
         "sketch.rectangle",
         &json!({"x1": 0, "y1": 0, "x2": 50, "y2": 30}),
@@ -55,7 +58,11 @@ fn a_surface_extrude_of_a_rectangle_has_area_1600_and_no_volume() {
     assert_eq!(b.boundary_edges().len(), 8);
     assert!(b.volume().is_err());
     // It is shown, as a surface.
-    let x = s.solids().iter().find(|x| x.name == "SurfaceExtrude1").unwrap();
+    let x = s
+        .solids()
+        .iter()
+        .find(|x| x.name == "SurfaceExtrude1")
+        .unwrap();
     let scene = s.scene.body(x.scene_id.unwrap()).unwrap();
     assert!(scene.surface);
     // Editing the distance to 20 doubles the area.
@@ -64,9 +71,10 @@ fn a_surface_extrude_of_a_rectangle_has_area_1600_and_no_volume() {
         .unwrap();
     assert!(close(solid(&s, "SurfaceExtrude1").area().unwrap(), 3200.0));
     // A key of another feature is refused.
-    assert!(s
-        .execute("feature.edit", &json!({"feature": f, "angle": 90}))
-        .is_err());
+    assert!(
+        s.execute("feature.edit", &json!({"feature": f, "angle": 90}))
+            .is_err()
+    );
 }
 
 #[test]
@@ -75,13 +83,19 @@ fn a_revolved_open_line_is_a_cylinder_of_area_two_pi_r_h() {
     s.execute("sketch.create", &json!({"plane": "xy"})).unwrap();
     // The axis along y and the line x = 10 from y = 0 to y = 20: r = 10, h = 20.
     let axis = id(
-        &s.execute("sketch.line", &json!({"x1": 0, "y1": -5, "x2": 0, "y2": 25}))
-            .unwrap(),
+        &s.execute(
+            "sketch.line",
+            &json!({"x1": 0, "y1": -5, "x2": 0, "y2": 25}),
+        )
+        .unwrap(),
         "curve",
     );
     let line = id(
-        &s.execute("sketch.line", &json!({"x1": 10, "y1": 0, "x2": 10, "y2": 20}))
-            .unwrap(),
+        &s.execute(
+            "sketch.line",
+            &json!({"x1": 10, "y1": 0, "x2": 10, "y2": 20}),
+        )
+        .unwrap(),
         "curve",
     );
     s.execute("sketch.finish", &json!({})).unwrap();
@@ -109,7 +123,10 @@ fn a_revolved_open_line_is_a_cylinder_of_area_two_pi_r_h() {
         &json!({"body": "SurfaceRevolve1", "plane": plane, "keep": "below"}),
     )
     .unwrap();
-    assert!(close(solid(&s, "SurfaceRevolve1").area().unwrap(), 200.0 * PI));
+    assert!(close(
+        solid(&s, "SurfaceRevolve1").area().unwrap(),
+        200.0 * PI
+    ));
 }
 
 #[test]
@@ -180,7 +197,10 @@ fn refused_surface_commands_leave_the_design_unchanged() {
             json!({"body": "SurfaceExtrude1", "tool": "SurfaceExtrude1"}),
         ),
         ("surface.revolve", json!({"sketch": sketch, "curves": [1]})),
-        ("surface.sweep", json!({"sketch": sketch, "profiles": [{"x": 25, "y": 15}]})),
+        (
+            "surface.sweep",
+            json!({"sketch": sketch, "profiles": [{"x": 25, "y": 15}]}),
+        ),
     ];
     for (cmd, p) in refused {
         assert!(s.execute(cmd, &p).is_err(), "{cmd} {p}");

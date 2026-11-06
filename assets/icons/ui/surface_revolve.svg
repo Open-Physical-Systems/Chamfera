@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+  <!-- Chamfera interface icon: surface revolve. Original artwork, MIT OR Apache-2.0. -->
+  <path stroke="#2B313B" d="M12 2.5v19"/>
+  <path stroke="#E8770E" d="M6 6.5v11M18 6.5v11"/>
+  <path stroke="#E8770E" d="M6 6.5c0-1.6 2.7-2.5 6-2.5s6 .9 6 2.5M6 17.5c0 1.6 2.7 2.5 6 2.5s6-.9 6-2.5"/>
+</svg>

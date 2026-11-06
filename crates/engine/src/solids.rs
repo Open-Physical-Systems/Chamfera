@@ -920,7 +920,12 @@ pub(crate) fn revolve_axis(
             };
             Line2::new(a, b - a).map_err(|e| format!("the axis: {e}"))?
         }
-        _ => return Err(format!("the axis {} is not a line of {}", axis_curve, f.name)),
+        _ => {
+            return Err(format!(
+                "the axis {} is not a line of {}",
+                axis_curve, f.name
+            ));
+        }
     };
     Ok(axis)
 }

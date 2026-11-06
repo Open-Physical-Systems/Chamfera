@@ -24,15 +24,12 @@ fn tube() -> Body {
 /// The cylinder of radius 10 and height 20 about the y axis: the line x = 10 from y = 0 to
 /// y = 20 turned about the y axis.
 fn cylinder() -> Body {
-    let line = vec![ProfileEdge::line(Point2::new(10.0, 0.0), Point2::new(10.0, 20.0))];
+    let line = vec![ProfileEdge::line(
+        Point2::new(10.0, 0.0),
+        Point2::new(10.0, 20.0),
+    )];
     let axis = Line2::new(Point2::ORIGIN, Vec2::new(0.0, 1.0)).unwrap();
-    surface_revolve(
-        &Frame::XY,
-        &SurfaceProfile::Open(line),
-        &axis,
-        2.0 * PI,
-    )
-    .unwrap()
+    surface_revolve(&Frame::XY, &SurfaceProfile::Open(line), &axis, 2.0 * PI).unwrap()
 }
 
 #[test]
@@ -71,7 +68,10 @@ fn an_open_chain_extrudes_into_its_own_sides_only() {
     assert_eq!(b.faces().len(), 2);
     assert_eq!(b.boundary_edges().len(), 6);
     // A single straight line too (its chord would be degenerate): 40 x 5.
-    let one = vec![ProfileEdge::line(Point2::new(0.0, 0.0), Point2::new(40.0, 0.0))];
+    let one = vec![ProfileEdge::line(
+        Point2::new(0.0, 0.0),
+        Point2::new(40.0, 0.0),
+    )];
     let b = surface_extrude(&Frame::XY, &SurfaceProfile::Open(one), 5.0).unwrap();
     assert!(close(b.area().unwrap(), 200.0));
     assert_eq!(b.boundary_edges().len(), 4);
@@ -135,7 +135,11 @@ fn trimming_a_cylinder_at_half_height_halves_it() {
     let plane = Frame::from_normal(Point3::new(0.0, 10.0, 0.0), Vec3::Y).unwrap();
     let below = trim_by_plane(&c, &plane, true).unwrap();
     // 400 pi / 2.
-    assert!(close(below.area().unwrap(), 200.0 * PI), "{}", below.area().unwrap());
+    assert!(
+        close(below.area().unwrap(), 200.0 * PI),
+        "{}",
+        below.area().unwrap()
+    );
     assert!(below.is_open());
     let above = trim_by_plane(&c, &plane, false).unwrap();
     assert!(close(above.area().unwrap(), 200.0 * PI));

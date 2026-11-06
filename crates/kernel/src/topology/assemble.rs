@@ -199,9 +199,9 @@ impl Body {
                     let (e, fwd) = missing[k];
                     cycle.push((e, fwd));
                     let end = edges[e].vertices[usize::from(fwd)];
-                    k = *starting.get(&end).ok_or_else(|| {
-                        bad(format!("the rim does not close at vertex {end}"))
-                    })?;
+                    k = *starting
+                        .get(&end)
+                        .ok_or_else(|| bad(format!("the rim does not close at vertex {end}")))?;
                 }
                 if k != start {
                     return Err(bad("the rim of the surface does not close into loops"));

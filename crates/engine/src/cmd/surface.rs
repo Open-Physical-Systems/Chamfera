@@ -225,7 +225,9 @@ fn patch(s: &mut Session, p: &Value) -> CmdResult {
         }
     } else {
         if given(p, "sketch") || given(p, "profiles") {
-            return Err(bad("give either `sketch` and `profiles`, or `edges`, not both"));
+            return Err(bad(
+                "give either `sketch` and `profiles`, or `edges`, not both",
+            ));
         }
         SurfacePatch {
             sketch: None,
@@ -288,13 +290,12 @@ const KEYS: [&str; 15] = [
 
 /// `feature.edit` for a surface feature: the values its command takes (and `keep`).
 pub(super) fn edit(s: &mut Session, id: u32, p: &Value) -> CmdResult {
-    if let Some(obj) = p.as_object() {
-        if let Some(k) = obj
+    if let Some(obj) = p.as_object()
+        && let Some(k) = obj
             .keys()
             .find(|k| !KEYS.contains(&k.as_str()) && k.as_str() != "keep")
-        {
-            return Err(bad(format!("`{k}` does not belong to a surface feature")));
-        }
+    {
+        return Err(bad(format!("`{k}` does not belong to a surface feature")));
     }
     let FeatureKind::Surface(mut sf) = s.doc.feature(id)?.kind.clone() else {
         return Err(bad("not a surface feature"));
@@ -317,7 +318,18 @@ pub(super) fn edit(s: &mut Session, id: u32, p: &Value) -> CmdResult {
     };
     match &mut sf {
         SurfaceFeature::Extrude(e) => {
-            no(&["axis", "axis_feature", "angle", "path_curves", "edges", "bodies", "body", "plane", "tool", "keep"])?;
+            no(&[
+                "axis",
+                "axis_feature",
+                "angle",
+                "path_curves",
+                "edges",
+                "bodies",
+                "body",
+                "plane",
+                "tool",
+                "keep",
+            ])?;
             set_shapes(&mut e.shapes)?;
             if let Some(d) = expression(p, "distance", "mm")? {
                 e.distance = d;
@@ -327,7 +339,17 @@ pub(super) fn edit(s: &mut Session, id: u32, p: &Value) -> CmdResult {
             }
         }
         SurfaceFeature::Revolve(r) => {
-            no(&["distance", "symmetric", "path_curves", "edges", "bodies", "body", "plane", "tool", "keep"])?;
+            no(&[
+                "distance",
+                "symmetric",
+                "path_curves",
+                "edges",
+                "bodies",
+                "body",
+                "plane",
+                "tool",
+                "keep",
+            ])?;
             set_shapes(&mut r.shapes)?;
             if given(p, "axis") {
                 r.axis = params::req_id(p, "axis")?;
@@ -340,14 +362,39 @@ pub(super) fn edit(s: &mut Session, id: u32, p: &Value) -> CmdResult {
             }
         }
         SurfaceFeature::Sweep(w) => {
-            no(&["distance", "symmetric", "axis", "axis_feature", "angle", "edges", "bodies", "body", "plane", "tool", "keep"])?;
+            no(&[
+                "distance",
+                "symmetric",
+                "axis",
+                "axis_feature",
+                "angle",
+                "edges",
+                "bodies",
+                "body",
+                "plane",
+                "tool",
+                "keep",
+            ])?;
             set_shapes(&mut w.shapes)?;
             if given(p, "path_curves") {
                 w.path = ids(p, "path_curves")?;
             }
         }
         SurfaceFeature::Patch(pa) => {
-            no(&["curves", "distance", "symmetric", "axis", "axis_feature", "angle", "path_curves", "bodies", "body", "plane", "tool", "keep"])?;
+            no(&[
+                "curves",
+                "distance",
+                "symmetric",
+                "axis",
+                "axis_feature",
+                "angle",
+                "path_curves",
+                "bodies",
+                "body",
+                "plane",
+                "tool",
+                "keep",
+            ])?;
             if given(p, "profiles") {
                 pa.profiles = seeds(p)?;
             }
@@ -356,13 +403,38 @@ pub(super) fn edit(s: &mut Session, id: u32, p: &Value) -> CmdResult {
             }
         }
         SurfaceFeature::Stitch(st) => {
-            no(&["profiles", "curves", "distance", "symmetric", "axis", "axis_feature", "angle", "path_curves", "edges", "body", "plane", "tool", "keep"])?;
+            no(&[
+                "profiles",
+                "curves",
+                "distance",
+                "symmetric",
+                "axis",
+                "axis_feature",
+                "angle",
+                "path_curves",
+                "edges",
+                "body",
+                "plane",
+                "tool",
+                "keep",
+            ])?;
             if let Some(b) = names(p, "bodies")? {
                 st.bodies = b;
             }
         }
         SurfaceFeature::Trim(t) => {
-            no(&["profiles", "curves", "distance", "symmetric", "axis", "axis_feature", "angle", "path_curves", "edges", "bodies"])?;
+            no(&[
+                "profiles",
+                "curves",
+                "distance",
+                "symmetric",
+                "axis",
+                "axis_feature",
+                "angle",
+                "path_curves",
+                "edges",
+                "bodies",
+            ])?;
             if let Some(b) = params::opt_str(p, "body")? {
                 t.body = b.to_owned();
             }

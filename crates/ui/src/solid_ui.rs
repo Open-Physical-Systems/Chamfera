@@ -376,6 +376,8 @@ pub struct SolidUi {
     pub press_pull: Option<crate::press_pull_ui::PressPullTool>,
     /// Combine, Split Body, Split Face or Thicken (`body_tools_ui.rs`).
     pub body_tool: Option<crate::body_tools_ui::BodyTool>,
+    /// A surface tool (`surface_ui.rs`).
+    pub surface: Option<crate::surface_ui::SurfaceTool>,
     /// The Sweep or Loft tool.
     pub sweep: Option<crate::sweep_ui::SweepTool>,
     /// Waiting for a click on a flat face to sketch on.
@@ -405,6 +407,7 @@ impl ChamferaApp {
             && self.solid.shell.is_none()
             && self.solid.press_pull.is_none()
             && self.solid.body_tool.is_none()
+            && self.solid.surface.is_none()
             && self.solid.sweep.is_none();
         let sweep_open = self.solid.sweep.as_ref().map(|t| t.loft);
         let mut open_sweep: Option<bool> = None;
@@ -650,6 +653,16 @@ impl ChamferaApp {
         if let Some(chamfer) = open_blend {
             self.open_blend(chamfer);
         }
+        let has_sketch = self
+            .session
+            .doc
+            .sketches
+            .iter()
+            .any(|f| f.sketch.curves().next().is_some());
+        widgets::ribbon_divider(ui, self.look());
+        self.surface_group(ui, has_sketch, tool_free);
+        let look = self.look();
+        widgets::ribbon_divider(ui, look);
         self.transform_group(ui, has_solids && tool_free);
         let look = self.look();
         widgets::ribbon_divider(ui, look);

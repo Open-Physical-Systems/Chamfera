@@ -47,6 +47,7 @@ mod sketch_shapes;
 mod sketch_ui;
 mod solid_ui;
 mod spline_ui;
+mod surface_ui;
 mod sweep_ui;
 mod timeline;
 mod transform_ui;
@@ -567,6 +568,14 @@ impl ChamferaApp {
                 return;
             }
         }
+        if self.solid.surface.is_some()
+            && response.clicked()
+            && let Some(pos) = response.interact_pointer_pos()
+        {
+            let (x, y) = local(pos);
+            self.surface_click(x, y, w, h);
+            return;
+        }
         if self.solid.body_tool.is_some()
             && response.clicked()
             && let Some(pos) = response.interact_pointer_pos()
@@ -937,6 +946,7 @@ impl eframe::App for ChamferaApp {
             self.sheet_dialogs(&ctx);
             self.press_pull_dialog(&ctx);
             self.body_tool_dialog(&ctx);
+            self.surface_dialog(&ctx);
             self.sweep_dialog(&ctx);
             self.feature_dialog(&ctx);
             self.timeline_error_window(&ctx);

@@ -162,8 +162,8 @@ pub fn stitch(bodies: &[&Body]) -> KernelResult<Body> {
                     // This body's use, in the global edge's direction, against the other's.
                     let mine = dir_of.get(ei).copied().unwrap_or(true) == same;
                     let done = emap.get(gb).map(Vec::as_slice).unwrap_or(&[]);
-                    let theirs = rim_direction(&lists[gb], done, g, gb == bi, &m)
-                        .ok_or_else(|| {
+                    let theirs =
+                        rim_direction(&lists[gb], done, g, gb == bi, &m).ok_or_else(|| {
                             KernelError::InvalidResult("a shared edge lost its use".into())
                         })?;
                     links.push((bi, gb, mine == theirs));

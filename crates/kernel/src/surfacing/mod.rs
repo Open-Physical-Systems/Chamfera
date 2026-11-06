@@ -375,7 +375,7 @@ pub fn patch_edges(body: &Body, edges: &[EdgeId]) -> KernelResult<Body> {
             let off = surface
                 .plane_distance(edge.curve.point_at(t))
                 .unwrap_or(f64::INFINITY);
-            if !(off.abs() <= LINEAR_TOLERANCE) {
+            if off.is_nan() || off.abs() > LINEAR_TOLERANCE {
                 return Err(KernelError::Unsupported(
                     "the edges do not lie in one plane; only planar patches are supported yet"
                         .into(),

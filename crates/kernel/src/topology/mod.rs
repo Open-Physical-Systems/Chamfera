@@ -67,12 +67,12 @@ mod tests;
 
 pub use crate::surface::Surface;
 pub(crate) use assemble::{ListEdge, ListFace, ListVertex};
-pub(crate) use open::FaceList;
 pub use build::MAX_PROFILE_VERTICES;
 pub use euler::Mvfs;
 pub use geometry::Curve;
 pub use measure::SURFACE_QUADRATURE_TOLERANCE;
 pub(crate) use measure::open_volume;
+pub(crate) use open::FaceList;
 pub use uv::PointOnFace;
 pub(crate) use uv::{EdgeImage, LoopImage};
 pub use validate::{ShellReport, TopologyError, TopologyReport, Validation};

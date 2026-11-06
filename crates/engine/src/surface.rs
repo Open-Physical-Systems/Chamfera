@@ -175,7 +175,10 @@ fn chain(f: &SketchFeature, curves: &[u32]) -> Result<Vec<ProfileEdge>, String> 
                 _ => piece.clone(),
             }
         } else {
-            let at = out.last().map(ProfileEdge::end).ok_or("the chain is empty")?;
+            let at = out
+                .last()
+                .map(ProfileEdge::end)
+                .ok_or("the chain is empty")?;
             if s.distance(at) <= tol {
                 piece.clone()
             } else if e.distance(at) <= tol {
@@ -198,7 +201,11 @@ fn index_of(made: &[(u32, String, Body)], name: &str) -> Result<usize, String> {
         .ok_or_else(|| format!("there is no body named {name:?} at this point"))
 }
 
-fn patch(doc: &Document, p: &SurfacePatch, made: &[(u32, String, Body)]) -> Result<Vec<Body>, String> {
+fn patch(
+    doc: &Document,
+    p: &SurfacePatch,
+    made: &[(u32, String, Body)],
+) -> Result<Vec<Body>, String> {
     if let Some(sketch) = p.sketch {
         let f = doc.sketch(sketch).map_err(|x| x.to_string())?;
         return feature_profiles(f, &p.profiles)?
@@ -236,7 +243,11 @@ fn patch(doc: &Document, p: &SurfacePatch, made: &[(u32, String, Body)]) -> Resu
     ))
 }
 
-fn stitch(s: &SurfaceStitch, feature: &Feature, made: &[(u32, String, Body)]) -> Result<Made, String> {
+fn stitch(
+    s: &SurfaceStitch,
+    feature: &Feature,
+    made: &[(u32, String, Body)],
+) -> Result<Made, String> {
     let mut picked = Vec::new();
     for name in &s.bodies {
         let i = index_of(made, name)?;
@@ -283,9 +294,8 @@ fn trim(
     };
     let mut out = match &t.tool {
         TrimTool::Plane { plane } => {
-            let (frame, _) = crate::construct::plane_of(&made.to_vec(), constructs, plane)?;
-            chamfera_kernel::trim_by_plane(surface, &frame, t.keep == TrimKeep::Below)
-                .map_err(k)?
+            let (frame, _) = crate::construct::plane_of(made, constructs, plane)?;
+            chamfera_kernel::trim_by_plane(surface, &frame, t.keep == TrimKeep::Below).map_err(k)?
         }
         TrimTool::Body { body } => {
             let j = index_of(made, body)?;

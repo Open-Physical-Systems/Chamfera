@@ -1,0 +1,18 @@
+[
+  {"command": "sketch.create", "params": {"plane": "xy"}, "as": "wall"},
+  {"command": "sketch.line", "params": {"x1": 0, "y1": 0, "x2": 40, "y2": 0}, "as": "a"},
+  {"command": "sketch.line", "params": {"x1": 40, "y1": 0, "x2": 40, "y2": 25}, "as": "b"},
+  {"command": "sketch.finish", "params": {}},
+  {"command": "surface.extrude", "params": {"sketch": "$wall.sketch", "curves": ["$a.curve", "$b.curve"], "distance": 20}},
+  {"command": "sketch.create", "params": {"plane": "xy"}, "as": "cone"},
+  {"command": "sketch.line", "params": {"x1": -30, "y1": -5, "x2": -30, "y2": 30}, "as": "axis"},
+  {"command": "sketch.line", "params": {"x1": -45, "y1": 0, "x2": -40, "y2": 25}, "as": "side"},
+  {"command": "sketch.finish", "params": {}},
+  {"command": "surface.revolve", "params": {"sketch": "$cone.sketch", "curves": ["$side.curve"], "axis": "$axis.curve", "angle": 270}},
+  {"command": "sketch.create", "params": {"plane": "xy"}, "as": "plate"},
+  {"command": "sketch.rectangle", "params": {"x1": 0, "y1": -40, "x2": 30, "y2": -15}},
+  {"command": "sketch.finish", "params": {}},
+  {"command": "surface.extrude", "params": {"sketch": "$plate.sketch", "profiles": [{"x": 15, "y": -30}], "distance": 12}},
+  {"command": "surface.patch", "params": {"edges": ["6:bottom 0", "6:bottom 1", "6:bottom 2", "6:bottom 3"]}},
+  {"command": "view.standard", "params": {"view": "iso"}}
+]

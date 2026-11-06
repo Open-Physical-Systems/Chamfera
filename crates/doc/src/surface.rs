@@ -335,18 +335,19 @@ impl Document {
                 Ok(())
             }
             SurfaceFeature::Patch(p) => match (p.sketch, p.edges.is_empty()) {
-                (Some(sketch), true) => self.check_surface_shapes(&SurfaceShapes {
-                    sketch,
-                    profiles: p.profiles.clone(),
-                    curves: Vec::new(),
-                })
-                .and_then(|()| {
-                    if p.profiles.is_empty() {
-                        Err(bad("pick at least one closed profile to patch"))
-                    } else {
-                        Ok(())
-                    }
-                }),
+                (Some(sketch), true) => self
+                    .check_surface_shapes(&SurfaceShapes {
+                        sketch,
+                        profiles: p.profiles.clone(),
+                        curves: Vec::new(),
+                    })
+                    .and_then(|()| {
+                        if p.profiles.is_empty() {
+                            Err(bad("pick at least one closed profile to patch"))
+                        } else {
+                            Ok(())
+                        }
+                    }),
                 (None, false) => check_names("edges", &p.edges, 1),
                 _ => Err(bad(
                     "a patch fills either sketch profiles or a loop of edges, not both",
@@ -385,7 +386,9 @@ impl Document {
                 {
                     Ok(())
                 }
-                _ => Err(bad(format!("feature {feature} is not a construction plane"))),
+                _ => Err(bad(format!(
+                    "feature {feature} is not a construction plane"
+                ))),
             },
         }
     }

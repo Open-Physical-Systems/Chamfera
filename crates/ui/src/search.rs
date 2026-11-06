@@ -211,7 +211,7 @@ fn context_of(action: Action) -> &'static str {
         Action::ShowShortcuts | Action::Search => "Help",
         Action::Command(id) => match id.split('.').next() {
             Some("sketch") => "Sketch",
-            Some("solid" | "feature" | "param") => "Solid",
+            Some("solid" | "feature" | "param" | "surface") => "Solid",
             Some("view" | "select") => "View",
             Some("design" | "body") => "File",
             Some("edit") => "Edit",
@@ -255,6 +255,10 @@ pub(crate) fn icon_of(action: Action) -> Icon {
         Action::Preferences => Icon::Parameters,
         Action::ShowShortcuts | Action::Search => Icon::Select,
         Action::Command(id) => match id.split('.').next() {
+            Some("surface") => crate::surface_ui::SurfaceKind::ALL
+                .into_iter()
+                .find(|k| k.command() == id)
+                .map_or(Icon::SurfaceExtrude, |k| k.icon()),
             Some("sketch") => Icon::Sketch,
             Some("solid" | "feature" | "body") => Icon::Body,
             Some("param") => Icon::Parameters,
@@ -583,6 +587,16 @@ impl ChamferaApp {
     fn run_command_item(&mut self, id: &'static str) {
         if id.starts_with("param.") {
             self.params.open = true;
+            return;
+        }
+        // The surface tools open their dialogs, as their SURFACE buttons do.
+        if let Some(kind) = crate::surface_ui::SurfaceKind::ALL
+            .into_iter()
+            .find(|k| k.command() == id)
+        {
+            if self.solid.surface.is_none() {
+                self.open_surface_tool(kind);
+            }
             return;
         }
         let Some(spec) = registry().into_iter().find(|c| c.id == id) else {

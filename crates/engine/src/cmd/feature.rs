@@ -271,6 +271,7 @@ pub(super) fn feature_reply(s: &Session, id: u32) -> Value {
                 "body": x.scene_id,
                 "volume": x.body.volume().ok(),
                 "area": x.body.area().ok(),
+                "surface": x.body.is_open(),
             })
         })
         .collect();

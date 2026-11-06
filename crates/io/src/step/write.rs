@@ -162,7 +162,12 @@ pub fn write(bodies: &[(&str, &Body)], options: &StepOptions) -> Result<String, 
             items.extend(body_solids(&mut out, name, body)?);
         }
     }
-    let join = |refs: &[Ref]| refs.iter().map(Ref::to_string).collect::<Vec<_>>().join(",");
+    let join = |refs: &[Ref]| {
+        refs.iter()
+            .map(Ref::to_string)
+            .collect::<Vec<_>>()
+            .join(",")
+    };
     let solid_rep = if items.is_empty() {
         None
     } else {

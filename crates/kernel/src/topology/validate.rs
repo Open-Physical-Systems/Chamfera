@@ -217,11 +217,10 @@ impl Body {
             }
         }
         for (si, shell) in self.shells.live() {
-            let all_open = shell.faces.iter().all(|f| {
-                self.faces
-                    .get(f.index())
-                    .is_some_and(|face| face.boundary)
-            });
+            let all_open = shell
+                .faces
+                .iter()
+                .all(|f| self.faces.get(f.index()).is_some_and(|face| face.boundary));
             if all_open {
                 return Err(TopologyError::OnlyOpenings(ShellId::from_index(si)));
             }

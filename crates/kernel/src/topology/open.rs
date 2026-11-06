@@ -54,15 +54,17 @@ impl Body {
             if !keep(f) {
                 continue;
             }
-            let (surface, same_sense) = self.face_surface(f)?.ok_or_else(|| {
-                KernelError::InvalidInput(format!("{f} has no surface"))
-            })?;
+            let (surface, same_sense) = self
+                .face_surface(f)?
+                .ok_or_else(|| KernelError::InvalidInput(format!("{f} has no surface")))?;
             let mut loops = Vec::new();
             for l in self.face_loops(f)? {
                 let mut lp = Vec::new();
                 for h in self.loop_half_edges(l)? {
                     let e = self.half_edge_edge(h)?.ok_or_else(|| {
-                        KernelError::Unsupported(format!("{l} is a lone vertex, not a loop of edges"))
+                        KernelError::Unsupported(format!(
+                            "{l} is a lone vertex, not a loop of edges"
+                        ))
                     })?;
                     let index = match emap.get(&e) {
                         Some(i) => *i,

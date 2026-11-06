@@ -44,6 +44,9 @@ It uses the GPU if there is one, else a software Vulkan driver (lavapipe, `mesa-
 - `construct.pick {x, y, width, height}` names the face, nearest edge and vertex under a pixel in the form these commands take.
 - `sketch.create {"plane": <plane id>}` sketches on a construction plane and follows it; `solid.revolve` and `solid.pattern_circular` take `axis_feature` (`examples/construction-planes.json`).
 
+## Surfaces
+- `surface.extrude {sketch, profiles, curves, distance, symmetric}`, `surface.revolve {sketch, profiles, curves, axis, angle}` and `surface.sweep {sketch, profiles, curves, path_sketch, path_curves}` make surface bodies (open shells): a closed profile's sides without caps, or an open chain of curves (ids, joined end to end). `surface.patch {sketch, profiles}` or `{edges: ["2:top 0", ...]}` fills a closed flat boundary; `surface.stitch {bodies}` joins surfaces along shared edges (a closed result is a solid); `surface.trim {body, plane | tool, keep: below|above}` cuts one; `solid.thicken` thickens a surface's face. Replies give each body's `area`, `surface: true` and `volume: null`. `examples/surface-basics.json` builds a few (drawn two-sided in the teal `surface_body` tint).
+
 ## Sheet metal
 - `sheet.rule {name, thickness, bend_radius, k_factor, relief, relief_width, relief_depth}` makes or changes a named rule; `sheet.base {sketch, profile: {x, y}, rule}` thickens a closed profile; `sheet.flange {edge, height, angle, position, side, offset_start, offset_end}` bends a wall up from a straight edge (names from `solid.edges`); `sheet.flat_pattern` unfolds it (replies with `length`, `width`, `area` and each bend's `allowance`) and `sheet.export_flat {path}` writes the outline as DXF. `examples/sheet-bracket.json` builds a bracket and its flat pattern.
 ## Manufacture (CAM)

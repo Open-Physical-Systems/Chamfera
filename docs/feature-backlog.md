@@ -174,13 +174,13 @@ Close runners-up: selection filters and box selection (UI and NAV), splines (nee
 
 | Feature | Description | Status | Pri | Size | Layer |
 |---|---|---|---|---|---|
-| Surface bodies (open shells) | Bodies that are not closed solids | missing | P1 | M | kernel |
-| Surface extrude, revolve, sweep, loft | Open curves swept into surfaces | missing | P1 | M | kernel |
-| Patch | Fill a closed boundary with a surface | missing | P1 | L | kernel (K10) |
+| Surface bodies (open shells) | Bodies that are not closed solids | branch `surface/basics` (open shells with boundary faces as openings, `Validation::Surface`, area, tessellation, rim edges, volume refused; STEP as `SHELL_BASED_SURFACE_MODEL` of `OPEN_SHELL`s; drawn two-sided in the `surface_body` tint) | P1 | M | kernel |
+| Surface extrude, revolve, sweep, loft | Open curves swept into surfaces | branch `surface/basics` (`surface.extrude`, `surface.revolve`, `surface.sweep` of closed profiles' sides and open chains of lines, arcs and splines; loft missing) | P1 | M | kernel |
+| Patch | Fill a closed boundary with a surface | partial: `surface.patch` fills closed sketch profiles or a closed planar loop of model edges with a flat face; non-planar boundaries wait for K10 | P1 | L | kernel (K10) |
 | Offset surface | Surface at a distance from faces | missing | P1 | L | kernel |
-| Thicken | Give a surface a thickness to make a solid | branch `solid/body-tools` (`solid.thicken` of faces of solids: flat faces extruded, full cylindrical faces as rings; one side, symmetric, both sides; open surfaces wait for surface bodies) | P1 | L | kernel |
-| Trim, untrim, extend surface | Edit surface boundaries | missing | P2 | L | kernel |
-| Stitch / unstitch | Sew surfaces into a solid, or take a solid apart | missing | P1 | M | kernel |
+| Thicken | Give a surface a thickness to make a solid | branch `solid/body-tools` (`solid.thicken` of faces of solids: flat faces extruded, full cylindrical faces as rings; one side, symmetric, both sides; faces of surface bodies too, which the thicken uses up) | P1 | L | kernel |
+| Trim, untrim, extend surface | Edit surface boundaries | partial: `surface.trim` by a plane, a flat one-face surface or a closed solid (K7 split and classify, wherever K6 meets the faces); untrim and extend missing | P2 | L | kernel |
+| Stitch / unstitch | Sew surfaces into a solid, or take a solid apart | partial: `surface.stitch` joins surfaces along coincident rim edges, reversing whole bodies to agree, and makes a closed result a solid; unstitch missing | P1 | M | kernel |
 | Ruled surface | Surface between an edge and a direction | missing | P2 | M | kernel |
 | Boundary fill | Make solids from the cells that surfaces enclose | missing | P2 | L | kernel |
 | Reverse normal | Flip a surface's side | missing | P2 | S | kernel |
