@@ -1,20 +1,30 @@
 //! Layer 2: the design document: parameters and sketches now, the feature timeline from M4.
 
+pub mod appearance;
 pub mod cam;
+pub mod component;
 pub mod construct;
+pub mod drawing;
 pub mod expr;
 pub mod feature;
 pub mod imported;
+pub mod joint;
+pub mod timeline;
 
+pub use appearance::Appearance;
+pub use component::{Assembly, Component, ROOT};
 pub use construct::{
     AxisRef, ConstructKind, Construction, EdgeRef, OriginAxis, OriginPlane, PlaneRef, PointRef,
 };
+pub use drawing::Drawing;
 pub use feature::{
     Blend, BlendKind, Extrude, ExtrudeDirection, ExtrudeExtent, ExtrudeTo, ExtrudeValues, Feature,
-    FeatureKind, Hole, HoleKind, HoleSizes, Mirror, MirrorPlane, Move, MoveTransform, Operation,
-    Pattern, PatternLayout, Revolve, Shell,
+    FeatureKind, Hole, HoleKind, HoleSizes, Loft, LoftSection, Mirror, MirrorPlane, Move,
+    MoveTransform, Operation, Pattern, PatternLayout, Revolve, Shell, Sweep,
 };
 pub use imported::ImportedBody;
+pub use joint::{EdgeEnd, Joint, JointKind, JointOrigin, OriginAt};
+pub use timeline::{Group, ItemKind, Timeline};
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -41,9 +51,19 @@ use thiserror::Error;
 ///   their own distances, a start offset and a taper angle. Older extrudes read as by
 ///   distance from the sketch plane without a taper.
 /// - 14: mirror and move/copy of bodies and features.
+/// - 15: components (bodies grouped, each with a placement) and joints between them.
+///   Older files open as a single root component.
+/// - 16: the timeline: an explicit build order of sketches and features, the rollback
+///   marker and groups (`timeline`). Older files open in id order with the marker at
+///   the end, as their timeline showed them.
+/// - 17: sweeps along a path and lofts between profiles.
+/// - 18: drawings: sheets with views of the solids and dimensions (`drawing`).
+///   Older files open with no sheets.
 /// - 19: projected (linked) sketch curves and ellipses.
 /// - 20: the CAM section: setups, tools and machining operations (`cam`).
-pub const FORMAT_VERSION: u32 = 20;
+/// - 21: body appearances (a colour and opacity per feature's body). Older files open
+///   with every body in the theme's colour.
+pub const FORMAT_VERSION: u32 = 21;
 /// The tag every design file starts with, so other JSON is not mistaken for a design.
 pub const FORMAT_TAG: &str = "chamfera";
 /// Longest parameter name.
@@ -88,6 +108,10 @@ pub enum DocError {
     NoSuchFeature(u32),
     #[error("{reason}")]
     BadFeature { reason: String },
+    #[error("timeline: {0}")]
+    Timeline(String),
+    #[error("drawing: {reason}")]
+    BadDrawing { reason: String },
 }
 
 /// What a parameter measures. Values are stored in internal units: mm and radians.
@@ -209,6 +233,18 @@ pub struct Document {
     /// Solid bodies imported from other CAD files (STEP), kept as exact B-rep bodies.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub imported: Vec<ImportedBody>,
+    /// Build order, rollback marker and groups of the sketches and features.
+    #[serde(default)]
+    pub timeline: Timeline,
+    /// Components and joints (format 15). A design without them is one root component.
+    #[serde(default, skip_serializing_if = "Assembly::is_empty")]
+    pub assembly: Assembly,
+    /// Drawing sheets (format 18).
+    #[serde(default, skip_serializing_if = "Drawing::is_empty")]
+    pub drawing: Drawing,
+    /// How the bodies a feature (or an import) made look, by its id. Display data only.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub appearances: BTreeMap<u32, Appearance>,
     /// Manufacturing: setups, tools and operations (format 20). Older files have none.
     #[serde(default, skip_serializing_if = "cam::Cam::is_empty")]
     pub cam: cam::Cam,
@@ -224,6 +260,10 @@ impl Default for Document {
             features: Vec::new(),
             last_feature_id: 0,
             imported: Vec::new(),
+            timeline: Timeline::default(),
+            assembly: Assembly::default(),
+            drawing: Drawing::default(),
+            appearances: BTreeMap::new(),
             cam: cam::Cam::default(),
         }
     }
@@ -488,6 +528,8 @@ impl Document {
             projections: Vec::new(),
             on_plane: None,
         });
+        self.timeline_insert(id);
+        self.assembly.adopt(id);
         Ok(id)
     }
 
@@ -511,7 +553,9 @@ impl Document {
             .iter()
             .position(|s| s.id == id)
             .ok_or(DocError::NoSuchSketch(id))?;
-        Ok(self.sketches.remove(i))
+        let s = self.sketches.remove(i);
+        self.timeline_remove();
+        Ok(s)
     }
 
     pub fn to_json(&self) -> Result<String, serde_json::Error> {
@@ -620,6 +664,14 @@ impl Document {
         checked.features = doc.features;
         imported::check(&doc.imported, &mut seen, checked.last_feature_id)?;
         checked.imported = doc.imported;
+        doc.assembly.check(checked.last_feature_id)?;
+        checked.assembly = doc.assembly;
+        checked.timeline = doc.timeline;
+        checked.check_timeline(&mut seen)?;
+        doc.drawing.check()?;
+        checked.drawing = doc.drawing;
+        appearance::check(&doc.appearances, checked.last_feature_id)?;
+        checked.appearances = doc.appearances;
         doc.cam.validate()?;
         checked.cam = doc.cam;
         // Values in the file must agree with their expressions.

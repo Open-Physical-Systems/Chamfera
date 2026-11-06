@@ -374,7 +374,11 @@ fn ends(curve: &Curve) -> Option<(PointId, PointId)> {
     match curve {
         Curve::Line { start, end, .. } | Curve::Arc { start, end, .. } => Some((*start, *end)),
         // Ellipses are not cut, extended or offset (yet): they have no ends here.
-        Curve::Circle { .. } | Curve::Ellipse { .. } | Curve::EllipticalArc { .. } => None,
+        // The tools that need ends (trim, extend, fillet, ...) do not cut splines yet.
+        Curve::Circle { .. }
+        | Curve::Ellipse { .. }
+        | Curve::EllipticalArc { .. }
+        | Curve::Spline { .. } => None,
     }
 }
 
@@ -389,7 +393,10 @@ fn with_end(curve: &Curve, at_start: bool, p: PointId) -> Curve {
                 *end = p;
             }
         }
-        Curve::Circle { .. } | Curve::Ellipse { .. } | Curve::EllipticalArc { .. } => {}
+        Curve::Circle { .. }
+        | Curve::Ellipse { .. }
+        | Curve::EllipticalArc { .. }
+        | Curve::Spline { .. } => {}
     }
     c
 }
@@ -541,7 +548,10 @@ impl Sketch {
                 }
                 Some(circle.polyline(t0, t1))
             }
-            Curve::Circle { .. } | Curve::Ellipse { .. } | Curve::EllipticalArc { .. } => None,
+            Curve::Circle { .. }
+            | Curve::Ellipse { .. }
+            | Curve::EllipticalArc { .. }
+            | Curve::Spline { .. } => None,
         }
     }
 
@@ -645,7 +655,8 @@ impl Sketch {
                 centre, start, end, ..
             } => Shape::arc(self.point(*centre)?, self.point(*start)?, self.point(*end)?),
             // Ellipses neither cut nor are cut by the tools (yet).
-            Curve::Ellipse { .. } | Curve::EllipticalArc { .. } => None,
+            // Splines take no part in the cutting tools yet.
+            Curve::Ellipse { .. } | Curve::EllipticalArc { .. } | Curve::Spline { .. } => None,
         }
     }
 
@@ -763,6 +774,7 @@ impl Sketch {
             Curve::Line { .. } => (false, None),
             Curve::Arc { centre, .. } => (false, Some(*centre)),
             Curve::Circle { centre, .. } => (true, Some(*centre)),
+            Curve::Spline { .. } => return refuse("splines cannot be cut yet"),
             Curve::Ellipse { .. } | Curve::EllipticalArc { .. } => {
                 return refuse("ellipses cannot be cut");
             }
@@ -966,6 +978,7 @@ impl Sketch {
                 // Piece 0 runs from the cut below the click to the cut above it.
                 self.rebuild(id, &[lo, hi], &[false, true])
             }
+            Curve::Spline { .. } => refuse("splines cannot be trimmed yet"),
             Curve::Ellipse { .. } | Curve::EllipticalArc { .. } => {
                 refuse("ellipses cannot be trimmed")
             }
@@ -1077,6 +1090,7 @@ impl Sketch {
                     v
                 }
                 Curve::Circle { .. } | Curve::Ellipse { .. } | Curve::EllipticalArc { .. } => inner,
+                Curve::Spline { .. } => continue,
             };
             let pieces = match c {
                 Curve::Circle { .. } => chain.len(),
@@ -1212,6 +1226,11 @@ impl Sketch {
                 Curve::Arc { start, end, .. } | Curve::EllipticalArc { start, end, .. } => {
                     if group.contains(start) || group.contains(end) {
                         return refuse("fillets and chamfers join two lines; an arc ends here");
+                    }
+                }
+                Curve::Spline { points, .. } => {
+                    if points.iter().any(|p| group.contains(p)) {
+                        return refuse("fillets and chamfers join two lines; a spline ends here");
                     }
                 }
                 Curve::Circle { .. } | Curve::Ellipse { .. } => {}
@@ -1492,6 +1511,7 @@ impl Sketch {
                     }
                 }
                 Curve::Circle { .. } => return refuse("a circle is offset on its own"),
+                Curve::Spline { .. } => return refuse("splines cannot be offset yet"),
                 Curve::Ellipse { .. } | Curve::EllipticalArc { .. } => {
                     return refuse("ellipses cannot be offset");
                 }
@@ -1841,6 +1861,19 @@ impl Sketch {
                     centre: m(&centre),
                     start: if mirrored { m(&end) } else { m(&start) },
                     end: if mirrored { m(&start) } else { m(&end) },
+                    construction,
+                },
+                // Interpolation and control polygons commute with rigid motions and
+                // reflections, so the copy is the spline on the copied points.
+                Curve::Spline {
+                    ref points,
+                    form,
+                    closed,
+                    construction,
+                } => Curve::Spline {
+                    points: points.iter().map(m).collect(),
+                    form,
+                    closed,
                     construction,
                 },
                 Curve::Ellipse {
@@ -2212,6 +2245,9 @@ impl Sketch {
                 if *end == from { r.perp() } else { -r.perp() }
             }
             Curve::Circle { .. } => return refuse("a circle has no end"),
+            Curve::Spline { .. } => {
+                return refuse("a tangent arc from a spline is not supported yet");
+            }
             Curve::Ellipse { .. } | Curve::EllipticalArc { .. } => {
                 return refuse("a tangent arc continues a line or a circular arc");
             }

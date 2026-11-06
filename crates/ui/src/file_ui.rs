@@ -68,6 +68,8 @@ impl ChamferaApp {
         );
         let post_linuxcnc = item(ui, Icon::CamPost, "Post G-code (LinuxCNC)…", "");
         let post_grbl = item(ui, Icon::CamPost, "Post G-code (GRBL)…", "");
+        // While the DRAWING tab is open: the sheet's exports (`drawing_ui.rs`).
+        let drawing_export = self.drawing_export_items(ui, look);
         ui.separator();
         let import = item(
             ui,
@@ -115,6 +117,10 @@ impl ChamferaApp {
         if post_linuxcnc || post_grbl {
             ui.close();
             self.post_dialog(if post_grbl { "grbl" } else { "linuxcnc" });
+        }
+        if let Some(f) = drawing_export {
+            ui.close();
+            self.export_drawing(f);
         }
         if import {
             ui.close();

@@ -7,12 +7,12 @@
 //! Both serialize through plain data and re-validate on load with the curve constructors.
 
 use crate::{Arc3, Circle3, Ellipse3, EllipticalArc3, KernelError, KernelResult, Line3, Segment3};
-use chamfera_geom::{ANGULAR_TOLERANCE, Aabb, Frame, Point3, Vec3};
+use chamfera_geom::{ANGULAR_TOLERANCE, Aabb, BSplineCurve3, Frame, Point3, Vec3};
 use serde::{Deserialize, Serialize};
 use std::f64::consts::TAU;
 
 /// A curve in space that an edge can lie on.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(try_from = "CurveData", into = "CurveData")]
 pub enum Curve {
     Line(Line3),
@@ -21,10 +21,12 @@ pub enum Curve {
     Arc(Arc3),
     Ellipse(Ellipse3),
     EllipticalArc(EllipticalArc3),
+    /// A rational B-spline (rung K10); its parameter is the spline's own, over its domain.
+    BSpline(BSplineCurve3),
 }
 
 /// The serialized form of a [`Curve`]: the constructor arguments.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 enum CurveData {
     Line {
@@ -56,6 +58,9 @@ enum CurveData {
         ry: f64,
         start: f64,
         sweep: f64,
+    },
+    BSpline {
+        curve: BSplineCurve3,
     },
 }
 
@@ -95,6 +100,7 @@ impl From<Curve> for CurveData {
                     sweep: hi - lo,
                 }
             }
+            Curve::BSpline(curve) => CurveData::BSpline { curve },
         }
     }
 }
@@ -120,6 +126,8 @@ impl TryFrom<CurveData> for Curve {
                 start,
                 sweep,
             } => Curve::EllipticalArc(EllipticalArc3::new(frame, rx, ry, start, sweep)?),
+            // The spline re-validated itself when it was read.
+            CurveData::BSpline { curve } => Curve::BSpline(curve),
         })
     }
 }
@@ -133,6 +141,7 @@ impl Curve {
             Curve::Arc(c) => c.point_at(t),
             Curve::Ellipse(c) => c.point_at(t),
             Curve::EllipticalArc(c) => c.point_at(t),
+            Curve::BSpline(c) => c.point_at(t),
         }
     }
 
@@ -145,6 +154,7 @@ impl Curve {
             Curve::Arc(c) => c.d1(t),
             Curve::Ellipse(c) => c.d1(t),
             Curve::EllipticalArc(c) => c.d1(t),
+            Curve::BSpline(c) => c.d1(t),
         }
     }
 
@@ -182,6 +192,10 @@ impl Curve {
                     .closest_point(p)?
                     .distance
             }
+            Curve::BSpline(c) => {
+                crate::check::point3("point", p)?;
+                c.segment(t0, t1)?.closest_point(p).distance
+            }
         };
         Ok(d)
     }
@@ -207,6 +221,11 @@ impl Curve {
                     "reversing an elliptical arc edge".into(),
                 ));
             }
+            Curve::BSpline(c) => (
+                Curve::BSpline(c.reversed()),
+                c.reversed_parameter(t1),
+                c.reversed_parameter(t0),
+            ),
         })
     }
 
@@ -220,6 +239,7 @@ impl Curve {
             Curve::Arc(c) => c.range(),
             Curve::Ellipse(c) => c.range(),
             Curve::EllipticalArc(c) => c.range(),
+            Curve::BSpline(c) => c.domain(),
         }
     }
 
@@ -286,6 +306,13 @@ impl Curve {
                 let e = a.ellipse();
                 conic(e.frame(), e.rx() * e.ry())
             }
+            // By adaptive Gauss-Legendre quadrature per knot span (K10); a failure to
+            // converge (never seen on valid curves) gives a non-finite moment, which the
+            // measures and validity checks refuse.
+            Curve::BSpline(c) => {
+                c.area_moment(t0, t1, r)
+                    .unwrap_or(Vec3::new(f64::NAN, f64::NAN, f64::NAN))
+            }
         }
     }
 
@@ -307,6 +334,13 @@ impl Curve {
             Curve::EllipticalArc(a) => {
                 let e = a.ellipse();
                 Ok(EllipticalArc3::new(*e.frame(), e.rx(), e.ry(), t0, t1 - t0)?.bounding_box())
+            }
+            // The control box of the segment contains it (convex hull property).
+            Curve::BSpline(c) => {
+                let (lo, hi) = c.bounding_box_on(t0, t1)?;
+                Aabb::from_points([lo, hi]).ok_or_else(|| {
+                    KernelError::InvalidInput("a spline edge has no bounding box".into())
+                })
             }
         }
     }

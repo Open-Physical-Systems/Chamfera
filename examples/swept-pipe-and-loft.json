@@ -1,0 +1,222 @@
+[
+  {
+    "command": "sketch.create",
+    "params": {
+      "plane": "yz"
+    }
+  },
+  {
+    "command": "sketch.circle",
+    "params": {
+      "cx": 0,
+      "cy": 0,
+      "radius": 6
+    }
+  },
+  {
+    "command": "sketch.circle",
+    "params": {
+      "cx": 0,
+      "cy": 0,
+      "radius": 4
+    }
+  },
+  {
+    "command": "sketch.finish",
+    "params": {}
+  },
+  {
+    "command": "sketch.create",
+    "params": {
+      "plane": "xy"
+    }
+  },
+  {
+    "command": "sketch.line",
+    "params": {
+      "x1": 0,
+      "y1": 0,
+      "x2": 40,
+      "y2": 0
+    }
+  },
+  {
+    "command": "sketch.arc",
+    "params": {
+      "cx": 40,
+      "cy": 30,
+      "x1": 40,
+      "y1": 0,
+      "x2": 70,
+      "y2": 30
+    }
+  },
+  {
+    "command": "sketch.line",
+    "params": {
+      "x1": 70,
+      "y1": 30,
+      "x2": 70,
+      "y2": 70
+    }
+  },
+  {
+    "command": "sketch.finish",
+    "params": {}
+  },
+  {
+    "command": "solid.sweep",
+    "params": {
+      "sketch": 1,
+      "profiles": [
+        {
+          "x": 5,
+          "y": 0
+        }
+      ],
+      "path_sketch": 2,
+      "path_curves": [
+        3,
+        7,
+        10
+      ]
+    }
+  },
+  {
+    "command": "sketch.create",
+    "params": {
+      "plane": "xy",
+      "offset": 0
+    }
+  },
+  {
+    "command": "sketch.rectangle",
+    "params": {
+      "x1": -80,
+      "y1": -20,
+      "x2": -40,
+      "y2": 20
+    }
+  },
+  {
+    "command": "sketch.finish",
+    "params": {}
+  },
+  {
+    "command": "sketch.create",
+    "params": {
+      "plane": "xy",
+      "offset": 30
+    }
+  },
+  {
+    "command": "sketch.rectangle",
+    "params": {
+      "x1": -70,
+      "y1": -10,
+      "x2": -50,
+      "y2": 10
+    }
+  },
+  {
+    "command": "sketch.finish",
+    "params": {}
+  },
+  {
+    "command": "sketch.create",
+    "params": {
+      "plane": "xy",
+      "offset": 50
+    }
+  },
+  {
+    "command": "sketch.rectangle",
+    "params": {
+      "x1": -75,
+      "y1": -15,
+      "x2": -45,
+      "y2": 15
+    }
+  },
+  {
+    "command": "sketch.finish",
+    "params": {}
+  },
+  {
+    "command": "solid.loft",
+    "params": {
+      "sections": [
+        {
+          "sketch": 4,
+          "x": -60,
+          "y": 0
+        },
+        {
+          "sketch": 5,
+          "x": -60,
+          "y": 0
+        },
+        {
+          "sketch": 6,
+          "x": -60,
+          "y": 0
+        }
+      ]
+    }
+  },
+  {
+    "command": "sketch.create",
+    "params": {
+      "plane": "xy",
+      "offset": 0
+    }
+  },
+  {
+    "command": "sketch.circle",
+    "params": {
+      "cx": -60,
+      "cy": 70,
+      "radius": 15
+    }
+  },
+  {
+    "command": "sketch.finish",
+    "params": {}
+  },
+  {
+    "command": "sketch.create",
+    "params": {
+      "plane": "xy",
+      "offset": 25
+    }
+  },
+  {
+    "command": "sketch.circle",
+    "params": {
+      "cx": -60,
+      "cy": 70,
+      "radius": 8
+    }
+  },
+  {
+    "command": "sketch.finish",
+    "params": {}
+  },
+  {
+    "command": "solid.loft",
+    "params": {
+      "sections": [
+        {
+          "sketch": 8,
+          "x": -60,
+          "y": 70
+        },
+        {
+          "sketch": 9,
+          "x": -60,
+          "y": 70
+        }
+      ]
+    }
+  }
+]

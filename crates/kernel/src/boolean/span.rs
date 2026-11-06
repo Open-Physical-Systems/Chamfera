@@ -31,6 +31,11 @@ impl Carrier {
             Curve::Arc(a) => (Carrier::Circle(*a.circle()), t0, t1),
             Curve::Ellipse(e) => (Carrier::Ellipse(*e), t0, t1),
             Curve::EllipticalArc(a) => (Carrier::Ellipse(*a.ellipse()), t0, t1),
+            Curve::BSpline(_) => {
+                return Err(KernelError::Unsupported(
+                    "booleans on solids with spline edges (K10 surfaces come later)".into(),
+                ));
+            }
         })
     }
 
@@ -227,7 +232,7 @@ pub(super) fn edge_cutters(
         }
     }
     if let Some(n) = neighbour {
-        out.push(*n);
+        out.push(n.clone());
     }
     match edge.carrier {
         Carrier::Line(l) => {

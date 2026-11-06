@@ -28,7 +28,10 @@ const MIN_LENGTH: f64 = LINEAR_TOLERANCE;
 fn shared_end(sketch: &Sketch, a: CurveId, b: CurveId) -> Option<PointId> {
     let ends = |c: CurveId| match sketch.curve(c)? {
         Curve::Line { start, end, .. } | Curve::Arc { start, end, .. } => Some([*start, *end]),
-        Curve::Circle { .. } | Curve::Ellipse { .. } | Curve::EllipticalArc { .. } => None,
+        Curve::Circle { .. }
+        | Curve::Spline { .. }
+        | Curve::Ellipse { .. }
+        | Curve::EllipticalArc { .. } => None,
     };
     let (ea, eb) = (ends(a)?, ends(b)?);
     let arcs = [a, b]

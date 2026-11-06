@@ -4,7 +4,7 @@ use super::CommandSpec;
 use crate::{CmdResult, CommandError, Session, params};
 use chamfera_doc::{
     Blend, BlendKind, Extrude, ExtrudeDirection, ExtrudeExtent, ExtrudeTo, FaceRef, FeatureKind,
-    Operation, Revolve,
+    Loft, LoftSection, Operation, Revolve, Sweep,
 };
 use chamfera_geom::Point2;
 use serde_json::{Value, json};
@@ -27,6 +27,8 @@ pub static COMMANDS: &[CommandSpec] = &[
                  extent, distance2, to, start_offset, taper: (optional) - extrude options as for solid.extrude (0 removes an offset or taper)\n\
                  operation: string (optional) - new_body, join, cut or intersect\n\
                  size: string or number (optional) - new fillet radius or chamfer distance\n\
+                 path_curves: list of integers (optional) - new sweep path curves\n\
+                 sections: list of {sketch, x, y} (optional) - new loft profiles, in order\n\
                  points, kind, diameter, depth, through_all, cb_diameter, cb_depth, cs_diameter,\n\
                  cs_angle, tip_angle (optional) - a hole's new values, as for solid.hole\n\
                  plane: string or object (optional) - a mirror's new plane, as in solid.mirror\n\
@@ -122,6 +124,15 @@ pub static COMMANDS: &[CommandSpec] = &[
         run: fillet,
     },
     CommandSpec {
+        id: "solid.loft",
+        label: "Loft",
+        params: "sections: list of {sketch, x, y} (required) - a point inside each profile, in order, \
+                 2 or more, on parallel planes\n\
+                 operation: string (optional) - new_body (default), join, cut or intersect",
+        mutates: true,
+        run: loft,
+    },
+    CommandSpec {
         id: "solid.shell",
         label: "Shell",
         params: "faces: list of strings (optional) - faces to remove (open), names like \"2:top\"; none: closed and hollow\n\
@@ -153,11 +164,30 @@ pub static COMMANDS: &[CommandSpec] = &[
         run: pattern_linear,
     },
     CommandSpec {
+        id: "solid.path_at",
+        label: "Path Under Cursor",
+        params: "x, y, width, height: number (required) - pixel and viewport size",
+        mutates: false,
+        run: path_at,
+    },
+    CommandSpec {
         id: "solid.profile_at",
         label: "Profile Under Cursor",
         params: "x, y, width, height: number (required) - pixel and viewport size",
         mutates: false,
         run: profile_at,
+    },
+    CommandSpec {
+        id: "solid.sweep",
+        label: "Sweep",
+        params: "sketch: integer (required) - the profile's sketch\n\
+                 profiles: list of {x, y} (required) - a point inside each profile, in sketch mm\n\
+                 path_sketch: integer (required) - the sketch the path is drawn in\n\
+                 path_curves: list of integers (required) - its lines and arcs, joined tangentially, \
+                 starting on the profile's plane\n\
+                 operation: string (optional) - new_body (default), join, cut or intersect",
+        mutates: true,
+        run: sweep,
     },
 ];
 
@@ -422,6 +452,73 @@ fn revolve(s: &mut Session, p: &Value) -> CmdResult {
     Ok(feature_reply(s, id))
 }
 
+/// A list of curve ids.
+fn ids(p: &Value, key: &str) -> Result<Vec<u32>, CommandError> {
+    let list = p
+        .get(key)
+        .and_then(Value::as_array)
+        .ok_or_else(|| bad(format!("`{key}` must be a list of curve ids")))?;
+    if list.len() > chamfera_doc::feature::MAX_SWEEP_PATH_CURVES {
+        return Err(bad(format!("`{key}` has too many curves")));
+    }
+    list.iter()
+        .map(|v| {
+            v.as_u64()
+                .and_then(|n| u32::try_from(n).ok())
+                .ok_or_else(|| bad(format!("`{key}` must hold curve ids (whole numbers)")))
+        })
+        .collect()
+}
+
+/// A loft's profiles: `[{sketch, x, y}, ...]`.
+fn sections(p: &Value) -> Result<Vec<LoftSection>, CommandError> {
+    let list = p
+        .get("sections")
+        .and_then(Value::as_array)
+        .ok_or_else(|| bad("`sections` must be a list of {sketch, x, y}"))?;
+    if list.len() > chamfera_doc::feature::MAX_LOFT_SECTIONS {
+        return Err(bad("too many sections"));
+    }
+    list.iter()
+        .map(|v| {
+            let sketch = params::req_id(v, "sketch")?;
+            let profile = Point2::new(params::req_f64(v, "x")?, params::req_f64(v, "y")?);
+            if !profile.is_valid() {
+                return Err(bad("a profile point is outside the working range"));
+            }
+            Ok(LoftSection { sketch, profile })
+        })
+        .collect()
+}
+
+fn add_feature(s: &mut Session, kind: FeatureKind) -> CmdResult {
+    let id = s.doc.add_feature(kind)?;
+    s.rebuild();
+    if let Some(e) = s.feature_errors().get(&id) {
+        return Err(CommandError::Unavailable(e.clone()));
+    }
+    Ok(feature_reply(s, id))
+}
+
+fn sweep(s: &mut Session, p: &Value) -> CmdResult {
+    let kind = FeatureKind::Sweep(Sweep {
+        sketch: params::req_id(p, "sketch")?,
+        profiles: seeds(p)?,
+        path_sketch: params::req_id(p, "path_sketch")?,
+        path: ids(p, "path_curves")?,
+        operation: operation(p)?.unwrap_or_default(),
+    });
+    add_feature(s, kind)
+}
+
+fn loft(s: &mut Session, p: &Value) -> CmdResult {
+    let kind = FeatureKind::Loft(Loft {
+        sections: sections(p)?,
+        operation: operation(p)?.unwrap_or_default(),
+    });
+    add_feature(s, kind)
+}
+
 /// The edges a fillet or chamfer names: a list, or the one under a pixel.
 fn blend_edges(s: &Session, p: &Value) -> Result<Vec<String>, CommandError> {
     match (p.get("edges"), p.get("pick")) {
@@ -660,6 +757,8 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
         match &mut kind {
             FeatureKind::Extrude(e) => e.operation = o,
             FeatureKind::Revolve(r) => r.operation = o,
+            FeatureKind::Sweep(w) => w.operation = o,
+            FeatureKind::Loft(l) => l.operation = o,
             FeatureKind::Pattern(_) => {
                 return Err(bad("a pattern does what the feature it repeats does"));
             }
@@ -744,6 +843,18 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
         }
         _ => {}
     }
+    if p.get("path_curves").is_some_and(|v| !v.is_null()) {
+        let FeatureKind::Sweep(w) = &mut kind else {
+            return Err(bad("path_curves belong to sweeps"));
+        };
+        w.path = ids(p, "path_curves")?;
+    }
+    if p.get("sections").is_some_and(|v| !v.is_null()) {
+        let FeatureKind::Loft(l) = &mut kind else {
+            return Err(bad("sections belong to lofts"));
+        };
+        l.sections = sections(p)?;
+    }
     s.doc.check_feature(&kind)?;
     let f = s.doc.feature_mut(id)?;
     f.kind = kind;
@@ -774,7 +885,9 @@ fn delete(s: &mut Session, p: &Value) -> CmdResult {
 fn rename(s: &mut Session, p: &Value) -> CmdResult {
     let id = params::req_id(p, "feature")?;
     let name = params::req_display_name(p, "name")?;
-    s.doc.feature_mut(id)?.name = name;
+    s.doc.feature(id)?;
+    s.doc.rename_item(id, &name)?;
+    // Bodies are named after their features.
     s.rebuild();
     Ok(feature_reply(s, id))
 }
@@ -784,6 +897,16 @@ fn list(s: &mut Session, p: &Value) -> CmdResult {
     let ids: Vec<u32> = s.doc.features.iter().map(|f| f.id).collect();
     let features: Vec<Value> = ids.into_iter().map(|id| feature_reply(s, id)).collect();
     Ok(json!({ "features": features }))
+}
+
+fn path_at(s: &mut Session, p: &Value) -> CmdResult {
+    let (x, y, w, h) = params::pixel(p)?;
+    Ok(match s.path_at(x, y, w, h) {
+        Some((sketch, curve, chain)) => json!({
+            "sketch": sketch, "curve": curve, "chain": chain,
+        }),
+        None => json!({ "sketch": null }),
+    })
 }
 
 fn profile_at(s: &mut Session, p: &Value) -> CmdResult {

@@ -5,7 +5,7 @@
 | L0 | `geom` | vectors, points, tolerances; later curves, surfaces, transforms, meshes |
 | L1 | `sketch`, `kernel`, `render` | the constraint solver and profiles; our own B-rep kernel; camera math and the headless scene |
 | L2 | `doc` | parameters, expressions, the feature timeline, persistent names, the design format |
-| L3 | `io`, `cam` | design files; STEP, STL, 3MF import and export. CAM: 2.5D milling toolpaths (facing, contour, pocket, drilling) from the exact model, and G-code for LinuxCNC and GRBL |
+| L3 | `io`, `drawing`, `cam` | design files; STEP, STL, 3MF import and export. 2D drawings: projected views with hidden lines from the exact B-rep, sheets, dimensions, SVG/DXF/PDF export. CAM: 2.5D milling toolpaths (facing, contour, pocket, drilling) from the exact model, and G-code for LinuxCNC and GRBL |
 | L4 | `engine` | the session, undo, and the command registry (everything is a command) |
 | L5 | `gpu` | the wgpu viewport renderer, and windowless snapshots of the same picture |
 | L6 | `ui`, `mcp` | the egui front end for desktop and browser; the MCP server for agents over stdio (`docs/mcp.md`) |

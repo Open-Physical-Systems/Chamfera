@@ -147,6 +147,8 @@ impl ChamferaApp {
             self.run("view.projection", json!({ "mode": mode }));
         }
         ui.separator();
+        self.display_menu(ui);
+        ui.separator();
         widgets::caption(ui, self.look(), "THEME");
         for (c, text) in [
             (ThemeChoice::System, "Follow system"),
@@ -163,22 +165,28 @@ impl ChamferaApp {
     /// The ribbon: workspace tabs, then the tools of the active one.
     pub(crate) fn ribbon(&mut self, ui: &mut egui::Ui) {
         let sketching = self.session.active_sketch.is_some();
+        let drawing = self.drawing.active && !sketching;
         ui.add_space(2.0);
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = S2;
-            let manufacture = self.cam.active && !sketching;
-            if self
-                .tab(ui, "SOLID", !sketching && !manufacture, !sketching)
-                .on_hover_text(if sketching {
-                    "Finish the sketch to use the solid tools"
-                } else {
-                    "Solid modelling: sketches, extrudes and revolves"
-                })
-                .clicked()
-                && manufacture
-            {
-                self.set_manufacture(false);
+            let manufacture = self.cam.active && !sketching && !drawing;
+            let solid = self.tab(
+                ui,
+                "SOLID",
+                !sketching && !drawing && !manufacture,
+                !sketching,
+            );
+            if solid.clicked() {
+                self.drawing.active = false;
+                if manufacture {
+                    self.set_manufacture(false);
+                }
             }
+            solid.on_hover_text(if sketching {
+                "Finish the sketch to use the solid tools"
+            } else {
+                "Solid modelling: sketches, extrudes and revolves"
+            });
             if !sketching
                 && self
                     .tab(ui, "MANUFACTURE", manufacture, true)
@@ -186,11 +194,21 @@ impl ChamferaApp {
                     .clicked()
                 && !manufacture
             {
+                self.drawing.active = false;
                 self.set_manufacture(true);
             }
             if sketching {
                 self.tab(ui, "SKETCH", true, true)
                     .on_hover_text("Editing a sketch: draw, constrain and dimension");
+            } else if self
+                .tab(ui, "DRAWING", drawing, true)
+                .on_hover_text("2D drawing sheets: views of the model, dimensions, export")
+                .clicked()
+            {
+                self.drawing.active = true;
+                if self.cam.active {
+                    self.set_manufacture(false);
+                }
             }
         });
         let look = self.look();
@@ -209,6 +227,8 @@ impl ChamferaApp {
                     ui.spacing_mut().item_spacing.x = 0.0;
                     if sketching {
                         self.sketch_toolbar(ui);
+                    } else if drawing {
+                        self.drawing_toolbar(ui);
                     } else if self.cam.active {
                         self.cam_toolbar(ui);
                     } else {
@@ -295,6 +315,8 @@ impl ChamferaApp {
                     widgets::bar_divider(ui, look, 14.0);
                 }
                 ui.label(small(crate::sketch_ui::tool_hint(self), muted));
+            } else if self.drawing.active {
+                ui.label(small(self.drawing_hint(), muted));
             } else if self.solid.pick_face {
                 ui.label(small("Click a flat face of a solid to sketch on it · Esc cancels", muted));
             } else if self.solid.blend.is_some() {

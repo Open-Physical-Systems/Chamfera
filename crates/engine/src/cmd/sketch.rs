@@ -85,7 +85,9 @@ pub static COMMANDS: &[CommandSpec] = &[
         id: "sketch.create",
         label: "Create Sketch",
         params: "plane: string or integer (required) - xy, xz or yz (top, front, right), or the\n\
-                 id of a construction plane (the sketch follows it when the design rebuilds)",
+                 id of a construction plane (the sketch follows it when the design rebuilds)\n\
+                 offset: number (optional) - move an origin plane along its normal, in mm \
+                 (profiles for a loft)",
         mutates: true,
         run: create,
     },
@@ -425,6 +427,18 @@ fn create(s: &mut Session, p: &Value) -> CmdResult {
         "yz" => Frame::YZ,
         other => return Err(bad(format!("unknown plane {other:?}: use xy, xz or yz"))),
     };
+    let plane = match params::opt_f64(p, "offset")? {
+        None => plane,
+        Some(d) if d.is_finite() && d.abs() <= chamfera_geom::MAX_COORDINATE => plane
+            .with_origin(plane.origin() + plane.z() * d)
+            .ok_or_else(|| bad("the offset plane is out of range"))?,
+        Some(_) => {
+            return Err(bad(format!(
+                "`offset` must be a finite distance of at most {} mm",
+                chamfera_geom::MAX_COORDINATE
+            )));
+        }
+    };
     let id = s.doc.add_sketch(plane)?;
     s.active_sketch = Some(id);
     s.sketch_selection.clear();
@@ -479,6 +493,14 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
     s.active_sketch = Some(id);
     s.sketch_selection.clear();
     Ok(json!({ "sketch": id }))
+}
+
+fn rename(s: &mut Session, p: &Value) -> CmdResult {
+    let id = params::req_id(p, "sketch")?;
+    let name = params::req_display_name(p, "name")?;
+    s.doc.sketch(id)?;
+    s.doc.rename_item(id, &name)?;
+    Ok(json!({ "sketch": id, "name": s.doc.sketch(id)?.name }))
 }
 
 fn finish(s: &mut Session, p: &Value) -> CmdResult {
@@ -861,6 +883,11 @@ fn dimension_selection(s: &mut Session, p: &Value) -> CmdResult {
                 curve: *c,
                 value: sk.radius(*c).ok_or_else(|| bad("the arc has no radius"))?,
             },
+            Some(Curve::Spline { .. }) => {
+                return Err(bad(
+                    "a spline has no dimension of its own; dimension its points",
+                ));
+            }
             Some(Curve::Ellipse { .. } | Curve::EllipticalArc { .. }) => {
                 return Err(bad(
                     "dimension an ellipse by its points: select its centre and an axis end",
@@ -952,13 +979,6 @@ fn plane_point(s: &mut Session, p: &Value) -> CmdResult {
         .sketch_plane_point(x, y, w, h)
         .ok_or_else(|| CommandError::Unavailable("the sketch plane is seen edge-on".into()))?;
     Ok(json!({ "x": at.x, "y": at.y }))
-}
-
-fn rename(s: &mut Session, p: &Value) -> CmdResult {
-    let id = params::req_id(p, "sketch")?;
-    let name = params::req_display_name(p, "name")?;
-    s.doc.sketch_mut(id)?.name = name.clone();
-    Ok(json!({ "sketch": id, "name": name }))
 }
 
 fn select(s: &mut Session, p: &Value) -> CmdResult {

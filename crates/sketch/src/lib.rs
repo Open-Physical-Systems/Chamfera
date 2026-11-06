@@ -18,6 +18,9 @@
 //! Every edit is validated, and deserialising re-validates everything (dangling ids,
 //! non-finite or out-of-range numbers, counts), so a `Sketch` is always well formed.
 //!
+//! - **Splines** (`spline.rs`) are smooth curves through (fit) or guided by (control) a
+//!   list of ordinary points, so constraints on the points shape them.
+//!
 //! # Solving
 //! The unknowns are point coordinates and circle radii; each constraint is one or more
 //! residual equations with an analytic Jacobian (`equations.rs`). [`Sketch::solve`] runs
@@ -67,6 +70,7 @@ mod shapes;
 mod sketch;
 mod snap;
 mod solver;
+mod spline;
 #[cfg(test)]
 mod tests;
 mod tools;
@@ -87,6 +91,9 @@ pub use snap::{
 pub use solver::{
     ConstraintStatus, DETERMINED_TOLERANCE, DofReport, DragReport, MAX_DRAG_STEPS,
     MAX_GROUP_EQUATIONS, MAX_GROUP_UNKNOWNS, MAX_ITERATIONS, SOLVE_TARGET, SolveError, SolveReport,
+};
+pub use spline::{
+    MAX_SPLINE_POINTS, SPLINE_SAMPLES_PER_SPAN, SplineForm, spline_geometry, spline_polyline,
 };
 pub use tools::{
     MAX_PATTERN_COPIES, MAX_TOOL_CURVES, OffsetCorners, ToolError, ToolOp, ToolReport,
