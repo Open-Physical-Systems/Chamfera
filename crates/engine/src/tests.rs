@@ -198,6 +198,10 @@ fn hostile_params_never_panic() {
         json!({"constraints": [{"kind": "teleport"}], "constraint": {"kind": "horizontal", "line": 1}}),
         json!({"constraints": "horizontal"}),
         json!({"constraints": vec![nested.clone(); 65]}),
+        json!({"edges": ["1:top 0", 5, null], "radius": "2 mm", "distance": 1e308}),
+        json!({"edges": [long], "radius": -1, "distance": "0 mm", "size": "q"}),
+        json!({"edges": [], "pick": {"x": 1e300, "y": "a"}, "radius": 1}),
+        json!({"pick": {"x": 400, "y": 300, "width": 800, "height": 600}, "radius": 1e9}),
     ];
     for c in registry() {
         for p in &hostile {
@@ -1284,6 +1288,150 @@ fn a_circular_pattern_of_new_bodies_makes_copies_around_an_axis() {
             &json!({"feature": 2, "count": 1, "origin": {"x": 0, "y": 0, "z": 0}, "axis": {"x": 0, "y": 0, "z": 1}}),
         )
         .is_err());
+}
+
+/// The name of the edge of the first solid running between `a` and `b` (either way).
+fn edge_between(s: &mut Session, a: [f64; 3], b: [f64; 3]) -> String {
+    let r = s.execute("solid.edges", &json!({})).unwrap();
+    let near = |v: &serde_json::Value, p: [f64; 3]| {
+        (0..3).all(|i| (v[i].as_f64().unwrap() - p[i]).abs() < 1e-9)
+    };
+    r["solids"][0]["edges"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| {
+            (near(&e["from"], a) && near(&e["to"], b)) || (near(&e["from"], b) && near(&e["to"], a))
+        })
+        .and_then(|e| e["edge"].as_str())
+        .unwrap()
+        .to_owned()
+}
+
+#[test]
+fn a_fillet_rounds_one_box_edge_by_its_exact_volume_and_follows_the_box() {
+    // The 50 x 30 x 10 plate; rounding the 50 mm top front edge with radius r removes
+    // the corner region (1 - π/4) r² along its length.
+    let mut s = Session::new();
+    extruded_plate(&mut s, json!(10));
+    let edge = edge_between(&mut s, [0.0, 0.0, 10.0], [50.0, 0.0, 10.0]);
+    let r = s
+        .execute("solid.fillet", &json!({"edges": [edge], "radius": 2}))
+        .unwrap();
+    let removed = |r: f64| (1.0 - std::f64::consts::FRAC_PI_4) * r * r * 50.0;
+    let v = exact_volume(&r);
+    assert!((v - (15_000.0 - removed(2.0))).abs() < 1e-6, "{v}");
+    let fillet = r["feature"].as_u64().unwrap();
+    // A thicker plate rebuilds with the same edge rounded.
+    s.execute("feature.edit", &json!({"feature": 2, "distance": 20}))
+        .unwrap();
+    let v = s.solids()[0].body.volume().unwrap();
+    assert!((v - (30_000.0 - removed(2.0))).abs() < 1e-6, "{v}");
+    // A new radius.
+    let r = s
+        .execute("feature.edit", &json!({"feature": fillet, "size": "3 mm"}))
+        .unwrap();
+    let v = exact_volume(&r);
+    assert!((v - (30_000.0 - removed(3.0))).abs() < 1e-6, "{v}");
+    // It saves and opens with the fillet in place.
+    let dir = std::env::temp_dir().join(format!("chamfera-fillet-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("f.chamfera");
+    s.execute("design.save", &json!({"path": path.to_string_lossy()}))
+        .unwrap();
+    let mut t = Session::new();
+    t.execute("design.open", &json!({"path": path.to_string_lossy()}))
+        .unwrap();
+    let v = t.solids()[0].body.volume().unwrap();
+    assert!((v - (30_000.0 - removed(3.0))).abs() < 1e-6, "{v}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_chamfer_bevels_an_edge_by_its_exact_volume() {
+    // An equal-distance chamfer d removes a right triangle d²/2 along the edge.
+    let mut s = Session::new();
+    extruded_plate(&mut s, json!(10));
+    let edge = edge_between(&mut s, [50.0, 0.0, 0.0], [50.0, 0.0, 10.0]);
+    let r = s
+        .execute(
+            "solid.chamfer",
+            &json!({"edges": [edge], "distance": "1.5"}),
+        )
+        .unwrap();
+    let v = exact_volume(&r);
+    assert!(
+        (v - (15_000.0 - 1.5 * 1.5 / 2.0 * 10.0)).abs() < 1e-6,
+        "{v}"
+    );
+}
+
+#[test]
+fn a_blend_of_a_missing_or_too_large_edge_is_refused_and_changes_nothing() {
+    let mut s = Session::new();
+    extruded_plate(&mut s, json!(10));
+    let before = s.doc.features.len();
+    assert!(
+        s.execute(
+            "solid.fillet",
+            &json!({"edges": ["7:nothing"], "radius": 1})
+        )
+        .is_err()
+    );
+    let edge = edge_between(&mut s, [0.0, 0.0, 10.0], [50.0, 0.0, 10.0]);
+    // A radius larger than the plate is thick would swallow the faces.
+    assert!(
+        s.execute("solid.fillet", &json!({"edges": [edge], "radius": 40}))
+            .is_err()
+    );
+    assert_eq!(s.doc.features.len(), before);
+    assert!((s.solids()[0].body.volume().unwrap() - 15_000.0).abs() < 1e-6);
+}
+
+#[test]
+fn clicking_near_a_visible_edge_picks_it_and_fillets_it() {
+    use chamfera_render::{mat_mul, transform_point};
+    let mut s = Session::new();
+    extruded_plate(&mut s, json!(10));
+    let (w, h) = (800.0, 600.0);
+    s.execute("view.home", &json!({"width": w, "height": h}))
+        .unwrap();
+    // Where the middle of the top front edge (25, 0, 10) lands on screen, 3 px off.
+    let vp = mat_mul(
+        &s.camera.projection_matrix(w / h, s.scene.bounds().as_ref()),
+        &s.camera.view_matrix(),
+    );
+    let n = transform_point(&vp, chamfera_geom::Point3::new(25.0, 0.0, 10.0)).unwrap();
+    let (x, y) = ((n[0] + 1.0) * 0.5 * w, (1.0 - n[1]) * 0.5 * h + 3.0);
+    let want = edge_between(&mut s, [0.0, 0.0, 10.0], [50.0, 0.0, 10.0]);
+    let hit = s
+        .execute(
+            "solid.edge_at",
+            &json!({"x": x, "y": y, "width": w, "height": h}),
+        )
+        .unwrap();
+    assert_eq!(hit["edge"].as_str(), Some(want.as_str()));
+    // The bottom back edge (25, 30, 0) is behind the box: never picked there.
+    let n = transform_point(&vp, chamfera_geom::Point3::new(25.0, 30.0, 0.0)).unwrap();
+    let (bx, by) = ((n[0] + 1.0) * 0.5 * w, (1.0 - n[1]) * 0.5 * h);
+    let hidden = edge_between(&mut s, [0.0, 30.0, 0.0], [50.0, 30.0, 0.0]);
+    let hit = s
+        .execute(
+            "solid.edge_at",
+            &json!({"x": bx, "y": by, "width": w, "height": h}),
+        )
+        .unwrap();
+    assert_ne!(hit["edge"].as_str(), Some(hidden.as_str()));
+    // A fillet by pick rounds the picked edge.
+    let r = s
+        .execute(
+            "solid.fillet",
+            &json!({"pick": {"x": x, "y": y, "width": w, "height": h}, "radius": 2}),
+        )
+        .unwrap();
+    let v = exact_volume(&r);
+    let removed = (1.0 - std::f64::consts::FRAC_PI_4) * 4.0 * 50.0;
+    assert!((v - (15_000.0 - removed)).abs() < 1e-6, "{v}");
 }
 
 // ----- sketch tools -----
