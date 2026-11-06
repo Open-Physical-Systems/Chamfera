@@ -281,9 +281,12 @@ fn color(c: chamfera_render::Rgba) -> Color32 {
 
 impl ChamferaApp {
     pub fn new(cc: &eframe::CreationContext<'_>, options: Options) -> ChamferaApp {
-        let gpu = cc.wgpu_render_state.as_ref().map(|rs| ViewGpu {
-            renderer: chamfera_gpu::ViewRenderer::new(&rs.device),
-            texture: None,
+        let gpu = cc.wgpu_render_state.as_ref().map(|rs| {
+            chamfera_gpu::report_errors_instead_of_panicking(&rs.device);
+            ViewGpu {
+                renderer: chamfera_gpu::ViewRenderer::new(&rs.device),
+                texture: None,
+            }
         });
         // Screenshots neither read nor write the user's preferences or Assistant key, so
         // they show no recent files or key and look the same on every machine.

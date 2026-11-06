@@ -424,6 +424,80 @@ fn thickening_the_top_face_by_3_gives_4500() {
     assert!((total_volume(&s) - 22_500.0).abs() < 1e-6);
 }
 
+/// A top face split by a cut into two pieces that share its name (`2:top#1`, `2:top#2`)
+/// thickens both for the whole name: a 40 x 20 x 10 block with a 4 mm slot across the
+/// top at x 18..22 leaves two 18 x 20 pieces, each 18 x 20 x 2 = 720 thickened.
+#[test]
+fn thickening_a_whole_name_thickens_every_piece_of_a_cut_face() {
+    let mut s = Session::new();
+    block(&mut s, [0.0, 0.0, 40.0, 20.0], json!(10));
+    let plane = s
+        .execute(
+            "construct.plane_offset",
+            &json!({"base": "xy", "distance": 10}),
+        )
+        .unwrap()["feature"]
+        .clone();
+    let sketch = s
+        .execute("sketch.create", &json!({"plane": plane}))
+        .unwrap()["sketch"]
+        .clone();
+    s.execute(
+        "sketch.rectangle",
+        &json!({"x1": 18, "y1": -5, "x2": 22, "y2": 25}),
+    )
+    .unwrap();
+    s.execute("sketch.finish", &json!({})).unwrap();
+    s.execute(
+        "solid.extrude",
+        &json!({"sketch": sketch, "profiles": [{"x": 20, "y": 10}], "distance": -2,
+                "operation": "cut"}),
+    )
+    .unwrap();
+    s.execute(
+        "solid.thicken",
+        &json!({"faces": ["2:top"], "thickness": 2}),
+    )
+    .unwrap();
+    assert!((volume(&s, "Thicken1 (1)") - 720.0).abs() < 1e-6);
+    assert!((volume(&s, "Thicken1 (2)") - 720.0).abs() < 1e-6);
+}
+
+/// QA (user guide pass): after Split Face, `2:top` names only the piece behind the
+/// plane; the piece in front is renamed `4:split plane 3 of 2:top`. A whole-name thicken
+/// should take both (40 x 20 x 2 = 1600), but a UI pick of the back piece also gives
+/// `2:top`, so widening the name would thicken both pieces there too.
+#[test]
+#[ignore = "needs a naming decision: Split Face renames the front piece, so `2:top` is one piece (QA guide pass, solids 4)"]
+fn thickening_the_whole_name_of_a_split_face_thickens_both_pieces() {
+    let mut s = Session::new();
+    block(&mut s, [0.0, 0.0, 40.0, 20.0], json!(10));
+    let plane = s
+        .execute(
+            "construct.plane_offset",
+            &json!({"base": "yz", "distance": 20}),
+        )
+        .unwrap()["feature"]
+        .clone();
+    s.execute(
+        "solid.split_face",
+        &json!({"faces": ["2:top"], "plane": plane}),
+    )
+    .unwrap();
+    s.execute(
+        "solid.thicken",
+        &json!({"faces": ["2:top"], "thickness": 2}),
+    )
+    .unwrap();
+    let thickened: f64 = s
+        .solids()
+        .iter()
+        .filter(|x| x.name.starts_with("Thicken1"))
+        .map(|x| x.body.volume().unwrap())
+        .sum();
+    assert!((thickened - 1600.0).abs() < 1e-6, "{thickened}");
+}
+
 #[test]
 fn thickening_a_cylinder_face_by_2_outward_gives_a_ring() {
     // A cylinder r = 10, h = 20; its side thickened 2 outward: π (12² − 10²) 20.

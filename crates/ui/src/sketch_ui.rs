@@ -1811,26 +1811,36 @@ impl ChamferaApp {
                 color(self.theme.text_muted),
             );
             let angle = tool == Tool::Line && k == 1;
-            let (value, c) = if typed.is_empty() {
-                (
-                    live.get(k).cloned().unwrap_or_default(),
-                    self.theme.text_muted,
-                )
+            let live = live.get(k).map_or("", String::as_str);
+            let c = if typed.is_empty() {
+                self.theme.text_muted
             } else {
-                (
-                    format!("{typed}{}", if angle { "°" } else { "" }),
-                    self.theme.text,
-                )
+                self.theme.text
             };
-            let unit = if angle { "" } else { " mm" };
             painter.text(
                 r.right_center() - Vec2::new(6.0, 0.0),
                 egui::Align2::RIGHT_CENTER,
-                format!("{value}{unit}"),
+                heads_up_text(self.units(), typed, live, angle),
                 font.clone(),
                 color(c),
             );
         }
+    }
+}
+
+/// The text of one heads-up field: the live value (already with its unit) until the user
+/// types, then what was typed with the unit it will be read in: the design's length unit
+/// for a plain number, degrees for the angle field, nothing added when it names its own.
+fn heads_up_text(u: chamfera_doc::DisplayUnits, typed: &str, live: &str, angle: bool) -> String {
+    let typed = typed.trim();
+    if typed.is_empty() {
+        return live.to_owned();
+    }
+    let names_unit = typed.chars().any(|c| c.is_alphabetic() || c == '°');
+    match (names_unit, angle) {
+        (true, _) => typed.to_owned(),
+        (false, true) => format!("{typed}°"),
+        (false, false) => format!("{typed} {}", u.length.symbol()),
     }
 }
 
@@ -2274,6 +2284,27 @@ pub(crate) fn tool_hint(app: &ChamferaApp) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The heads-up fields show each unit once: the live length 40 mm reads
+    /// "40.00 mm" (not "40.00 mm mm"); a typed 25 reads "25 mm", or "25 in" in an inch
+    /// design; a typed "1 in" keeps its own unit; the angle field adds degrees.
+    #[test]
+    fn heads_up_fields_show_their_unit_once() {
+        let mm = chamfera_doc::DisplayUnits::default();
+        let inch = chamfera_doc::DisplayUnits {
+            length: chamfera_doc::LengthUnit::In,
+            ..mm
+        };
+        let live = display_value(mm, "length", 40.0);
+        assert_eq!(heads_up_text(mm, "", &live, false), "40.00 mm");
+        assert_eq!(heads_up_text(mm, "25", &live, false), "25 mm");
+        // 25.4 mm is 1 in.
+        let live_in = display_value(inch, "length", 25.4);
+        assert_eq!(heads_up_text(inch, "", &live_in, false), "1.00 in");
+        assert_eq!(heads_up_text(inch, "25", &live_in, false), "25 in");
+        assert_eq!(heads_up_text(inch, "10 mm", &live_in, false), "10 mm");
+        assert_eq!(heads_up_text(mm, "30", "", true), "30°");
+    }
 
     /// A top view of the XY plane, 800 x 600, centred on (40, 25) at a distance that makes
     /// the pixel scale easy: `px(x, y)` is the pixel of sketch point (x, y).

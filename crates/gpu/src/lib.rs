@@ -72,7 +72,26 @@ struct Globals {
 
 /// Bytes of a body's uniform: its colour and its material (metallic, roughness,
 /// transmission, index of refraction).
-pub(crate) const BODY_UNIFORM: u64 = 32;
+pub(crate) const BODY_UNIFORM: u64 = std::mem::size_of::<BodyUniform>() as u64;
+
+/// Makes GPU validation errors on `device` print a line to standard error instead of
+/// panicking (wgpu's default), so a renderer bug shows a wrong picture, never a crash
+/// that loses work. The app calls this on the window's device; the windowless snapshot
+/// catches errors in an error scope and returns them instead.
+pub fn report_errors_instead_of_panicking(device: &wgpu::Device) {
+    device.on_uncaptured_error(std::sync::Arc::new(|e: wgpu::Error| {
+        eprintln!("chamfera: graphics error (the picture may be wrong): {e}");
+    }));
+}
+
+/// A body's uniform as the shader reads it (`Body` in `shaders.wgsl`): colour, then
+/// material. Every body-layout bind group is built from this type, so none can be
+/// shorter than the shader expects (a 16-byte colour once failed GPU validation).
+type BodyUniform = [[f32; 4]; 2];
+
+/// The material of a plain (not realistic) mesh: not metallic, half rough, opaque, the
+/// index of refraction of glass.
+const PLAIN_MATERIAL: [f32; 4] = [0.0, 0.5, 0.0, 1.5];
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -235,6 +254,30 @@ fn f3(p: Point3) -> [f32; 3] {
 }
 
 impl ViewRenderer {
+    /// A body-layout bind group holding one fixed uniform, for meshes drawn once per
+    /// frame (previews, stock, compared versions).
+    fn plain_body_bind(
+        &self,
+        device: &wgpu::Device,
+        label: &str,
+        data: BodyUniform,
+    ) -> wgpu::BindGroup {
+        use wgpu::util::DeviceExt;
+        let colour = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some(label),
+            contents: bytemuck::cast_slice(&data),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some(label),
+            layout: &self.body_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: colour.as_entire_binding(),
+            }],
+        })
+    }
+
     pub fn new(device: &wgpu::Device) -> ViewRenderer {
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("chamfera viewport"),
@@ -808,7 +851,7 @@ impl ViewRenderer {
                 let mut c = c.linear();
                 c[3] = b.appearance.opacity();
                 let m = b.appearance.material(chamfera_render::Rgba(0, 0, 0, 255));
-                let data = [c, [m.metallic, m.roughness, m.transmission, m.ior]];
+                let data: BodyUniform = [c, [m.metallic, m.roughness, m.transmission, m.ior]];
                 queue.write_buffer(&g.uniform, 0, bytemuck::cast_slice(&data));
             }
         }
@@ -857,20 +900,11 @@ impl ViewRenderer {
                 contents: bytemuck::cast_slice(&preview_tris),
                 usage: wgpu::BufferUsages::VERTEX,
             });
-            let data = [frame.theme.preview_body.linear(), [0.0, 0.5, 0.0, 1.5]];
-            let colour = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("preview colour"),
-                contents: bytemuck::cast_slice(&data),
-                usage: wgpu::BufferUsages::UNIFORM,
-            });
-            let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("preview"),
-                layout: &self.body_layout,
-                entries: &[wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: colour.as_entire_binding(),
-                }],
-            });
+            let bind = self.plain_body_bind(
+                device,
+                "preview",
+                [frame.theme.preview_body.linear(), PLAIN_MATERIAL],
+            );
             (tris, preview_tris.len() as u32, bind)
         });
         let preview_edges =
@@ -891,20 +925,11 @@ impl ViewRenderer {
                     contents: bytemuck::cast_slice(&tris),
                     usage: wgpu::BufferUsages::VERTEX,
                 });
-                let data = [sm.style.color(frame.theme).linear(), [0.0, 0.5, 0.0, 1.5]];
-                let colour = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("stock colour"),
-                    contents: bytemuck::cast_slice(&data),
-                    usage: wgpu::BufferUsages::UNIFORM,
-                });
-                let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("stock"),
-                    layout: &self.body_layout,
-                    entries: &[wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: colour.as_entire_binding(),
-                    }],
-                });
+                let bind = self.plain_body_bind(
+                    device,
+                    "stock",
+                    [sm.style.color(frame.theme).linear(), PLAIN_MATERIAL],
+                );
                 Some((buf, tris.len() as u32, bind))
             })
             .collect();
@@ -924,19 +949,11 @@ impl ViewRenderer {
                     contents: bytemuck::cast_slice(&tris),
                     usage: wgpu::BufferUsages::VERTEX,
                 });
-                let colour = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("compare colour"),
-                    contents: bytemuck::cast_slice(&cm.side.color(frame.theme).linear()),
-                    usage: wgpu::BufferUsages::UNIFORM,
-                });
-                let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("compare"),
-                    layout: &self.body_layout,
-                    entries: &[wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: colour.as_entire_binding(),
-                    }],
-                });
+                let bind = self.plain_body_bind(
+                    device,
+                    "compare",
+                    [cm.side.color(frame.theme).linear(), PLAIN_MATERIAL],
+                );
                 let see_through = cm.side == chamfera_render::CompareSide::B;
                 Some((see_through, buf, tris.len() as u32, bind))
             })
@@ -985,7 +1002,8 @@ impl ViewRenderer {
                 if is_glass(&b.id) {
                     continue;
                 }
-                if let Some(g) = self.bodies.get(&b.id) {
+                // An empty buffer cannot be sliced (wgpu panics), so empty meshes skip.
+                if let Some(g) = self.bodies.get(&b.id).filter(|g| g.triangle_vertices > 0) {
                     pass.set_vertex_buffer(0, g.triangles.slice(..));
                     pass.draw(0..g.triangle_vertices, 0..1);
                 }
@@ -1045,7 +1063,7 @@ impl ViewRenderer {
             };
             let (opaque, transparent) = (gpu(&opaque), gpu(&transparent));
             let draw_faces = |pass: &mut wgpu::RenderPass, bodies: &[&GpuBody]| {
-                for g in bodies {
+                for g in bodies.iter().filter(|g| g.triangle_vertices > 0) {
                     pass.set_bind_group(1, &g.bind, &[]);
                     pass.set_vertex_buffer(0, g.triangles.slice(..));
                     pass.draw(0..g.triangle_vertices, 0..1);

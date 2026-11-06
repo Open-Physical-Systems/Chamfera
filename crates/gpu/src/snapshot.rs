@@ -61,6 +61,8 @@ pub fn snapshot_rgba(frame: &Frame) -> Result<Vec<u8>, SnapshotError> {
         return Err(SnapshotError::Size);
     }
     let (device, queue) = open()?;
+    // Validation errors become a `Render` error, never a panic.
+    let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
     let mut renderer = ViewRenderer::new(&device);
     let draw = renderer.render(&device, &queue, frame);
     let (w, h) = (frame.width, frame.height);
@@ -94,6 +96,9 @@ pub fn snapshot_rgba(frame: &Frame) -> Result<Vec<u8>, SnapshotError> {
         },
     );
     let submission = queue.submit([draw, encoder.finish()]);
+    if let Some(e) = pollster::block_on(scope.pop()) {
+        return Err(SnapshotError::Render(e.to_string()));
+    }
     let slice = read.slice(..);
     let (tx, rx) = std::sync::mpsc::channel();
     slice.map_async(wgpu::MapMode::Read, move |r| {
@@ -383,6 +388,59 @@ mod display_tests {
         );
         // Outside the box the background is untouched.
         assert!(px(&cut, 1, 1).iter().all(|&c| c > 220));
+    }
+
+    /// Two compared versions (`version.compare`) draw without a GPU validation error
+    /// (the compare colour buffer once held only the colour, 16 bytes, where the body
+    /// shader reads colour and material, 32). Version A alone, opaque, covers the box's
+    /// pixels in the `compare_a` colour; the scene has no ordinary bodies.
+    #[test]
+    fn compared_versions_draw_in_their_theme_colours() {
+        let _gpu = crate::snapshot::gpu_lock();
+        let mut scene = Scene::default();
+        scene.compare.push(chamfera_render::CompareMesh {
+            side: chamfera_render::CompareSide::A,
+            mesh: TriMesh::cuboid(
+                Point3::new(-10.0, -10.0, -10.0),
+                Point3::new(10.0, 10.0, 10.0),
+            ),
+        });
+        // B sits off to the left (x -40..-25: columns 1.5..13), so it does not tint
+        // A's pixel; it still goes through the see-through pass and its edges.
+        scene.compare.push(chamfera_render::CompareMesh {
+            side: chamfera_render::CompareSide::B,
+            mesh: TriMesh::cuboid(
+                Point3::new(-40.0, -10.0, -10.0),
+                Point3::new(-25.0, 10.0, 10.0),
+            ),
+        });
+        let Some(rgba) = render(&scene) else {
+            return;
+        };
+        // The face is lit, so it is not exactly `compare_a` (222, 120, 40), but it stays
+        // orange: red well above blue, where the plain body colour is blue-grey.
+        let c = px(&rgba, 35, 20);
+        assert!(
+            i32::from(c[0]) - i32::from(c[2]) > 60,
+            "compare pixel {c:?}"
+        );
+        // Row 1 is z = 29.6 mm, above both boxes (z <= 10): background.
+        assert!(px(&rgba, 40, 1).iter().all(|&v| v > 220));
+    }
+
+    /// A body with no triangles (an empty tessellation) draws nothing instead of
+    /// panicking on an empty vertex buffer slice, in the shaded and realistic styles.
+    #[test]
+    fn a_body_with_an_empty_mesh_draws_nothing_and_does_not_panic() {
+        let _gpu = crate::snapshot::gpu_lock();
+        let mut scene = Scene::default();
+        let _ = scene.add("empty", TriMesh::default());
+        let Some(rgba) = render(&scene) else {
+            return;
+        };
+        assert!(px(&rgba, 35, 20).iter().all(|&v| v > 200));
+        scene.display.style = VisualStyle::Realistic;
+        assert!(render(&scene).is_some());
     }
 
     /// Wireframe draws no faces: inside the box outline the background shows (its light
