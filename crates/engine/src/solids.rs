@@ -104,6 +104,53 @@ fn build_blend(
     Ok(next)
 }
 
+/// Hollows the bodies built so far (rung K12). A body is shelled when it has one of the
+/// named open faces; with no faces named, every body is hollowed closed. Every name must
+/// still be found.
+fn build_shell(
+    doc: &chamfera_doc::Document,
+    sh: &chamfera_doc::Shell,
+    feature: u32,
+    made: &[(u32, String, Body)],
+) -> Result<Vec<(u32, String, Body)>, String> {
+    let thickness = doc
+        .evaluate_feature_value(&sh.thickness, chamfera_doc::expr::Dim::LENGTH)
+        .map_err(|x| x.to_string())?;
+    let mut found = vec![false; sh.faces.len()];
+    let mut next = made.to_vec();
+    let mut any = false;
+    for (_, _, body) in &mut next {
+        let mut open = Vec::new();
+        for f in body.faces() {
+            if let Some(n) = body.face_name(f).ok().flatten()
+                && let Some(i) = sh.faces.iter().position(|x| x == n)
+            {
+                open.push(f);
+                if let Some(seen) = found.get_mut(i) {
+                    *seen = true;
+                }
+            }
+        }
+        if open.is_empty() && !sh.faces.is_empty() {
+            continue;
+        }
+        let mut out =
+            chamfera_kernel::shell(body, &open, thickness).map_err(|x| format!("shell: {x}"))?;
+        name_faces(&mut out, feature);
+        name_edges(&mut out, feature);
+        *body = out;
+        any = true;
+    }
+    if let Some(i) = found.iter().position(|f| !f) {
+        let name = sh.faces.get(i).map_or("", String::as_str);
+        return Err(format!("shell: the face {name:?} is no longer there"));
+    }
+    if !any {
+        return Err("shell: there is no solid to shell".into());
+    }
+    Ok(next)
+}
+
 /// The plane of a flat face, with its normal pointing out of the solid.
 pub fn face_plane(body: &Body, face: chamfera_kernel::FaceId) -> Option<chamfera_geom::Frame> {
     match body.face_surface(face).ok()?? {
@@ -179,6 +226,8 @@ pub struct Built {
     pub errors: BTreeMap<u32, String>,
     /// Features whose solids were built but cannot be shown yet, and why.
     pub display_errors: BTreeMap<u32, String>,
+    /// Construction planes, axes and points, by feature id.
+    pub constructs: BTreeMap<u32, crate::construct::Constructed>,
 }
 
 /// A sketch loop as exact kernel profile edges: lines stay lines, arcs and circles stay
@@ -364,6 +413,7 @@ fn pattern_copies(
     p: &chamfera_doc::Pattern,
     pattern_id: u32,
     tools: &BTreeMap<u32, (Vec<Body>, Operation)>,
+    constructs: &BTreeMap<u32, crate::construct::Constructed>,
 ) -> Result<(Vec<Body>, Operation), String> {
     use chamfera_doc::PatternLayout;
     use chamfera_geom::Transform;
@@ -390,7 +440,12 @@ fn pattern_copies(
                 origin,
                 axis,
                 angle,
+                axis_feature,
             } => {
+                let (origin, axis) = match axis_feature {
+                    Some(id) => construct_axis(constructs, *id)?,
+                    None => (*origin, *axis),
+                };
                 let a = doc
                     .evaluate_feature_value(angle, chamfera_doc::expr::Dim::ANGLE)
                     .map_err(|e| e.to_string())?;
@@ -403,7 +458,7 @@ fn pattern_copies(
                 } else {
                     a / (count - 1) as f64
                 };
-                Transform::rotation_about(*origin, *axis, step * k as f64)
+                Transform::rotation_about(origin, axis, step * k as f64)
             }
         }
         .ok_or("the pattern's move leaves the working range")?;
@@ -564,14 +619,56 @@ fn build_extrude(doc: &chamfera_doc::Document, e: &Extrude) -> Result<Vec<Body>,
         .collect()
 }
 
-/// The bodies one revolve makes: one per profile, about a line of the same sketch.
-fn build_revolve(doc: &chamfera_doc::Document, r: &Revolve) -> Result<Vec<Body>, String> {
+/// A built construction axis: a point on it and its direction.
+fn construct_axis(
+    constructs: &BTreeMap<u32, crate::construct::Constructed>,
+    id: u32,
+) -> Result<(Point3, chamfera_geom::Vec3), String> {
+    match constructs.get(&id) {
+        Some(crate::construct::Constructed::Axis {
+            origin, direction, ..
+        }) => Ok((*origin, *direction)),
+        _ => Err(format!(
+            "axis {id} it turns around is suppressed or could not be built"
+        )),
+    }
+}
+
+/// The bodies one revolve makes: one per profile, about a line of the same sketch or a
+/// construction axis in the sketch plane.
+fn build_revolve(
+    doc: &chamfera_doc::Document,
+    r: &Revolve,
+    constructs: &BTreeMap<u32, crate::construct::Constructed>,
+) -> Result<Vec<Body>, String> {
     let f = doc.sketch(r.sketch).map_err(|x| x.to_string())?;
     let angle = doc
         .evaluate_feature_value(&r.angle, chamfera_doc::expr::Dim::ANGLE)
         .map_err(|x| x.to_string())?;
-    let axis = match f.sketch.curve(chamfera_sketch::CurveId(r.axis)) {
-        Some(Curve::Line { start, end, .. }) => {
+    let sketch_line = match r.axis_feature {
+        Some(id) => {
+            let (o, d) = construct_axis(constructs, id)?;
+            // The axis must lie in the sketch plane: its direction has no normal part and
+            // its point is on the plane.
+            let n = f.plane.z();
+            let off = n.dot(o - f.plane.origin());
+            if d.dot(n).abs() > crate::construct::PARALLEL_SIN
+                || off.abs() > chamfera_geom::LINEAR_TOLERANCE
+            {
+                return Err(format!("axis {id} does not lie in the plane of {}", f.name));
+            }
+            let a = f.plane.to_plane(o);
+            let v = chamfera_geom::Vec2::new(d.dot(f.plane.x()), d.dot(f.plane.y()));
+            Some(Line2::new(a, v).map_err(|e| format!("the axis: {e}"))?)
+        }
+        None => None,
+    };
+    let axis = match (
+        sketch_line,
+        f.sketch.curve(chamfera_sketch::CurveId(r.axis)),
+    ) {
+        (Some(line), _) => line,
+        (None, Some(Curve::Line { start, end, .. })) => {
             let (Some(a), Some(b)) = (f.sketch.point(*start), f.sketch.point(*end)) else {
                 return Err("the axis line has lost a point".into());
             };
@@ -603,13 +700,24 @@ impl Session {
             }
             // A sketch drawn on a face follows that face (built earlier in the timeline).
             if let Some(sketch) = feature.kind.sketch()
-                && let Err(e) = self.follow_attached_sketch(sketch, &made)
+                && let Err(e) = self.follow_attached_sketch(sketch, &made, &built.constructs)
             {
                 built.errors.insert(feature.id, e);
                 continue;
             }
+            if let FeatureKind::Construct(c) = &feature.kind {
+                match crate::construct::build(&self.doc, c, &made, &built.constructs) {
+                    Ok(g) => {
+                        built.constructs.insert(feature.id, g);
+                    }
+                    Err(e) => {
+                        built.errors.insert(feature.id, e);
+                    }
+                }
+                continue;
+            }
             if let FeatureKind::Pattern(p) = &feature.kind {
-                let copies = pattern_copies(&self.doc, p, feature.id, &tools);
+                let copies = pattern_copies(&self.doc, p, feature.id, &tools, &built.constructs);
                 match copies {
                     Ok((bodies, Operation::NewBody)) => {
                         for (k, b) in bodies.into_iter().enumerate() {
@@ -676,11 +784,22 @@ impl Session {
                 }
                 continue;
             }
+            if let FeatureKind::Shell(sh) = &feature.kind {
+                match build_shell(&self.doc, sh, feature.id, &made) {
+                    Ok(next) => made = next,
+                    Err(e) => {
+                        built.errors.insert(feature.id, e);
+                    }
+                }
+                continue;
+            }
             let result = match &feature.kind {
                 FeatureKind::Extrude(e) => build_extrude(&self.doc, e),
-                FeatureKind::Revolve(r) => build_revolve(&self.doc, r),
+                FeatureKind::Revolve(r) => build_revolve(&self.doc, r, &built.constructs),
                 FeatureKind::Pattern(_)
+                | FeatureKind::Construct(_)
                 | FeatureKind::Blend(_)
+                | FeatureKind::Shell(_)
                 | FeatureKind::Mirror(_)
                 | FeatureKind::Move(_) => continue,
             };
@@ -725,16 +844,16 @@ impl Session {
                 }
             }
         }
-        // Sketches on faces that no feature uses yet follow their face too.
+        // Sketches on faces or construction planes that no feature uses yet follow too.
         let attached: Vec<u32> = self
             .doc
             .sketches
             .iter()
-            .filter(|s| s.attached.is_some())
+            .filter(|s| s.attached.is_some() || s.on_plane.is_some())
             .map(|s| s.id)
             .collect();
         for id in attached {
-            let _ = self.follow_attached_sketch(id, &made);
+            let _ = self.follow_attached_sketch(id, &made, &built.constructs);
         }
         // Replace the scene's solid bodies.
         let old: Vec<u32> = self
@@ -744,9 +863,7 @@ impl Session {
             .filter_map(|s| s.scene_id)
             .collect();
         self.scene.bodies.retain(|b| !old.contains(&b.id));
-        if self.scene.selection.is_some_and(|h| old.contains(&h.body)) {
-            self.scene.selection = None;
-        }
+        self.scene.deselect(|b| old.contains(&b));
         let options = TessOptions::default();
         for (feature, name, body) in made {
             // A solid that cannot be shown is still built: its measures and export work.
@@ -784,19 +901,29 @@ impl Session {
         self.built = built;
     }
 
-    /// Moves an attached sketch's plane onto its face, as built so far.
+    /// Moves an attached sketch's plane onto its face or construction plane, as built so
+    /// far.
     fn follow_attached_sketch(
         &mut self,
         sketch: u32,
         made: &[(u32, String, Body)],
+        constructs: &BTreeMap<u32, crate::construct::Constructed>,
     ) -> Result<(), String> {
         let Ok(f) = self.doc.sketch(sketch) else {
             return Ok(());
         };
-        let Some(r) = f.attached.clone() else {
-            return Ok(());
+        let plane = match (f.attached.clone(), f.on_plane) {
+            (Some(r), _) => attached_plane(made, &r)?,
+            (None, Some(id)) => match constructs.get(&id) {
+                Some(crate::construct::Constructed::Plane { frame, .. }) => *frame,
+                _ => {
+                    return Err(format!(
+                        "the plane {id} it is drawn on is suppressed or could not be built"
+                    ));
+                }
+            },
+            (None, None) => return Ok(()),
         };
-        let plane = attached_plane(made, &r)?;
         if let Ok(f) = self.doc.sketch_mut(sketch) {
             f.plane = plane;
         }
@@ -825,6 +952,21 @@ impl Session {
         let (feature, role) = split_face_key(name)?;
         let plane = face_plane(&solid.body, face)?;
         Some((feature, role.to_owned(), plane))
+    }
+
+    /// The full name (`2:top`) of the face of a built solid under pixel `(x, y)`, flat or
+    /// curved (a shell opens either).
+    pub fn face_ref_at(&self, x: f64, y: f64, w: f64, h: f64) -> Option<String> {
+        let bounds = self.scene.bounds();
+        let ray = self.camera.ray_through(x, y, w, h, bounds.as_ref())?;
+        let hit = self.scene.pick(&ray)?;
+        let solid = self
+            .built
+            .solids
+            .iter()
+            .find(|s| s.scene_id == Some(hit.body))?;
+        let face = *solid.faces.get(hit.triangle)?;
+        solid.body.face_name(face).ok().flatten().map(str::to_owned)
     }
 
     /// The true edge nearest pixel `(x, y)` on screen, within [`EDGE_PICK_PIXELS`], that is
