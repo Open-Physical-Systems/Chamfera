@@ -419,3 +419,47 @@ fn three_d_operations_are_added_generated_and_their_resolutions_capped() {
     let back = chamfera_doc::Document::from_json(&text).unwrap();
     assert_eq!(back.cam, s.doc.cam);
 }
+
+#[test]
+fn the_simulation_knows_the_part_height_over_every_column_of_a_filleted_block() {
+    // examples/cam-3d-finish.json: a 60 x 40 x 20 block with its four top edges filleted
+    // at radius 8 (two pairs of cylinders lying along X and Y, mitred at the corners).
+    // With dx = max(0, 8 - x, x - 52) and dy = max(0, 8 - y, y - 32) into the fillets,
+    // the top is at 12 + sqrt(64 - max(dx, dy)²), including on the mitre diagonals (where
+    // a column lies on the edge between two fillets).
+    let text = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../examples/cam-3d-finish.json"
+    ))
+    .unwrap();
+    let steps: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let mut s = Session::new();
+    // The block, its setup and tools; a facing op (quick to make) to simulate.
+    script::run_steps(&mut s, &steps.as_array().unwrap()[..8]).unwrap();
+    let tool = s.doc.cam.tools[0].id;
+    s.execute("cam.op_add", &json!({"kind": "facing", "tool": tool}))
+        .unwrap();
+    s.execute("cam.simulate", &json!({"resolution": 128}))
+        .unwrap();
+    let sim = s.simulation().unwrap();
+    let d = &sim.blank;
+    let mut checked = 0;
+    for j in 0..d.ny {
+        for i in 0..d.nx {
+            let c = d.centre(i, j);
+            if !(c.x > 1e-6 && c.x < 60.0 - 1e-6 && c.y > 1e-6 && c.y < 40.0 - 1e-6) {
+                continue;
+            }
+            let dx = 0f64.max(8.0 - c.x).max(c.x - 52.0);
+            let dy = 0f64.max(8.0 - c.y).max(c.y - 32.0);
+            let want = 12.0 + (64.0 - dx.max(dy).powi(2)).sqrt();
+            let got = sim.heights[j * d.nx + i];
+            assert!(
+                got.is_some_and(|h| (h - want).abs() < 1e-6),
+                "{c:?}: {got:?} vs {want}"
+            );
+            checked += 1;
+        }
+    }
+    assert!(checked > 8_000);
+}

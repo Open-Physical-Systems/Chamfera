@@ -62,8 +62,9 @@ pub fn scallop_stepover(r: f64, h: f64) -> Result<f64, CamError> {
 }
 
 /// A drop-cutter that leaves `leave` on the part: the tool grown by `leave` (a tool of
-/// radius `R + l` and corner `r + l` is the tool's offset by `l`), dropped, then lowered
-/// by `leave`. Below the model the tool rests at `floor`.
+/// radius `R + l` and corner `r + l` is the tool's offset by `l`) is dropped; the tool
+/// itself sits `l` above the grown tool's tip, so its tip height is the grown drop plus
+/// `l`, everywhere `l` clear of the part. Below the model the tool rests at `floor`.
 #[derive(Debug, Clone)]
 pub struct Cl<'a> {
     pub model: &'a DropModel,
@@ -99,7 +100,7 @@ impl<'a> Cl<'a> {
     pub fn at(&self, x: f64, y: f64) -> f64 {
         self.model
             .drop(&self.grown, x, y)
-            .map_or(self.floor, |z| (z - self.leave).max(self.floor))
+            .map_or(self.floor, |z| (z + self.leave).max(self.floor))
     }
 }
 

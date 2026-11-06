@@ -54,6 +54,10 @@ const UP: f64 = 1e-9;
 /// `2π / RIM_SAMPLES` of the rim could be missed only on a surface that curves that
 /// tightly within one tool radius, which none of the analytic offset surfaces does.
 const RIM_SAMPLES: usize = 48;
+/// How far past its radius a point still counts as under the tool (mm): rounding of
+/// coordinates up to the working range moves a computed rim point by about 1e-10, which
+/// is large next to a pin-point probe's radius.
+const REACH_SLACK: f64 = 1e-9;
 /// Golden-section steps: each shrinks the bracket by 0.618, so 60 take it to 3e-13 of
 /// its width.
 const GOLDEN_STEPS: usize = 60;
@@ -92,7 +96,7 @@ impl ToolShape {
     /// The cutting surface's height above the tip at `rho` from the axis, or `None`
     /// beyond the tool's radius.
     pub fn height(&self, rho: f64) -> Option<f64> {
-        if !(rho.is_finite() && rho >= 0.0) || rho > self.radius * (1.0 + 1e-12) {
+        if !(rho.is_finite() && rho >= 0.0) || rho > self.radius + REACH_SLACK {
             return None;
         }
         let e = self.flat();
@@ -563,7 +567,7 @@ impl DropModel {
                     break;
                 }
                 let rho = (h.foot.x - x).hypot(h.foot.y - y);
-                if rho <= tool.radius * (1.0 + 1e-9) && self.on_face(f, h.foot) {
+                if rho <= tool.radius + REACH_SLACK && self.on_face(f, h.foot) {
                     *out = z;
                     break;
                 }
@@ -591,14 +595,16 @@ impl DropModel {
         if matches!(f.shape, Shape::Skip) {
             return None;
         }
-        if e <= 1e-12 {
+        // A disk this small (a pin-point probe) is its centre: the rim adds nothing a
+        // micrometre could show, and on a seam between faces its points fall off both.
+        if e <= 1e-6 {
             vertical_hits(&f.shape, r, x, y, &mut hits);
             consider(&mut hits, &mut out);
             return out.is_finite().then_some(out);
         }
         // Critical points: the tops of a sphere and of a torus's tube.
         critical_hits(&f.shape, r, &mut hits);
-        hits.retain(|h| (h.q.x - x).hypot(h.q.y - y) <= e * (1.0 + 1e-12));
+        hits.retain(|h| (h.q.x - x).hypot(h.q.y - y) <= e + REACH_SLACK);
         consider(&mut hits, &mut out);
         // The rim: each branch of upward hits separately (a torus has two).
         let branches = if matches!(f.shape, Shape::Torus { .. }) {

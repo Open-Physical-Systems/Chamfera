@@ -120,10 +120,10 @@ use thiserror::Error;
 ///   leaders, surface texture symbols, feature control frames, centre lines, balloons)
 ///   and a parts list (`parts_list`). Older files open unchanged: their dimensions keep
 ///   their points, as before.
-/// - 32: 3D machining operations in the CAM section: `parallel` (raster finishing),
+/// - 33: 3D machining operations in the CAM section: `parallel` (raster finishing),
 ///   `waterline` (Z-level finishing) and `adaptive` (bounded-engagement roughing). Older
 ///   files open unchanged: they hold none.
-pub const FORMAT_VERSION: u32 = 32;
+pub const FORMAT_VERSION: u32 = 33;
 /// The tag every design file starts with, so other JSON is not mistaken for a design.
 pub const FORMAT_TAG: &str = "chamfera";
 /// Longest parameter name.

@@ -149,6 +149,29 @@ fn edge_and_vertex_contacts_hold_the_tool_beside_a_block() {
 }
 
 #[test]
+fn stock_to_leave_keeps_the_tool_that_far_off_the_part() {
+    // Leaving l = 1 with a ball R = 3: the ball's centre is R + l from the surface. On the
+    // plane z = 10 the tip is at 11; on the sphere of radius 20 at XY offset d the centre
+    // is on the sphere of radius 24, the tip at sqrt(24² - d²) - 3.
+    let ball = ToolShape::new(3.0, 3.0).unwrap();
+    let plane = DropModel::new(&[block(40.0, 40.0, 10.0)]).unwrap();
+    let cl = Cl::new(&plane, ball, 1.0, 0.0).unwrap();
+    assert!((cl.at(20.0, 20.0) - 11.0).abs() < 1e-9);
+    let dome = DropModel::new(&[hemisphere(20.0)]).unwrap();
+    let cl = Cl::new(&dome, ball, 1.0, 0.0).unwrap();
+    for d in [0.0, 9.0, 15.0] {
+        let want = (24.0f64 * 24.0 - d * d).sqrt() - 3.0;
+        assert!((cl.at(d, 0.0) - want).abs() < 1e-7, "{d}");
+    }
+    // A flat R = 4 leaving 0.5 beside the 20 x 20 x 10 block's edge (x = 20) at x = 22:
+    // the tool's rim is 2 in, so its tip is 0.5 above the top: 10.5.
+    let flat = ToolShape::new(4.0, 0.0).unwrap();
+    let small = DropModel::new(&[block(20.0, 20.0, 10.0)]).unwrap();
+    let cl = Cl::new(&small, flat, 0.5, 0.0).unwrap();
+    assert!((cl.at(22.0, 10.0) - 10.5).abs() < 1e-9);
+}
+
+#[test]
 fn the_scallop_stepover_is_two_root_two_r_h_minus_h_squared() {
     // R = 3, h = 0.01: s = 2 sqrt(0.06 - 0.0001) = 2 sqrt(0.0599). At h = R, s = 2R.
     let s = ops3d::scallop_stepover(3.0, 0.01).unwrap();
