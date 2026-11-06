@@ -58,6 +58,8 @@ fn colour(layer: Layer) -> &'static str {
         Layer::Hidden => "4",
         Layer::Center => "1",
         Layer::Dim => "3",
+        Layer::Hatch => "8",
+        Layer::Dangling => "6",
     }
 }
 

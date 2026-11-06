@@ -23,6 +23,7 @@ mod config_ui;
 mod construct_ui;
 mod context_menu;
 mod display_ui;
+mod drawing_tools_ui;
 mod drawing_ui;
 mod file_ui;
 mod hole_ui;
