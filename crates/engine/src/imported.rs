@@ -29,6 +29,13 @@ impl Session {
                 Ok(m) => {
                     faces = m.face_of_triangle;
                     let id = self.scene.add(&imported.name, m.mesh);
+                    let look = self.doc.appearances.get(&imported.id);
+                    if let Some(b) = id.and_then(|id| self.scene.body_mut(id)) {
+                        b.edges = m.edge_polylines.into_iter().map(|(_, l)| l).collect();
+                        b.appearance = look
+                            .map(crate::display::scene_appearance)
+                            .unwrap_or_default();
+                    }
                     if id.is_none() {
                         built
                             .display_errors

@@ -6,6 +6,7 @@
 
 pub mod box_select;
 pub mod cmd;
+pub mod display;
 mod imported;
 mod params;
 pub mod pick_filter;

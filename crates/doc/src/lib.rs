@@ -4,6 +4,9 @@ pub mod expr;
 pub mod feature;
 pub mod imported;
 
+pub use appearance::Appearance;
+pub mod appearance;
+
 pub use feature::{
     Blend, BlendKind, Extrude, ExtrudeDirection, Feature, FeatureKind, Operation, Pattern,
     PatternLayout, Revolve, Shell,
@@ -26,7 +29,10 @@ use thiserror::Error;
 /// - 8: imported solid bodies.
 /// - 9: fillets and chamfers of edges.
 /// - 10: shells (hollowed solids with open faces).
-pub const FORMAT_VERSION: u32 = 10;
+/// - 21: body appearances (a colour and opacity per feature's body). Older files open
+///   with every body in the theme's colour. (11 to 20 are taken by branches landing at
+///   the same time; the merge renumbers.)
+pub const FORMAT_VERSION: u32 = 21;
 /// The tag every design file starts with, so other JSON is not mistaken for a design.
 pub const FORMAT_TAG: &str = "chamfera";
 /// Longest parameter name.
@@ -157,6 +163,9 @@ pub struct Document {
     /// Solid bodies imported from other CAD files (STEP), kept as exact B-rep bodies.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub imported: Vec<ImportedBody>,
+    /// How the bodies a feature (or an import) made look, by its id. Display data only.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub appearances: BTreeMap<u32, Appearance>,
 }
 
 impl Default for Document {
@@ -169,6 +178,7 @@ impl Default for Document {
             features: Vec::new(),
             last_feature_id: 0,
             imported: Vec::new(),
+            appearances: BTreeMap::new(),
         }
     }
 }
@@ -544,6 +554,8 @@ impl Document {
         checked.features = doc.features;
         imported::check(&doc.imported, &mut seen, checked.last_feature_id)?;
         checked.imported = doc.imported;
+        appearance::check(&doc.appearances, checked.last_feature_id)?;
+        checked.appearances = doc.appearances;
         // Values in the file must agree with their expressions.
         checked.evaluate()?;
         Ok(checked)

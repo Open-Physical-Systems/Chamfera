@@ -18,6 +18,7 @@ mod blend_ui;
 mod browser;
 mod chrome;
 mod context_menu;
+mod display_ui;
 mod file_ui;
 
 /// `--screenshot` gives up after this long without a drawn frame.
@@ -92,6 +93,9 @@ struct Drawn {
     selection: Option<Hit>,
     selected: Vec<u32>,
     overlays: Vec<chamfera_render::Overlay>,
+    /// Visual style and section plane, and each body's appearance.
+    display: chamfera_render::Display,
+    appearances: Vec<chamfera_render::Appearance>,
     theme: ThemeMode,
     size: (u32, u32),
 }
@@ -130,6 +134,8 @@ pub struct ChamferaApp {
     search: search::SearchUi,
     /// Right-click menus, the selection filter and hover pre-highlight.
     ctx_menu: context_menu::ContextMenuUi,
+    /// Visual style, section and the Appearance panel.
+    display: display_ui::DisplayUi,
     /// The browser's file picker, downloads and local storage.
     #[cfg(target_arch = "wasm32")]
     web: web::WebFiles,
@@ -209,6 +215,7 @@ impl ChamferaApp {
             timeline: timeline::TimelineUi::default(),
             search: search::SearchUi::default(),
             ctx_menu: context_menu::ContextMenuUi::default(),
+            display: display_ui::DisplayUi::default(),
             #[cfg(target_arch = "wasm32")]
             web: web::WebFiles::default(),
             ctx_close: false,
@@ -506,6 +513,14 @@ impl ChamferaApp {
             selection: self.session.scene.selection,
             selected: self.session.scene.selected.clone(),
             overlays: self.session.scene.overlays.clone(),
+            display: self.session.scene.display,
+            appearances: self
+                .session
+                .scene
+                .bodies
+                .iter()
+                .map(|b| b.appearance)
+                .collect(),
             theme: self.theme.mode,
             size,
         };
@@ -561,6 +576,7 @@ impl ChamferaApp {
         self.view_cube(ui, rect);
         self.viewport_hint(ui, rect);
         self.selection_filter_bar(ui.ctx(), rect);
+        self.display_bar(ui.ctx(), rect);
         if self.frames >= 2
             && let Some([x, y]) = self.ctx_menu.open_at.take()
         {
@@ -712,6 +728,7 @@ impl eframe::App for ChamferaApp {
             self.feature_dialog(&ctx);
             self.rename_dialog(&ctx);
             self.properties_window(&ctx);
+            self.appearance_window(&ctx);
         }
         self.unsaved_dialog(&ctx);
         self.shortcuts_window(&ctx);
