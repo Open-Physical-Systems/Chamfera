@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! chamfera [part.stl ...] [--sample] [--theme light|dark] [--script steps.json]
-//!          [--parameters] [--configurations] [--preferences PAGE] [--drawing] [--extrude] [--extrude-with JSON]
+//!          [--parameters] [--configurations] [--tool-library] [--preferences PAGE] [--drawing] [--extrude] [--extrude-with JSON]
 //!          [--render] [--render-window WxH,SAMPLES]
 //!          [--hole] [--box X1,Y1,X2,Y2] [--search QUERY] [--context-menu X,Y]
 //!          [--press-pull X,Y,D] [--ribbon-menu GROUP] [--assistant-demo] [--size WxH]
@@ -17,7 +17,7 @@
 use std::process::ExitCode;
 
 const USAGE: &str = "usage: chamfera [part.stl ...] [--sample] [--theme light|dark] \
-[--script steps.json] [--parameters] [--configurations] [--preferences PAGE] [--drawing] [--extrude] \
+[--script steps.json] [--parameters] [--configurations] [--tool-library] [--preferences PAGE] [--drawing] [--extrude] \
 [--extrude-with JSON] [--hole] \
 [--box X1,Y1,X2,Y2] [--search QUERY] [--context-menu X,Y] [--press-pull X,Y,D] \
 [--ribbon-menu GROUP] [--assistant-demo] [--history] [--recovery-demo] [--render] [--render-window WxH,SAMPLES] [--size WxH] \
@@ -47,6 +47,7 @@ fn main() -> ExitCode {
             "--sample" => options.sample = true,
             "--parameters" => options.parameters = true,
             "--configurations" => options.configurations = true,
+            "--tool-library" => options.tool_library = true,
             "--preferences" => match args.next() {
                 Some(page) => options.preferences = Some(page),
                 None => {

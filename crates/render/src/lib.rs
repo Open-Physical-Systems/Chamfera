@@ -392,6 +392,8 @@ pub enum OverlayStyle {
     ToolpathFeed,
     /// A toolpath's rapid moves (the engine splits them into dashes).
     ToolpathRapid,
+    /// A toolpath being made again after an edit, dimmed (`theme.toolpath_stale`).
+    ToolpathStale,
     /// The outline of where bodies overlap (`theme.interference`).
     Interference,
     /// An exploded view's trail from a component's place to where it is shown.
@@ -412,6 +414,7 @@ impl OverlayStyle {
             OverlayStyle::Hover => theme.hover_highlight,
             OverlayStyle::ToolpathFeed => theme.toolpath_feed,
             OverlayStyle::ToolpathRapid => theme.toolpath_rapid,
+            OverlayStyle::ToolpathStale => theme.toolpath_stale,
             OverlayStyle::Interference => theme.interference,
             OverlayStyle::ExplodeTrail => theme.explode_trail,
         }
@@ -473,6 +476,8 @@ pub enum StockStyle {
     Stock,
     /// Stock cut below the part (`theme.gouge`).
     Gouge,
+    /// Stock or part the holder or shank ran into (`theme.holder_collision`).
+    HolderCollision,
 }
 
 impl StockStyle {
@@ -480,6 +485,7 @@ impl StockStyle {
         match self {
             StockStyle::Stock => theme.stock,
             StockStyle::Gouge => theme.gouge,
+            StockStyle::HolderCollision => theme.holder_collision,
         }
     }
 }

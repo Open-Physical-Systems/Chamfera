@@ -378,6 +378,14 @@ fn hostile_params_never_panic() {
         json!({"body": 1, "metallic": 2, "roughness": f64::NAN, "transmission": -1, "ior": 0}),
         json!({"body": 1, "metallic": "1", "roughness": [0], "transmission": null, "ior": 1e300}),
         json!({"body": 1, "metallic": 1, "roughness": 0, "transmission": 1, "ior": 3, "preset": "chrome"}),
+        // Tools with holders, the holder check, pencil and scallop, tool libraries.
+        json!({"kind": "flat_end_mill", "diameter": 6, "holder": {"stickout": 1e300, "segments": [{"diameter": -1, "length": f64::MAX}]}}),
+        json!({"kind": "ball_end_mill", "diameter": 6, "holder": {"stickout": 2, "shank_diameter": "1e9 mm", "segments": vec![json!({"diameter": 1, "length": 1}); 33]}}),
+        json!({"kind": "bull_nose", "diameter": 6, "corner_radius": 1, "holder": {"segments": "x"}, "tool": 1}),
+        json!({"tool": 1, "holder": [1], "kind": "pencil", "min_angle": 1e300, "max_slope": -5, "holder_check": "maybe"}),
+        json!({"tool": 1, "kind": "scallop", "stepover": 1e-300, "max_slope": "89 deg", "holder_check": 5}),
+        json!({"tool": 4294967296u64, "kind": "parallel", "holder_check": "refuse", "path": "/dev/zero", "tools": [1, 99]}),
+        json!({"path": "/nonexistent/dir/tools.json", "replace": "yes", "tools": "all"}),
     ];
     for c in registry() {
         for p in &hostile {
