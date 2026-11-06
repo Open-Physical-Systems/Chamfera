@@ -131,12 +131,26 @@ impl ChamferaApp {
         let mut toggle_section = false;
         let mut offset_changed = false;
         let mut open_appearance = false;
-        egui::Area::new(egui::Id::unique("display bar"))
+        // Bottom right, clear of the selection filter at the bottom left: when the viewport
+        // is too narrow for both side by side (as they were last drawn), it sits above it.
+        let id = egui::Id::unique("display bar");
+        let mut at = rect.right_bottom() + vec2(-S3, -S3);
+        let (bar, filter) = ctx.memory(|m| {
+            (
+                m.area_rect(id),
+                m.area_rect(egui::Id::unique("selection filter")),
+            )
+        });
+        if let (Some(bar), Some(filter)) = (bar, filter)
+            && at.x - bar.width() < filter.max.x + S3
+        {
+            at.y = filter.min.y - S2;
+        }
+        egui::Area::new(id)
             .order(egui::Order::Middle)
             .fade_in(false)
-            // Bottom right, clear of the selection filter at the bottom left.
             .pivot(egui::Align2::RIGHT_BOTTOM)
-            .fixed_pos(rect.right_bottom() + vec2(-S3, -S3))
+            .fixed_pos(at)
             .show(ctx, |ui| {
                 widgets::dialog_frame(look)
                     .inner_margin(egui::Margin::symmetric(S2 as i8, 4))
@@ -170,14 +184,17 @@ impl ChamferaApp {
                                     }
                                 })
                                 .response
-                                .on_hover_text(label("view.style"));
+                                .on_hover_text(format!(
+                                    "{}\nShaded, with or without edges, or wireframe",
+                                    label("view.style")
+                                ));
                             widgets::bar_divider(ui, look, 18.0);
                             let r = ui
                                 .add(egui::Button::selectable(
                                     section,
                                     egui::RichText::new("Section").size(T_SMALL),
                                 ))
-                                .on_hover_text("Cut the view with a plane (display only)");
+                                .on_hover_text("Section\nCut the view with a plane (display only)");
                             toggle_section = r.clicked();
                             if section {
                                 egui::ComboBox::from_id_salt("section plane")
@@ -206,7 +223,7 @@ impl ChamferaApp {
                                 offset_changed |= r.changed();
                                 if ui
                                     .checkbox(&mut self.display.flip, "Flip")
-                                    .on_hover_text("Cut away the other side")
+                                    .on_hover_text("Flip\nCut away the other side")
                                     .changed()
                                 {
                                     offset_changed = true;
@@ -218,7 +235,9 @@ impl ChamferaApp {
                                     self.display.appearance_open,
                                     egui::RichText::new("Appearance").size(T_SMALL),
                                 ))
-                                .on_hover_text("Colour and opacity of the selected bodies")
+                                .on_hover_text(
+                                    "Appearance\nColour and opacity of the selected bodies",
+                                )
                                 .clicked();
                         });
                     });
@@ -329,9 +348,17 @@ impl ChamferaApp {
                                 )
                                 .changed();
                         });
-                        ui.add_space(S2);
-                        reset = widgets::secondary_button(ui, look, "Default appearance").clicked();
                     });
+                });
+                widgets::dialog_footer(ui, look, |ui| {
+                    if widgets::primary_button(ui, look, "Close", true).clicked() {
+                        close = true;
+                    }
+                    reset = ui
+                        .add_enabled_ui(!bodies.is_empty(), |ui| {
+                            widgets::secondary_button(ui, look, "Default Appearance").clicked()
+                        })
+                        .inner;
                 });
             });
         let selected_bodies = bodies.clone();

@@ -58,6 +58,7 @@ pub enum Icon {
     Delete,
     DeleteFace,
     Dimension,
+    Drawing,
     Edit,
     Ellipse,
     Error,
@@ -123,7 +124,7 @@ pub enum Icon {
 
 impl Icon {
     #[cfg(test)]
-    pub const ALL: [Icon; 100] = [
+    pub const ALL: [Icon; 101] = [
         Icon::Arc,
         Icon::ArcTangent,
         Icon::ArcThreePoint,
@@ -163,6 +164,7 @@ impl Icon {
         Icon::Delete,
         Icon::DeleteFace,
         Icon::Dimension,
+        Icon::Drawing,
         Icon::Edit,
         Icon::Ellipse,
         Icon::Error,
@@ -260,6 +262,7 @@ impl Icon {
             Icon::Delete => master!("delete"),
             Icon::DeleteFace => master!("delete_face"),
             Icon::Dimension => master!("dimension"),
+            Icon::Drawing => master!("drawing"),
             Icon::Edit => master!("edit"),
             Icon::Ellipse => master!("ellipse"),
             Icon::Error => master!("error"),
