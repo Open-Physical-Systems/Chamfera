@@ -53,6 +53,9 @@ pub struct Options {
     /// Open the Extrude tool at start and pick the profile under the viewport's centre,
     /// as a click there would.
     pub extrude: bool,
+    /// Extrude options for the tool `extrude` opens, as `solid.extrude` parameters (such as
+    /// `{"taper": 5, "direction": "two_sides", "distance2": 4}`).
+    pub extrude_with: Option<Value>,
     /// The window's inner size in points, instead of the default 1400 x 900.
     pub window_size: Option<[f32; 2]>,
     /// Interface zoom (pixels per point multiplier), for checking crispness at 2x.
@@ -81,6 +84,8 @@ struct Drawn {
     overlays: Vec<chamfera_render::Overlay>,
     theme: ThemeMode,
     size: (u32, u32),
+    /// How many times the tool preview was rebuilt, and how many shapes it shows.
+    previews: (u64, usize),
 }
 
 enum Shot {
@@ -97,6 +102,8 @@ pub struct ChamferaApp {
     icons: icons::Icons,
     gpu: Option<ViewGpu>,
     drawn: Option<Drawn>,
+    /// Counts rebuilds of the extrude preview, so a changed preview is drawn again.
+    preview_version: u64,
     /// Viewport size in points; commands work in these units.
     viewport: Vec2,
     /// Where the viewport is on screen, for placing dialogs beside the model.
@@ -173,6 +180,7 @@ impl ChamferaApp {
             icons: icons::Icons::default(),
             gpu,
             drawn: None,
+            preview_version: 0,
             viewport: Vec2::new(1280.0, 800.0),
             viewport_rect: Rect::from_min_size(egui::pos2(260.0, 120.0), Vec2::new(1280.0, 800.0)),
             // A start-up script sets its own view.
@@ -210,7 +218,11 @@ impl ChamferaApp {
         }
         app.params.open = options.parameters;
         if options.extrude {
-            app.solid.extrude = Some(solid_ui::ExtrudeTool::default());
+            let mut tool = solid_ui::ExtrudeTool::default();
+            if let Some(p) = &options.extrude_with {
+                tool.apply(p);
+            }
+            app.solid.extrude = Some(tool);
             app.solid.pick_centre = true;
         }
         app.zoom = options.zoom;
@@ -336,6 +348,14 @@ impl ChamferaApp {
                 self.run("view.zoom", p);
             }
         }
+        if self.picking_extrude_target()
+            && response.clicked()
+            && let Some(pos) = response.interact_pointer_pos()
+        {
+            let (x, y) = local(pos);
+            self.extrude_target_click(x, y, w, h);
+            return;
+        }
         if self.solid.pick_face
             && response.clicked()
             && let Some(pos) = response.interact_pointer_pos()
@@ -445,6 +465,7 @@ impl ChamferaApp {
             overlays: self.session.scene.overlays.clone(),
             theme: self.theme.mode,
             size,
+            previews: (self.preview_version, self.session.scene.previews.len()),
         };
         if let (Some(gpu), Some(rs)) = (self.gpu.as_mut(), frame.wgpu_render_state())
             && self.drawn.as_ref() != Some(&now)

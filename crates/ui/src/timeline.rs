@@ -3,18 +3,20 @@
 //! click for more. Acts through `sketch.edit`, `feature.edit` and `feature.delete`.
 
 use crate::icons::Icon;
-use crate::solid_ui::{direction_key, direction_name};
+use crate::solid_ui::{ExtrudeForm, extrude_summary};
 use crate::widgets::{self, Look};
 use crate::{ChamferaApp, label};
-use chamfera_doc::{ExtrudeDirection, FeatureKind};
+use chamfera_doc::FeatureKind;
 use egui::{CornerRadius, Rect, Sense, Stroke, StrokeKind, Vec2, vec2};
 use serde_json::json;
 
 /// A feature being edited in the Edit Feature dialog.
 pub struct FeatureEdit {
     feature: u32,
+    /// The value a revolve, pattern, fillet or chamfer shows or edits.
     distance: String,
-    direction: ExtrudeDirection,
+    /// An extrude's options.
+    pub(crate) extrude: Option<ExtrudeForm>,
     suppressed: bool,
 }
 
@@ -78,9 +80,8 @@ impl ChamferaApp {
                 FeatureKind::Extrude(e) => (
                     Icon::Extrude,
                     format!(
-                        "Extrude {} · {} · from {}",
-                        e.distance,
-                        direction_name(e.direction).to_lowercase(),
+                        "Extrude {} · from {}",
+                        extrude_summary(e),
                         sketch_name(e.sketch)
                     ),
                 ),
@@ -308,16 +309,16 @@ impl ChamferaApp {
         let Ok(f) = self.session.doc.feature(item.id) else {
             return;
         };
-        let (distance, direction) = match &f.kind {
-            FeatureKind::Extrude(e) => (e.distance.clone(), e.direction),
-            FeatureKind::Revolve(r) => (r.angle.clone(), ExtrudeDirection::Normal),
-            FeatureKind::Pattern(p) => (p.count.clone(), ExtrudeDirection::Normal),
-            FeatureKind::Blend(b) => (b.size.clone(), ExtrudeDirection::Normal),
+        let (distance, extrude) = match &f.kind {
+            FeatureKind::Extrude(e) => (e.distance.clone(), Some(ExtrudeForm::from_extrude(e))),
+            FeatureKind::Revolve(r) => (r.angle.clone(), None),
+            FeatureKind::Pattern(p) => (p.count.clone(), None),
+            FeatureKind::Blend(b) => (b.size.clone(), None),
         };
         self.timeline.editing = Some(FeatureEdit {
             feature: item.id,
             distance,
-            direction,
+            extrude,
             suppressed: f.suppressed,
         });
     }
@@ -394,36 +395,10 @@ impl ChamferaApp {
                                     ok = true;
                                 }
                                 ui.end_row();
-                            } else {
-                                widgets::field_label(ui, look, "Distance");
-                                let r = ui.add_sized(
-                                    [180.0, 26.0],
-                                    egui::TextEdit::singleline(&mut edit.distance)
-                                        .hint_text("10 mm or thickness * 2")
-                                        .align(egui::Align2::LEFT_CENTER),
-                                );
-                                if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                                    ok = true;
-                                }
-                                ui.end_row();
-                                widgets::field_label(ui, look, "Direction");
-                                egui::ComboBox::from_id_salt("feature direction")
-                                    .selected_text(direction_name(edit.direction))
-                                    .width(180.0)
-                                    .show_ui(ui, |ui| {
-                                        for d in [
-                                            ExtrudeDirection::Normal,
-                                            ExtrudeDirection::Reversed,
-                                            ExtrudeDirection::Symmetric,
-                                        ] {
-                                            ui.selectable_value(
-                                                &mut edit.direction,
-                                                d,
-                                                direction_name(d),
-                                            );
-                                        }
-                                    });
-                                ui.end_row();
+                            } else if let Some(form) = edit.extrude.as_mut()
+                                && form.rows(ui, look)
+                            {
+                                ok = true;
                             }
                             widgets::field_label(ui, look, "Build");
                             let mut on = !edit.suppressed;
@@ -455,9 +430,11 @@ impl ChamferaApp {
             let mut params = json!({ "feature": edit.feature, "suppressed": edit.suppressed });
             if blend {
                 params["size"] = json!(edit.distance.trim());
-            } else if extrude {
-                params["distance"] = json!(edit.distance.trim());
-                params["direction"] = json!(direction_key(edit.direction));
+            } else if let Some(form) = &edit.extrude
+                && let (Some(p), serde_json::Value::Object(options)) =
+                    (params.as_object_mut(), form.params())
+            {
+                p.extend(options);
             }
             if self.run("feature.edit", params).is_some() {
                 self.timeline.editing = None;
@@ -539,7 +516,13 @@ mod tests {
         // Double-click on the boss extrude opens its dialog with its current values.
         app.edit_item(&items[3]);
         let edit = app.timeline.editing.as_ref().unwrap();
-        assert_eq!((edit.feature, edit.distance.as_str()), (4, "15 mm"));
+        assert_eq!(
+            (
+                edit.feature,
+                edit.extrude.as_ref().unwrap().distance.as_str()
+            ),
+            (4, "15 mm")
+        );
         // Suppressing it (the context menu's command) shows it faded, with one solid left.
         app.run("feature.edit", json!({ "feature": 4, "suppressed": true }));
         assert!(app.timeline_items()[3].suppressed);

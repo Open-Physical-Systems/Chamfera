@@ -60,5 +60,8 @@ Ids: the rectangle is points 1-4, lines 5-8, constraints 9-12; fix, lengths 13-1
 - `snapshot {"view": "top"}` and look at the image: the outline, the holes where you meant them, construction lines in their own colour. Fully determined geometry of the sketch being edited is drawn in the constrained colour.
 - `sketch.finish` ends editing; `design.save {"path": "plate.chamfera"}` saves into the scratch folder (or a path inside an `--allow-path` folder).
 
+## 7. Solids from the sketch
+`solid.extrude {"sketch", "profiles": [{x, y}], "distance"}` pulls the profiles containing those points out of the sketch. Options: `direction` (`normal`, `reversed`, `symmetric`, `two_sides` with `distance2`), `extent` (`through_all` past every body, or `to_object` with `to: {feature, face}` or `{plane: {origin, normal}}`, parallel only), `start_offset`, `taper` (degrees, positive narrows) and `operation` (`join`, `cut`, `intersect`). Work the volume out by hand first: a taper `θ` over height `h` moves each edge in by `h tan θ`, so a rectangle's volume is the prismatoid `h/6 (A₀ + 4 A_mid + A_top)`. `solid.extrude_preview` takes the same parameters and replies with the volume and bounds without changing the design.
+
 ## When something fails
 A failing command changes nothing and its error says what was wrong. In a `batch`, the steps before the failing one stay applied, one undo step each: fix the failing step and run the rest, or `edit.undo` what you do not want.

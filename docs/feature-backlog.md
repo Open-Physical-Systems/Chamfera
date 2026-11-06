@@ -132,8 +132,8 @@ Close runners-up: selection filters and box selection (UI and NAV), splines (nee
 | Feature | Description | Status | Pri | Size | Layer |
 |---|---|---|---|---|---|
 | Extrude (one side, flipped, symmetric) | Sweep a profile along its normal; distance as an expression | done | P0 | M | kernel, doc, engine |
-| Extrude extents | Through all, to a face or object, start offset, two different sides | missing | P0 | M | engine, doc, kernel |
-| Extrude taper | Draft angle on the extrude sides | missing | P0 | M | kernel |
+| Extrude extents | Through all, to a face or object, start offset, two different sides | done (to object: parallel flat faces and planes only) | P0 | M | engine, doc, kernel |
+| Extrude taper | Draft angle on the extrude sides | done (planar profiles; sharp corners at arcs refused) | P0 | M | kernel |
 | Thin extrude | Extrude an open or closed profile as a wall of given thickness | missing | P1 | M | kernel, engine |
 | Revolve | Profile around an axis, partial or full | done | P0 | M | kernel, engine |
 | Boolean operation choice | New body, join, cut, intersect for each feature | done | P0 | M | kernel (K7), engine |
@@ -311,7 +311,7 @@ Close runners-up: selection filters and box selection (UI and NAV), splines (nee
 | Box selection | Window and crossing selection by dragging | missing | P0 | M | engine, gpu, ui |
 | Select through / select other | Cycle through overlapping items under the cursor | missing | P1 | S | engine, ui |
 | Pre-selection highlight | Highlight what a click would pick | missing | P0 | S | gpu, ui |
-| Feature dialogs with live preview | A panel per feature with fields and a preview before OK | missing | P0 | M | ui, engine (partial: some features) |
+| Feature dialogs with live preview | A panel per feature with fields and a preview before OK | missing | P0 | M | ui, engine (partial: Extrude shows a translucent preview through `solid.extrude_preview`) |
 | Drag manipulators | Arrows and rings on the model to set distances and angles | missing | P1 | M | ui, gpu |
 | Undo and redo | Every change undoable | done | P0 | S | engine |
 | Themes (light, dark, system) | From theme tokens | done | P0 | S | render, ui |

@@ -404,6 +404,10 @@ pub struct Scene {
     /// Drawn over everything, in order.
     #[serde(default)]
     pub overlays: Vec<Overlay>,
+    /// Shapes a tool would make (the extrude preview), drawn translucent in the theme's
+    /// `preview_body` colour over the bodies. Not picked; display only.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub previews: Vec<TriMesh>,
     next_id: u32,
 }
 
@@ -432,7 +436,7 @@ impl Scene {
         self.bodies.iter_mut().find(|b| b.id == id)
     }
 
-    /// Bounds of the visible bodies and the overlays.
+    /// Bounds of the visible bodies, the previews and the overlays.
     pub fn bounds(&self) -> Option<Aabb> {
         let overlay_points = self
             .overlays
@@ -445,6 +449,7 @@ impl Scene {
             .iter()
             .filter(|b| b.visible)
             .filter_map(|b| b.mesh.bounds())
+            .chain(self.previews.iter().filter_map(TriMesh::bounds))
             .chain(overlays)
             .reduce(Aabb::union)
     }

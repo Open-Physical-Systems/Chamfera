@@ -180,6 +180,8 @@ pub struct ViewRenderer {
     /// The same, hidden by bodies in front (finished sketches).
     overlay_lines_depth: wgpu::RenderPipeline,
     overlay_points_depth: wgpu::RenderPipeline,
+    /// Translucent tool previews (`Scene::previews`).
+    preview: wgpu::RenderPipeline,
     targets: Option<Targets>,
     bodies: HashMap<u32, GpuBody>,
     /// Made on first use, only on backends without texture view formats.
@@ -388,6 +390,19 @@ impl ViewRenderer {
             bias: no_bias,
             blend: Some(wgpu::BlendState::ALPHA_BLENDING),
         });
+        // Previews blend over the bodies and hide behind them, without hiding anything.
+        let preview = make(Spec {
+            label: "preview",
+            layout: &mesh_layout,
+            vs: "mesh_vs",
+            fs: "preview_fs",
+            buffers: &mesh_buffers,
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            depth_write: false,
+            compare: wgpu::CompareFunction::LessEqual,
+            bias: no_bias,
+            blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+        });
         let overlay_lines_depth = make(Spec {
             label: "overlay lines (depth tested)",
             layout: &base_layout,
@@ -424,6 +439,7 @@ impl ViewRenderer {
             overlay_points,
             overlay_lines_depth,
             overlay_points_depth,
+            preview,
             targets: None,
             bodies: HashMap::new(),
             raw_blit: None,
@@ -644,6 +660,42 @@ impl ViewRenderer {
         let overlay_point_buf = vertex_buffer("overlay points", &overlay_points);
         let depth_line_buf = vertex_buffer("overlay lines (depth)", &depth_lines);
         let depth_point_buf = vertex_buffer("overlay points (depth)", &depth_points);
+        // Previews change while a dialog's values change, so they are uploaded each frame.
+        let preview_tris: Vec<MeshVertex> = frame
+            .scene
+            .previews
+            .iter()
+            .flat_map(mesh_vertices)
+            .collect();
+        let preview_lines: Vec<LineVertex> = frame
+            .scene
+            .previews
+            .iter()
+            .flat_map(|m| edge_vertices(m, frame.theme.sketch_preview.linear()))
+            .collect();
+        let preview = (!preview_tris.is_empty()).then(|| {
+            let tris = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("preview triangles"),
+                contents: bytemuck::cast_slice(&preview_tris),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+            let colour = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("preview colour"),
+                contents: bytemuck::cast_slice(&frame.theme.preview_body.linear()),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+            let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("preview"),
+                layout: &self.body_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: colour.as_entire_binding(),
+                }],
+            });
+            (tris, preview_tris.len() as u32, bind)
+        });
+        let preview_edges =
+            vertex_buffer("preview edges", &preview_lines).map(|b| (b, preview_lines.len() as u32));
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("viewport"),
@@ -700,6 +752,17 @@ impl ViewRenderer {
                 pass.set_pipeline(&self.grid);
                 pass.set_vertex_buffer(0, grid_buf.slice(..));
                 pass.draw(0..grid.len() as u32, 0..1);
+            }
+            if let Some((tris, n, bind)) = &preview {
+                pass.set_pipeline(&self.preview);
+                pass.set_bind_group(1, bind, &[]);
+                pass.set_vertex_buffer(0, tris.slice(..));
+                pass.draw(0..*n, 0..1);
+            }
+            if let Some((buf, n)) = &preview_edges {
+                pass.set_pipeline(&self.overlay_lines_depth);
+                pass.set_vertex_buffer(0, buf.slice(..));
+                pass.draw(0..*n, 0..1);
             }
             if let Some(buf) = &depth_line_buf {
                 pass.set_pipeline(&self.overlay_lines_depth);

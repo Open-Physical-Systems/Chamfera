@@ -2,7 +2,8 @@
 //!
 //! ```text
 //! chamfera [part.stl ...] [--sample] [--theme light|dark] [--script steps.json]
-//!          [--parameters] [--extrude] [--size WxH] [--zoom F] [--screenshot shot.png]
+//!          [--parameters] [--extrude] [--extrude-with JSON] [--size WxH] [--zoom F]
+//!          [--screenshot shot.png]
 //! ```
 
 // Release builds on Windows open no console window; chamfera-cli stays a console app.
@@ -11,7 +12,8 @@
 use std::process::ExitCode;
 
 const USAGE: &str = "usage: chamfera [part.stl ...] [--sample] [--theme light|dark] \
-[--script steps.json] [--parameters] [--extrude] [--size WxH] [--zoom F] [--screenshot shot.png]";
+[--script steps.json] [--parameters] [--extrude] [--extrude-with JSON] [--size WxH] [--zoom F] \
+[--screenshot shot.png]";
 
 fn main() -> ExitCode {
     let mut options = chamfera_ui::Options::default();
@@ -21,6 +23,16 @@ fn main() -> ExitCode {
             "--sample" => options.sample = true,
             "--parameters" => options.parameters = true,
             "--extrude" => options.extrude = true,
+            "--extrude-with" => match args
+                .next()
+                .map(|j| serde_json::from_str::<serde_json::Value>(&j))
+            {
+                Some(Ok(v)) if v.is_object() => {
+                    options.extrude = true;
+                    options.extrude_with = Some(v);
+                }
+                _ => return fail("--extrude-with takes a JSON object of solid.extrude options"),
+            },
             "--size" => match args.next().as_deref().and_then(parse_size) {
                 Some(size) => options.window_size = Some(size),
                 None => return fail(USAGE),

@@ -5,8 +5,8 @@ pub mod feature;
 pub mod imported;
 
 pub use feature::{
-    Blend, BlendKind, Extrude, ExtrudeDirection, Feature, FeatureKind, Operation, Pattern,
-    PatternLayout, Revolve,
+    Blend, BlendKind, Extrude, ExtrudeDirection, ExtrudeExtent, ExtrudeTo, ExtrudeValues, Feature,
+    FeatureKind, Operation, Pattern, PatternLayout, Revolve,
 };
 pub use imported::ImportedBody;
 
@@ -25,7 +25,11 @@ use thiserror::Error;
 /// - 7: linear and circular patterns of features.
 /// - 8: imported solid bodies.
 /// - 9: fillets and chamfers of edges.
-pub const FORMAT_VERSION: u32 = 9;
+/// - 13: extrude options: extents (through all, up to a face or plane), two sides with
+///   their own distances, a start offset and a taper angle. Older extrudes read as by
+///   distance from the sketch plane without a taper. (10 to 12 are taken by other
+///   branches.)
+pub const FORMAT_VERSION: u32 = 13;
 /// The tag every design file starts with, so other JSON is not mistaken for a design.
 pub const FORMAT_TAG: &str = "chamfera";
 /// Longest parameter name.
