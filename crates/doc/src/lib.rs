@@ -128,7 +128,11 @@ use thiserror::Error;
 /// - 34: physically based materials in body appearances (`metallic`, `roughness`,
 ///   `transmission`, `ior`), read by the realistic style and the path tracer. Older files
 ///   open unchanged: their bodies take a satin, opaque, non-metal material.
-pub const FORMAT_VERSION: u32 = 34;
+/// - 36: CAM v3: tool holders (`holder`: stickout, shank diameter and a stack of
+///   cylinders and cones), the holder check of parallel and adaptive operations
+///   (`holder_check`), and the `pencil` and `scallop` (experimental) finishing
+///   operations. Older files open unchanged: every new field is optional.
+pub const FORMAT_VERSION: u32 = 36;
 /// The tag every design file starts with, so other JSON is not mistaken for a design.
 pub const FORMAT_TAG: &str = "chamfera";
 /// Longest parameter name.

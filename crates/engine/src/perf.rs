@@ -467,11 +467,13 @@ impl Caches {
 impl crate::Session {
     /// Switches the rebuild caches on or off. Off forgets everything they held, and every
     /// rebuild then builds the whole timeline.
+    /// The toolpath cache (`cam_cache.rs`) follows it.
     pub fn set_rebuild_cache(&mut self, enabled: bool) {
         self.caches.enabled = enabled;
         if !enabled {
             self.caches.clear();
         }
+        self.set_toolpath_cache(enabled);
     }
 
     /// Forgets the checkpoints and meshes of earlier rebuilds.

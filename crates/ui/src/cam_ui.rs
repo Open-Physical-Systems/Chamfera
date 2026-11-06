@@ -1,5 +1,6 @@
 //! The MANUFACTURE workspace: its ribbon (setup, tools, 2D and 3D operations, generate,
-//! post, simulate), the stock simulation's time slider panel,
+//! post, simulate), the tool library panel (tools with their holders, import and export),
+//! the stock simulation's time slider panel,
 //! the setup and operations tree in the left panel, the operation dialog (pick faces or
 //! edges in the viewport, choose the tool, depths and stepover) and Post G-code in the
 //! File menu. Acts only through `cam.*` commands; toolpaths are drawn by the engine as
@@ -19,6 +20,8 @@ pub struct CamUi {
     pub tool_dialog: Option<ToolDialog>,
     /// The Simulate panel while it is open.
     pub sim_panel: Option<SimPanel>,
+    /// The Tool Library panel is open.
+    pub library_open: bool,
 }
 
 /// The Simulate panel: the time slider, the resolution and the last result.
@@ -52,15 +55,144 @@ pub struct OpDialog {
     pub engagement: String,
     /// 3D: material left on the part.
     pub leave: String,
+    /// Parallel and adaptive: what to do where the holder would hit the part.
+    pub holder_check: &'static str,
+    /// Pencil: the least change of slope traced (degrees).
+    pub min_angle: String,
+    /// Scallop: steeper than this is a border (degrees).
+    pub max_slope: String,
 }
 
-/// The Add Tool dialog.
+/// The Add Tool dialog, or Edit Tool for `edit`.
 pub struct ToolDialog {
+    pub edit: Option<u32>,
     pub kind: &'static str,
+    pub name: String,
     pub diameter: String,
+    pub corner: String,
+    pub flute_length: String,
     pub feed: String,
     pub rpm: String,
+    /// The holder: empty stickout for none.
+    pub stickout: String,
+    pub shank: String,
+    /// Each holder segment: diameter, top diameter (empty for a cylinder), length.
+    pub segments: Vec<[String; 3]>,
 }
+
+impl ToolDialog {
+    fn new() -> ToolDialog {
+        ToolDialog {
+            edit: None,
+            kind: "flat_end_mill",
+            name: String::new(),
+            diameter: "6 mm".into(),
+            corner: String::new(),
+            flute_length: String::new(),
+            feed: "600".into(),
+            rpm: "10000".into(),
+            stickout: String::new(),
+            shank: String::new(),
+            segments: Vec::new(),
+        }
+    }
+
+    /// The dialog on an existing tool.
+    fn editing(t: &chamfera_doc::cam::Tool) -> ToolDialog {
+        let mm = |v: f64| format!("{} mm", num(v));
+        let h = t.holder.as_ref();
+        ToolDialog {
+            edit: Some(t.id),
+            kind: TOOL_KINDS
+                .iter()
+                .find(|k| **k == t.kind.key())
+                .copied()
+                .unwrap_or("flat_end_mill"),
+            name: t.name.clone(),
+            diameter: mm(t.diameter),
+            corner: if t.kind == chamfera_doc::cam::ToolKind::BullNose {
+                mm(t.corner_radius)
+            } else {
+                String::new()
+            },
+            flute_length: mm(t.flute_length),
+            feed: num(t.feed),
+            rpm: num(t.spindle_rpm),
+            stickout: h.map(|h| mm(h.stickout)).unwrap_or_default(),
+            shank: h.and_then(|h| h.shank_diameter).map(mm).unwrap_or_default(),
+            segments: h
+                .map(|h| {
+                    h.segments
+                        .iter()
+                        .map(|s| {
+                            [
+                                mm(s.diameter),
+                                s.top_diameter.map(mm).unwrap_or_default(),
+                                mm(s.length),
+                            ]
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+        }
+    }
+
+    /// The `cam.tool_add` or `cam.tool_edit` parameters.
+    fn params(&self) -> Value {
+        let mut p = json!({ "kind": self.kind, "diameter": self.diameter.trim() });
+        if let Some(id) = self.edit {
+            p["tool"] = json!(id);
+        }
+        if !self.name.trim().is_empty() {
+            p["name"] = json!(self.name.trim());
+        }
+        if self.kind == "bull_nose" && !self.corner.trim().is_empty() {
+            p["corner_radius"] = json!(self.corner.trim());
+        }
+        if !self.flute_length.trim().is_empty() {
+            p["flute_length"] = json!(self.flute_length.trim());
+        }
+        if let Ok(f) = self.feed.trim().parse::<f64>() {
+            p["feed"] = json!(f);
+        }
+        if let Ok(r) = self.rpm.trim().parse::<f64>() {
+            p["spindle_rpm"] = json!(r);
+        }
+        if self.stickout.trim().is_empty() {
+            if self.edit.is_some() {
+                p["holder"] = Value::Null;
+            }
+        } else {
+            let segments: Vec<Value> = self
+                .segments
+                .iter()
+                .filter(|s| !s[0].trim().is_empty() && !s[2].trim().is_empty())
+                .map(|s| {
+                    let mut v = json!({ "diameter": s[0].trim(), "length": s[2].trim() });
+                    if !s[1].trim().is_empty() {
+                        v["top_diameter"] = json!(s[1].trim());
+                    }
+                    v
+                })
+                .collect();
+            let mut h = json!({ "stickout": self.stickout.trim(), "segments": segments });
+            if !self.shank.trim().is_empty() {
+                h["shank_diameter"] = json!(self.shank.trim());
+            }
+            p["holder"] = h;
+        }
+        p
+    }
+}
+
+/// The tool kinds the dialog offers.
+const TOOL_KINDS: [&str; 5] = [
+    "flat_end_mill",
+    "ball_end_mill",
+    "bull_nose",
+    "drill",
+    "chamfer_mill",
+];
 
 /// A number for a text field: at most 3 decimals, no trailing zeros.
 fn num(v: f64) -> String {
@@ -68,7 +200,7 @@ fn num(v: f64) -> String {
     s.trim_end_matches('0').trim_end_matches('.').to_owned()
 }
 
-const KINDS: [(&str, &str, Icon); 7] = [
+const KINDS: [(&str, &str, Icon); 9] = [
     ("facing", "Facing", Icon::CamFacing),
     ("contour", "2D Contour", Icon::CamContour),
     ("pocket", "2D Pocket", Icon::CamPocket),
@@ -76,11 +208,16 @@ const KINDS: [(&str, &str, Icon); 7] = [
     ("adaptive", "Adaptive Clearing", Icon::CamAdaptive),
     ("parallel", "Parallel", Icon::CamParallel),
     ("waterline", "Waterline", Icon::CamWaterline),
+    ("pencil", "Pencil", Icon::CamContour),
+    ("scallop", "Scallop (experimental)", Icon::CamParallel),
 ];
 
 /// The 3D operations, which have no face to pick.
 fn is_3d(kind: &str) -> bool {
-    matches!(kind, "adaptive" | "parallel" | "waterline")
+    matches!(
+        kind,
+        "adaptive" | "parallel" | "waterline" | "pencil" | "scallop"
+    )
 }
 
 fn kind_icon(kind: &str) -> Icon {
@@ -108,7 +245,7 @@ impl OpDialog {
             pick_edges: false,
             stepover: match kind {
                 "facing" => "50",
-                "parallel" => "10",
+                "parallel" | "scallop" => "10",
                 _ => "40",
             }
             .into(),
@@ -128,6 +265,9 @@ impl OpDialog {
                 _ => "0 mm",
             }
             .into(),
+            holder_check: "ignore",
+            min_angle: "10".into(),
+            max_slope: "60".into(),
         }
     }
 
@@ -161,13 +301,29 @@ impl OpDialog {
             .trim_end_matches('%')
             .trim()
             .parse::<f64>()
-            && matches!(self.kind, "facing" | "pocket" | "parallel")
+            && matches!(self.kind, "facing" | "pocket" | "parallel" | "scallop")
             && (self.kind != "parallel" || self.scallop.trim().is_empty())
         {
             p["stepover"] = json!(v);
         }
-        if !matches!(self.kind, "drill" | "parallel") && !self.stepdown.trim().is_empty() {
+        if !matches!(self.kind, "drill" | "parallel" | "pencil" | "scallop")
+            && !self.stepdown.trim().is_empty()
+        {
             p["stepdown"] = json!(self.stepdown.trim());
+        }
+        if matches!(self.kind, "parallel" | "adaptive") {
+            p["holder_check"] = json!(self.holder_check);
+        }
+        let degrees = |t: &str| t.trim().trim_end_matches('°').trim().parse::<f64>().ok();
+        if self.kind == "pencil"
+            && let Some(a) = degrees(&self.min_angle)
+        {
+            p["min_angle"] = json!(a);
+        }
+        if self.kind == "scallop"
+            && let Some(a) = degrees(&self.max_slope)
+        {
+            p["max_slope"] = json!(a);
         }
         if is_3d(self.kind) && !self.leave.trim().is_empty() {
             p["stock_to_leave"] = json!(self.leave.trim());
@@ -232,6 +388,7 @@ impl ChamferaApp {
         if !on {
             self.cam.dialog = None;
             self.cam.tool_dialog = None;
+            self.cam.library_open = false;
             if self.cam.sim_panel.take().is_some() {
                 self.run("cam.simulate", json!({ "clear": true }));
             }
@@ -256,12 +413,7 @@ impl ChamferaApp {
 
     /// Add Tool: opens its dialog with a 6 mm flat end mill filled in.
     pub(crate) fn open_cam_tool_dialog(&mut self) {
-        self.cam.tool_dialog = Some(ToolDialog {
-            kind: "flat_end_mill",
-            diameter: "6 mm".into(),
-            feed: "600".into(),
-            rpm: "10000".into(),
-        });
+        self.cam.tool_dialog = Some(ToolDialog::new());
     }
 
     /// Opens the dialog for a new operation of this kind (`facing`, `contour`, `pocket`,
@@ -336,6 +488,7 @@ impl ChamferaApp {
         let mut open: Option<u32> = None;
         let mut toggle: Option<(u32, bool)> = None;
         let mut delete: Option<u32> = None;
+        let mut edit_tool: Option<u32> = None;
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
@@ -349,7 +502,9 @@ impl ChamferaApp {
                 for st in &cam.setups {
                     widgets::menu_item(ui, look, Icon::CamSetup, &st.name, true);
                     for o in cam.operations.iter().filter(|o| o.setup == st.id) {
+                        let stale = self.session.toolpath_stale(o.id);
                         let status = match self.session.toolpath(o.id) {
+                            _ if stale => "regenerating…".to_owned(),
                             Some(Ok(tp)) => {
                                 format!("{:.1} min", tp.stats(st.rapid_rate).minutes)
                             }
@@ -434,13 +589,16 @@ impl ChamferaApp {
                 ui.add_space(widgets::S3);
                 widgets::caption(ui, look, "TOOLS");
                 for t in &cam.tools {
-                    widgets::menu_item(
+                    let r = widgets::menu_item(
                         ui,
                         look,
                         Icon::CamTool,
                         &format!("T{} {}", t.number, t.name),
                         true,
                     );
+                    if r.on_hover_text("Edit Tool\nIts size, feeds and holder").clicked() {
+                        edit_tool = Some(t.id);
+                    }
                 }
             });
         if let Some(id) = open {
@@ -451,6 +609,9 @@ impl ChamferaApp {
         }
         if let Some(id) = delete {
             self.run("cam.op_delete", json!({ "operation": id }));
+        }
+        if let Some(t) = edit_tool.and_then(|id| self.session.doc.cam.tool(id)) {
+            self.cam.tool_dialog = Some(ToolDialog::editing(t));
         }
     }
 
@@ -510,12 +671,32 @@ impl ChamferaApp {
                 scallop,
                 angle,
                 stock_to_leave,
+                holder_check,
                 ..
             } => {
                 d.stepover = pct(stepover);
                 d.scallop = scallop.map(mm).unwrap_or_default();
                 d.angle = num(angle.to_degrees());
                 d.leave = mm(stock_to_leave);
+                d.holder_check = holder_check.key();
+            }
+            OpKind::Pencil {
+                stock_to_leave,
+                min_angle,
+                ..
+            } => {
+                d.leave = mm(stock_to_leave);
+                d.min_angle = num(min_angle.to_degrees());
+            }
+            OpKind::Scallop {
+                stepover,
+                stock_to_leave,
+                max_slope,
+                ..
+            } => {
+                d.stepover = pct(stepover);
+                d.leave = mm(stock_to_leave);
+                d.max_slope = num(max_slope.to_degrees());
             }
             OpKind::Waterline {
                 stepdown,
@@ -529,10 +710,12 @@ impl ChamferaApp {
                 stepdown,
                 max_engagement,
                 stock_to_leave,
+                holder_check,
             } => {
                 d.stepdown = mm(stepdown);
                 d.engagement = num(max_engagement.to_degrees());
                 d.leave = mm(stock_to_leave);
+                d.holder_check = holder_check.key();
             }
         }
         self.cam.dialog = Some(d);
@@ -575,6 +758,7 @@ impl ChamferaApp {
         if !self.cam.active {
             return;
         }
+        self.library_window(ctx);
         self.tool_window(ctx);
         self.sim_window(ctx);
         const WIDTH: f32 = 320.0;
@@ -671,8 +855,16 @@ impl ChamferaApp {
                                 });
                                 ui.end_row();
                             }
-                            if matches!(d.kind, "facing" | "pocket" | "parallel") {
-                                widgets::field_label(ui, look, "Stepover %");
+                            if matches!(d.kind, "facing" | "pocket" | "parallel" | "scallop") {
+                                widgets::field_label(
+                                    ui,
+                                    look,
+                                    if d.kind == "scallop" {
+                                        "Stepover % (along)"
+                                    } else {
+                                        "Stepover %"
+                                    },
+                                );
                                 ui.add_sized(
                                     widgets::FIELD,
                                     egui::TextEdit::singleline(&mut d.stepover),
@@ -702,6 +894,34 @@ impl ChamferaApp {
                                 );
                                 ui.end_row();
                             }
+                            if d.kind == "pencil" {
+                                widgets::field_label(ui, look, "Corner angle °");
+                                ui.add_sized(
+                                    widgets::FIELD,
+                                    egui::TextEdit::singleline(&mut d.min_angle),
+                                );
+                                ui.end_row();
+                            }
+                            if d.kind == "scallop" {
+                                widgets::field_label(ui, look, "Steepest °");
+                                ui.add_sized(
+                                    widgets::FIELD,
+                                    egui::TextEdit::singleline(&mut d.max_slope),
+                                );
+                                ui.end_row();
+                            }
+                            if matches!(d.kind, "parallel" | "adaptive") {
+                                widgets::field_label(ui, look, "Holder");
+                                egui::ComboBox::from_id_salt("cam holder check")
+                                    .selected_text(d.holder_check)
+                                    .width(widgets::FIELD_WIDTH)
+                                    .show_ui(ui, |ui| {
+                                        for k in ["ignore", "lift", "refuse"] {
+                                            ui.selectable_value(&mut d.holder_check, k, k);
+                                        }
+                                    });
+                                ui.end_row();
+                            }
                             if is_3d(d.kind) {
                                 widgets::field_label(ui, look, "Stock to leave");
                                 ui.add_sized(
@@ -710,7 +930,7 @@ impl ChamferaApp {
                                 );
                                 ui.end_row();
                             }
-                            if !matches!(d.kind, "drill" | "parallel") {
+                            if !matches!(d.kind, "drill" | "parallel" | "pencil" | "scallop") {
                                 widgets::field_label(ui, look, "Stepdown");
                                 ui.add_sized(
                                     widgets::FIELD,
@@ -897,6 +1117,26 @@ impl ChamferaApp {
                                     );
                                 }
                                 ui.end_row();
+                                if r["holder"]["checked"].as_bool() == Some(true) {
+                                    widgets::field_label(ui, look, "Holder");
+                                    let n = r["holder"]["moves"].as_u64().unwrap_or(0);
+                                    if n == 0 {
+                                        ui.label("clear");
+                                    } else {
+                                        ui.label(
+                                            egui::RichText::new(format!(
+                                                "{n} moves collide, deepest {}",
+                                                units.length(
+                                                    r["holder"]["max_depth"]
+                                                        .as_f64()
+                                                        .unwrap_or(0.0)
+                                                )
+                                            ))
+                                            .color(look.c(|t| t.gouge)),
+                                        );
+                                    }
+                                    ui.end_row();
+                                }
                             }
                         });
                 });
@@ -918,21 +1158,26 @@ impl ChamferaApp {
             theme: &self.theme,
             icons: &self.icons,
         };
-        let pos = self.tool_dialog_pos(300.0);
+        let pos = self.tool_dialog_pos(320.0);
         let Some(t) = self.cam.tool_dialog.as_mut() else {
             return;
         };
         let (mut ok, mut cancel) = (false, false);
-        egui::Window::new("Add Tool")
+        let title = label(if t.edit.is_some() {
+            "cam.tool_edit"
+        } else {
+            "cam.tool_add"
+        });
+        egui::Window::new(title)
             .id(egui::Id::unique("cam tool dialog"))
             .title_bar(false)
             .frame(widgets::dialog_frame(look))
             .default_pos(pos)
             .fade_in(false)
-            .default_width(300.0)
+            .default_width(320.0)
             .resizable(false)
             .show(ctx, |ui| {
-                if widgets::dialog_title(ui, look, Icon::CamTool, label("cam.tool_add")) {
+                if widgets::dialog_title(ui, look, Icon::CamTool, title) {
                     cancel = true;
                 }
                 widgets::dialog_body(ui, |ui| {
@@ -945,23 +1190,53 @@ impl ChamferaApp {
                                 .selected_text(t.kind.replace('_', " "))
                                 .width(widgets::FIELD_WIDTH)
                                 .show_ui(ui, |ui| {
-                                    for k in
-                                        ["flat_end_mill", "ball_end_mill", "drill", "chamfer_mill"]
-                                    {
+                                    for k in TOOL_KINDS {
                                         ui.selectable_value(&mut t.kind, k, k.replace('_', " "));
                                     }
                                 });
                             ui.end_row();
-                            for (text, field) in [
-                                ("Diameter", &mut t.diameter),
-                                ("Feed mm/min", &mut t.feed),
-                                ("Spindle rpm", &mut t.rpm),
-                            ] {
+                            let mut rows: Vec<(&str, &mut String)> =
+                                vec![("Name", &mut t.name), ("Diameter", &mut t.diameter)];
+                            if t.kind == "bull_nose" {
+                                rows.push(("Corner radius", &mut t.corner));
+                            }
+                            rows.push(("Flute length", &mut t.flute_length));
+                            rows.push(("Feed mm/min", &mut t.feed));
+                            rows.push(("Spindle rpm", &mut t.rpm));
+                            rows.push(("Stickout", &mut t.stickout));
+                            rows.push(("Shank Ø", &mut t.shank));
+                            for (text, field) in rows {
                                 widgets::field_label(ui, look, text);
                                 ui.add_sized(widgets::FIELD, egui::TextEdit::singleline(field));
                                 ui.end_row();
                             }
                         });
+                    ui.add_space(widgets::S2);
+                    widgets::caption(ui, look, "HOLDER (BOTTOM FIRST): Ø, TOP Ø, LENGTH");
+                    let mut remove = None;
+                    for (i, seg) in t.segments.iter_mut().enumerate() {
+                        ui.horizontal(|ui| {
+                            for (k, hint) in ["Ø", "top Ø", "length"].iter().enumerate() {
+                                ui.add_sized(
+                                    [76.0, widgets::ROW_HEIGHT],
+                                    egui::TextEdit::singleline(&mut seg[k]).hint_text(*hint),
+                                );
+                            }
+                            if widgets::icon_button(ui, look, Icon::Delete, 22.0, 14.0, true, false)
+                                .on_hover_text("Remove this segment")
+                                .clicked()
+                            {
+                                remove = Some(i);
+                            }
+                        });
+                    }
+                    if let Some(i) = remove {
+                        t.segments.remove(i);
+                    }
+                    if widgets::secondary_button(ui, look, "Add Segment").clicked() {
+                        t.segments
+                            .push([String::new(), String::new(), String::new()]);
+                    }
                 });
                 widgets::dialog_footer(ui, look, |ui| {
                     ok = widgets::primary_button(ui, look, "OK", true).clicked();
@@ -969,17 +1244,19 @@ impl ChamferaApp {
                 });
             });
         if ok {
-            let mut p = json!({ "kind": t.kind, "diameter": t.diameter.trim() });
-            if let Ok(f) = t.feed.trim().parse::<f64>() {
-                p["feed"] = json!(f);
-            }
-            if let Ok(r) = t.rpm.trim().parse::<f64>() {
-                p["spindle_rpm"] = json!(r);
-            }
-            if let Some(r) = self.run("cam.tool_add", p) {
+            let (id, p) = match t.edit {
+                Some(_) => ("cam.tool_edit", t.params()),
+                None => ("cam.tool_add", t.params()),
+            };
+            if let Some(r) = self.run(id, p) {
                 self.message = Some((
                     format!(
-                        "Added T{} {}",
+                        "{} T{} {}",
+                        if id == "cam.tool_add" {
+                            "Added"
+                        } else {
+                            "Changed"
+                        },
                         r["number"],
                         r["name"].as_str().unwrap_or("")
                     ),
@@ -991,6 +1268,180 @@ impl ChamferaApp {
         if cancel {
             self.cam.tool_dialog = None;
         }
+    }
+
+    /// The Tool Library panel: every tool with its size and holder, to edit or delete,
+    /// and libraries to import or export.
+    fn library_window(&mut self, ctx: &egui::Context) {
+        if !self.cam.library_open {
+            return;
+        }
+        let look = Look {
+            theme: &self.theme,
+            icons: &self.icons,
+        };
+        let units = self.units();
+        let pos = self.tool_dialog_pos(380.0);
+        let tools = self.session.doc.cam.tools.clone();
+        let (mut close, mut edit, mut delete, mut add) = (false, None, None, false);
+        let (mut import, mut export) = (false, false);
+        egui::Window::new("Tool Library")
+            .id(egui::Id::unique("cam tool library"))
+            .title_bar(false)
+            .frame(widgets::dialog_frame(look))
+            .default_pos(pos)
+            .fade_in(false)
+            .default_width(380.0)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.set_width(380.0);
+                if widgets::dialog_title(ui, look, Icon::CamTool, "Tool Library") {
+                    close = true;
+                }
+                widgets::dialog_body(ui, |ui| {
+                    if tools.is_empty() {
+                        ui.label(
+                            egui::RichText::new("No tools yet: add one, or import a library")
+                                .size(widgets::T_SMALL)
+                                .color(look.c(|t| t.text_muted)),
+                        );
+                    }
+                    egui::ScrollArea::vertical()
+                        .max_height(320.0)
+                        .show(ui, |ui| {
+                            for t in &tools {
+                                ui.horizontal(|ui| {
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            if widgets::icon_button(
+                                                ui,
+                                                look,
+                                                Icon::Delete,
+                                                22.0,
+                                                14.0,
+                                                true,
+                                                false,
+                                            )
+                                            .on_hover_text(format!(
+                                                "{}\nRemove it from the library",
+                                                label("cam.tool_delete")
+                                            ))
+                                            .clicked()
+                                            {
+                                                delete = Some(t.id);
+                                            }
+                                            let holder = match &t.holder {
+                                                Some(h) => format!(
+                                                    "out {}, {} piece holder",
+                                                    units.length(h.stickout),
+                                                    h.segments.len()
+                                                ),
+                                                None => "no holder".to_owned(),
+                                            };
+                                            ui.label(
+                                                egui::RichText::new(format!(
+                                                    "Ø{} · {holder}",
+                                                    units.length(t.diameter)
+                                                ))
+                                                .size(widgets::T_SMALL)
+                                                .color(look.c(|t| t.text_muted)),
+                                            );
+                                            ui.with_layout(
+                                                egui::Layout::left_to_right(egui::Align::Center),
+                                                |ui| {
+                                                    if widgets::menu_item(
+                                                        ui,
+                                                        look,
+                                                        Icon::CamTool,
+                                                        &format!("T{} {}", t.number, t.name),
+                                                        true,
+                                                    )
+                                                    .on_hover_text(format!(
+                                                        "{}\nIts size, feeds and holder",
+                                                        label("cam.tool_edit")
+                                                    ))
+                                                    .clicked()
+                                                    {
+                                                        edit = Some(t.id);
+                                                    }
+                                                },
+                                            );
+                                        },
+                                    );
+                                });
+                            }
+                        });
+                });
+                widgets::dialog_footer(ui, look, |ui| {
+                    add = widgets::primary_button(ui, look, "Add Tool", true).clicked();
+                    close |= widgets::secondary_button(ui, look, "Close").clicked();
+                    export = widgets::secondary_button(ui, look, "Export…").clicked();
+                    import = widgets::secondary_button(ui, look, "Import…").clicked();
+                });
+            });
+        if let Some(t) = edit.and_then(|id| self.session.doc.cam.tool(id)) {
+            self.cam.tool_dialog = Some(ToolDialog::editing(t));
+        }
+        if let Some(id) = delete {
+            self.run("cam.tool_delete", json!({ "tool": id }));
+        }
+        if add {
+            self.open_cam_tool_dialog();
+        }
+        if import {
+            self.tool_library_file(false);
+        }
+        if export {
+            self.tool_library_file(true);
+        }
+        if close {
+            self.cam.library_open = false;
+        }
+    }
+
+    /// Asks for a tool library file and imports or exports it.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn tool_library_file(&mut self, export: bool) {
+        let d = rfd::FileDialog::new().add_filter("Tool library", &["json"]);
+        let path = if export {
+            d.set_title(label("cam.tool_library_export"))
+                .set_file_name("tools.json")
+                .save_file()
+        } else {
+            d.set_title(label("cam.tool_library_import")).pick_file()
+        };
+        let Some(path) = path else {
+            return;
+        };
+        let id = if export {
+            "cam.tool_library_export"
+        } else {
+            "cam.tool_library_import"
+        };
+        if let Some(r) = self.run(id, json!({ "path": path.to_string_lossy() })) {
+            let n = r["tools"]
+                .as_u64()
+                .or_else(|| r["tools"].as_array().map(|a| a.len() as u64))
+                .unwrap_or(0);
+            self.message = Some((
+                format!(
+                    "{} {n} tools {} {}",
+                    if export { "Exported" } else { "Imported" },
+                    if export { "to" } else { "from" },
+                    path.display()
+                ),
+                false,
+            ));
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn tool_library_file(&mut self, _export: bool) {
+        self.message = Some((
+            "Tool library files are in the desktop app for now".into(),
+            true,
+        ));
     }
 }
 

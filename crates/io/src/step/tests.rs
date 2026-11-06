@@ -660,7 +660,42 @@ pub(super) mod curved {
             Vec3::new(1.0, 1.0, 0.0),
         )
         .unwrap();
+        // Curved blends (K11): the slot's top rim filleted (cylinders and tori meeting
+        // tangentially), its bottom rim chamfered (planes and cones), and a variable
+        // fillet on a box edge (a cone).
+        let slot_body = extrude(&xy, &slot, 10.0).unwrap();
+        let rim_of = |body: &Body, name: &str| {
+            let f = body
+                .faces()
+                .into_iter()
+                .find(|f| body.face_name(*f).unwrap() == Some(name))
+                .unwrap();
+            body.face_edges(f).unwrap()
+        };
+        let rounded_slot =
+            chamfera_kernel::fillet(&slot_body, &rim_of(&slot_body, "top"), 2.0).unwrap();
+        let rounded_slot =
+            chamfera_kernel::chamfer(&rounded_slot, &rim_of(&rounded_slot, "bottom"), 1.0).unwrap();
+        let block = extrude(
+            &xy,
+            &Profile::polygon(&[
+                Point2::new(0.0, 0.0),
+                Point2::new(50.0, 0.0),
+                Point2::new(50.0, 30.0),
+                Point2::new(0.0, 30.0),
+            ]),
+            10.0,
+        )
+        .unwrap();
+        let top0 = block
+            .edges()
+            .into_iter()
+            .find(|e| block.edge_name(*e).unwrap() == Some("top 0"))
+            .unwrap();
+        let variable = chamfera_kernel::fillet_variable(&block, top0, 1.0, 3.0).unwrap();
         vec![
+            ("filleted slot", rounded_slot),
+            ("variable fillet", variable),
             (
                 "cylinder",
                 extrude(&xy, &Profile::circle(Point2::ORIGIN, 5.0), 10.0).unwrap(),
@@ -1072,6 +1107,32 @@ mod splines {
         assert_eq!(ex.count("SURFACE_OF_LINEAR_EXTRUSION"), 2);
         let s = summarize(&ex).unwrap();
         assert_eq!(s.solids.len(), 1);
+    }
+
+    #[test]
+    fn a_filleted_spline_edge_exports_its_cylinder_and_trimmed_splines() {
+        // The strut at (20, 0) between the spline side and the flat side, filleted: a
+        // fifth face (a cylinder), two more edges at each end and two more vertices per
+        // end: 5 faces, 9 edges, 6 vertices.
+        let a = arch();
+        let strut = a
+            .edges()
+            .into_iter()
+            .find(|e| {
+                let [v0, v1] = a.edge_vertices(*e).unwrap();
+                let (p, q) = (a.vertex_point(v0).unwrap(), a.vertex_point(v1).unwrap());
+                (p.x - 20.0).abs() < 1e-9 && (q.x - 20.0).abs() < 1e-9 && p.y.abs() < 1e-9
+            })
+            .unwrap();
+        let round = chamfera_kernel::fillet(&a, &[strut], 1.0).unwrap();
+        let (_, ex) = export(&[("round", &round)]);
+        let s = summarize(&ex).unwrap();
+        let [solid] = s.solids.as_slice() else {
+            panic!("one solid expected");
+        };
+        assert_eq!((solid.faces, solid.edges, solid.vertices), (5, 9, 6));
+        assert_eq!(ex.count("CYLINDRICAL_SURFACE"), 1);
+        assert_eq!(ex.count("SURFACE_OF_LINEAR_EXTRUSION"), 1);
     }
 
     #[test]

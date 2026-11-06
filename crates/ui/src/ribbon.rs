@@ -1104,6 +1104,15 @@ pub const TOOLS: &[RibbonTool] = &[
         "A mill or drill with its feeds and speeds",
     )
     .primary(),
+    tool(
+        M,
+        "SETUP",
+        Action::Tool("cam.tool_library"),
+        Icon::CamTool,
+        "Tool Library",
+        "Every tool with its holder: edit, delete, import and export libraries",
+    )
+    .short("Library"),
     // MANUFACTURE > 2D
     tool(
         M,
@@ -1167,6 +1176,22 @@ pub const TOOLS: &[RibbonTool] = &[
         Icon::CamWaterline,
         "Waterline",
         "Finish steep walls in level contours, one at each height",
+    ),
+    tool(
+        M,
+        "3D",
+        Action::Tool("cam.op.pencil"),
+        Icon::CamContour,
+        "Pencil",
+        "Clean up concave corners: one pass where the tool touches two faces at once",
+    ),
+    tool(
+        M,
+        "3D",
+        Action::Tool("cam.op.scallop"),
+        Icon::CamParallel,
+        "Scallop",
+        "Experimental: passes a constant stepover apart along the surface",
     ),
     // MANUFACTURE > ACTIONS
     tool(
@@ -1417,6 +1442,8 @@ fn cam_op(id: &str) -> Option<&'static str> {
         "cam.op.adaptive" => "adaptive",
         "cam.op.parallel" => "parallel",
         "cam.op.waterline" => "waterline",
+        "cam.op.pencil" => "pencil",
+        "cam.op.scallop" => "scallop",
         _ => return None,
     })
 }
@@ -1678,6 +1705,7 @@ impl ChamferaApp {
                 "inspect.interference" => self.motion.interference.is_some(),
                 "view.explode" => self.motion.explode.is_some(),
                 "cam.tool_add" => self.cam.tool_dialog.is_some(),
+                "cam.tool_library" => self.cam.library_open,
                 "cam.simulate" => self.cam.sim_panel.is_some(),
                 "sheet.base" => self.sheet_metal.base.is_some(),
                 "sheet.flange" => self.sheet_metal.flange.is_some(),
@@ -1854,7 +1882,7 @@ impl ChamferaApp {
             Tab::Manufacture => {
                 let cam = &self.session.doc.cam;
                 match id {
-                    "cam.tool_add" => return None,
+                    "cam.tool_add" | "cam.tool_library" => return None,
                     _ if (id == "cam.setup" || cam_op(id).is_some()) && !has_solids => {
                         format!("{name}: build a solid first")
                     }
@@ -1919,6 +1947,7 @@ impl ChamferaApp {
             "drawing.add_parts_list" => self.drawing_parts_list(),
             "cam.setup" => self.cam_setup(),
             "cam.tool_add" => self.open_cam_tool_dialog(),
+            "cam.tool_library" => self.cam.library_open = !self.cam.library_open,
             "cam.generate" => self.generate_toolpaths(),
             "cam.post" => self.post_dialog("linuxcnc"),
             "cam.simulate" => self.toggle_simulation(),
@@ -2428,6 +2457,10 @@ mod tests {
             "cam.op_delete",
             "cam.op_edit", // the Manufacture tree
             "cam.show",
+            "cam.tool_delete", // the Tool Library panel
+            "cam.tool_edit",
+            "cam.tool_library_export",
+            "cam.tool_library_import",
             "component.activate", // Browser
             "component.copy",
             "component.delete",

@@ -86,10 +86,14 @@ pub struct Theme {
     pub toolpath_feed: Rgba,
     /// Rapid moves, drawn dashed.
     pub toolpath_rapid: Rgba,
+    /// Toolpaths being made again after an edit (shown dimmed until the new ones come).
+    pub toolpath_stale: Rgba,
     /// The simulated stock (`cam.simulate`).
     pub stock: Rgba,
     /// Simulated stock cut below the part: a gouge.
     pub gouge: Rgba,
+    /// Simulated stock or part the tool's holder or shank ran into.
+    pub holder_collision: Rgba,
     // assemblies
     /// Version comparison (`version.compare`): the first version's bodies, shaded.
     pub compare_a: Rgba,
@@ -206,10 +210,12 @@ impl Theme {
             select_crossing_fill: Rgba(30, 135, 70, 36),
             toolpath_feed: Rgba(96, 72, 204, 255),
             toolpath_rapid: Rgba(200, 50, 60, 220),
+            toolpath_stale: Rgba(120, 112, 150, 110),
             stock: Rgba(196, 170, 120, 255),
             compare_a: Rgba(222, 120, 40, 255),
             compare_b: Rgba(30, 112, 214, 120),
             gouge: Rgba(222, 32, 48, 255),
+            holder_collision: Rgba(236, 132, 0, 255),
             interference: Rgba(214, 30, 60, 255),
             interference_fill: Rgba(230, 40, 70, 120),
             explode_trail: Rgba(52, 58, 72, 255),
@@ -286,10 +292,12 @@ impl Theme {
             select_crossing_fill: Rgba(88, 196, 124, 40),
             toolpath_feed: Rgba(170, 150, 255, 255),
             toolpath_rapid: Rgba(255, 110, 110, 220),
+            toolpath_stale: Rgba(150, 140, 190, 110),
             stock: Rgba(178, 152, 104, 255),
             compare_a: Rgba(236, 140, 60, 255),
             compare_b: Rgba(80, 160, 255, 120),
             gouge: Rgba(255, 64, 80, 255),
+            holder_collision: Rgba(255, 160, 40, 255),
             interference: Rgba(255, 80, 110, 255),
             interference_fill: Rgba(255, 70, 100, 120),
             explode_trail: Rgba(200, 206, 218, 255),

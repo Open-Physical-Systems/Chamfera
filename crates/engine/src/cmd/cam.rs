@@ -8,7 +8,8 @@
 use super::CommandSpec;
 use crate::{CmdResult, CommandError, Session, params};
 use chamfera_doc::cam::{
-    CamOperation, Entry, OpKind, Setup, Side, Stock, Tool, ToolKind, WcsOrigin,
+    CamOperation, Entry, Holder, HolderCheck, HolderSegment, LibraryTool, OpKind, Setup, Side,
+    Stock, Tool, ToolKind, ToolLibrary, WcsOrigin,
 };
 use chamfera_doc::expr::Dim;
 use serde_json::{Map, Value, json};
@@ -33,7 +34,7 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         id: "cam.op_add",
         label: "Add Machining Operation",
-        params: "kind: string (required) - facing, contour, pocket, drill, parallel, waterline or adaptive\n\
+        params: "kind: string (required) - facing, contour, pocket, drill, parallel, waterline, adaptive, pencil or scallop (experimental)\n\
                  tool: integer (required) - a tool from cam.tool_add\n\
                  setup: integer (optional) - default the last setup (one is made if none)\n\
                  name: string (optional)\n\
@@ -55,8 +56,12 @@ pub static COMMANDS: &[CommandSpec] = &[
                  scallop: length (parallel) - cusp height for a ball end mill, instead of stepover\n\
                  angle: angle (parallel) - pass direction from +X, degrees (default 0)\n\
                  tolerance: length (parallel, waterline) - largest height error between samples (default 0.01)\n\
-                 stock_to_leave: length (parallel, waterline, adaptive) - material left on the part (default 0; adaptive 0.3)\n\
-                 max_engagement: angle (adaptive) - largest tool engagement, degrees (default 60)",
+                 stock_to_leave: length (parallel, waterline, adaptive, pencil, scallop) - material left on the part (default 0; adaptive 0.3)\n\
+                 max_engagement: angle (adaptive) - largest tool engagement, degrees (default 60)\n\
+                 holder_check: string (parallel, adaptive) - ignore (default), lift or refuse where the tool's holder would hit the part\n\
+                 min_angle: angle (pencil) - least change of slope across a corner that is traced, degrees (default 10)\n\
+                 max_slope: angle (scallop) - steeper than this is a border, degrees (default 60)\n\
+                 The scallop stepover is measured along the surface (percent of the tool diameter, default 10)",
         mutates: true,
         run: op_add,
     },
@@ -96,9 +101,11 @@ pub static COMMANDS: &[CommandSpec] = &[
                  time: number (optional) - how far through the cycle time, 0 to 1 (default 1)\n\
                  tolerance: length (optional) - a cut this far below the part is a gouge (default 0.02)\n\
                  clear: boolean (optional) - true ends the simulation\n\
-                 Cuts a dexel stock along the toolpaths, shows it (gouges in their own colour) and \
-                 replies with removed_volume, rest_volume (left above the part), gouges \
-                 {cells, volume, max_depth} and the cell size",
+                 Cuts a dexel stock along the toolpaths, shows it (gouges and holder collisions in \
+                 their own colours) and replies with removed_volume, rest_volume (left above the \
+                 part), gouges {cells, volume, max_depth}, holder {checked, moves, cells, \
+                 max_depth, incomplete} (where a tool's holder or shank hit the stock or part) \
+                 and the cell size",
         mutates: false,
         run: simulate,
     },
@@ -137,9 +144,47 @@ pub static COMMANDS: &[CommandSpec] = &[
                  tip_angle: angle (optional) - degrees; default 118 for drills, 90 for chamfer mills\n\
                  spindle_rpm: number (optional) - default 10000\n\
                  feed: number (optional) - mm/min, default 600\n\
-                 plunge_feed: number (optional) - mm/min, default a third of the feed",
+                 plunge_feed: number (optional) - mm/min, default a third of the feed\n\
+                 holder: object or null (optional) - {\"stickout\": length from the tip to the holder, \
+                 \"shank_diameter\": length (default the tool's), \"segments\": [{\"diameter\", \
+                 \"top_diameter\" (a cone), \"length\"}, ...] bottom first}",
         mutates: true,
         run: tool_add,
+    },
+    CommandSpec {
+        id: "cam.tool_delete",
+        label: "Delete Tool",
+        params: "tool: integer (required) - refused while an operation uses it",
+        mutates: true,
+        run: tool_delete,
+    },
+    CommandSpec {
+        id: "cam.tool_edit",
+        label: "Edit Tool",
+        params: "tool: integer (required)\n\
+                 and any setting of cam.tool_add (optional); holder null removes the holder",
+        mutates: true,
+        run: tool_edit,
+    },
+    CommandSpec {
+        id: "cam.tool_library_export",
+        label: "Export Tool Library",
+        params: "path: string (required) - the .json file to write\n\
+                 tools: list of integers (optional) - these tools; default all\n\
+                 Writes the tools as a Chamfera tool library ({\"format\": \"chamfera-tools\", \
+                 \"version\": 1, \"tools\": [...]})",
+        mutates: false,
+        run: tool_library_export,
+    },
+    CommandSpec {
+        id: "cam.tool_library_import",
+        label: "Import Tool Library",
+        params: "path: string (required) - a tool library .json file\n\
+                 replace: boolean (optional) - first remove the tools no operation uses (default false)\n\
+                 Adds the library's tools (a T number already in use gets the next free one) and \
+                 replies with their ids",
+        mutates: true,
+        run: tool_library_import,
     },
 ];
 
@@ -363,57 +408,258 @@ fn setup(s: &mut Session, p: &Value) -> CmdResult {
     Ok(setup_json(s, &st))
 }
 
-fn tool_add(s: &mut Session, p: &Value) -> CmdResult {
-    let kind_s = params::req_str(p, "kind")?;
-    let kind = ToolKind::parse(kind_s).ok_or_else(|| {
-        bad("`kind` is flat_end_mill, ball_end_mill, bull_nose, drill or chamfer_mill")
-    })?;
-    let d = length(s, p, "diameter")?.ok_or_else(|| bad("`diameter` is required"))?;
-    let corner = match (kind, length(s, p, "corner_radius")?) {
-        (ToolKind::BallEndMill, _) => d / 2.0,
-        (ToolKind::BullNose, None) => return Err(bad("a bull nose mill needs `corner_radius`")),
-        (_, Some(r)) => r,
-        (_, None) => 0.0,
+/// The `holder` parameter: `None` when not given, `Some(None)` for null.
+fn holder_param(s: &Session, p: &Value) -> Result<Option<Option<Holder>>, CommandError> {
+    let v = match obj(p)?.get("holder") {
+        None => return Ok(None),
+        Some(Value::Null) => return Ok(Some(None)),
+        Some(v @ Value::Object(_)) => v,
+        Some(_) => return Err(bad("`holder` is an object or null")),
     };
-    let flutes = match obj(p)?.get("flutes") {
-        None | Some(Value::Null) => {
-            if kind == ToolKind::Drill {
-                2
-            } else {
-                3
+    let stickout = length(s, v, "stickout")?.ok_or_else(|| bad("`holder.stickout` is required"))?;
+    let shank_diameter = length(s, v, "shank_diameter")?;
+    let mut segments = Vec::new();
+    match obj(v)?.get("segments") {
+        None | Some(Value::Null) => {}
+        Some(Value::Array(a)) => {
+            if a.len() > chamfera_doc::cam::MAX_HOLDER_SEGMENTS {
+                return Err(bad(format!(
+                    "a holder has at most {} segments",
+                    chamfera_doc::cam::MAX_HOLDER_SEGMENTS
+                )));
+            }
+            for seg in a {
+                if !seg.is_object() {
+                    return Err(bad(
+                        "each holder segment is {diameter, top_diameter, length}",
+                    ));
+                }
+                segments.push(HolderSegment {
+                    diameter: length(s, seg, "diameter")?
+                        .ok_or_else(|| bad("a holder segment needs `diameter`"))?,
+                    top_diameter: length(s, seg, "top_diameter")?,
+                    length: length(s, seg, "length")?
+                        .ok_or_else(|| bad("a holder segment needs `length`"))?,
+                });
             }
         }
-        _ => params::req_id(p, "flutes")?,
+        Some(_) => return Err(bad("`holder.segments` is a list")),
+    }
+    Ok(Some(Some(Holder {
+        stickout,
+        shank_diameter,
+        segments,
+    })))
+}
+
+/// Applies `cam.tool_add`'s settings in `p` onto `t` (a new tool's defaults, or a tool
+/// being edited: then only what `p` gives changes).
+fn apply_tool(s: &Session, p: &Value, t: &mut Tool, new: bool) -> Result<(), CommandError> {
+    if let Some(kind_s) = params::opt_str(p, "kind")? {
+        t.kind = ToolKind::parse(kind_s).ok_or_else(|| {
+            bad("`kind` is flat_end_mill, ball_end_mill, bull_nose, drill or chamfer_mill")
+        })?;
+    }
+    if let Some(d) = length(s, p, "diameter")? {
+        t.diameter = d;
+    }
+    let corner = length(s, p, "corner_radius")?;
+    t.corner_radius = match (t.kind, corner) {
+        (ToolKind::BallEndMill, _) => t.diameter / 2.0,
+        (ToolKind::BullNose, None) if new => {
+            return Err(bad("a bull nose mill needs `corner_radius`"));
+        }
+        (_, Some(r)) => r,
+        (ToolKind::BullNose, None) => t.corner_radius,
+        (_, None) => 0.0,
     };
-    let tip = angle(s, p, "tip_angle")?.unwrap_or(match kind {
-        ToolKind::Drill => 118f64.to_radians(),
-        ToolKind::ChamferMill => 90f64.to_radians(),
-        _ => 0.0,
-    });
-    let feed = params::opt_f64(p, "feed")?.unwrap_or(600.0);
-    let number = match obj(p)?.get("number") {
-        None | Some(Value::Null) => s.doc.cam.tools.iter().map(|t| t.number).max().unwrap_or(0) + 1,
-        _ => params::req_id(p, "number")?,
+    match obj(p)?.get("flutes") {
+        None | Some(Value::Null) => {
+            if new {
+                t.flutes = if t.kind == ToolKind::Drill { 2 } else { 3 };
+            }
+        }
+        _ => t.flutes = params::req_id(p, "flutes")?,
+    }
+    match angle(s, p, "tip_angle")? {
+        Some(a) => t.tip_angle = a,
+        None if new => {
+            t.tip_angle = match t.kind {
+                ToolKind::Drill => 118f64.to_radians(),
+                ToolKind::ChamferMill => 90f64.to_radians(),
+                _ => 0.0,
+            }
+        }
+        None => {}
+    }
+    if let Some(f) = params::opt_f64(p, "feed")? {
+        t.feed = f;
+        if new {
+            t.plunge_feed = f / 3.0;
+        }
+    }
+    if let Some(f) = params::opt_f64(p, "plunge_feed")? {
+        t.plunge_feed = f;
+    }
+    if let Some(r) = params::opt_f64(p, "spindle_rpm")? {
+        t.spindle_rpm = r;
+    }
+    match length(s, p, "flute_length")? {
+        Some(l) => t.flute_length = l,
+        None if new => t.flute_length = 3.0 * t.diameter,
+        None => {}
+    }
+    match obj(p)?.get("number") {
+        None | Some(Value::Null) => {}
+        _ => t.number = params::req_id(p, "number")?,
+    }
+    if let Some(n) = opt_name(p)? {
+        t.name = n;
+    }
+    if let Some(h) = holder_param(s, p)? {
+        t.holder = h;
+    }
+    Ok(())
+}
+
+fn tool_add(s: &mut Session, p: &Value) -> CmdResult {
+    params::req_str(p, "kind")?;
+    if length(s, p, "diameter")?.is_none() {
+        return Err(bad("`diameter` is required"));
+    }
+    let mut t = Tool {
+        id: 0,
+        number: s.doc.cam.tools.iter().map(|t| t.number).max().unwrap_or(0) + 1,
+        name: String::new(),
+        kind: ToolKind::FlatEndMill,
+        diameter: 1.0,
+        flute_length: 3.0,
+        corner_radius: 0.0,
+        flutes: 3,
+        tip_angle: 0.0,
+        spindle_rpm: 10_000.0,
+        feed: 600.0,
+        plunge_feed: 200.0,
+        holder: None,
     };
-    let id = s.doc.cam.next_id()?;
-    let name = opt_name(p)?
-        .unwrap_or_else(|| format!("{} mm {}", chamfera_cam::post::number(d), kind.words()));
-    s.doc.cam.tools.push(Tool {
-        id,
-        number,
-        name: name.clone(),
-        kind,
-        diameter: d,
-        flute_length: length(s, p, "flute_length")?.unwrap_or(3.0 * d),
-        corner_radius: corner,
-        flutes,
-        tip_angle: tip,
-        spindle_rpm: params::opt_f64(p, "spindle_rpm")?.unwrap_or(10_000.0),
-        feed,
-        plunge_feed: params::opt_f64(p, "plunge_feed")?.unwrap_or(feed / 3.0),
-    });
+    apply_tool(s, p, &mut t, true)?;
+    if t.name.is_empty() {
+        t.name = format!(
+            "{} mm {}",
+            chamfera_cam::post::number(t.diameter),
+            t.kind.words()
+        );
+    }
+    t.id = s.doc.cam.next_id()?;
+    let (id, number, name) = (t.id, t.number, t.name.clone());
+    s.doc.cam.tools.push(t);
     checked(s)?;
     Ok(json!({"tool": id, "number": number, "name": name}))
+}
+
+fn tool_edit(s: &mut Session, p: &Value) -> CmdResult {
+    let id = params::req_id(p, "tool")?;
+    let mut t = s
+        .doc
+        .cam
+        .tool(id)
+        .cloned()
+        .ok_or_else(|| bad(format!("no tool {id}")))?;
+    apply_tool(s, p, &mut t, false)?;
+    let (number, name) = (t.number, t.name.clone());
+    if let Some(slot) = s.doc.cam.tools.iter_mut().find(|x| x.id == id) {
+        *slot = t;
+    }
+    checked(s)?;
+    s.regenerate_cam_now();
+    Ok(json!({"tool": id, "number": number, "name": name}))
+}
+
+fn tool_delete(s: &mut Session, p: &Value) -> CmdResult {
+    let id = params::req_id(p, "tool")?;
+    if s.doc.cam.tool(id).is_none() {
+        return Err(bad(format!("no tool {id}")));
+    }
+    if let Some(o) = s.doc.cam.operations.iter().find(|o| o.tool == id) {
+        return Err(CommandError::Unavailable(format!(
+            "{} uses this tool: give it another tool or delete it first",
+            o.name
+        )));
+    }
+    s.doc.cam.tools.retain(|t| t.id != id);
+    Ok(json!({"deleted": id}))
+}
+
+fn tool_library_export(s: &mut Session, p: &Value) -> CmdResult {
+    let path = params::req_str(p, "path")?.to_owned();
+    let only = match obj(p)?.get("tools") {
+        None | Some(Value::Null) => None,
+        Some(Value::Array(a)) => {
+            if a.len() > chamfera_doc::cam::MAX_CAM_ITEMS {
+                return Err(bad("`tools` holds too many tools"));
+            }
+            let ids = a
+                .iter()
+                .map(|v| {
+                    v.as_u64()
+                        .and_then(|x| u32::try_from(x).ok())
+                        .ok_or_else(|| bad("`tools` must be a list of tool ids"))
+                })
+                .collect::<Result<Vec<u32>, _>>()?;
+            for id in &ids {
+                if s.doc.cam.tool(*id).is_none() {
+                    return Err(bad(format!("no tool {id}")));
+                }
+            }
+            Some(ids)
+        }
+        Some(_) => return Err(bad("`tools` must be a list of tool ids")),
+    };
+    let tools: Vec<LibraryTool> = s
+        .doc
+        .cam
+        .tools
+        .iter()
+        .filter(|t| only.as_ref().is_none_or(|o| o.contains(&t.id)))
+        .map(LibraryTool::from_tool)
+        .collect();
+    let n = tools.len();
+    let text = ToolLibrary::new(tools).to_json()?;
+    std::fs::write(&path, text.as_bytes()).map_err(chamfera_io::IoError::from)?;
+    Ok(json!({"path": path, "tools": n}))
+}
+
+fn tool_library_import(s: &mut Session, p: &Value) -> CmdResult {
+    let path = params::req_str(p, "path")?.to_owned();
+    let replace = opt_bool(p, "replace")?.unwrap_or(false);
+    let bytes = chamfera_io::read_limited(
+        std::path::Path::new(&path),
+        chamfera_doc::cam::MAX_TOOL_LIBRARY_BYTES,
+    )?;
+    let text = String::from_utf8(bytes).map_err(|_| bad("the tool library is not UTF-8 text"))?;
+    let lib = ToolLibrary::from_json(&text)?;
+    if replace {
+        let used: Vec<u32> = s.doc.cam.operations.iter().map(|o| o.tool).collect();
+        s.doc.cam.tools.retain(|t| used.contains(&t.id));
+    }
+    if s.doc.cam.tools.len() + lib.tools.len() > chamfera_doc::cam::MAX_CAM_ITEMS {
+        return Err(bad(format!(
+            "a design holds at most {} tools",
+            chamfera_doc::cam::MAX_CAM_ITEMS
+        )));
+    }
+    let mut ids = Vec::new();
+    for lt in &lib.tools {
+        let id = s.doc.cam.next_id()?;
+        let mut t = lt.to_tool(id);
+        if s.doc.cam.tools.iter().any(|x| x.number == t.number) {
+            t.number = s.doc.cam.tools.iter().map(|x| x.number).max().unwrap_or(0) + 1;
+        }
+        s.doc.cam.tools.push(t);
+        ids.push(id);
+    }
+    checked(s)?;
+    Ok(json!({"path": path, "tools": ids}))
 }
 
 /// Applies the kind's settings in `p` onto `op` (new or edited).
@@ -500,6 +746,7 @@ fn apply(s: &Session, p: &Value, op: &mut OpKind, tool_d: f64) -> Result<(), Com
             angle: a,
             tolerance,
             stock_to_leave,
+            holder_check,
         } => {
             *stepover = so.unwrap_or(*stepover);
             match obj(p)?.get("scallop") {
@@ -513,6 +760,7 @@ fn apply(s: &Session, p: &Value, op: &mut OpKind, tool_d: f64) -> Result<(), Com
             *a = angle(s, p, "angle")?.unwrap_or(*a);
             *tolerance = length(s, p, "tolerance")?.unwrap_or(*tolerance);
             *stock_to_leave = length(s, p, "stock_to_leave")?.unwrap_or(*stock_to_leave);
+            *holder_check = holder_check_param(p)?.unwrap_or(*holder_check);
         }
         OpKind::Waterline {
             stepdown,
@@ -527,13 +775,44 @@ fn apply(s: &Session, p: &Value, op: &mut OpKind, tool_d: f64) -> Result<(), Com
             stepdown,
             max_engagement,
             stock_to_leave,
+            holder_check,
         } => {
             *stepdown = sd.unwrap_or(*stepdown);
             *max_engagement = angle(s, p, "max_engagement")?.unwrap_or(*max_engagement);
             *stock_to_leave = length(s, p, "stock_to_leave")?.unwrap_or(*stock_to_leave);
+            *holder_check = holder_check_param(p)?.unwrap_or(*holder_check);
+        }
+        OpKind::Pencil {
+            tolerance,
+            stock_to_leave,
+            min_angle,
+        } => {
+            *tolerance = length(s, p, "tolerance")?.unwrap_or(*tolerance);
+            *stock_to_leave = length(s, p, "stock_to_leave")?.unwrap_or(*stock_to_leave);
+            *min_angle = angle(s, p, "min_angle")?.unwrap_or(*min_angle);
+        }
+        OpKind::Scallop {
+            stepover,
+            tolerance,
+            stock_to_leave,
+            max_slope,
+        } => {
+            *stepover = so.unwrap_or(*stepover);
+            *tolerance = length(s, p, "tolerance")?.unwrap_or(*tolerance);
+            *stock_to_leave = length(s, p, "stock_to_leave")?.unwrap_or(*stock_to_leave);
+            *max_slope = angle(s, p, "max_slope")?.unwrap_or(*max_slope);
         }
     }
     Ok(())
+}
+
+fn holder_check_param(p: &Value) -> Result<Option<HolderCheck>, CommandError> {
+    match params::opt_str(p, "holder_check")? {
+        None => Ok(None),
+        Some(h) => HolderCheck::parse(h)
+            .map(Some)
+            .ok_or_else(|| bad("`holder_check` is ignore, lift or refuse")),
+    }
 }
 
 fn default_op(kind: &str, tool_d: f64) -> Result<OpKind, CommandError> {
@@ -571,6 +850,7 @@ fn default_op(kind: &str, tool_d: f64) -> Result<OpKind, CommandError> {
             angle: 0.0,
             tolerance: 0.01,
             stock_to_leave: 0.0,
+            holder_check: HolderCheck::Ignore,
         },
         "waterline" => OpKind::Waterline {
             stepdown: 1.0,
@@ -581,10 +861,23 @@ fn default_op(kind: &str, tool_d: f64) -> Result<OpKind, CommandError> {
             stepdown: 2.0,
             max_engagement: 60f64.to_radians(),
             stock_to_leave: 0.3,
+            holder_check: HolderCheck::Ignore,
+        },
+        "pencil" => OpKind::Pencil {
+            tolerance: 0.01,
+            stock_to_leave: 0.0,
+            min_angle: 10f64.to_radians(),
+        },
+        "scallop" => OpKind::Scallop {
+            stepover: 0.1,
+            tolerance: 0.01,
+            stock_to_leave: 0.0,
+            max_slope: 60f64.to_radians(),
         },
         _ => {
             return Err(bad(
-                "`kind` is facing, contour, pocket, drill, parallel, waterline or adaptive",
+                "`kind` is facing, contour, pocket, drill, parallel, waterline, adaptive, \
+                 pencil or scallop",
             ));
         }
     })
@@ -604,6 +897,9 @@ fn op_reply(s: &Session, id: u32) -> Value {
         v["setup"] = json!(o.setup);
         v["tool"] = json!(o.tool);
         v["suppressed"] = json!(o.suppressed);
+        if matches!(o.op, OpKind::Scallop { .. }) {
+            v["experimental"] = json!(true);
+        }
         if let OpKind::Drill { faces, .. } = &o.op {
             let bodies: Vec<chamfera_kernel::Body> =
                 s.solids().iter().map(|x| x.body.clone()).collect();
@@ -688,7 +984,7 @@ fn op_add(s: &mut Session, p: &Value) -> CmdResult {
         op,
     });
     checked(s)?;
-    s.regenerate_cam();
+    s.regenerate_cam_now();
     s.set_toolpaths_visible(true);
     Ok(op_reply(s, id))
 }
@@ -719,7 +1015,7 @@ fn op_edit(s: &mut Session, p: &Value) -> CmdResult {
         *slot = o;
     }
     checked(s)?;
-    s.regenerate_cam();
+    s.regenerate_cam_now();
     Ok(op_reply(s, id))
 }
 
@@ -740,7 +1036,7 @@ fn generate(s: &mut Session, p: &Value) -> CmdResult {
     {
         return Err(bad(format!("no operation {id}")));
     }
-    s.regenerate_cam();
+    s.regenerate_cam_now();
     s.set_toolpaths_visible(true);
     s.refresh_overlays();
     let ids: Vec<u32> = s
@@ -759,6 +1055,7 @@ fn generate(s: &mut Session, p: &Value) -> CmdResult {
 
 fn list(s: &mut Session, p: &Value) -> CmdResult {
     params::none(p)?;
+    s.ensure_cam_current();
     let setups: Vec<Value> = s
         .doc
         .cam
@@ -775,7 +1072,8 @@ fn list(s: &mut Session, p: &Value) -> CmdResult {
             json!({"tool": t.id, "number": t.number, "name": t.name, "kind": t.kind.key(),
                    "diameter": t.diameter, "corner_radius": t.corner_radius,
                    "flutes": t.flutes, "spindle_rpm": t.spindle_rpm, "feed": t.feed,
-                   "plunge_feed": t.plunge_feed})
+                   "plunge_feed": t.plunge_feed, "flute_length": t.flute_length,
+                   "holder": t.holder})
         })
         .collect();
     let ids: Vec<u32> = s.doc.cam.operations.iter().map(|o| o.id).collect();
@@ -838,6 +1136,7 @@ fn simulate(s: &mut Session, p: &Value) -> CmdResult {
     };
     let st = s.simulate(&req).map_err(CommandError::Unavailable)?;
     let r = st.report;
+    let h = st.holder;
     Ok(json!({
         "setup": st.setup,
         "ops": st.ops,
@@ -847,6 +1146,8 @@ fn simulate(s: &mut Session, p: &Value) -> CmdResult {
         "removed_volume": r.removed_volume,
         "rest_volume": r.rest_volume,
         "gouges": {"cells": r.gouge_cells, "volume": r.gouge_volume, "max_depth": r.max_gouge},
+        "holder": {"checked": h.checked, "moves": h.moves, "cells": h.cells,
+                   "max_depth": h.max_depth, "incomplete": h.incomplete},
     }))
 }
 
@@ -881,7 +1182,7 @@ fn post(s: &mut Session, p: &Value) -> CmdResult {
         .setup(setup_id)
         .cloned()
         .ok_or_else(|| bad(format!("no setup {setup_id}")))?;
-    s.regenerate_cam();
+    s.regenerate_cam_now();
     let mut ops = Vec::new();
     for o in s
         .doc

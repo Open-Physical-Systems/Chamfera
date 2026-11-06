@@ -9,6 +9,7 @@ pub mod assembly;
 mod body_tools;
 pub mod box_select;
 pub mod cam;
+pub mod cam_cache;
 #[cfg(test)]
 mod cam_tests;
 pub mod cmd;

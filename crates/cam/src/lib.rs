@@ -10,21 +10,29 @@
 //! - [`model`]: boundaries, pocket regions and holes read from the B-rep;
 //! - [`ops`]: facing, contour, pocket and drilling; [`toolpath`]: moves and cycle time;
 //! - [`drop`]: the exact drop-cutter for flat, ball and bull-nose tools; [`ops3d`]:
-//!   parallel and waterline finishing and adaptive roughing; [`sim`]: stock simulation
-//!   on a dexel heightfield; [`grid`]: contours and distance transforms on grids;
+//!   parallel and waterline finishing and adaptive roughing; [`pencil`]: passes along
+//!   concave corners; [`scallop`]: constant-stepover passes (experimental); [`sim`]:
+//!   stock simulation on a dexel heightfield; [`grid`]: contours and distance transforms
+//!   on grids;
+//! - [`holder`]: the shank and holder, checked against the stock and the part;
+//!   [`cancel`]: stopping a job on a worker thread that is no longer wanted;
 //! - [`post`]: G-code for LinuxCNC and GRBL;
 //! - [`generate`] and [`setup_geometry`]: the document's CAM section to toolpaths.
 //!
 //! Model decisions use the exact geometry; nothing here meshes.
 
+pub mod cancel;
 pub mod drop;
 pub mod grid;
+pub mod holder;
 pub mod model;
 pub mod offset;
 pub mod ops;
 pub mod ops3d;
 pub mod path2;
+pub mod pencil;
 pub mod post;
+pub mod scallop;
 pub mod sim;
 pub mod toolpath;
 
@@ -49,6 +57,9 @@ pub enum CamError {
     TooComplex(String),
     #[error("the model: {0}")]
     Model(String),
+    /// A newer job was asked for while this one ran on a worker thread ([`cancel`]).
+    #[error("cancelled: a newer toolpath job replaced this one")]
+    Cancelled,
 }
 
 /// Names an edge the way the document refers to it (the engine's `edge_ref`).
@@ -271,6 +282,7 @@ pub fn generate(
             angle,
             tolerance,
             stock_to_leave,
+            holder_check,
         } => {
             let shape = ops3d::tool_shape(tool)?;
             let dm = drop::DropModel::new(bodies)?;
@@ -286,7 +298,8 @@ pub fn generate(
                 }
                 None => stepover * tool.diameter,
             };
-            ops3d::parallel(
+            let check = holder_check_of(tool, *holder_check, *stock_to_leave)?;
+            ops3d::parallel_with(
                 &cl,
                 &cutter,
                 stock_area(&g),
@@ -294,6 +307,10 @@ pub fn generate(
                 *angle,
                 *tolerance,
                 g.clearance_z,
+                check.as_ref().map(|c| ops3d::HolderUse {
+                    check: c,
+                    mode: *holder_check,
+                }),
             )
         }
         OpKind::Waterline {
@@ -319,11 +336,13 @@ pub fn generate(
             stepdown,
             max_engagement,
             stock_to_leave,
+            holder_check,
         } => {
             let shape = ops3d::tool_shape(tool)?;
             let dm = drop::DropModel::new(bodies)?;
             let cl = ops3d::Cl::new(&dm, shape, *stock_to_leave, g.stock_min.z)?;
-            ops3d::adaptive(
+            let check = holder_check_of(tool, *holder_check, *stock_to_leave)?;
+            ops3d::adaptive_with(
                 &cl,
                 &cutter,
                 ops3d::AdaptiveParams {
@@ -335,8 +354,48 @@ pub fn generate(
                     max_engagement: *max_engagement,
                     clearance: g.clearance_z,
                 },
+                check.as_ref().map(|c| ops3d::HolderUse {
+                    check: c,
+                    mode: *holder_check,
+                }),
             )
             .map(|r| r.toolpath)
+        }
+        OpKind::Pencil {
+            tolerance,
+            stock_to_leave,
+            min_angle,
+        } => {
+            let shape = ops3d::tool_shape(tool)?;
+            let dm = drop::DropModel::new(bodies)?;
+            let cl = ops3d::Cl::new(&dm, shape, *stock_to_leave, g.model_min.z)?;
+            pencil::pencil(
+                &cl,
+                &cutter,
+                stock_area(&g),
+                *tolerance,
+                *min_angle,
+                g.clearance_z,
+            )
+        }
+        OpKind::Scallop {
+            stepover,
+            tolerance,
+            stock_to_leave,
+            max_slope,
+        } => {
+            let shape = ops3d::tool_shape(tool)?;
+            let dm = drop::DropModel::new(bodies)?;
+            let cl = ops3d::Cl::new(&dm, shape, *stock_to_leave, g.model_min.z)?;
+            scallop::scallop(
+                &cl,
+                &cutter,
+                stock_area(&g),
+                stepover * tool.diameter,
+                *tolerance,
+                *max_slope,
+                g.clearance_z,
+            )
         }
         OpKind::Drill {
             faces,
@@ -355,6 +414,25 @@ pub fn generate(
             )
         }
     }
+}
+
+/// The part check of an operation's holder check, if it checks one: refused when the
+/// tool has no holder to check.
+fn holder_check_of(
+    tool: &chamfera_doc::cam::Tool,
+    mode: chamfera_doc::cam::HolderCheck,
+    leave: f64,
+) -> Result<Option<holder::PartCheck>, CamError> {
+    if mode == chamfera_doc::cam::HolderCheck::Ignore {
+        return Ok(None);
+    }
+    let Some(nc) = holder::NonCutting::of(tool)? else {
+        return Err(CamError::Refused(format!(
+            "the holder check needs a holder on the tool {:?}: give it one",
+            tool.name
+        )));
+    };
+    holder::PartCheck::new(&nc, leave).map(Some)
 }
 
 /// The stock's XY box, which the tool's centre covers in the 3D operations.
@@ -398,3 +476,5 @@ pub fn drill_holes(bodies: &[Body], faces: &[String]) -> Result<Vec<Hole>, CamEr
 mod tests;
 #[cfg(test)]
 mod tests3d;
+#[cfg(test)]
+mod tests_v3;
