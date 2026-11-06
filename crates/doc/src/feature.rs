@@ -675,66 +675,6 @@ impl FeatureKind {
             FeatureKind::Remove(_) => "Remove",
         }
     }
-
-    /// The expressions this feature evaluates.
-    fn expressions(&self) -> Vec<&str> {
-        match self {
-            FeatureKind::Surface(s) => s.expressions(),
-            FeatureKind::Extrude(e) => std::iter::once(e.distance.as_str())
-                .chain(e.distance2.as_deref())
-                .chain(e.start_offset.as_deref())
-                .chain(e.taper.as_deref())
-                .collect(),
-            FeatureKind::Revolve(r) => vec![r.angle.as_str()],
-            FeatureKind::Blend(b) => vec![b.size.as_str()],
-            FeatureKind::Sweep(_) | FeatureKind::Loft(_) => Vec::new(),
-            FeatureKind::Hole(h) => std::iter::once(&h.diameter)
-                .chain(
-                    [
-                        &h.depth,
-                        &h.cb_diameter,
-                        &h.cb_depth,
-                        &h.cs_diameter,
-                        &h.cs_angle,
-                        &h.tip_angle,
-                    ]
-                    .into_iter()
-                    .flatten(),
-                )
-                .map(String::as_str)
-                .collect(),
-            FeatureKind::Mirror(_) => Vec::new(),
-            FeatureKind::Move(m) => match &m.transform {
-                MoveTransform::Translate { dx, dy, dz } => {
-                    vec![dx.as_str(), dy.as_str(), dz.as_str()]
-                }
-                MoveTransform::Rotate { angle, .. } => vec![angle.as_str()],
-                MoveTransform::PointToPoint { .. } => Vec::new(),
-            },
-            FeatureKind::Shell(s) => vec![s.thickness.as_str()],
-            FeatureKind::SheetFlange(f) => std::iter::once(&f.height)
-                .chain(std::iter::once(&f.angle))
-                .chain([&f.offset_start, &f.offset_end].into_iter().flatten())
-                .map(String::as_str)
-                .collect(),
-            FeatureKind::SheetBase(_) | FeatureKind::SheetUnfold(_) => Vec::new(),
-            FeatureKind::OffsetFace(o) => vec![o.distance.as_str()],
-            FeatureKind::DeleteFace(_) => Vec::new(),
-            FeatureKind::MoveFace(m) => std::iter::once(m.distance.as_str())
-                .chain(m.turn.as_ref().map(|t| t.angle.as_str()))
-                .collect(),
-            FeatureKind::Thicken(t) => vec![t.thickness.as_str()],
-            FeatureKind::Combine(_)
-            | FeatureKind::SplitBody(_)
-            | FeatureKind::SplitFace(_)
-            | FeatureKind::Remove(_) => Vec::new(),
-            FeatureKind::Pattern(p) => match &p.layout {
-                PatternLayout::Linear { spacing, .. } => vec![p.count.as_str(), spacing.as_str()],
-                PatternLayout::Circular { angle, .. } => vec![p.count.as_str(), angle.as_str()],
-            },
-            FeatureKind::Construct(c) => c.expressions(),
-        }
-    }
 }
 
 impl Document {
@@ -1269,27 +1209,33 @@ impl Document {
         }
     }
 
-    /// Evaluates a feature's expression against the current parameters.
+    /// Evaluates a feature's expression against the current parameters, user and model.
     pub fn evaluate_feature_value(&self, src: &str, dim: expr::Dim) -> Result<f64, DocError> {
-        let values: std::collections::BTreeMap<String, expr::Quantity> = self
-            .parameters
-            .iter()
-            .map(|(n, p)| {
-                (
-                    n.clone(),
-                    expr::Quantity {
-                        value: p.value,
-                        dim: p.unit.dim(),
-                    },
-                )
-            })
-            .collect();
-        expr::evaluate_as_in(src, dim, self.length_scale(), &values).map_err(|error| {
-            DocError::Expression {
-                name: "feature".into(),
-                error,
-            }
-        })
+        let names = expr::names_in(src);
+        // Most expressions use only user parameters, whose values are up to date.
+        if names.iter().all(|n| self.parameters.contains_key(n)) {
+            let values: std::collections::BTreeMap<String, expr::Quantity> = names
+                .iter()
+                .filter_map(|n| {
+                    self.parameters.get(n).map(|p| {
+                        (
+                            n.clone(),
+                            expr::Quantity {
+                                value: p.value,
+                                dim: p.unit.dim(),
+                            },
+                        )
+                    })
+                })
+                .collect();
+            return expr::evaluate_as_in(src, dim, self.length_scale(), &values).map_err(|error| {
+                DocError::Expression {
+                    name: "feature".into(),
+                    error,
+                }
+            });
+        }
+        crate::model_params::Namespace::new(self).eval("feature", src, dim)
     }
 
     /// Adds a feature at the end of the timeline and returns its id.
@@ -1344,6 +1290,7 @@ impl Document {
             .ok_or(DocError::NoSuchFeature(id))?;
         let f = self.features.remove(i);
         self.references.remove(&id);
+        self.configs_forget_feature(id);
         self.timeline_remove();
         Ok(f)
     }
@@ -1401,30 +1348,22 @@ impl Document {
                 | FeatureKind::MoveFace(_) => false,
             })
             .map(|f| f.name.clone());
-        sketches.chain(features).collect()
+        let mut users: Vec<String> = sketches.chain(features).collect();
+        // Expressions elsewhere that use this feature's values (`Extrude1.distance`).
+        users.extend(self.model_users_of_item(feature));
+        users
     }
 
     /// Features that use a sketch (so deleting the sketch can be refused).
     pub fn sketch_users(&self, sketch: u32) -> Vec<String> {
-        self.features
+        let mut users: Vec<String> = self
+            .features
             .iter()
             .filter(|f| f.kind.sketches().contains(&sketch))
             .map(|f| f.name.clone())
-            .collect()
-    }
-
-    /// The parameters a feature's expressions refer to are users of those parameters.
-    pub(crate) fn feature_parameter_users(&self, name: &str) -> Vec<String> {
-        self.features
-            .iter()
-            .filter(|f| {
-                f.kind
-                    .expressions()
-                    .iter()
-                    .any(|e| expr::names_in(e).iter().any(|n| n == name))
-            })
-            .map(|f| f.name.clone())
-            .collect()
+            .collect();
+        users.extend(self.model_users_of_item(sketch));
+        users
     }
 }
 

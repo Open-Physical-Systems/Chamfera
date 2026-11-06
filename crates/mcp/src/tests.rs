@@ -768,6 +768,39 @@ fn symlinks_leaving_the_allowed_folders_are_refused() {
 }
 
 #[test]
+fn parameter_csv_and_configuration_folders_are_guarded() {
+    let tmp = TempDir::new("paramscsv");
+    let mut s = initialized(&tmp);
+    ok_json(
+        &mut s,
+        "run",
+        json!({ "command": "param.set", "params": { "name": "w", "value": 3 } }),
+    );
+    // Inside the scratch folder: written, then read back.
+    let (err, text) = run_path(&mut s, "param.export_csv", "params.csv");
+    assert!(!err, "{text}");
+    assert!(tmp.path().join("scratch/params.csv").exists());
+    let (err, text) = run_path(&mut s, "param.import_csv", "params.csv");
+    assert!(!err, "{text}");
+    // Outside: refused, and nothing is written.
+    let outside = tmp.path().join("outside/params.csv");
+    let (err, text) = run_path(&mut s, "param.export_csv", outside.to_str().unwrap());
+    assert!(err && text.contains("refused"), "{text}");
+    assert!(!outside.exists());
+    // A configuration export's folder is checked as a path is.
+    let dir = tmp.path().join("outside/configs");
+    for d in [dir.to_str().unwrap(), "../configs"] {
+        let (err, text, _) = call(
+            &mut s,
+            "run",
+            json!({ "command": "config.export_all", "params": { "dir": d } }),
+        );
+        assert!(err && text.contains("refused"), "{d}: {text}");
+    }
+    assert!(!dir.exists());
+}
+
+#[test]
 fn every_command_that_takes_a_path_is_guarded() {
     for c in chamfera_engine::registry() {
         let guarded = PATH_COMMANDS.iter().any(|(id, _)| *id == c.id);

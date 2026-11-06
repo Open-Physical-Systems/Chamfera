@@ -338,7 +338,7 @@ impl ChamferaApp {
                     .session
                     .doc
                     .feature(feature)
-                    .is_ok_and(|f| f.suppressed);
+                    .is_ok_and(|f| self.session.doc.is_suppressed(f));
                 out.push(item(
                     label("feature.edit"),
                     Icon::Edit,

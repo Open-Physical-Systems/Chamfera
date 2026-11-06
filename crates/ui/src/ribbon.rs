@@ -429,6 +429,14 @@ pub const TOOLS: &[RibbonTool] = &[
         Icon::Parameters,
         "Parameters",
         "Named values and formulas that dimensions and features follow",
+    ),
+    tool(
+        P,
+        "MODIFY",
+        Action::Tool("config.list"),
+        Icon::Parameters,
+        "Configurations",
+        "Variants of the design from a table of parameter values",
     )
     .sep(),
     // SOLID > SURFACE
@@ -1463,6 +1471,7 @@ impl ChamferaApp {
                 "sheet.base" => self.sheet_metal.base.is_some(),
                 "sheet.flange" => self.sheet_metal.flange.is_some(),
                 "sheet.rules" => self.sheet_metal.rules.is_some(),
+                "config.list" => self.configs.open,
                 _ => {
                     if let Some(k) = body_tool_kind(id) {
                         s.body_tool.as_ref().is_some_and(|t| t.kind == k)
@@ -1529,6 +1538,7 @@ impl ChamferaApp {
                     format!("{name}: group bodies into components first")
                 }
                 "view.explode" => return None,
+                "config.list" => return None,
                 "solid.remove" if has_solids && self.session.scene.selected_bodies().is_empty() => {
                     format!("{name}: select the bodies to remove first")
                 }
@@ -1670,6 +1680,7 @@ impl ChamferaApp {
             #[cfg(not(target_arch = "wasm32"))]
             "sheet.export_flat" => self.export("DXF flat pattern", &["dxf"], "sheet.export_flat"),
             "sheet.rules" => self.open_rules(),
+            "config.list" => self.configs.open = !self.configs.open,
             _ => {
                 if let Some(k) = body_tool_kind(id) {
                     self.open_body_tool(k);
