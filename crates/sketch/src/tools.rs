@@ -749,8 +749,9 @@ impl Sketch {
             tie.remove(&ps);
             tie.remove(&pe);
             for p in tie {
-                self.add_constraint(Constraint::PointOnLine { point: p, line: id })?;
+                self.add_unique(Constraint::PointOnLine { point: p, line: id })?;
             }
+            self.drop_implied_on(id, &[ps, pe]);
         } else {
             // Pieces joined to the first one share its radius through their common points;
             // each run of pieces cut off from it keeps one point on its circle.
@@ -777,14 +778,40 @@ impl Sketch {
                     i > 0 && kept(i - 1)
                 };
                 if !previous_kept && let Some((s, _)) = piece(i) {
-                    self.add_constraint(Constraint::PointOnCircle {
+                    self.add_unique(Constraint::PointOnCircle {
                         point: s,
                         curve: id,
                     })?;
                 }
             }
+            let on_it: Vec<PointId> = (0..n)
+                .filter(|i| kept(*i) && (*i == primary || joined(*i)))
+                .filter_map(piece)
+                .flat_map(|(s, e)| [s, e])
+                .collect();
+            self.drop_implied_on(id, &on_it);
         }
         Ok(())
+    }
+
+    /// Adds a constraint unless the same one is there already.
+    fn add_unique(&mut self, c: Constraint) -> Result<(), ToolError> {
+        if !self.constraints().any(|(_, k)| *k == c) {
+            self.add_constraint(c)?;
+        }
+        Ok(())
+    }
+
+    /// Drops "point on `curve`" constraints of points that are now ends of `curve` (or of
+    /// pieces joined to it), which hold by themselves and would count as redundant.
+    fn drop_implied_on(&mut self, curve: CurveId, ends: &[PointId]) {
+        self.retain_constraints(|c| match c {
+            Constraint::PointOnLine { point, line: k }
+            | Constraint::PointOnCircle { point, curve: k } => {
+                !(*k == curve && ends.contains(point))
+            }
+            _ => true,
+        });
     }
 
     // ----- trim -----

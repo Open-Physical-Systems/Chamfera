@@ -828,3 +828,28 @@ fn hostile_tool_input_is_refused_without_changing_anything() {
         assert_eq!(s, before, "{op:?}");
     }
 }
+
+#[test]
+fn trimming_the_inner_arcs_of_two_circles_leaves_their_union() {
+    let mut s = Sketch::new();
+    let a = circle(&mut s, (0.0, 0.0), 10.0);
+    let b = circle(&mut s, (14.0, 0.0), 10.0);
+    s.apply_tool(&ToolOp::Trim {
+        curve: a,
+        at: p(9.0, 0.0),
+    })
+    .unwrap();
+    s.apply_tool(&ToolOp::Trim {
+        curve: b,
+        at: p(5.0, 0.0),
+    })
+    .unwrap();
+    // Two discs less the lens they share: the lens of circles r apart d is
+    // 2 r² acos(d / 2r) - (d / 2) sqrt(4 r² - d²).
+    let lens = 200.0 * (0.7f64).acos() - 7.0 * 204f64.sqrt();
+    let a = areas(&s);
+    assert_eq!(a.len(), 1, "{a:?}");
+    assert!((a[0] - (200.0 * PI - lens)).abs() < 1e-9, "{a:?}");
+    // The second trim reused the first one's cut points: nothing is redundant.
+    assert_eq!(dof(&s), 6);
+}
