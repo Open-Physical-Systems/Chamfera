@@ -141,11 +141,12 @@ fn toolpaths_follow_the_model_when_it_changes() {
 #[test]
 fn the_cam_section_saves_posts_and_refuses_what_it_cannot_cut() {
     let mut s = hole_plate();
-    // It survives a save and reopen (format 20).
+    // It survives a save and reopen (the CAM section came with format 20; files are
+    // written at the current version).
     let text = s.doc.to_json().unwrap();
     let back = chamfera_doc::Document::from_json(&text).unwrap();
     assert_eq!(back.cam, s.doc.cam);
-    assert_eq!(back.version, 20);
+    assert_eq!(back.version, chamfera_doc::FORMAT_VERSION);
     // G-code for both dialects; GRBL has no canned cycles or tool changes.
     let lin = s.execute("cam.post", &json!({})).unwrap();
     let g = lin["gcode"].as_str().unwrap();
