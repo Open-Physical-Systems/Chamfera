@@ -3,12 +3,14 @@
 pub mod expr;
 pub mod feature;
 pub mod imported;
+pub mod timeline;
 
 pub use feature::{
     Blend, BlendKind, Extrude, ExtrudeDirection, Feature, FeatureKind, Operation, Pattern,
     PatternLayout, Revolve,
 };
 pub use imported::ImportedBody;
+pub use timeline::{Group, ItemKind, Timeline};
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -25,7 +27,11 @@ use thiserror::Error;
 /// - 7: linear and circular patterns of features.
 /// - 8: imported solid bodies.
 /// - 9: fillets and chamfers of edges.
-pub const FORMAT_VERSION: u32 = 9;
+/// - 10 to 15: taken by other branches (the merger renumbers).
+/// - 16: the timeline: an explicit build order of sketches and features, the rollback
+///   marker and groups (`timeline`). Older files open in id order with the marker at
+///   the end, as their timeline showed them.
+pub const FORMAT_VERSION: u32 = 16;
 /// The tag every design file starts with, so other JSON is not mistaken for a design.
 pub const FORMAT_TAG: &str = "chamfera";
 /// Longest parameter name.
@@ -70,6 +76,8 @@ pub enum DocError {
     NoSuchFeature(u32),
     #[error("{reason}")]
     BadFeature { reason: String },
+    #[error("timeline: {0}")]
+    Timeline(String),
 }
 
 /// What a parameter measures. Values are stored in internal units: mm and radians.
@@ -156,6 +164,9 @@ pub struct Document {
     /// Solid bodies imported from other CAD files (STEP), kept as exact B-rep bodies.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub imported: Vec<ImportedBody>,
+    /// Build order, rollback marker and groups of the sketches and features.
+    #[serde(default)]
+    pub timeline: Timeline,
 }
 
 impl Default for Document {
@@ -168,6 +179,7 @@ impl Default for Document {
             features: Vec::new(),
             last_feature_id: 0,
             imported: Vec::new(),
+            timeline: Timeline::default(),
         }
     }
 }
@@ -429,6 +441,7 @@ impl Document {
             expressions: BTreeMap::new(),
             attached: None,
         });
+        self.timeline_insert(id);
         Ok(id)
     }
 
@@ -452,7 +465,9 @@ impl Document {
             .iter()
             .position(|s| s.id == id)
             .ok_or(DocError::NoSuchSketch(id))?;
-        Ok(self.sketches.remove(i))
+        let s = self.sketches.remove(i);
+        self.timeline_remove();
+        Ok(s)
     }
 
     pub fn to_json(&self) -> Result<String, serde_json::Error> {
@@ -543,6 +558,8 @@ impl Document {
         checked.features = doc.features;
         imported::check(&doc.imported, &mut seen, checked.last_feature_id)?;
         checked.imported = doc.imported;
+        checked.timeline = doc.timeline;
+        checked.check_timeline(&mut seen)?;
         // Values in the file must agree with their expressions.
         checked.evaluate()?;
         Ok(checked)

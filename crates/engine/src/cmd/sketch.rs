@@ -255,6 +255,14 @@ pub static COMMANDS: &[CommandSpec] = &[
         run: remove,
     },
     CommandSpec {
+        id: "sketch.rename",
+        label: "Rename Sketch",
+        params: "sketch: integer (required)\n\
+                 name: string (required) - the new name",
+        mutates: true,
+        run: rename,
+    },
+    CommandSpec {
         id: "sketch.select",
         label: "Select in Sketch",
         params: "x, y, width, height: number (required) - pixel and viewport size\n\
@@ -391,6 +399,14 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
     s.active_sketch = Some(id);
     s.sketch_selection.clear();
     Ok(json!({ "sketch": id }))
+}
+
+fn rename(s: &mut Session, p: &Value) -> CmdResult {
+    let id = params::req_id(p, "sketch")?;
+    let name = params::req_str(p, "name")?;
+    s.doc.sketch(id)?;
+    s.doc.rename_item(id, name)?;
+    Ok(json!({ "sketch": id, "name": s.doc.sketch(id)?.name }))
 }
 
 fn finish(s: &mut Session, p: &Value) -> CmdResult {

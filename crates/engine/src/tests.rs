@@ -198,6 +198,10 @@ fn hostile_params_never_panic() {
         json!({"edges": [long], "radius": -1, "distance": "0 mm", "size": "q"}),
         json!({"edges": [], "pick": {"x": 1e300, "y": "a"}, "radius": 1}),
         json!({"pick": {"x": 400, "y": 300, "width": 800, "height": 600}, "radius": 1e9}),
+        json!({"item": 1, "to": 1e300, "position": -1, "items": [1, "a"], "group": 0}),
+        json!({"item": 2, "to": 0, "position": 0.5, "items": [], "name": "\u{7}"}),
+        json!({"item": 1, "to": 1, "position": 1e7, "items": [1, 1, 1], "group": 99, "name": long}),
+        json!({"item": [1], "to": "end", "position": "0", "items": 3, "sketch": 1, "name": 5}),
     ];
     for c in registry() {
         for p in &hostile {

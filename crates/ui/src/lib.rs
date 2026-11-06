@@ -646,7 +646,9 @@ impl eframe::App for ChamferaApp {
             self.extrude_dialog(&ctx);
             self.blend_dialog(&ctx);
             self.feature_dialog(&ctx);
+            self.timeline_error_window(&ctx);
         }
+        self.rename_box(&ctx);
         self.unsaved_dialog(&ctx);
         self.shortcuts_window(&ctx);
         self.search_window(&ctx);

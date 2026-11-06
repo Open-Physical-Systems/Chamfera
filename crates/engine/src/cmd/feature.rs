@@ -34,6 +34,14 @@ pub static COMMANDS: &[CommandSpec] = &[
         run: list,
     },
     CommandSpec {
+        id: "feature.rename",
+        label: "Rename Feature",
+        params: "feature: integer (required)\n\
+                 name: string (required) - the new name",
+        mutates: true,
+        run: rename,
+    },
+    CommandSpec {
         id: "solid.chamfer",
         label: "Chamfer",
         params: "edges: list of strings (optional) - edge names from solid.edges or solid.edge_at\n\
@@ -472,6 +480,16 @@ fn delete(s: &mut Session, p: &Value) -> CmdResult {
     s.doc.remove_feature(id)?;
     s.rebuild();
     Ok(json!({ "deleted": id }))
+}
+
+fn rename(s: &mut Session, p: &Value) -> CmdResult {
+    let id = params::req_id(p, "feature")?;
+    let name = params::req_str(p, "name")?;
+    s.doc.feature(id)?;
+    s.doc.rename_item(id, name)?;
+    // Bodies are named after their features.
+    s.rebuild();
+    Ok(feature_reply(s, id))
 }
 
 fn list(s: &mut Session, p: &Value) -> CmdResult {

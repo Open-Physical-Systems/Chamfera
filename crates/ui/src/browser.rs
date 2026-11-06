@@ -286,15 +286,30 @@ impl ChamferaApp {
                 if can_edit && row.double_clicked() {
                     self.edit_sketch(id);
                 }
+                // F2 on the row renames the sketch (in a box over the row).
+                let mut rename = row.hovered()
+                    && !ui.ctx().egui_wants_keyboard_input()
+                    && ui.input(|i| i.key_pressed(egui::Key::F2));
+                let mut edit = false;
                 row.context_menu(|ui| {
                     let look = self.look();
                     if widgets::menu_item(ui, look, Icon::Edit, label("sketch.edit"), can_edit)
                         .clicked()
                     {
                         ui.close();
-                        self.edit_sketch(id);
+                        edit = true;
+                    }
+                    if widgets::menu_item(ui, look, Icon::Edit, "Rename…", true).clicked() {
+                        ui.close();
+                        rename = true;
                     }
                 });
+                if edit {
+                    self.edit_sketch(id);
+                }
+                if rename {
+                    self.start_rename(id, row.rect, false);
+                }
             }
         }
 
