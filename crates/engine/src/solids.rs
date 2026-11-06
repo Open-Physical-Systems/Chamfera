@@ -628,6 +628,7 @@ impl Session {
                 scene_id,
             });
         }
+        self.show_imported(&mut built);
         self.built = built;
     }
 
