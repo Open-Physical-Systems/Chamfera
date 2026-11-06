@@ -15,6 +15,7 @@ mod inspect;
 mod joint;
 mod param;
 mod select;
+mod sheet;
 mod sketch;
 mod spline;
 mod timeline;
@@ -56,6 +57,7 @@ pub fn registry() -> Vec<&'static CommandSpec> {
         joint::COMMANDS,
         param::COMMANDS,
         select::COMMANDS,
+        sheet::COMMANDS,
         sketch::COMMANDS,
         spline::COMMANDS,
         timeline::COMMANDS,
