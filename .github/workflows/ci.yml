@@ -31,6 +31,69 @@ jobs:
           # GPU tests must really render (on lavapipe here), not skip.
           CHAMFERA_REQUIRE_GPU: "1"
 
+  web:
+    # The browser app: built with trunk, then started in headless Chrome (WebGL 2 on
+    # SwiftShader), where every file path is exercised. On pushes to dev the build is kept
+    # for the GitHub Pages deployment below.
+    needs: ci
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: web
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: trunk
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Build (trunk)
+        working-directory: apps/chamfera-web
+        run: |
+          trunk build --release
+          ls -l dist
+          echo "wasm: $(stat -c %s dist/*.wasm) bytes, gzip $(gzip -9 -c dist/*.wasm | wc -c) bytes"
+      - name: Smoke test in headless Chrome (WebGL 2)
+        run: node tools/web-smoke.mjs --no-webgpu --out web-webgl2.png
+      - name: Files in the browser (open, insert, save, export, local storage)
+        run: node tools/web-smoke.mjs --no-webgpu --steps tools/web-checks/files.json
+      - name: Smoke test with WebGPU (SwiftShader; informative only)
+        continue-on-error: true
+        run: node tools/web-smoke.mjs --renderer webgpu --out web-webgpu.png
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: chamfera-web-screenshots
+          path: "*.png"
+          if-no-files-found: ignore
+      - uses: actions/upload-pages-artifact@v3
+        if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+        with:
+          path: apps/chamfera-web/dist
+
+  pages:
+    # Publishes the browser app from dev to GitHub Pages. Only pushes to dev in this
+    # repository deploy: never pull requests (from forks or not), and never forks.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/dev' && github.repository == 'Open-Physical-Systems/Chamfera'
+    needs: web
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
+
   appimage:
     needs: ci
     runs-on: ubuntu-22.04
