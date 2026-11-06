@@ -20,6 +20,39 @@ pub struct Solid {
     pub body: Body,
     /// The scene body that shows it, if it could be displayed.
     pub scene_id: Option<u32>,
+    /// The kernel face behind each displayed triangle (for picking faces).
+    pub faces: Vec<chamfera_kernel::FaceId>,
+}
+
+/// The plane of a flat face, with its normal pointing out of the solid.
+pub fn face_plane(body: &Body, face: chamfera_kernel::FaceId) -> Option<chamfera_geom::Frame> {
+    match body.face_surface(face).ok()?? {
+        (chamfera_kernel::Surface::Plane(frame), same_sense) => {
+            Some(if same_sense { frame } else { frame.flipped() })
+        }
+        _ => None,
+    }
+}
+
+/// The plane of the face `r.face` of feature `r.feature`'s solid, from bodies built so
+/// far in this rebuild.
+fn attached_plane(
+    made: &[(u32, String, Body)],
+    r: &chamfera_doc::FaceRef,
+) -> Result<chamfera_geom::Frame, String> {
+    for (feature, _, body) in made.iter().filter(|m| m.0 == r.feature) {
+        let _ = feature;
+        for face in body.faces() {
+            if body.face_name(face).ok().flatten() == Some(r.face.as_str()) {
+                return face_plane(body, face)
+                    .ok_or_else(|| format!("the face {:?} is not flat", r.face));
+            }
+        }
+    }
+    Err(format!(
+        "the face {:?} it is drawn on is gone (feature {} changed or failed)",
+        r.face, r.feature
+    ))
 }
 
 /// What the last rebuild produced.
@@ -148,8 +181,14 @@ impl Session {
     pub fn rebuild(&mut self) {
         let mut built = Built::default();
         let mut made: Vec<(u32, String, Body)> = Vec::new();
-        for feature in &self.doc.features {
+        let features = self.doc.features.clone();
+        for feature in &features {
             if feature.suppressed {
+                continue;
+            }
+            // A sketch drawn on a face follows that face (built earlier in the timeline).
+            if let Err(e) = self.follow_attached_sketch(feature.kind.sketch(), &made) {
+                built.errors.insert(feature.id, e);
                 continue;
             }
             let result = match &feature.kind {
@@ -173,6 +212,17 @@ impl Session {
                 }
             }
         }
+        // Sketches on faces that no feature uses yet follow their face too.
+        let attached: Vec<u32> = self
+            .doc
+            .sketches
+            .iter()
+            .filter(|s| s.attached.is_some())
+            .map(|s| s.id)
+            .collect();
+        for id in attached {
+            let _ = self.follow_attached_sketch(id, &made);
+        }
         // Replace the scene's solid bodies.
         let old: Vec<u32> = self
             .built
@@ -187,8 +237,10 @@ impl Session {
         let options = TessOptions::default();
         for (feature, name, body) in made {
             // A solid that cannot be shown is still built: its measures and export work.
+            let mut faces = Vec::new();
             let scene_id = match tessellate(&body, &options) {
                 Ok(m) => {
+                    faces = m.face_of_triangle;
                     let id = self.scene.add(&name, m.mesh);
                     if id.is_none() {
                         built
@@ -205,6 +257,7 @@ impl Session {
                 }
             };
             built.solids.push(Solid {
+                faces,
                 feature,
                 name,
                 body,
@@ -212,6 +265,48 @@ impl Session {
             });
         }
         self.built = built;
+    }
+
+    /// Moves an attached sketch's plane onto its face, as built so far.
+    fn follow_attached_sketch(
+        &mut self,
+        sketch: u32,
+        made: &[(u32, String, Body)],
+    ) -> Result<(), String> {
+        let Ok(f) = self.doc.sketch(sketch) else {
+            return Ok(());
+        };
+        let Some(r) = f.attached.clone() else {
+            return Ok(());
+        };
+        let plane = attached_plane(made, &r)?;
+        if let Ok(f) = self.doc.sketch_mut(sketch) {
+            f.plane = plane;
+        }
+        Ok(())
+    }
+
+    /// The solid face under pixel `(x, y)`: (feature, face name, plane), for flat faces
+    /// with a name.
+    pub fn face_at(
+        &self,
+        x: f64,
+        y: f64,
+        w: f64,
+        h: f64,
+    ) -> Option<(u32, String, chamfera_geom::Frame)> {
+        let bounds = self.scene.bounds();
+        let ray = self.camera.ray_through(x, y, w, h, bounds.as_ref())?;
+        let hit = self.scene.pick(&ray)?;
+        let solid = self
+            .built
+            .solids
+            .iter()
+            .find(|s| s.scene_id == Some(hit.body))?;
+        let face = *solid.faces.get(hit.triangle)?;
+        let name = solid.body.face_name(face).ok().flatten()?.to_owned();
+        let plane = face_plane(&solid.body, face)?;
+        Some((solid.feature, name, plane))
     }
 
     /// The solids of the last rebuild.

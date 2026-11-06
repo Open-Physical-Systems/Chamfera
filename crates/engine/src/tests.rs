@@ -176,6 +176,8 @@ fn hostile_params_never_panic() {
         json!({"sketch": 1, "profiles": [{"x": 10, "y": 10}], "axis": 5, "angle": 90}),
         json!({"sketch": 1, "profiles": [{"x": 10, "y": 10}], "axis": 14, "angle": "720 deg"}),
         json!({"sketch": 1, "profiles": [{"x": 10, "y": 10}], "axis": 1, "angle": [0]}),
+        json!({"feature": 2, "face": "top", "x": 0, "y": 0, "z": 0}),
+        json!({"feature": 99, "face": "nowhere", "x": 1e300, "y": 0, "z": f64::NAN}),
     ];
     for c in registry() {
         for p in &hostile {
@@ -929,4 +931,103 @@ fn saving_tracks_the_file_and_unsaved_changes_and_exports_write_files() {
     assert!(!t.has_unsaved_changes());
     assert_eq!(t.solids().len(), 1, "opening rebuilds the solids");
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn a_sketch_on_the_top_face_follows_the_plate_when_it_gets_thicker() {
+    // Plate 50 x 30, 10 thick; a 10 x 10 boss sketched on its top face, extruded 5:
+    // the boss spans z 10..15. Make the plate 20 thick: the boss moves to z 20..25.
+    let mut s = Session::new();
+    extruded_plate(&mut s, json!("10"));
+    let r = s
+        .execute(
+            "sketch.create_on_face",
+            &json!({"feature": 2, "face": "top"}),
+        )
+        .unwrap();
+    assert!(
+        (r["origin"]["z"].as_f64().unwrap() - 10.0).abs() < 1e-9,
+        "{r}"
+    );
+    assert!(
+        (r["normal"]["z"].as_f64().unwrap() - 1.0).abs() < 1e-12,
+        "outward normal"
+    );
+    let sketch = r["sketch"].as_u64().unwrap();
+    // The face frame's x and y match the base sketch's: a rectangle at (20..30, 10..20).
+    s.execute(
+        "sketch.rectangle",
+        &json!({"x1": 20, "y1": 10, "x2": 30, "y2": 20}),
+    )
+    .unwrap();
+    s.execute("sketch.finish", &json!({})).unwrap();
+    let boss = s
+        .execute(
+            "solid.extrude",
+            &json!({"sketch": sketch, "profiles": [{"x": 25, "y": 15}], "distance": 5}),
+        )
+        .unwrap();
+    let boss_id = boss["feature"].as_u64().unwrap();
+    let z_range = |s: &Session| {
+        let solid = s
+            .solids()
+            .iter()
+            .find(|x| u64::from(x.feature) == boss_id)
+            .unwrap();
+        let b = s
+            .scene
+            .body(solid.scene_id.unwrap())
+            .unwrap()
+            .mesh
+            .bounds()
+            .unwrap();
+        (b.min.z, b.max.z)
+    };
+    assert_eq!(z_range(&s), (10.0, 15.0));
+    s.execute("feature.edit", &json!({"feature": 2, "distance": "20"}))
+        .unwrap();
+    assert_eq!(z_range(&s), (20.0, 25.0));
+    // The plate cannot be deleted while the boss's sketch sits on it.
+    assert!(s.execute("feature.delete", &json!({"feature": 2})).is_err());
+    // A side face works too: its normal points out of the plate.
+    let side = s
+        .execute(
+            "sketch.create_on_face",
+            &json!({"feature": 2, "face": "side 0"}),
+        )
+        .unwrap();
+    let n = &side["normal"];
+    let len = (n["x"].as_f64().unwrap().powi(2) + n["y"].as_f64().unwrap().powi(2)).sqrt();
+    assert!(
+        (len - 1.0).abs() < 1e-9 && n["z"].as_f64().unwrap().abs() < 1e-12,
+        "{side}"
+    );
+}
+
+#[test]
+fn clicking_a_face_creates_a_sketch_on_it() {
+    // Top view of the 10-thick plate centred on (25, 15): the centre pixel hits the top.
+    let mut s = Session::new();
+    extruded_plate(&mut s, json!(10));
+    s.execute("view.standard", &json!({"view": "top"})).unwrap();
+    s.camera.target = chamfera_geom::Point3::new(25.0, 15.0, 5.0);
+    let r = s
+        .execute(
+            "sketch.create_on_face",
+            &json!({"x": 400, "y": 300, "width": 800, "height": 600}),
+        )
+        .unwrap();
+    assert_eq!(r["face"], "top");
+    // Nothing under a corner pixel: refused.
+    let mut t = Session::new();
+    extruded_plate(&mut t, json!(10));
+    t.execute("view.standard", &json!({"view": "top"})).unwrap();
+    t.camera.target = chamfera_geom::Point3::new(25.0, 15.0, 5.0);
+    assert!(
+        t.execute(
+            "sketch.create_on_face",
+            &json!({"x": 1, "y": 1, "width": 800, "height": 600}),
+        )
+        .is_err()
+    );
 }

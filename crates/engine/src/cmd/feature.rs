@@ -210,6 +210,13 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
 
 fn delete(s: &mut Session, p: &Value) -> CmdResult {
     let id = params::req_id(p, "feature")?;
+    let users = s.doc.feature_users(id);
+    if !users.is_empty() {
+        return Err(CommandError::Unavailable(format!(
+            "{} is drawn on this feature's faces; delete it first",
+            users.join(", ")
+        )));
+    }
     s.doc.remove_feature(id)?;
     s.rebuild();
     Ok(json!({ "deleted": id }))

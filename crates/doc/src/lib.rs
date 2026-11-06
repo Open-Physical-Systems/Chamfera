@@ -15,7 +15,8 @@ use thiserror::Error;
 /// - 2: sketches (each on a plane). Version 1 files open with no sketches.
 /// - 3: parameter expressions, and sketch dimensions driven by expressions.
 /// - 4: the feature timeline (extrude, revolve).
-pub const FORMAT_VERSION: u32 = 4;
+/// - 5: sketches attached to a face of a feature's solid.
+pub const FORMAT_VERSION: u32 = 5;
 /// The tag every design file starts with, so other JSON is not mistaken for a design.
 pub const FORMAT_TAG: &str = "chamfera";
 /// Longest parameter name.
@@ -104,6 +105,14 @@ pub struct Parameter {
     pub expression: Option<String>,
 }
 
+/// A face of a feature's solid, by the face's role name (`top`, `side 2`, ...). Names
+/// come from the kernel's sweeps and stay the same when the feature is rebuilt.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FaceRef {
+    pub feature: u32,
+    pub face: String,
+}
+
 /// A sketch and the plane it is drawn on.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SketchFeature {
@@ -116,6 +125,10 @@ pub struct SketchFeature {
     /// parameter changes.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub expressions: BTreeMap<u32, String>,
+    /// The face this sketch lies on, if any: its plane follows that face when the design
+    /// rebuilds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attached: Option<FaceRef>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -401,6 +414,7 @@ impl Document {
             plane,
             sketch: chamfera_sketch::Sketch::new(),
             expressions: BTreeMap::new(),
+            attached: None,
         });
         Ok(id)
     }

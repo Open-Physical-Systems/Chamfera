@@ -59,6 +59,14 @@ pub static COMMANDS: &[CommandSpec] = &[
         run: create,
     },
     CommandSpec {
+        id: "sketch.create_on_face",
+        label: "Create Sketch on Face",
+        params: "x, y, width, height: number - the pixel of a flat face of a solid; or\n\
+                 feature: integer and face: string - a face by its name, such as \"top\"",
+        mutates: true,
+        run: create_on_face,
+    },
+    CommandSpec {
         id: "sketch.delete",
         label: "Delete Sketch",
         params: "sketch: integer (required)",
@@ -227,6 +235,48 @@ fn create(s: &mut Session, p: &Value) -> CmdResult {
     s.active_sketch = Some(id);
     s.sketch_selection.clear();
     Ok(json!({ "sketch": id }))
+}
+
+fn create_on_face(s: &mut Session, p: &Value) -> CmdResult {
+    let (feature, face, plane) = if p.get("feature").is_some_and(|v| !v.is_null()) {
+        let feature = params::req_id(p, "feature")?;
+        let face = params::req_str(p, "face")?.to_owned();
+        let solid = s
+            .solids()
+            .iter()
+            .find(|x| x.feature == feature)
+            .ok_or_else(|| bad(format!("feature {feature} has no solid")))?;
+        let id = solid
+            .body
+            .faces()
+            .into_iter()
+            .find(|f| solid.body.face_name(*f).ok().flatten() == Some(face.as_str()))
+            .ok_or_else(|| bad(format!("feature {feature} has no face named {face:?}")))?;
+        let plane = crate::solids::face_plane(&solid.body, id)
+            .ok_or_else(|| bad("sketches go on flat faces"))?;
+        (feature, face, plane)
+    } else {
+        let (x, y, w, h) = params::pixel(p)?;
+        s.face_at(x, y, w, h)
+            .ok_or_else(|| bad("no flat face of a solid is under that point"))?
+    };
+    let id = s.doc.add_sketch(plane)?;
+    if let Ok(f) = s.doc.sketch_mut(id) {
+        f.attached = Some(chamfera_doc::FaceRef {
+            feature,
+            face: face.clone(),
+        });
+    }
+    s.active_sketch = Some(id);
+    s.sketch_selection.clear();
+    let n = plane.z();
+    Ok(json!({
+        "sketch": id,
+        "feature": feature,
+        "face": face,
+        "origin": plane.origin(),
+        "normal": { "x": n.x, "y": n.y, "z": n.z },
+    }))
 }
 
 fn edit(s: &mut Session, p: &Value) -> CmdResult {

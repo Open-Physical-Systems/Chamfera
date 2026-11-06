@@ -29,6 +29,13 @@ pub static COMMANDS: &[CommandSpec] = &[
         run: home,
     },
     CommandSpec {
+        id: "view.normal_to",
+        label: "Look At",
+        params: "x, y, z: number (required) - look against this direction (a face normal)",
+        mutates: false,
+        run: normal_to,
+    },
+    CommandSpec {
         id: "view.orbit",
         label: "Orbit",
         params: "yaw: number (required) - radians around +Z\npitch: number (required) - radians up",
@@ -107,6 +114,25 @@ fn angle(p: &Value, key: &str) -> Result<f64, CommandError> {
         )));
     }
     Ok(v)
+}
+
+fn normal_to(s: &mut Session, p: &Value) -> CmdResult {
+    let n = chamfera_geom::Vec3::new(
+        params::req_f64(p, "x")?,
+        params::req_f64(p, "y")?,
+        params::req_f64(p, "z")?,
+    )
+    .normalized()
+    .ok_or_else(|| CommandError::BadParams("the direction has no length".into()))?;
+    // The eye sits on the normal's side, looking back along it.
+    s.camera.yaw = n.y.atan2(n.x);
+    s.camera.pitch = n.z.clamp(-1.0, 1.0).asin();
+    if n.x.abs() < 1e-9 && n.y.abs() < 1e-9 {
+        // Straight up or down: keep +Y up on screen, as the Top view does.
+        s.camera.yaw = -std::f64::consts::FRAC_PI_2;
+    }
+    s.camera.sanitize();
+    Ok(reply(s))
 }
 
 fn orbit(s: &mut Session, p: &Value) -> CmdResult {

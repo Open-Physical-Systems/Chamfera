@@ -38,6 +38,8 @@ impl Default for ExtrudeTool {
 #[derive(Default)]
 pub struct SolidUi {
     pub extrude: Option<ExtrudeTool>,
+    /// Waiting for a click on a flat face to sketch on.
+    pub pick_face: bool,
     /// Feature distance being edited in the timeline: (feature id, text).
     editing: Option<(u32, String)>,
 }
@@ -53,6 +55,19 @@ impl ChamferaApp {
                         ui.close();
                         self.create_sketch(plane, view);
                     }
+                }
+                ui.separator();
+                if ui
+                    .add_enabled(
+                        !self.session.solids().is_empty(),
+                        egui::Button::new("On a face… (then click a flat face)"),
+                    )
+                    .clicked()
+                {
+                    ui.close();
+                    self.solid.pick_face = true;
+                    self.message =
+                        Some(("Click a flat face of a solid to sketch on".into(), false));
                 }
             });
             let has_profiles = self
@@ -90,6 +105,26 @@ impl ChamferaApp {
                 ));
             }
         });
+    }
+
+    /// A click while waiting for a face: creates a sketch on it and looks straight at it.
+    pub(crate) fn face_click(&mut self, x: f64, y: f64, w: f64, h: f64) {
+        self.solid.pick_face = false;
+        let Some(r) = self.run_sketch(
+            "sketch.create_on_face",
+            json!({ "x": x, "y": y, "width": w, "height": h }),
+        ) else {
+            return;
+        };
+        self.run("view.normal_to", r["normal"].clone());
+        self.sketch.tool = Some(crate::sketch_ui::Tool::Line);
+        self.message = Some((
+            format!(
+                "Sketching on the {} face",
+                r["face"].as_str().unwrap_or("picked")
+            ),
+            false,
+        ));
     }
 
     /// A click in the viewport while the Extrude tool is open: picks or unpicks a profile.

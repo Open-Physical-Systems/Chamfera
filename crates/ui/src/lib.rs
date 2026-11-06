@@ -460,6 +460,14 @@ impl ChamferaApp {
                 self.run("view.zoom", p);
             }
         }
+        if self.solid.pick_face
+            && response.clicked()
+            && let Some(pos) = response.interact_pointer_pos()
+        {
+            let (x, y) = local(pos);
+            self.face_click(x, y, w, h);
+            return;
+        }
         if self.solid.extrude.is_some()
             && response.clicked()
             && let Some(pos) = response.interact_pointer_pos()
