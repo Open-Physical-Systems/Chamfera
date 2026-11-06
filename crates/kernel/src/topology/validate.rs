@@ -78,7 +78,7 @@ pub enum TopologyError {
     OffSurface(FaceId),
     #[error("{0} is used twice by one loop of a planar face (a dangling wire edge)")]
     WireEdge(EdgeId),
-    #[error("{0} is planar but has a loop without edges")]
+    #[error("{0} has a loop without edges")]
     VertexLoop(FaceId),
     #[error(
         "the loops of {0} disagree with its orientation (outer loop counter-clockwise, inner loops clockwise about the outward normal)"
@@ -451,11 +451,15 @@ impl Body {
 
     /// Checks that the body is a valid solid: [`Body::validate_topology`], then geometry.
     /// Every vertex has a valid point; every edge has a curve whose ends are its
-    /// vertices' points within [`LINEAR_TOLERANCE`]; every face has a surface; on a planar
-    /// face every vertex and edge lies in the plane, no edge is used twice by one loop,
-    /// no loop is a bare vertex, and the outer loop runs counter-clockwise and inner loops
-    /// clockwise about the outward normal; a shell of planar faces encloses positive
-    /// volume.
+    /// vertices' points within [`LINEAR_TOLERANCE`]; every face has a surface and no loop
+    /// that is a bare vertex; on a planar face every vertex and edge lies in the plane,
+    /// no edge is used twice by one loop, and the outer loop runs counter-clockwise and
+    /// inner loops clockwise about the outward normal; on a curved face every vertex and
+    /// edge lies on the surface, and each loop whose `(u, v)` image closes runs
+    /// counter-clockwise (outer) or clockwise (inner) in `(u, v)` when the outward normal is
+    /// `S_u × S_v`, the other way when it is the opposite (loops around a periodic
+    /// direction without a seam are not checked for orientation); every shell encloses
+    /// positive volume (which also catches a face whose orientation flag is wrong).
     pub fn validate(&self) -> Result<TopologyReport, TopologyError> {
         let report = self.validate_loaded()?;
         for (ei, edge) in self.edges.live() {
@@ -485,30 +489,23 @@ impl Body {
                 return Err(TopologyError::WireEdge(e));
             }
         }
-        let mut all_planar = vec![true; self.shells.slots()];
-        for (fi, face) in self.faces.live() {
+        for (fi, _) in self.faces.live() {
             let f = FaceId::from_index(fi);
             let Some((surface, same_sense)) = self.face_surface(f).ok().flatten() else {
                 return Err(TopologyError::MissingSurface(f));
             };
             match surface {
                 Surface::Plane(_) => self.check_planar_face(f, &surface, same_sense)?,
-            }
-            if !matches!(surface, Surface::Plane(_))
-                && let Some(p) = all_planar.get_mut(face.shell.index())
-            {
-                *p = false;
+                _ => self.check_curved_face(f, &surface, same_sense)?,
             }
         }
         for (si, _) in self.shells.live() {
             let s = ShellId::from_index(si);
-            if all_planar.get(si).copied().unwrap_or(false) {
-                let v = self
-                    .shell_volume(s)
-                    .map_err(|_| TopologyError::NotOutward(s))?;
-                if v <= 0.0 {
-                    return Err(TopologyError::NotOutward(s));
-                }
+            let v = self
+                .shell_volume(s)
+                .map_err(|_| TopologyError::NotOutward(s))?;
+            if v.is_nan() || v <= 0.0 {
+                return Err(TopologyError::NotOutward(s));
             }
         }
         Ok(report)
@@ -561,6 +558,54 @@ impl Body {
             }
             let outer = k == 0;
             if outer != (area > 0.0) {
+                return Err(TopologyError::WrongOrientation(f));
+            }
+        }
+        Ok(())
+    }
+
+    fn check_curved_face(
+        &self,
+        f: FaceId,
+        surface: &Surface,
+        same_sense: bool,
+    ) -> Result<(), TopologyError> {
+        let orient = if same_sense { 1.0 } else { -1.0 };
+        let loops = self.face_loops(f).map_err(|_| dangling(f, "its loops"))?;
+        for (k, l) in loops.iter().enumerate() {
+            let hs = self
+                .loop_half_edges(*l)
+                .map_err(|_| TopologyError::OpenLoop(*l))?;
+            for h in &hs {
+                let Some(he) = self.half_edges.get(h.index()) else {
+                    return Err(dangling(l, h));
+                };
+                let Some(e) = he.edge else {
+                    return Err(TopologyError::VertexLoop(f));
+                };
+                let Some((c, t0, t1)) = self.edge_curve(e).ok().flatten() else {
+                    return Err(TopologyError::MissingCurve(e));
+                };
+                // Nine samples catch a curve that leaves the surface.
+                for i in 0..=8 {
+                    let t = t0 + (t1 - t0) * f64::from(i) / 8.0;
+                    let off = surface.distance(c.point_at(t));
+                    if off.is_nan() || off > LINEAR_TOLERANCE {
+                        return Err(TopologyError::OffSurface(f));
+                    }
+                }
+            }
+            let image = self
+                .loop_image(*l, surface, orient)
+                .map_err(|_| TopologyError::OffSurface(f))?;
+            if !image.closed {
+                continue;
+            }
+            let area = image.signed_area() * orient;
+            if !area.is_finite() || area.abs() <= LINEAR_TOLERANCE * LINEAR_TOLERANCE {
+                return Err(TopologyError::DegenerateFace(f));
+            }
+            if (k == 0) != (area > 0.0) {
                 return Err(TopologyError::WrongOrientation(f));
             }
         }

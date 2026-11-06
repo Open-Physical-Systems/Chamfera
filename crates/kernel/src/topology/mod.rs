@@ -38,14 +38,18 @@ mod build;
 mod euler;
 mod geometry;
 mod measure;
+mod uv;
 mod validate;
 
 #[cfg(test)]
 mod tests;
 
+pub use crate::surface::Surface;
 pub use build::MAX_PROFILE_VERTICES;
 pub use euler::Mvfs;
-pub use geometry::{Curve, Surface};
+pub use geometry::Curve;
+pub use measure::SURFACE_QUADRATURE_TOLERANCE;
+pub use uv::PointOnFace;
 pub use validate::{ShellReport, TopologyError, TopologyReport};
 
 use crate::{KernelError, KernelResult, Segment3};
