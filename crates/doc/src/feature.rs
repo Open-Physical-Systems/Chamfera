@@ -141,6 +141,22 @@ pub struct Blend {
 /// Most edges one blend may hold.
 pub const MAX_BLEND_EDGES: usize = 10_000;
 
+/// A shell: the solids built so far hollowed to walls of `thickness`, with the named
+/// faces removed to open them. Faces are named like everywhere else (`2:top` is face
+/// `top` of feature 2's shape), so the shell finds them again after every rebuild. A
+/// negative thickness grows the walls outward.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Shell {
+    /// The faces to remove (open); may be empty for a closed, hollow body.
+    #[serde(default)]
+    pub faces: Vec<String>,
+    /// The wall thickness, an expression such as `2 mm`.
+    pub thickness: String,
+}
+
+/// Most faces one shell may open.
+pub const MAX_SHELL_FACES: usize = 10_000;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum FeatureKind {
@@ -148,6 +164,7 @@ pub enum FeatureKind {
     Revolve(Revolve),
     Pattern(Pattern),
     Blend(Blend),
+    Shell(Shell),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -167,7 +184,7 @@ impl FeatureKind {
         match self {
             FeatureKind::Extrude(e) => Some(e.sketch),
             FeatureKind::Revolve(r) => Some(r.sketch),
-            FeatureKind::Pattern(_) | FeatureKind::Blend(_) => None,
+            FeatureKind::Pattern(_) | FeatureKind::Blend(_) | FeatureKind::Shell(_) => None,
         }
     }
 
@@ -176,7 +193,9 @@ impl FeatureKind {
         match self {
             FeatureKind::Extrude(e) => e.operation,
             FeatureKind::Revolve(r) => r.operation,
-            FeatureKind::Pattern(_) | FeatureKind::Blend(_) => Operation::NewBody,
+            FeatureKind::Pattern(_) | FeatureKind::Blend(_) | FeatureKind::Shell(_) => {
+                Operation::NewBody
+            }
         }
     }
 
@@ -184,7 +203,7 @@ impl FeatureKind {
         match self {
             FeatureKind::Extrude(e) => &e.profiles,
             FeatureKind::Revolve(r) => &r.profiles,
-            FeatureKind::Pattern(_) | FeatureKind::Blend(_) => &[],
+            FeatureKind::Pattern(_) | FeatureKind::Blend(_) | FeatureKind::Shell(_) => &[],
         }
     }
 
@@ -197,6 +216,7 @@ impl FeatureKind {
                 BlendKind::Fillet => "Fillet",
                 BlendKind::Chamfer => "Chamfer",
             },
+            FeatureKind::Shell(_) => "Shell",
         }
     }
 
@@ -206,6 +226,7 @@ impl FeatureKind {
             FeatureKind::Extrude(e) => vec![e.distance.as_str()],
             FeatureKind::Revolve(r) => vec![r.angle.as_str()],
             FeatureKind::Blend(b) => vec![b.size.as_str()],
+            FeatureKind::Shell(s) => vec![s.thickness.as_str()],
             FeatureKind::Pattern(p) => match &p.layout {
                 PatternLayout::Linear { spacing, .. } => vec![p.count.as_str(), spacing.as_str()],
                 PatternLayout::Circular { angle, .. } => vec![p.count.as_str(), angle.as_str()],
@@ -238,6 +259,22 @@ impl Document {
             }
             return Ok(());
         }
+        if let FeatureKind::Shell(s) = kind {
+            if s.faces.len() > MAX_SHELL_FACES {
+                return Err(bad(format!("open at most {MAX_SHELL_FACES} faces")));
+            }
+            if s.faces
+                .iter()
+                .any(|f| f.is_empty() || f.chars().count() > 512)
+            {
+                return Err(bad("a face name is empty or too long".into()));
+            }
+            let t = self.evaluate_feature_value(&s.thickness, expr::Dim::LENGTH)?;
+            if !t.is_finite() || t.abs() <= chamfera_geom::LINEAR_TOLERANCE {
+                return Err(bad("the thickness must not be 0".into()));
+            }
+            return Ok(());
+        }
         let Some(sketch) = kind.sketch() else {
             return Err(bad("the feature has no sketch".into()));
         };
@@ -267,7 +304,7 @@ impl Document {
                     return Err(bad("the distance must not be 0".into()));
                 }
             }
-            FeatureKind::Pattern(_) | FeatureKind::Blend(_) => {}
+            FeatureKind::Pattern(_) | FeatureKind::Blend(_) | FeatureKind::Shell(_) => {}
             FeatureKind::Revolve(r) => {
                 let a = self.evaluate_feature_value(&r.angle, expr::Dim::ANGLE)?;
                 if !a.is_finite()

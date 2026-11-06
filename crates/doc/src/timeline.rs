@@ -85,6 +85,8 @@ pub fn kind_dependencies(kind: &FeatureKind) -> Vec<u32> {
     match kind {
         FeatureKind::Pattern(p) => deps.push(p.source),
         FeatureKind::Blend(b) => deps.extend(b.edges.iter().flat_map(|e| edge_features(e))),
+        // Open faces are named like edges: `2:top`.
+        FeatureKind::Shell(sh) => deps.extend(sh.faces.iter().flat_map(|f| edge_features(f))),
         FeatureKind::Extrude(_) | FeatureKind::Revolve(_) => {}
     }
     deps.sort_unstable();

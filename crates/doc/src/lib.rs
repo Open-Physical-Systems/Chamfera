@@ -7,7 +7,7 @@ pub mod timeline;
 
 pub use feature::{
     Blend, BlendKind, Extrude, ExtrudeDirection, Feature, FeatureKind, Operation, Pattern,
-    PatternLayout, Revolve,
+    PatternLayout, Revolve, Shell,
 };
 pub use imported::ImportedBody;
 pub use timeline::{Group, ItemKind, Timeline};
@@ -27,7 +27,8 @@ use thiserror::Error;
 /// - 7: linear and circular patterns of features.
 /// - 8: imported solid bodies.
 /// - 9: fillets and chamfers of edges.
-/// - 10 to 15: taken by other branches (the merger renumbers).
+/// - 10: shells (hollowed solids with open faces).
+/// - 11 to 15: taken by other branches (the merger renumbers).
 /// - 16: the timeline: an explicit build order of sketches and features, the rollback
 ///   marker and groups (`timeline`). Older files open in id order with the marker at
 ///   the end, as their timeline showed them.

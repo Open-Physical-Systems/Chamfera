@@ -320,7 +320,7 @@ impl ChamferaApp {
             .iter()
             .map(|b| (b.id, b.name.clone(), b.visible))
             .collect();
-        let selected = self.session.scene.selection.map(|h| h.body);
+        let selected = self.session.scene.selected_bodies();
         if self.section(ui, "bodies", Icon::Body, "Bodies", bodies.len()) {
             if bodies.is_empty() {
                 self.empty_note(ui, "Extrude a closed profile to make one");
@@ -334,7 +334,7 @@ impl ChamferaApp {
                         depth: 2,
                         icon: Some(Icon::Body),
                         text: &name,
-                        selected: selected == Some(id),
+                        selected: selected.contains(&id),
                         dimmed: !visible,
                         eye: Some(visible),
                         ..Row::default()

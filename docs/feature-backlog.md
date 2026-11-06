@@ -145,7 +145,7 @@ Close runners-up: selection filters and box selection (UI and NAV), splines (nee
 | Variable-radius fillet | Radius changes along the edge | missing | P2 | L | kernel |
 | Rule fillet / full round | Round all edges of a face, or a full round between three faces | missing | P2 | M | kernel |
 | Tangent chain selection | Picking one edge selects its tangent-connected chain | missing | P0 | S | engine, ui |
-| Shell | Hollow a body with chosen faces removed | missing | P0 | L | kernel (K12), engine |
+| Shell | Hollow a body with chosen faces removed | branch `kernel/k12-shell` (planes, cylinders, cones; inward or outward; closed hollow) | P0 | L | kernel (K12), engine |
 | Hole | Simple, counterbore, countersink; blind, to a face, through all | missing | P0 | M | engine, doc, kernel |
 | Thread | Cosmetic thread (attribute + drawing note), later modelled thread | missing | P1 | M | doc, kernel |
 | Linear (rectangular) pattern | Features repeated in one or two directions | done | P0 | M | engine, doc |
@@ -299,10 +299,10 @@ Close runners-up: selection filters and box selection (UI and NAV), splines (nee
 | Ribbon with workspaces and tabs | Tool groups by task | done | P0 | M | ui |
 | Browser (model tree) | Bodies, sketches, parameters; show/hide, context menu | done | P0 | M | ui |
 | Browser: origin, construction, components folders | Tree items for planes, axes and components | missing | P0 | S | ui |
-| Timeline | Features in order; edit, suppress, delete from the context menu | done | P0 | M | ui, doc |
-| Rollback marker | Drag to roll back and insert features earlier | missing | P0 | M | doc, ui |
-| Reorder features | Drag features in the timeline | missing | P1 | M | doc |
-| Timeline groups | Collapse several features into a group | missing | P2 | S | doc, ui |
+| Timeline | Features in order; edit, suppress, delete, rename (F2), show error and broken reference from the context menu | done | P0 | M | ui, doc |
+| Rollback marker | Drag to roll back and insert features earlier | branch (`timeline/rollback`) | P0 | M | doc, ui |
+| Reorder features | Drag features in the timeline | branch (`timeline/rollback`) | P1 | M | doc |
+| Timeline groups | Collapse several features into a group | branch (`timeline/rollback`) | P2 | S | doc, ui |
 | Command search | A search box (on a key) that finds any command by name and runs it | missing | P0 | S | ui |
 | Keyboard shortcuts | Single keys for line, rectangle, circle, extrude, fillet, measure, dimension, trim, offset, and so on; editable | missing | P0 | S | ui (now only file, undo, fit, home) |
 | Radial context menu | Right-click menu laid out around the cursor with the common commands | missing | P1 | M | ui |

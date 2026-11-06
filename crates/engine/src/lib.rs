@@ -4,6 +4,7 @@
 //! [`Session::execute`] with a command id and JSON parameters, so they behave the same way.
 //! Read `skills/chamfera-commands/SKILL.md` before adding one.
 
+pub mod box_select;
 pub mod cmd;
 mod imported;
 mod params;

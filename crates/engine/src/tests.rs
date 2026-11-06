@@ -202,6 +202,17 @@ fn hostile_params_never_panic() {
         json!({"item": 2, "to": 0, "position": 0.5, "items": [], "name": "\u{7}"}),
         json!({"item": 1, "to": 1, "position": 1e7, "items": [1, 1, 1], "group": 99, "name": long}),
         json!({"item": [1], "to": "end", "position": "0", "items": 3, "sketch": 1, "name": 5}),
+        json!({"faces": ["2:top", 5, null], "thickness": "2 mm", "feature": 2}),
+        json!({"faces": [long], "thickness": -1e308, "feature": 3}),
+        json!({"faces": "2:top", "thickness": "0 mm"}),
+        json!({"faces": [], "pick": {"x": 400, "y": 300, "width": 800, "height": 600}, "thickness": 1}),
+        json!({"pick": {"x": 400, "y": 300, "width": 800, "height": 600}, "thickness": [2]}),
+        json!({"faces": [], "thickness": f64::NAN}),
+        json!({"x1": 0, "y1": 0, "x2": 800, "y2": 600, "width": 800, "height": 600, "mode": "crossing", "add": true, "remove": true}),
+        json!({"x1": 900, "y1": -1, "x2": f64::NAN, "y2": 1e308, "width": 800, "height": 600, "mode": "window"}),
+        json!({"x1": 0, "y1": 0, "x2": 0, "y2": 0, "width": 1, "height": 1, "mode": "crossing", "add": "yes"}),
+        json!({"x": 400, "y": 300, "width": 800, "height": 600, "mode": "toggle"}),
+        json!({"x": 400, "y": 300, "width": 800, "height": 600, "mode": "flip"}),
     ];
     for c in registry() {
         for p in &hostile {
@@ -1397,6 +1408,109 @@ fn clicking_near_a_visible_edge_picks_it_and_fillets_it() {
     assert!((v - (15_000.0 - removed)).abs() < 1e-6, "{v}");
 }
 
+#[test]
+fn a_shell_hollows_the_plate_by_its_exact_volume_and_follows_edits() {
+    // 2 mm walls with the top open: the cavity is (50 - 4) x (30 - 4) x (h - 2).
+    let mut s = Session::new();
+    extruded_plate(&mut s, json!(10));
+    let r = s
+        .execute("solid.shell", &json!({"faces": ["2:top"], "thickness": 2}))
+        .unwrap();
+    assert!((exact_volume(&r) - (15_000.0 - 46.0 * 26.0 * 8.0)).abs() < 1e-6);
+    let shell = r["feature"].as_u64().unwrap();
+    // The inner walls are named after the faces they offset.
+    let names: Vec<String> = s.solids()[0]
+        .body
+        .faces()
+        .into_iter()
+        .filter_map(|f| {
+            s.solids()[0]
+                .body
+                .face_name(f)
+                .ok()
+                .flatten()
+                .map(str::to_owned)
+        })
+        .collect();
+    assert!(
+        names
+            .iter()
+            .any(|n| n == &format!("{shell}:shell of 2:bottom"))
+    );
+    // A thicker plate rebuilds with the shell in place.
+    s.execute("feature.edit", &json!({"feature": 2, "distance": 20}))
+        .unwrap();
+    let v = s.solids()[0].body.volume().unwrap();
+    assert!((v - (30_000.0 - 46.0 * 26.0 * 18.0)).abs() < 1e-6, "{v}");
+    // A new thickness, then no open face: a closed hollow box.
+    let r = s
+        .execute(
+            "feature.edit",
+            &json!({"feature": shell, "thickness": "1 mm"}),
+        )
+        .unwrap();
+    assert!((exact_volume(&r) - (30_000.0 - 48.0 * 28.0 * 19.0)).abs() < 1e-6);
+    let r = s
+        .execute("feature.edit", &json!({"feature": shell, "faces": []}))
+        .unwrap();
+    assert!((exact_volume(&r) - (30_000.0 - 48.0 * 28.0 * 18.0)).abs() < 1e-6);
+    // Undo goes back to the open top.
+    s.execute("edit.undo", &json!({})).unwrap();
+    let v = s.solids()[0].body.volume().unwrap();
+    assert!((v - (30_000.0 - 48.0 * 28.0 * 19.0)).abs() < 1e-6, "{v}");
+    // Size and thickness belong to their own features.
+    assert!(
+        s.execute("feature.edit", &json!({"feature": 2, "thickness": 1}))
+            .is_err()
+    );
+    assert!(
+        s.execute("feature.edit", &json!({"feature": shell, "size": 1}))
+            .is_err()
+    );
+}
+
+#[test]
+fn a_too_thick_or_zero_shell_is_refused_and_changes_nothing() {
+    let mut s = Session::new();
+    extruded_plate(&mut s, json!(10));
+    let before = s.doc.features.len();
+    for p in [
+        json!({"faces": ["2:top"], "thickness": 20}),
+        json!({"faces": ["2:top"], "thickness": 0}),
+        json!({"faces": ["9:nowhere"], "thickness": 1}),
+        json!({"faces": ["2:top"]}),
+    ] {
+        assert!(s.execute("solid.shell", &p).is_err(), "{p}");
+    }
+    assert_eq!(s.doc.features.len(), before);
+    assert!((s.solids()[0].body.volume().unwrap() - 15_000.0).abs() < 1e-6);
+}
+
+#[test]
+fn clicking_a_face_opens_it_in_a_shell() {
+    use chamfera_render::{mat_mul, transform_point};
+    let mut s = Session::new();
+    extruded_plate(&mut s, json!(10));
+    let (w, h) = (800.0, 600.0);
+    s.execute("view.home", &json!({"width": w, "height": h}))
+        .unwrap();
+    // Where the middle of the top face (25, 15, 10) lands on screen.
+    let vp = mat_mul(
+        &s.camera.projection_matrix(w / h, s.scene.bounds().as_ref()),
+        &s.camera.view_matrix(),
+    );
+    let n = transform_point(&vp, chamfera_geom::Point3::new(25.0, 15.0, 10.0)).unwrap();
+    let (x, y) = ((n[0] + 1.0) * 0.5 * w, (1.0 - n[1]) * 0.5 * h);
+    let r = s
+        .execute(
+            "solid.shell",
+            &json!({"pick": {"x": x, "y": y, "width": w, "height": h}, "thickness": "2 mm"}),
+        )
+        .unwrap();
+    assert_eq!(r["definition"]["faces"], json!(["2:top"]));
+    assert!((exact_volume(&r) - (15_000.0 - 46.0 * 26.0 * 8.0)).abs() < 1e-6);
+}
+
 // ----- sketch tools -----
 
 fn ids(v: &serde_json::Value) -> Vec<u64> {
@@ -1734,4 +1848,204 @@ fn body_import_step_adds_exact_solids_that_undo_save_and_open_keep() {
             .is_err()
     );
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// Two 10 mm cubes, A at x 0..10 and B at x 30..40 (both y 0..10, z 0..10), seen from
+/// the top in an orthographic 800 x 600 view centred on (20, 5) with a half height of
+/// 30 mm. Then 1 mm is 300 / 30 = 10 px, and model (x, y) is pixel
+/// (400 + 10 (x - 20), 300 - 10 (y - 5)): A covers pixels x 200..300, B x 500..600, both
+/// y 250..350. (The top view's pitch is 1e-5 rad short of straight down, which moves a
+/// corner 10 mm up by 1e-4 mm: far below a pixel.)
+fn two_cubes_from_the_top() -> (Session, u32, u32) {
+    use chamfera_geom::{Point3, TriMesh};
+    let mut s = Session::new();
+    let a = s
+        .scene
+        .add(
+            "A",
+            TriMesh::cuboid(Point3::ORIGIN, Point3::new(10.0, 10.0, 10.0)),
+        )
+        .unwrap();
+    let b = s
+        .scene
+        .add(
+            "B",
+            TriMesh::cuboid(Point3::new(30.0, 0.0, 0.0), Point3::new(40.0, 10.0, 10.0)),
+        )
+        .unwrap();
+    top_view_centred_on(&mut s, 20.0, 5.0);
+    (s, a, b)
+}
+
+/// Orthographic top view centred on model (x, y), 30 mm half height: 10 px per mm in an
+/// 800 x 600 viewport.
+fn top_view_centred_on(s: &mut Session, x: f64, y: f64) {
+    s.execute("view.standard", &json!({"view": "top"})).unwrap();
+    s.camera.projection = chamfera_render::Projection::Orthographic;
+    s.camera.target = chamfera_geom::Point3::new(x, y, 0.0);
+    s.camera.distance = 30.0 / (s.camera.fov_y * 0.5).tan();
+}
+
+fn boxed(s: &mut Session, corners: [f64; 4], mode: &str) -> Vec<u64> {
+    let r = s
+        .execute(
+            "select.box",
+            &json!({"x1": corners[0], "y1": corners[1], "x2": corners[2], "y2": corners[3],
+                    "width": 800, "height": 600, "mode": mode}),
+        )
+        .unwrap();
+    let mut ids: Vec<u64> = r["bodies"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_u64().unwrap())
+        .collect();
+    ids.sort();
+    ids
+}
+
+#[test]
+fn a_window_selects_only_bodies_fully_inside_it() {
+    let (mut s, a, b) = two_cubes_from_the_top();
+    let (a, b) = (u64::from(a), u64::from(b));
+    // Around A only (pixels 190..310 x 240..360).
+    assert_eq!(
+        boxed(&mut s, [190.0, 240.0, 310.0, 360.0], "window"),
+        vec![a]
+    );
+    // All of A and half of B (x 190..550): B is not fully inside.
+    assert_eq!(
+        boxed(&mut s, [190.0, 240.0, 550.0, 360.0], "window"),
+        vec![a]
+    );
+    // Both (x 190..610).
+    assert_eq!(
+        boxed(&mut s, [190.0, 240.0, 610.0, 360.0], "window"),
+        vec![a, b]
+    );
+    // Inside A's outline (x 210..290): A pokes out of it, so nothing.
+    assert!(boxed(&mut s, [210.0, 260.0, 290.0, 340.0], "window").is_empty());
+}
+
+#[test]
+fn a_crossing_selects_bodies_it_touches_or_contains() {
+    let (mut s, a, b) = two_cubes_from_the_top();
+    let (a, b) = (u64::from(a), u64::from(b));
+    // All of A and half of B: both are touched.
+    assert_eq!(
+        boxed(&mut s, [550.0, 360.0, 190.0, 240.0], "crossing"),
+        vec![a, b]
+    );
+    // A thin strip across A's middle (x 250..260, past its top and bottom): no corner of A
+    // is inside, but its faces are.
+    assert_eq!(
+        boxed(&mut s, [260.0, 200.0, 250.0, 400.0], "crossing"),
+        vec![a]
+    );
+    // A small box wholly inside B's top face (x 540..560): no edge of B crosses it.
+    assert_eq!(
+        boxed(&mut s, [560.0, 290.0, 540.0, 310.0], "crossing"),
+        vec![b]
+    );
+    // The gap between them (x 320..480) touches neither.
+    assert!(boxed(&mut s, [480.0, 240.0, 320.0, 360.0], "crossing").is_empty());
+}
+
+#[test]
+fn box_selection_adds_and_removes_and_hidden_bodies_are_left_out() {
+    let (mut s, a, b) = two_cubes_from_the_top();
+    let around_a = json!({"x1": 190, "y1": 240, "x2": 310, "y2": 360, "width": 800, "height": 600, "mode": "window"});
+    let around_b = json!({"x1": 490, "y1": 240, "x2": 610, "y2": 360, "width": 800, "height": 600, "mode": "window", "add": true});
+    s.execute("select.box", &around_a).unwrap();
+    let r = s.execute("select.box", &around_b).unwrap();
+    assert_eq!(r["count"], 2);
+    assert_eq!(r["bodies"], json!([a, b]));
+    // Removing with a box around A leaves B.
+    let mut remove_a = around_a.clone();
+    remove_a["remove"] = json!(true);
+    let r = s.execute("select.box", &remove_a).unwrap();
+    assert_eq!(r["bodies"], json!([b]));
+    // Hiding a selected body deselects it, and a hidden body is never boxed.
+    s.execute("body.visibility", &json!({"body": b, "visible": false}))
+        .unwrap();
+    assert_eq!(s.execute("select.get", &json!({})).unwrap()["count"], 0);
+    let all = json!({"x1": 0, "y1": 0, "x2": 800, "y2": 600, "width": 800, "height": 600, "mode": "crossing"});
+    assert_eq!(s.execute("select.box", &all).unwrap()["bodies"], json!([a]));
+    // A corner outside the viewport, or both add and remove, is refused.
+    let mut outside = all.clone();
+    outside["x2"] = json!(801);
+    assert!(s.execute("select.box", &outside).is_err());
+    let mut both = all.clone();
+    both["add"] = json!(true);
+    both["remove"] = json!(true);
+    assert!(s.execute("select.box", &both).is_err());
+    assert_eq!(
+        s.execute("select.clear", &json!({})).unwrap()["bodies"],
+        json!([])
+    );
+}
+
+#[test]
+fn toggle_picks_build_a_set_and_a_plain_miss_clears_it() {
+    let (mut s, a, b) = two_cubes_from_the_top();
+    // The centres of A (5, 5) and B (35, 5) are pixels (250, 300) and (550, 300).
+    let at =
+        |x: f64, mode: &str| json!({"x": x, "y": 300, "width": 800, "height": 600, "mode": mode});
+    s.execute("select.pick", &at(250.0, "replace")).unwrap();
+    let r = s.execute("select.pick", &at(550.0, "toggle")).unwrap();
+    assert_eq!(r["bodies"], json!([a, b]));
+    assert_eq!(r["body"], b, "the last pick is B");
+    // Toggling A off keeps B.
+    let r = s.execute("select.pick", &at(250.0, "toggle")).unwrap();
+    assert_eq!(r["bodies"], json!([b]));
+    // A modified click on empty space (the gap at x = 20 mm, pixel 400) changes nothing.
+    let r = s.execute("select.pick", &at(400.0, "toggle")).unwrap();
+    assert_eq!(r["bodies"], json!([b]));
+    // Add A, then remove B.
+    s.execute("select.pick", &at(250.0, "add")).unwrap();
+    let r = s.execute("select.pick", &at(550.0, "remove")).unwrap();
+    assert_eq!(r["bodies"], json!([a]));
+    // A plain click on empty space clears.
+    let r = s.execute("select.pick", &at(400.0, "replace")).unwrap();
+    assert_eq!(r["count"], 0);
+    assert!(r["body"].is_null());
+}
+
+#[test]
+fn a_box_in_an_active_sketch_selects_its_points_and_curves() {
+    let mut s = Session::new();
+    s.execute("sketch.create", &json!({"plane": "xy"})).unwrap();
+    // Line A from (10, 10) to (20, 10), line B from (40, 10) to (50, 10).
+    let la = s
+        .execute(
+            "sketch.line",
+            &json!({"x1": 10, "y1": 10, "x2": 20, "y2": 10}),
+        )
+        .unwrap();
+    let lb = s
+        .execute(
+            "sketch.line",
+            &json!({"x1": 40, "y1": 10, "x2": 50, "y2": 10}),
+        )
+        .unwrap();
+    // Centred on (30, 10): model (x, y) is pixel (400 + 10 (x - 30), 300 - 10 (y - 10)).
+    // A runs over pixels x 200..300, B x 500..600, both at y = 300.
+    top_view_centred_on(&mut s, 30.0, 10.0);
+    let window = json!({"x1": 190, "y1": 290, "x2": 310, "y2": 310, "width": 800, "height": 600, "mode": "window"});
+    let r = s.execute("select.box", &window).unwrap();
+    let expected = json!([
+        {"point": la["start"]}, {"point": la["end"]}, {"curve": la["curve"]}
+    ]);
+    assert_eq!(r["selection"], expected, "{r}");
+    // A crossing over B's middle (x 530..570, neither end inside) adds only curve B.
+    let crossing = json!({"x1": 570, "y1": 290, "x2": 530, "y2": 310, "width": 800, "height": 600, "mode": "crossing", "add": true});
+    let r = s.execute("select.box", &crossing).unwrap();
+    assert_eq!(r["items"], json!([{"curve": lb["curve"]}]), "{r}");
+    assert_eq!(r["selection"].as_array().unwrap().len(), 4);
+    // The same box as a window selects nothing: B is not inside it.
+    let mut as_window = crossing.clone();
+    as_window["mode"] = json!("window");
+    as_window["add"] = json!(false);
+    let r = s.execute("select.box", &as_window).unwrap();
+    assert_eq!(r["selection"], json!([]));
 }
