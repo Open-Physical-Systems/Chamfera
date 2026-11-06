@@ -2,9 +2,11 @@
 
 mod app;
 mod body;
+mod component;
 mod design;
 mod edit;
 mod feature;
+mod joint;
 mod param;
 mod select;
 mod sketch;
@@ -32,9 +34,11 @@ pub fn registry() -> Vec<&'static CommandSpec> {
     for area in [
         app::COMMANDS,
         body::COMMANDS,
+        component::COMMANDS,
         design::COMMANDS,
         edit::COMMANDS,
         feature::COMMANDS,
+        joint::COMMANDS,
         param::COMMANDS,
         select::COMMANDS,
         sketch::COMMANDS,

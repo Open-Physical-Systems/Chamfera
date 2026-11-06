@@ -387,6 +387,7 @@ impl Document {
             suppressed: false,
             kind,
         });
+        self.assembly.adopt(id);
         Ok(id)
     }
 

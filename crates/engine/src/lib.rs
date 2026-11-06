@@ -4,6 +4,7 @@
 //! [`Session::execute`] with a command id and JSON parameters, so they behave the same way.
 //! Read `skills/chamfera-commands/SKILL.md` before adding one.
 
+pub mod assembly;
 pub mod cmd;
 mod imported;
 mod params;
@@ -96,8 +97,11 @@ impl Session {
         // Solids follow the design: rebuild after anything that may have changed it.
         // solid.* and feature.* rebuild themselves; a failed command was rolled back, so
         // the solids must follow the restored design.
-        let rebuilt_itself =
-            id.starts_with("solid.") || id.starts_with("feature.") || id == "body.import_step";
+        let rebuilt_itself = id.starts_with("solid.")
+            || id.starts_with("feature.")
+            || id.starts_with("component.")
+            || id.starts_with("joint.")
+            || id == "body.import_step";
         if (spec.mutates && (result.is_err() || !rebuilt_itself))
             || (id.starts_with("edit.") && result.is_ok())
             || (id.starts_with("design.") && result.is_ok() && id != "design.save")

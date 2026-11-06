@@ -14,6 +14,7 @@ use egui::{Color32, PointerButton, Rect, Sense, Vec2};
 use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
 
+mod assembly_ui;
 mod blend_ui;
 mod browser;
 mod chrome;
@@ -115,6 +116,7 @@ pub struct ChamferaApp {
     sketch: sketch_ui::SketchUi,
     params: params_ui::ParamsUi,
     solid: solid_ui::SolidUi,
+    assembly: assembly_ui::AssemblyUi,
     file: file_ui::FileUi,
     browser: browser::BrowserUi,
     timeline: timeline::TimelineUi,
@@ -189,6 +191,7 @@ impl ChamferaApp {
             sketch: sketch_ui::SketchUi::default(),
             params: params_ui::ParamsUi::default(),
             solid: solid_ui::SolidUi::default(),
+            assembly: assembly_ui::AssemblyUi::default(),
             file: file_ui::FileUi::default(),
             browser: browser::BrowserUi::default(),
             timeline: timeline::TimelineUi::default(),
@@ -354,6 +357,17 @@ impl ChamferaApp {
             self.face_click(x, y, w, h);
             return;
         }
+        if self.assembly.joint.is_some() {
+            let at = response.hover_pos().map(local);
+            self.joint_hover(at, w, h);
+            if response.clicked()
+                && let Some(pos) = response.interact_pointer_pos()
+            {
+                let (x, y) = local(pos);
+                self.joint_click(x, y, w, h);
+                return;
+            }
+        }
         if self.solid.blend.is_some() {
             let at = response.hover_pos().map(local);
             self.blend_hover(at, w, h);
@@ -431,6 +445,8 @@ impl ChamferaApp {
         }
         let blends = self.blend_overlays();
         self.session.scene.overlays.extend(blends);
+        let joints = self.joint_overlays();
+        self.session.scene.overlays.extend(joints);
         if let Some(picked) = self.extrude_overlay() {
             self.session.scene.overlays.push(Overlay {
                 style: chamfera_render::OverlayStyle::Highlight,
@@ -645,6 +661,7 @@ impl eframe::App for ChamferaApp {
             self.parameters_window(&ctx);
             self.extrude_dialog(&ctx);
             self.blend_dialog(&ctx);
+            self.joint_dialog(&ctx);
             self.feature_dialog(&ctx);
         }
         self.unsaved_dialog(&ctx);

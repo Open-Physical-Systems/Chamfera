@@ -16,6 +16,8 @@ use std::collections::BTreeMap;
 #[derive(Debug, Clone)]
 pub struct Solid {
     pub feature: u32,
+    /// The component it belongs to (`chamfera_doc::ROOT` for the design itself).
+    pub component: u32,
     pub name: String,
     pub body: Body,
     /// The scene body that shows it, if it could be displayed.
@@ -179,6 +181,8 @@ pub struct Built {
     pub errors: BTreeMap<u32, String>,
     /// Features whose solids were built but cannot be shown yet, and why.
     pub display_errors: BTreeMap<u32, String>,
+    /// Where each component is, and joints that could not be solved.
+    pub placements: crate::assembly::Placements,
 }
 
 /// A sketch loop as exact kernel profile edges: lines stay lines, arcs and circles stay
@@ -596,7 +600,8 @@ impl Session {
             self.scene.selection = None;
         }
         let options = TessOptions::default();
-        for (feature, name, body) in made {
+        let placed = self.place_components(made, &mut built);
+        for (feature, component, name, body) in placed {
             // A solid that cannot be shown is still built: its measures and export work.
             let mut faces = Vec::new();
             let mut edges = Vec::new();
@@ -610,6 +615,7 @@ impl Session {
                             .display_errors
                             .insert(feature, "the scene holds no more bodies".into());
                     }
+                    Session::tint_body(&self.doc.assembly, &mut self.scene, id, component);
                     id
                 }
                 Err(e) => {
@@ -623,6 +629,7 @@ impl Session {
                 faces,
                 edges,
                 feature,
+                component,
                 name,
                 body,
                 scene_id,

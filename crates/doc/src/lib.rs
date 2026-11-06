@@ -1,14 +1,18 @@
 //! Layer 2: the design document: parameters and sketches now, the feature timeline from M4.
 
+pub mod component;
 pub mod expr;
 pub mod feature;
 pub mod imported;
+pub mod joint;
 
+pub use component::{Assembly, Component, ROOT};
 pub use feature::{
     Blend, BlendKind, Extrude, ExtrudeDirection, Feature, FeatureKind, Operation, Pattern,
     PatternLayout, Revolve,
 };
 pub use imported::ImportedBody;
+pub use joint::{EdgeEnd, Joint, JointKind, JointOrigin, OriginAt};
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -25,7 +29,9 @@ use thiserror::Error;
 /// - 7: linear and circular patterns of features.
 /// - 8: imported solid bodies.
 /// - 9: fillets and chamfers of edges.
-pub const FORMAT_VERSION: u32 = 9;
+/// - 15: components (bodies grouped, each with a placement) and joints between them.
+///   Older files open as a single root component.
+pub const FORMAT_VERSION: u32 = 15;
 /// The tag every design file starts with, so other JSON is not mistaken for a design.
 pub const FORMAT_TAG: &str = "chamfera";
 /// Longest parameter name.
@@ -156,6 +162,9 @@ pub struct Document {
     /// Solid bodies imported from other CAD files (STEP), kept as exact B-rep bodies.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub imported: Vec<ImportedBody>,
+    /// Components and joints (format 15). A design without them is one root component.
+    #[serde(default, skip_serializing_if = "Assembly::is_empty")]
+    pub assembly: Assembly,
 }
 
 impl Default for Document {
@@ -168,6 +177,7 @@ impl Default for Document {
             features: Vec::new(),
             last_feature_id: 0,
             imported: Vec::new(),
+            assembly: Assembly::default(),
         }
     }
 }
@@ -429,6 +439,7 @@ impl Document {
             expressions: BTreeMap::new(),
             attached: None,
         });
+        self.assembly.adopt(id);
         Ok(id)
     }
 
@@ -543,6 +554,8 @@ impl Document {
         checked.features = doc.features;
         imported::check(&doc.imported, &mut seen, checked.last_feature_id)?;
         checked.imported = doc.imported;
+        doc.assembly.check(checked.last_feature_id)?;
+        checked.assembly = doc.assembly;
         // Values in the file must agree with their expressions.
         checked.evaluate()?;
         Ok(checked)

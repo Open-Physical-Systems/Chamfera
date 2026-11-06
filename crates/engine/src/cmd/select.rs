@@ -38,6 +38,7 @@ fn reply(s: &Session) -> Value {
             "point": h.point,
             "distance": h.distance,
             "normal": s.scene.body(h.body).and_then(|b| b.mesh.triangle_normal(h.triangle)),
+            "component": s.component_of_body(h.body),
         }),
         None => json!({ "body": null }),
     }

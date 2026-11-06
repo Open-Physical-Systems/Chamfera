@@ -298,6 +298,8 @@ impl ChamferaApp {
             }
         }
 
+        self.browser_components(ui);
+
         let bodies: Vec<(u32, String, bool)> = self
             .session
             .scene

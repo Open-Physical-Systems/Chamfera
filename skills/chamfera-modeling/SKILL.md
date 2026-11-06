@@ -60,5 +60,11 @@ Ids: the rectangle is points 1-4, lines 5-8, constraints 9-12; fix, lengths 13-1
 - `snapshot {"view": "top"}` and look at the image: the outline, the holes where you meant them, construction lines in their own colour. Fully determined geometry of the sketch being edited is drawn in the constrained colour.
 - `sketch.finish` ends editing; `design.save {"path": "plate.chamfera"}` saves into the scratch folder (or a path inside an `--allow-path` folder).
 
+## 7. Assemblies: components and joints
+- `component.new {"name"}` makes an empty component and activates it: features you add next go into it. `component.new {"from_bodies": [feature]}` moves existing bodies (by the feature that made each) into a new one. `component.activate {"component": 0}` returns to the root (the design).
+- `component.move {"component", "transform": {"translate": {x, y, z}, "rotate": {"axis", "angle"}}}` places a component; `component.copy` makes a linked copy; `component.ground` fixes one in place.
+- `joint.create {"type": "revolute", "a": {...}, "b": {...}, "value": 60}` moves B so its origin meets A's, then turns or slides it by the value (degrees, or mm for a slider). An origin is `{"face": "2:top"}`, `{"edge": ...}` or `{"component", "point", "axis"}` in that component's coordinates. `joint.set_value` drives it; joints that would close a loop are refused.
+- Check with `component.list`: each component's `world` transform and each body's exact `bounds` against values you worked out (`examples/hinge-assembly.json`).
+
 ## When something fails
 A failing command changes nothing and its error says what was wrong. In a `batch`, the steps before the failing one stay applied, one undo step each: fix the failing step and run the rest, or `edit.undo` what you do not want.

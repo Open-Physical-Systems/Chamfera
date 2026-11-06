@@ -340,6 +340,9 @@ pub struct SceneBody {
     pub name: String,
     pub mesh: TriMesh,
     pub visible: bool,
+    /// A component tint: an index into the theme's `component_tints`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tint: Option<u8>,
 }
 
 /// What a click picked.
@@ -420,6 +423,7 @@ impl Scene {
             name: name.to_owned(),
             mesh,
             visible: true,
+            tint: None,
         });
         Some(id)
     }

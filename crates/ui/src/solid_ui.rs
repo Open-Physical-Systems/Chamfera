@@ -308,6 +308,7 @@ impl ChamferaApp {
             self.run("body.sample", json!({}));
             self.fit_pending = true;
         }
+        self.assemble_group(ui);
     }
 
     /// Waits for a click on a flat face to sketch on (Create Sketch > A flat face).

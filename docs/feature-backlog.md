@@ -215,14 +215,14 @@ Close runners-up: selection filters and box selection (UI and NAV), splines (nee
 
 | Feature | Description | Status | Pri | Size | Layer |
 |---|---|---|---|---|---|
-| Components | Bodies grouped in named parts with their own origin, nested | missing | P1 | L | doc, engine, ui |
-| Activate a component | Edit one component in place; others shown faded | missing | P1 | M | doc, ui |
+| Components | Bodies grouped in named parts with their own origin, nested; linked copies (`component.*`) | done | P1 | L | doc, engine, ui |
+| Activate a component | Edit one component in place; others shown faded (new features go into the active one: done; fading: missing) | missing | P1 | M | doc, ui |
 | External references | Insert another design as a linked component that updates | missing | P2 | L | doc, io |
-| Joints | Connect components at joint origins: rigid, revolute, slider, cylindrical, pin-slot, planar, ball | missing | P1 | L | doc (new solver for joints) |
+| Joints | Connect components at joint origins: rigid, revolute, slider, cylindrical, planar done (`joint.*`, solved as an exact tree, loops refused); pin-slot, ball and loops missing | done | P1 | L | doc, engine |
 | As-built joints | Joint components where they already sit | missing | P1 | M | doc |
-| Joint limits and motion | Ranges, drive a joint, animate | missing | P2 | M | doc, ui |
+| Joint limits and motion | Ranges and driving a joint (`joint.set_value`): done; animation: missing | missing | P2 | M | doc, ui |
 | Rigid groups | Lock several components together | missing | P2 | S | doc |
-| Ground / fix a component | Keep a component in place | missing | P1 | S | doc |
+| Ground / fix a component | Keep a component in place (`component.ground`) | done | P1 | S | doc |
 | Motion links and contact sets | One joint drives another; parts stop on contact | missing | P2 | L | doc, kernel |
 | Interference check | Find overlapping volumes between components | missing | P1 | M | kernel (K7), engine |
 | Bill of materials | List of components with counts and properties | missing | P2 | M | doc, io |
