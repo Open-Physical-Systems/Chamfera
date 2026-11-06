@@ -37,6 +37,7 @@
 mod build;
 mod euler;
 mod geometry;
+mod import;
 mod measure;
 mod uv;
 mod validate;
