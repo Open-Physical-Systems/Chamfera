@@ -5,6 +5,7 @@
 //! Read `skills/chamfera-commands/SKILL.md` before adding one.
 
 pub mod cmd;
+pub mod hole;
 mod imported;
 mod params;
 pub mod script;

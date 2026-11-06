@@ -5,6 +5,7 @@ mod body;
 mod design;
 mod edit;
 mod feature;
+mod hole;
 mod param;
 mod select;
 mod sketch;
@@ -35,6 +36,7 @@ pub fn registry() -> Vec<&'static CommandSpec> {
         design::COMMANDS,
         edit::COMMANDS,
         feature::COMMANDS,
+        hole::COMMANDS,
         param::COMMANDS,
         select::COMMANDS,
         sketch::COMMANDS,

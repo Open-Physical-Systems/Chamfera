@@ -18,6 +18,7 @@ mod blend_ui;
 mod browser;
 mod chrome;
 mod file_ui;
+mod hole_ui;
 
 /// `--screenshot` gives up after this long without a drawn frame.
 const SHOT_TIMEOUT_SECS: f64 = 30.0;
@@ -53,6 +54,8 @@ pub struct Options {
     /// Open the Extrude tool at start and pick the profile under the viewport's centre,
     /// as a click there would.
     pub extrude: bool,
+    /// Open the Hole tool at start, on the design's last hole feature if it has one.
+    pub hole: bool,
     /// The window's inner size in points, instead of the default 1400 x 900.
     pub window_size: Option<[f32; 2]>,
     /// Interface zoom (pixels per point multiplier), for checking crispness at 2x.
@@ -213,6 +216,9 @@ impl ChamferaApp {
             app.solid.extrude = Some(solid_ui::ExtrudeTool::default());
             app.solid.pick_centre = true;
         }
+        if options.hole {
+            app.open_hole_on_last();
+        }
         app.zoom = options.zoom;
         app
     }
@@ -344,6 +350,17 @@ impl ChamferaApp {
             self.face_click(x, y, w, h);
             return;
         }
+        if self.solid.hole.is_some() {
+            let at = response.hover_pos().map(local);
+            self.hole_hover(at, w, h);
+            if response.clicked()
+                && let Some(pos) = response.interact_pointer_pos()
+            {
+                let (x, y) = local(pos);
+                self.hole_click(x, y, w, h);
+                return;
+            }
+        }
         if self.solid.blend.is_some() {
             let at = response.hover_pos().map(local);
             self.blend_hover(at, w, h);
@@ -421,6 +438,8 @@ impl ChamferaApp {
         }
         let blends = self.blend_overlays();
         self.session.scene.overlays.extend(blends);
+        let holes = self.hole_overlays();
+        self.session.scene.overlays.extend(holes);
         if let Some(picked) = self.extrude_overlay() {
             self.session.scene.overlays.push(Overlay {
                 style: chamfera_render::OverlayStyle::Highlight,
@@ -632,6 +651,7 @@ impl eframe::App for ChamferaApp {
             self.parameters_window(&ctx);
             self.extrude_dialog(&ctx);
             self.blend_dialog(&ctx);
+            self.hole_dialog(&ctx);
             self.feature_dialog(&ctx);
         }
         self.unsaved_dialog(&ctx);

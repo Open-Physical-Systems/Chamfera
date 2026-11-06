@@ -92,6 +92,7 @@ impl ChamferaApp {
                     Icon::PatternRectangular,
                     format!("Pattern × {} of feature {}", p.count, p.source),
                 ),
+                FeatureKind::Hole(h) => (Icon::Hole, crate::hole_ui::hole_details(h)),
                 FeatureKind::Blend(b) => (
                     match b.blend {
                         chamfera_doc::BlendKind::Fillet => Icon::Fillet,
@@ -308,11 +309,16 @@ impl ChamferaApp {
         let Ok(f) = self.session.doc.feature(item.id) else {
             return;
         };
+        if let FeatureKind::Hole(h) = &f.kind {
+            self.solid.hole = Some(crate::hole_ui::HoleTool::editing(item.id, h));
+            return;
+        }
         let (distance, direction) = match &f.kind {
             FeatureKind::Extrude(e) => (e.distance.clone(), e.direction),
             FeatureKind::Revolve(r) => (r.angle.clone(), ExtrudeDirection::Normal),
             FeatureKind::Pattern(p) => (p.count.clone(), ExtrudeDirection::Normal),
             FeatureKind::Blend(b) => (b.size.clone(), ExtrudeDirection::Normal),
+            FeatureKind::Hole(h) => (h.diameter.clone(), ExtrudeDirection::Normal),
         };
         self.timeline.editing = Some(FeatureEdit {
             feature: item.id,

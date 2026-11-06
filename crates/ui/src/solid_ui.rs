@@ -46,6 +46,8 @@ pub struct SolidUi {
     pub extrude: Option<ExtrudeTool>,
     /// The Fillet or Chamfer tool.
     pub blend: Option<crate::blend_ui::BlendTool>,
+    /// The Hole tool.
+    pub hole: Option<crate::hole_ui::HoleTool>,
     /// Waiting for a click on a flat face to sketch on.
     pub pick_face: bool,
     /// `--extrude`: pick the profile under the viewport's centre on the first frame.
@@ -63,13 +65,15 @@ impl ChamferaApp {
             .iter()
             .any(|s| !s.sketch.profiles().is_empty());
         let has_solids = !self.session.solids().is_empty();
-        let tool_free = self.solid.extrude.is_none() && self.solid.blend.is_none();
+        let tool_free =
+            self.solid.extrude.is_none() && self.solid.blend.is_none() && self.solid.hole.is_none();
         let extruding = self.solid.extrude.as_ref().is_some_and(|t| !t.revolve);
         let revolving = self.solid.extrude.as_ref().is_some_and(|t| t.revolve);
         let mut plane: Option<(&str, &str)> = None;
         let mut on_face = false;
         let mut open_tool: Option<bool> = None;
         let mut sketch_button: Option<egui::Response> = None;
+        let (mut open_hole, holing) = (false, self.solid.hole.is_some());
         let (_, menu) = widgets::ribbon_group(ui, look, "CREATE", true, |ui| {
             let r = widgets::tool_button(
                 ui,
@@ -120,6 +124,7 @@ impl ChamferaApp {
             {
                 open_tool = Some(true);
             }
+            open_hole = crate::hole_ui::hole_button(ui, look, has_solids, tool_free, holing);
         });
         // Create Sketch opens the list of planes under its button.
         if let Some(r) = &sketch_button {
@@ -191,6 +196,9 @@ impl ChamferaApp {
         if on_face {
             self.solid.pick_face = true;
             self.message = Some(("Click a flat face of a solid to sketch on".into(), false));
+        }
+        if open_hole {
+            self.open_hole_tool();
         }
         match open_tool {
             Some(false) => {
