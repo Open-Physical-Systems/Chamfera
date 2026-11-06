@@ -58,8 +58,10 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         id: "sketch.constrain",
         label: "Add Constraint",
-        params: "constraint: object (required) - {\"kind\": ..., ids and value}, for example \
-                 {\"kind\": \"horizontal\", \"line\": 3} or {\"kind\": \"length\", \"line\": 3, \"value\": 50}",
+        params: "constraint: object (required unless constraints) - {\"kind\": ..., ids and value}, for example \
+                 {\"kind\": \"horizontal\", \"line\": 3} or {\"kind\": \"length\", \"line\": 3, \"value\": 50}\n\
+                 constraints: array of objects (optional) - several at once, as one undo step; each one that \
+                 would conflict or is already implied is left out and counted in `skipped`",
         mutates: true,
         run: constrain,
     },
@@ -573,7 +575,13 @@ fn arc(s: &mut Session, p: &Value) -> CmdResult {
     Ok(json!({ "curve": id.0, "centre": centre.0, "start": start.0, "end": end.0 }))
 }
 
+/// At most this many constraints in one `sketch.constrain` call.
+const MAX_CONSTRAINT_BATCH: usize = 64;
+
 fn constrain(s: &mut Session, p: &Value) -> CmdResult {
+    if let Some(list) = p.get("constraints") {
+        return constrain_many(s, list);
+    }
     let raw = p
         .get("constraint")
         .ok_or_else(|| bad("`constraint` is required"))?;
@@ -582,6 +590,39 @@ fn constrain(s: &mut Session, p: &Value) -> CmdResult {
     let sk = active(s)?;
     let id = sk.try_add_constraint(c).map_err(sketch_err)?;
     Ok(json!({ "constraint": id.0 }))
+}
+
+/// Adds each constraint that solves and is not implied by the others; skips the rest.
+fn constrain_many(s: &mut Session, list: &Value) -> CmdResult {
+    let items = list
+        .as_array()
+        .ok_or_else(|| bad("`constraints` must be an array of constraint objects"))?;
+    if items.len() > MAX_CONSTRAINT_BATCH {
+        return Err(bad(format!(
+            "`constraints` takes at most {MAX_CONSTRAINT_BATCH} constraints"
+        )));
+    }
+    let mut parsed = Vec::with_capacity(items.len());
+    for (k, raw) in items.iter().enumerate() {
+        let c: Constraint = serde_json::from_value(raw.clone())
+            .map_err(|e| bad(format!("`constraints[{k}]`: {e}")))?;
+        parsed.push(c);
+    }
+    let sk = active(s)?;
+    let mut added = Vec::new();
+    let mut skipped = 0;
+    for c in parsed {
+        match sk.try_add_constraint(c) {
+            Ok((id, report)) if report.dof.redundant.contains(&id) => {
+                // Already implied: keep the sketch free of redundant constraints.
+                sk.remove_constraint(id).map_err(sketch_err)?;
+                skipped += 1;
+            }
+            Ok((id, _)) => added.push(id.0),
+            Err(_) => skipped += 1,
+        }
+    }
+    Ok(json!({ "constraints": added, "skipped": skipped }))
 }
 
 fn dimension(s: &mut Session, p: &Value) -> CmdResult {

@@ -42,6 +42,12 @@
 //! three-point and tangent arcs (`tools.rs`, with planar intersections in
 //! `intersect.rs`). A failed tool changes nothing.
 //!
+//! # Snaps
+//! [`Sketch::snap`] finds where a drawing click near existing geometry should land
+//! (endpoints, centres, the origin, midpoints, crossings, quadrants, perpendicular and
+//! tangent points, on-curve) and [`Sketch::snap_constraints`] the constraints that keep
+//! it there (`snap.rs`).
+//!
 //! Clean room: the solver and profile code are written from textbooks and papers
 //! (Madsen, Nielsen and Tingleff on Levenberg-Marquardt; Golub and Van Loan on QR and
 //! Cholesky; Tarjan on bridges). Read `skills/chamfera-kernel/SKILL.md` before changing
@@ -54,6 +60,7 @@ mod intersect;
 mod linalg;
 mod profile;
 mod sketch;
+mod snap;
 mod solver;
 #[cfg(test)]
 mod tests;
@@ -66,6 +73,10 @@ pub use constraint::Constraint;
 pub use entity::{ConstraintId, Curve, CurveId, PointId};
 pub use profile::{LoopSegment, ProfileLoop, Region};
 pub use sketch::{MAX_CONSTRAINTS, MAX_CURVES, MAX_POINTS, Sketch, SketchError};
+pub use snap::{
+    MAX_SNAP_CURVES, Snap, SnapKind, SnapQuery, exact_direction, lock_angle, lock_straight,
+    midpoint, perpendicular_foot, quadrant_points, tangent_points,
+};
 pub use solver::{
     ConstraintStatus, DETERMINED_TOLERANCE, DofReport, DragReport, MAX_DRAG_STEPS,
     MAX_GROUP_EQUATIONS, MAX_GROUP_UNKNOWNS, MAX_ITERATIONS, SOLVE_TARGET, SolveError, SolveReport,

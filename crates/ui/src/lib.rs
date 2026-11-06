@@ -64,6 +64,10 @@ pub struct Options {
     pub window_size: Option<[f32; 2]>,
     /// Interface zoom (pixels per point multiplier), for checking crispness at 2x.
     pub zoom: Option<f32>,
+    /// Drawing-tool steps to run in the active sketch at start, for screenshots of snaps
+    /// and typed values: `tool line; click 0,0; hover 30,12; type 25` (see
+    /// `sketch_ui::parse_demo`).
+    pub sketch_input: Option<String>,
     /// Show a selection box with these viewport corners (x1, y1, x2, y2) as if it were
     /// being dragged, for screenshots of the window and crossing styles.
     pub select_box: Option<[f32; 4]>,
@@ -244,6 +248,12 @@ impl ChamferaApp {
             app.solid.pick_centre = true;
         }
         app.zoom = options.zoom;
+        if let Some(text) = &options.sketch_input {
+            match sketch_ui::parse_demo(text) {
+                Ok(steps) => app.sketch.demo = steps,
+                Err(e) => app.message = Some((e, true)),
+            }
+        }
         app.ctx_menu.open_at = options.context_menu;
         app.box_preview = options.select_box;
         if let Some(q) = &options.search {
@@ -669,6 +679,10 @@ fn save_png(_: &std::path::Path, _: &egui::ColorImage) -> Result<(), String> {
 }
 
 impl eframe::App for ChamferaApp {
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        self.sketch_raw_input(ctx, raw_input);
+    }
+
     /// Runs every frame, even when the window is covered or minimised (then eframe skips
     /// `ui`). `--screenshot` lives here and asks for painting while hidden, so a covered
     /// window still draws, captures and quits instead of waiting forever.
