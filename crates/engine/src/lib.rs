@@ -11,6 +11,7 @@ pub mod hole;
 mod imported;
 mod params;
 pub mod pick_filter;
+pub mod projection;
 pub mod script;
 pub mod sketching;
 pub mod solids;

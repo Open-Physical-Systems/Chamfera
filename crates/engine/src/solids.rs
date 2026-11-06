@@ -257,6 +257,9 @@ fn loop_edges(sketch: &Sketch, l: &ProfileLoop) -> Result<Vec<ProfileEdge>, Stri
                     sketch.point(*end).ok_or_else(gone)?,
                 )
                 .map_err(|e| format!("an arc of the profile: {e}"))?,
+                Curve::Ellipse { .. } | Curve::EllipticalArc { .. } => {
+                    return Err("ellipses in a profile cannot be swept into solids yet".into());
+                }
             };
             Ok(if seg.reversed { edge.reversed() } else { edge })
         })
@@ -1041,7 +1044,7 @@ impl Session {
             .doc
             .sketches
             .iter()
-            .filter(|s| s.attached.is_some() || s.on_plane.is_some())
+            .filter(|s| s.attached.is_some() || s.on_plane.is_some() || !s.projections.is_empty())
             .map(|s| s.id)
             .collect();
         for id in attached {
@@ -1093,8 +1096,8 @@ impl Session {
         self.built = built;
     }
 
-    /// Moves an attached sketch's plane onto its face or construction plane, as built so
-    /// far.
+    /// Moves an attached sketch's plane onto its face or construction plane, and its
+    /// projected edges onto their edges, as built so far.
     fn follow_attached_sketch(
         &mut self,
         sketch: u32,
@@ -1105,21 +1108,23 @@ impl Session {
             return Ok(());
         };
         let plane = match (f.attached.clone(), f.on_plane) {
-            (Some(r), _) => attached_plane(made, &r)?,
+            (Some(r), _) => Some(attached_plane(made, &r)?),
             (None, Some(id)) => match constructs.get(&id) {
-                Some(crate::construct::Constructed::Plane { frame, .. }) => *frame,
+                Some(crate::construct::Constructed::Plane { frame, .. }) => Some(*frame),
                 _ => {
                     return Err(format!(
                         "the plane {id} it is drawn on is suppressed or could not be built"
                     ));
                 }
             },
-            (None, None) => return Ok(()),
+            (None, None) => None,
         };
-        if let Ok(f) = self.doc.sketch_mut(sketch) {
+        if let Some(plane) = plane
+            && let Ok(f) = self.doc.sketch_mut(sketch)
+        {
             f.plane = plane;
         }
-        Ok(())
+        self.follow_projections(sketch, made.iter().map(|m| &m.2))
     }
 
     /// The solid face under pixel `(x, y)`: (feature, face name, plane), for flat faces

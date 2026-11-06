@@ -73,6 +73,10 @@ pub fn curve_polyline(sketch: &Sketch, curve: &Curve) -> Vec<Point2> {
                 })
                 .collect()
         }
+        Curve::Ellipse { .. } | Curve::EllipticalArc { .. } => sketch
+            .ellipse_arc_of(curve)
+            .map(|e| e.polyline(CIRCLE_SEGMENTS))
+            .unwrap_or_default(),
     }
 }
 
@@ -133,6 +137,8 @@ impl Session {
                     OverlayStyle::Highlight
                 } else if curve.is_construction() {
                     OverlayStyle::Construction
+                } else if f.projection_of(id.0).is_some() {
+                    OverlayStyle::Projected
                 } else if dof.as_ref().is_some_and(|d| d.is_curve_determined(id)) || !active {
                     OverlayStyle::Constrained
                 } else {
@@ -261,7 +267,7 @@ impl Session {
         let circle_label = |c: CurveId| {
             let centre = match s.curve(c)? {
                 Curve::Circle { centre, .. } | Curve::Arc { centre, .. } => s.point(*centre)?,
-                Curve::Line { .. } => return None,
+                _ => return None,
             };
             let r = s.radius(c)?;
             // Up and to the right of the centre, on the circle.
@@ -269,6 +275,12 @@ impl Session {
             Some(Point2::new(centre.x + d, centre.y + d))
         };
         s.constraints()
+            // A projected curve's own radius is not a dimension the user set.
+            .filter(|(_, c)| {
+                !c.curve_refs()
+                    .iter()
+                    .any(|k| f.projection_of(k.0).is_some())
+            })
             .filter_map(|(id, c)| {
                 use chamfera_sketch::Constraint as C;
                 let value = c.value()?;

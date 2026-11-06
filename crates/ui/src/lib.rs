@@ -33,6 +33,7 @@ mod search;
 mod shell_ui;
 mod shortcuts;
 mod sketch_select;
+mod sketch_shapes;
 mod sketch_ui;
 mod solid_ui;
 mod timeline;

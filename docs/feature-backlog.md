@@ -48,10 +48,10 @@ Close runners-up: selection filters and box selection (UI and NAV), splines (nee
 | Tangent arc | Arc that continues tangentially from a line end | branch (`sketch/tools`) | P0 | S | sketch, ui |
 | Point | A free sketch point | done | P0 | S | sketch |
 | Construction toggle | Mark a curve as construction (not part of profiles) | done | P0 | S | sketch, ui |
-| Polygon | Regular polygon, inscribed or circumscribed, by centre or edge | missing | P0 | S | sketch, ui |
-| Slot | Straight slot by centres or overall length, arc slot | missing | P0 | S | sketch, ui |
-| Ellipse | Ellipse by centre and two axes (kernel ellipses exist) | missing | P1 | S | sketch, ui |
-| Elliptical arc | Partial ellipse | missing | P2 | S | sketch |
+| Polygon | Regular polygon, inscribed or circumscribed, by centre or edge | branch (`sketch/shapes-project`) (by centre) | P0 | S | sketch, ui |
+| Slot | Straight slot by centres or overall length, arc slot | branch (`sketch/shapes-project`) (straight) | P0 | S | sketch, ui |
+| Ellipse | Ellipse by centre and two axes (kernel ellipses exist) | branch (`sketch/shapes-project`) (not extruded yet) | P1 | S | sketch, ui |
+| Elliptical arc | Partial ellipse | branch (`sketch/shapes-project`) (command only) | P2 | S | sketch |
 | Conic curve | A conic with a shape value (rho) between two ends | missing | P2 | M | sketch, geom |
 | Fit-point spline | Smooth curve through clicked points, with tangent handles | missing | P1 | L | sketch, geom (needs K10) |
 | Control-point spline | Spline edited by its control polygon | missing | P1 | M | sketch, geom (needs K10) |
@@ -65,7 +65,7 @@ Close runners-up: selection filters and box selection (UI and NAV), splines (nee
 | Sketch mirror | Mirror curves across a line, with symmetry constraints | branch (`sketch/tools`) | P0 | S | sketch, engine |
 | Sketch rectangular and circular patterns | Repeat curves in a grid or around a point | branch (`sketch/tools`) | P1 | S | sketch, engine |
 | Move, rotate, scale, copy sketch geometry | Transform selected curves by drag or typed values | missing | P1 | M | sketch, engine, ui |
-| Project / include geometry | Bring model edges, faces and other sketch curves into the sketch, linked to their source | missing | P0 | M | sketch, doc, engine |
+| Project / include geometry | Bring model edges, faces and other sketch curves into the sketch, linked to their source | branch (`sketch/shapes-project`) (edges and faces) | P0 | M | sketch, doc, engine |
 | Intersection curve | Curve where the sketch plane cuts a body | missing | P1 | M | kernel, sketch |
 | Project to surface / wrap | Project curves onto a curved face | missing | P2 | L | kernel |
 | 3D sketch | Curves in space, not on one plane (paths for sweeps) | missing | P2 | L | sketch, doc |

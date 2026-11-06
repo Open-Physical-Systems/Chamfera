@@ -358,6 +358,8 @@ pub enum OverlayStyle {
     Sketch,
     Constrained,
     Construction,
+    /// Model edges projected into the sketch.
+    Projected,
     Preview,
     Highlight,
     /// A measure result: the line between two closest points.
@@ -374,6 +376,7 @@ impl OverlayStyle {
             OverlayStyle::Sketch => theme.sketch,
             OverlayStyle::Constrained => theme.sketch_constrained,
             OverlayStyle::Construction => theme.sketch_construction,
+            OverlayStyle::Projected => theme.sketch_projected,
             OverlayStyle::Preview => theme.sketch_preview,
             OverlayStyle::Highlight => theme.highlight,
             OverlayStyle::Measure => theme.measure,
