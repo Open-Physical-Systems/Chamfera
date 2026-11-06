@@ -26,7 +26,12 @@
 //! circles and ellipses or an explicit [`SurfaceIntersection`]), curve-surface
 //! intersection ([`intersect_curve_surface`]) and point-solid classification
 //! ([`classify_point`]), the geometry booleans (K7) need.
+//!
+//! Rung K7 is here: booleans on solids ([`union`], [`subtract`], [`intersect`]) by face
+//! intersection, splitting, classification and sewing, with coplanar and touching cases,
+//! multi-lump results and result faces named after the operand faces they came from.
 
+mod boolean;
 mod check;
 mod curve3;
 mod intersect;
@@ -38,6 +43,9 @@ mod sweep;
 mod tessellate;
 mod topology;
 
+pub use boolean::{
+    BooleanOp, MAX_BOOLEAN_ENTITIES, MAX_BOOLEAN_FACES, boolean, intersect, subtract, union,
+};
 pub use curve3::{
     Arc3, Circle3, ClosestPoint, ELLIPSE_LENGTH_RELATIVE_TOLERANCE, Ellipse3, EllipticalArc3,
     Line3, Segment3,
@@ -62,6 +70,7 @@ pub use topology::{
     SURFACE_QUADRATURE_TOLERANCE, ShellId, ShellReport, SurfaceId, TopologyError, TopologyReport,
     TopologySummary, VertexId,
 };
+pub(crate) use topology::{ListEdge, ListFace, ListVertex};
 
 use thiserror::Error;
 
@@ -77,6 +86,8 @@ pub enum KernelError {
     InvalidResult(String),
     #[error("a numeric method did not converge: {0}")]
     NoConvergence(String),
+    #[error("the result is empty: the operation leaves no material")]
+    EmptyResult,
 }
 
 pub type KernelResult<T> = Result<T, KernelError>;
