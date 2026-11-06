@@ -1,5 +1,4 @@
-//! Solids built from Euler operators: cuboid, prism (with holes) and the topology of a
-//! cylinder. These are the shapes K4's extrude will produce.
+//! Solids built from Euler operators: cuboid, prism (with holes) and a cylinder. These are the shapes K4's extrude will produce.
 //!
 //! A prism is built as in Mantyla (1988), section 9.4 ("sweeping"): MVFS and a chain of
 //! MEVs draw the profile as a tree of struts, one MEF closes it into a bottom face and a
@@ -10,7 +9,7 @@
 //! down through the solid in the same way, and KFMRH turns it into a ring of the bottom
 //! face (genus + 1).
 
-use super::{Body, Curve, FaceId, HalfEdgeId, VertexId};
+use super::{Body, Curve, FaceId, HalfEdgeId, Surface, VertexId};
 use crate::{Circle3, KernelError, KernelResult};
 use chamfera_geom::{
     Frame, LINEAR_TOLERANCE, MAX_COORDINATE, Point2, Point3, Sign, Vec3, orient2d,
@@ -347,8 +346,9 @@ impl Body {
     /// `2 - 3 + 3 - 0 = 2`. Built as MVFS, MEF (closed bottom circle), MEV (seam), MEF
     /// (closed top circle).
     ///
-    /// The lateral face has no surface until K3 adds cylinders, so this body passes
-    /// [`Body::validate_topology`] but not yet [`Body::validate`].
+    /// The lateral face lies on a [`Surface::Cylinder`] (outward normal away from the
+    /// axis), so the body passes [`Body::validate`]. K4's extrude of a circle builds the
+    /// same solid with the general naming scheme.
     pub fn cylinder_topology(frame: &Frame, radius: f64, height: f64) -> KernelResult<Body> {
         if !(height.is_finite() && height > LINEAR_TOLERANCE && height <= 2.0 * MAX_COORDINATE) {
             return Err(invalid(format!(
@@ -381,10 +381,11 @@ impl Body {
         body.set_edge_line(seam)?;
         body.set_face_plane_from_loop(bottom)?;
         body.set_face_plane_from_loop(top)?;
+        body.set_face_surface(lateral, Surface::cylinder(*frame, radius)?, true)?;
         body.set_face_name(lateral, "lateral")?;
         body.set_face_name(bottom, "bottom")?;
         body.set_face_name(top, "top")?;
-        body.validate_topology()?;
+        body.validate()?;
         Ok(body)
     }
 }

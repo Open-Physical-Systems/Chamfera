@@ -26,6 +26,13 @@ fn valid(b: &Body, genus: usize) -> TopologyReport {
     r
 }
 
+/// [`valid`] plus the geometric checks of [`Body::validate`].
+fn valid_solid(b: &Body, genus: usize) -> TopologyReport {
+    let r = valid(b, genus);
+    assert_eq!(b.validate().unwrap(), r);
+    r
+}
+
 fn square(x0: f64, y0: f64, side: f64) -> Vec<Point2> {
     vec![
         Point2::new(x0, y0),
@@ -43,7 +50,9 @@ fn face_named(b: &Body, name: &str) -> FaceId {
 }
 
 fn outward_normal(b: &Body, f: FaceId) -> Vec3 {
-    let (Surface::Plane(frame), same) = b.face_surface(f).unwrap().unwrap();
+    let Some((Surface::Plane(frame), same)) = b.face_surface(f).unwrap() else {
+        panic!("{f} is not planar");
+    };
     if same { frame.z() } else { -frame.z() }
 }
 
@@ -480,8 +489,16 @@ fn cylinder_topology_has_two_circles_and_a_seam() {
     let lateral = face_named(&b, "lateral");
     let bottom = face_named(&b, "bottom");
     let top = face_named(&b, "top");
-    // The lateral face waits for K3's cylinder surface.
-    assert_eq!(b.validate(), Err(TopologyError::MissingSurface(lateral)));
+    // The lateral face lies on the cylinder r = 5 about Z, outward normal away from it.
+    valid_solid(&b, 0);
+    let Some((Surface::Cylinder(c), true)) = b.face_surface(lateral).unwrap() else {
+        panic!("the lateral face must be on a cylinder, same sense");
+    };
+    assert_eq!(c.radius(), r);
+    // Lateral area 2π r h = 100π; total 100π + 2·25π = 150π; volume π r² h = 250π.
+    assert!(close(b.face_area(lateral).unwrap(), TAU * r * h, 1e-9));
+    assert!(close(b.area().unwrap(), 150.0 * PI, 1e-9));
+    assert!(close(b.volume().unwrap(), 250.0 * PI, 1e-9));
     // Caps are discs bounded by one closed edge: area πr² exactly from the arc formula.
     assert!(close(b.face_area(bottom).unwrap(), PI * r * r, 1e-12));
     assert!(close(b.face_area(top).unwrap(), PI * r * r, 1e-12));
@@ -507,6 +524,130 @@ fn cylinder_topology_has_two_circles_and_a_seam() {
     let bb = b.bounding_box().unwrap();
     assert!(bb.min.coincident(Point3::new(-r, -r, 0.0)));
     assert!(bb.max.coincident(Point3::new(r, r, h)));
+}
+
+#[test]
+fn points_are_classified_against_cylinder_faces() {
+    let (r, h) = (5.0, 10.0);
+    let b = Body::cylinder_topology(&Frame::XY, r, h).unwrap();
+    let lateral = face_named(&b, "lateral");
+    let bottom = face_named(&b, "bottom");
+    let at = |f: FaceId, p: Point3| b.classify_point_on_face(f, p).unwrap();
+    // On the lateral face: the far side (-5, 0, 5) is inside; the seam at (5, 0, 5) and
+    // the circles at z = 0 and z = 10 are boundary; the cylinder above the face and points
+    // off the cylinder are outside.
+    assert_eq!(at(lateral, Point3::new(-r, 0.0, 5.0)), PointOnFace::Inside);
+    let s = 0.5f64.sqrt() * r;
+    assert_eq!(at(lateral, Point3::new(s, -s, 0.1)), PointOnFace::Inside);
+    assert_eq!(at(lateral, Point3::new(r, 0.0, 5.0)), PointOnFace::Boundary);
+    assert_eq!(at(lateral, Point3::new(0.0, r, 0.0)), PointOnFace::Boundary);
+    assert_eq!(at(lateral, Point3::new(0.0, -r, h)), PointOnFace::Boundary);
+    assert_eq!(at(lateral, Point3::new(0.0, r, 12.0)), PointOnFace::Outside);
+    assert_eq!(
+        at(lateral, Point3::new(0.0, r, -1e-3)),
+        PointOnFace::Outside
+    );
+    assert_eq!(
+        at(lateral, Point3::new(0.0, 0.0, 5.0)),
+        PointOnFace::Outside
+    );
+    // Within the tolerance of the seam counts as boundary, just past it as inside.
+    let off = LINEAR_TOLERANCE * 0.5 / r;
+    assert_eq!(
+        at(lateral, Point3::new(r * off.cos(), r * off.sin(), 5.0)),
+        PointOnFace::Boundary
+    );
+    let past = 1e-4f64;
+    assert_eq!(
+        at(lateral, Point3::new(r * past.cos(), r * past.sin(), 5.0)),
+        PointOnFace::Inside
+    );
+    // The bottom disc: exact arcs in the plane, so a point 1e-6 inside the rim is inside
+    // and 1e-6 outside is outside.
+    assert_eq!(at(bottom, Point3::new(1.0, 1.0, 0.0)), PointOnFace::Inside);
+    assert_eq!(
+        at(bottom, Point3::new(r - 1e-6, 0.0, 0.0)),
+        PointOnFace::Inside
+    );
+    assert_eq!(
+        at(bottom, Point3::new(0.0, r + 1e-6, 0.0)),
+        PointOnFace::Outside
+    );
+    assert_eq!(at(bottom, Point3::new(0.0, -r, 0.0)), PointOnFace::Boundary);
+    assert_eq!(at(bottom, Point3::new(1.0, 1.0, 1.0)), PointOnFace::Outside);
+    // Hostile input.
+    assert!(
+        b.classify_point_on_face(bottom, Point3::new(f64::NAN, 0.0, 0.0))
+            .is_err()
+    );
+    assert!(
+        b.classify_point_on_face(FaceId(99), Point3::ORIGIN)
+            .is_err()
+    );
+}
+
+#[test]
+fn points_are_classified_against_a_planar_face_with_holes() {
+    // A 10 x 10 square plate with a 2 x 2 hole at (4, 4).
+    let b = Body::prism_with_holes(
+        &Frame::XY,
+        &square(0.0, 0.0, 10.0),
+        &[square(4.0, 4.0, 2.0)],
+        1.0,
+    )
+    .unwrap();
+    let top = face_named(&b, "top");
+    let at = |p: Point3| b.classify_point_on_face(top, p).unwrap();
+    assert_eq!(at(Point3::new(1.0, 1.0, 1.0)), PointOnFace::Inside);
+    assert_eq!(at(Point3::new(5.0, 5.0, 1.0)), PointOnFace::Outside);
+    assert_eq!(at(Point3::new(4.0, 5.0, 1.0)), PointOnFace::Boundary);
+    assert_eq!(at(Point3::new(11.0, 5.0, 1.0)), PointOnFace::Outside);
+    // The rays from (1, 4, 1) and (1, 6, 1) run along the hole's bottom and top edges:
+    // half-open counting keeps the parity right.
+    assert_eq!(at(Point3::new(1.0, 4.0, 1.0)), PointOnFace::Inside);
+    assert_eq!(at(Point3::new(1.0, 6.0, 1.0)), PointOnFace::Inside);
+}
+
+#[test]
+fn curved_faces_with_wrong_geometry_fail_validation() {
+    let good = Body::cylinder_topology(&Frame::XY, 5.0, 10.0).unwrap();
+    let lateral = face_named(&good, "lateral");
+    // The wrong sense: the loop runs clockwise in (u, v) for the claimed normal.
+    let mut b = good.clone();
+    b.set_face_surface(lateral, Surface::cylinder(Frame::XY, 5.0).unwrap(), false)
+        .unwrap();
+    assert_eq!(b.validate(), Err(TopologyError::WrongOrientation(lateral)));
+    // A cylinder of another radius, or moved sideways: the edges are off it.
+    let mut b = good.clone();
+    b.set_face_surface(lateral, Surface::cylinder(Frame::XY, 5.1).unwrap(), true)
+        .unwrap();
+    assert_eq!(b.validate(), Err(TopologyError::OffSurface(lateral)));
+    let mut b = good.clone();
+    let moved = Frame::XY.with_origin(Point3::new(0.0, 1e-6, 0.0)).unwrap();
+    b.set_face_surface(lateral, Surface::cylinder(moved, 5.0).unwrap(), true)
+        .unwrap();
+    assert_eq!(b.validate(), Err(TopologyError::OffSurface(lateral)));
+    // Within the tolerance it is still valid.
+    let mut b = good.clone();
+    let moved = Frame::XY.with_origin(Point3::new(0.0, 5e-8, 0.0)).unwrap();
+    b.set_face_surface(lateral, Surface::cylinder(moved, 5.0).unwrap(), true)
+        .unwrap();
+    b.validate().unwrap();
+    // The lateral face on a sphere through neither circle.
+    let mut b = good;
+    b.set_face_surface(lateral, Surface::sphere(Frame::XY, 5.0).unwrap(), true)
+        .unwrap();
+    assert_eq!(b.validate(), Err(TopologyError::OffSurface(lateral)));
+}
+
+#[test]
+fn a_cylinder_round_trips_through_json() {
+    let b = Body::cylinder_topology(&Frame::YZ, 2.0, 3.0).unwrap();
+    let json = serde_json::to_string(&b).unwrap();
+    let back: Body = serde_json::from_str(&json).unwrap();
+    back.validate().unwrap();
+    // π r² h = 12π.
+    assert!(close(back.volume().unwrap(), 12.0 * PI, 1e-9));
 }
 
 #[test]
@@ -698,7 +839,9 @@ fn wrong_orientation_fails_validation() {
     // flipping only the senses turns every face's normal against its loops.
     let mut b = good_box();
     for f in b.faces() {
-        let (Surface::Plane(frame), _) = b.face_surface(f).unwrap().unwrap();
+        let Some((Surface::Plane(frame), _)) = b.face_surface(f).unwrap() else {
+            panic!("box faces are planar");
+        };
         let flipped = frame.flipped();
         b.set_face_surface(f, Surface::Plane(flipped), false)
             .unwrap();
@@ -736,7 +879,9 @@ fn bad_points_and_geometry_fail_validation() {
     // A plane moved off the face.
     let mut b = good_box();
     let f = FaceId(1);
-    let (Surface::Plane(frame), same) = b.face_surface(f).unwrap().unwrap();
+    let Some((Surface::Plane(frame), same)) = b.face_surface(f).unwrap() else {
+        panic!("box faces are planar");
+    };
     let moved = frame.with_origin(frame.origin() + frame.z() * 0.5).unwrap();
     b.set_face_surface(f, Surface::Plane(moved), same).unwrap();
     assert_eq!(b.validate(), Err(TopologyError::OffSurface(f)));

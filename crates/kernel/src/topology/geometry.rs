@@ -2,8 +2,7 @@
 //!
 //! [`Curve`] wraps the K1 curves in space. An edge uses a curve over a parameter range
 //! `[t0, t1]` (an [`EdgeCurve`]); its first half-edge runs from `c(t0)` to `c(t1)`.
-//! [`Surface`] is the carrier of a face. Rung K2 has planes only; K3 adds cylinder, cone,
-//! sphere and torus as further variants.
+//! The carrier of a face is a [`Surface`](crate::Surface) (rung K3, in `surface.rs`).
 //!
 //! Both serialize through plain data and re-validate on load with the curve constructors.
 
@@ -137,6 +136,80 @@ impl Curve {
         }
     }
 
+    /// The first derivative `c'(t)`.
+    pub fn d1(&self, t: f64) -> Vec3 {
+        match self {
+            Curve::Line(c) => c.d1(t),
+            Curve::Segment(c) => c.d1(t),
+            Curve::Circle(c) => c.d1(t),
+            Curve::Arc(c) => c.d1(t),
+            Curve::Ellipse(c) => c.d1(t),
+            Curve::EllipticalArc(c) => c.d1(t),
+        }
+    }
+
+    /// The distance from `p` to the part of the curve with parameter in `[t0, t1]` (a
+    /// valid edge range).
+    pub fn distance_on(&self, t0: f64, t1: f64, p: Point3) -> KernelResult<f64> {
+        let (a, b) = (self.point_at(t0), self.point_at(t1));
+        let d = match self {
+            Curve::Line(_) | Curve::Segment(_) => {
+                if a.coincident(b) {
+                    a.distance(p)
+                } else {
+                    Segment3::new(a, b)?.closest_point(p)?.distance
+                }
+            }
+            Curve::Circle(c) => {
+                Arc3::new(*c.frame(), c.radius(), t0, t1 - t0)?
+                    .closest_point(p)?
+                    .distance
+            }
+            Curve::Arc(a) => {
+                let c = a.circle();
+                Arc3::new(*c.frame(), c.radius(), t0, t1 - t0)?
+                    .closest_point(p)?
+                    .distance
+            }
+            Curve::Ellipse(e) => {
+                EllipticalArc3::new(*e.frame(), e.rx(), e.ry(), t0, t1 - t0)?
+                    .closest_point(p)?
+                    .distance
+            }
+            Curve::EllipticalArc(a) => {
+                let e = a.ellipse();
+                EllipticalArc3::new(*e.frame(), e.rx(), e.ry(), t0, t1 - t0)?
+                    .closest_point(p)?
+                    .distance
+            }
+        };
+        Ok(d)
+    }
+
+    /// The same points run the other way, with the matching range: the curve `c'` and
+    /// `[t0', t1']` with `c'(t0') = c(t1)` and `c'(t1') = c(t0)`.
+    pub fn reversed_on(&self, t0: f64, t1: f64) -> KernelResult<(Curve, f64, f64)> {
+        Ok(match self {
+            Curve::Line(l) => (Curve::Line(l.reversed()), -t1, -t0),
+            Curve::Segment(s) => (Curve::Segment(s.reversed()), 1.0 - t1, 1.0 - t0),
+            Curve::Circle(c) => (Curve::Circle(c.reversed()), -t1, -t0),
+            Curve::Arc(a) => {
+                let r = a.reversed();
+                // The reversed arc's parameter u covers the point c(t) at u = -t, moved by
+                // whole turns into its own range.
+                let (lo, _) = r.range();
+                let u0 = crate::check::angle_from(-t1, lo);
+                (Curve::Arc(r), u0, u0 + (t1 - t0))
+            }
+            Curve::Ellipse(e) => (Curve::Ellipse(e.reversed()), -t1, -t0),
+            Curve::EllipticalArc(_) => {
+                return Err(KernelError::Unsupported(
+                    "reversing an elliptical arc edge".into(),
+                ));
+            }
+        })
+    }
+
     /// The curve's own parameter range (infinite for a line, one turn for a circle or
     /// ellipse).
     pub fn range(&self) -> (f64, f64) {
@@ -235,33 +308,6 @@ impl Curve {
                 let e = a.ellipse();
                 Ok(EllipticalArc3::new(*e.frame(), e.rx(), e.ry(), t0, t1 - t0)?.bounding_box())
             }
-        }
-    }
-}
-
-/// The surface a face lies on. A face also has an orientation flag saying whether its
-/// outward normal is the surface normal or its opposite.
-///
-/// K3 adds `Cylinder`, `Cone`, `Sphere` and `Torus` here.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case", deny_unknown_fields)]
-pub enum Surface {
-    /// The plane through the frame's origin; its normal is the frame's z axis.
-    Plane(Frame),
-}
-
-impl Surface {
-    /// The surface normal at a point of a plane (constant).
-    pub fn plane_normal(&self) -> Option<Vec3> {
-        match self {
-            Surface::Plane(f) => Some(f.z()),
-        }
-    }
-
-    /// Signed distance of `p` from the surface along its normal, for a plane.
-    pub fn plane_distance(&self, p: Point3) -> Option<f64> {
-        match self {
-            Surface::Plane(f) => Some((p - f.origin()).dot(f.z())),
         }
     }
 }
