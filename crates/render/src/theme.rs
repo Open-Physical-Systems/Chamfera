@@ -52,6 +52,8 @@ pub struct Theme {
     pub sketch_preview: Rgba,
     /// What the pointer is over, or what is picked.
     pub highlight: Rgba,
+    /// Measure results in the viewport: the dimension line between closest points.
+    pub measure: Rgba,
     // construction geometry
     /// Construction plane outlines, axes and points.
     pub construct: Rgba,
@@ -118,6 +120,7 @@ impl Theme {
             sketch_construction: Rgba(214, 120, 30, 255),
             sketch_preview: Rgba(30, 100, 220, 140),
             highlight: Rgba(240, 160, 20, 255),
+            measure: Rgba(0, 140, 112, 255),
             construct: Rgba(176, 112, 16, 255),
             construct_fill: Rgba(232, 168, 40, 46),
             hover_highlight: Rgba(0, 150, 180, 255),
@@ -164,6 +167,7 @@ impl Theme {
             sketch_construction: Rgba(240, 150, 60, 255),
             sketch_preview: Rgba(96, 170, 255, 140),
             highlight: Rgba(255, 190, 60, 255),
+            measure: Rgba(70, 216, 178, 255),
             construct: Rgba(240, 180, 80, 255),
             construct_fill: Rgba(240, 180, 80, 38),
             hover_highlight: Rgba(90, 215, 235, 255),

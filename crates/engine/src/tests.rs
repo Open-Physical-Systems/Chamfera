@@ -202,6 +202,12 @@ fn hostile_params_never_panic() {
         json!({"edges": [long], "radius": -1, "distance": "0 mm", "size": "q"}),
         json!({"edges": [], "pick": {"x": 1e300, "y": "a"}, "radius": 1}),
         json!({"pick": {"x": 400, "y": 300, "width": 800, "height": 600}, "radius": 1e9}),
+        json!({"body": "Extrude 1", "density": -1, "a": {"solid": 5}, "b": {"point": [1, 2]}}),
+        json!({"body": 1e300, "density": 1e300, "a": {"point": [f64::MAX, 0, 0]}, "b": null}),
+        json!({"body": [1], "a": {"solid": "Extrude 1", "face": long}, "b": {"solid": "x", "edge": 3}}),
+        json!({"a": {"solid": "Extrude 1", "vertex": [1, "a", 3]}, "b": {"body": -4, "face": "#99999999999"}}),
+        json!({"a": "solid", "x": 400, "y": 300, "width": 800, "height": 600, "from": {"point": "here"}}),
+        json!({"x": 400, "y": 300, "width": 800, "height": 600, "from": {"solid": "Extrude 1", "edge": "#-1"}}),
         json!({"x": 400, "y": 300, "width": 800, "height": 600, "filter": ["edges", 5, null]}),
         json!({"x": 400, "y": 300, "width": 800, "height": 600, "filter": "edges"}),
         json!({"x": 400, "y": 300, "width": 800, "height": 600, "filter": [], "name": "   "}),
@@ -1853,6 +1859,210 @@ fn body_import_step_adds_exact_solids_that_undo_save_and_open_keep() {
             .is_err()
     );
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+// ----- inspect -----
+
+/// The 50 x 30 x 10 box of `extruded_plate`, and its solid's name.
+fn measured_box(s: &mut Session) -> String {
+    let r = extruded_plate(s, json!(10));
+    r["solids"][0]["name"].as_str().unwrap().to_owned()
+}
+
+#[test]
+fn mass_properties_of_the_box_match_the_textbook() {
+    // 50 x 30 x 10 from the origin, density 2: m = 30000, centre (25, 15, 5),
+    // I_xx = m (30² + 10²) / 12, I_yy = m (50² + 10²) / 12, I_zz = m (50² + 30²) / 12.
+    let mut s = Session::new();
+    let name = measured_box(&mut s);
+    let r = s
+        .execute("inspect.mass", &json!({"body": name, "density": 2}))
+        .unwrap();
+    let m = 30_000.0;
+    let f = |v: &serde_json::Value| v.as_f64().unwrap();
+    assert!((f(&r["mass"]) - m).abs() < 1e-8);
+    assert!((f(&r["volume"]) - 15_000.0).abs() < 1e-8);
+    assert!((f(&r["area"]) - 4_600.0).abs() < 1e-8);
+    for (k, want) in [25.0, 15.0, 5.0].into_iter().enumerate() {
+        assert!((f(&r["centre_of_mass"][k]) - want).abs() < 1e-9);
+    }
+    let want = [m * 1000.0 / 12.0, m * 2600.0 / 12.0, m * 3400.0 / 12.0];
+    for k in 0..3 {
+        assert!((f(&r["inertia"][k][k]) - want[k]).abs() < 1e-9 * want[k]);
+        assert!((f(&r["principal_moments"][k]) - want[k]).abs() < 1e-9 * want[k]);
+    }
+    // By scene id too, density 1 by default.
+    let id = r["body"].as_u64().unwrap();
+    let r = s.execute("inspect.mass", &json!({"body": id})).unwrap();
+    assert!((f(&r["mass"]) - 15_000.0).abs() < 1e-8);
+    // Refused: no such solid, a bad density.
+    assert!(
+        s.execute("inspect.mass", &json!({"body": "nothing"}))
+            .is_err()
+    );
+    assert!(
+        s.execute("inspect.mass", &json!({"body": id, "density": 0}))
+            .is_err()
+    );
+}
+
+#[test]
+fn measuring_two_box_faces_gives_ninety_degrees_and_an_edge_its_length() {
+    let mut s = Session::new();
+    let name = measured_box(&mut s);
+    // Face names are the feature id (2) and the profile role.
+    let r = s
+        .execute(
+            "inspect.measure",
+            &json!({"a": {"solid": name, "face": "2:top"}, "b": {"solid": name, "face": "2:side 0"}}),
+        )
+        .unwrap();
+    assert!(
+        (r["angle_degrees"].as_f64().unwrap() - 90.0).abs() < 1e-9,
+        "{r}"
+    );
+    // They share an edge: distance zero.
+    assert!(r["distance"].as_f64().unwrap() < 1e-12);
+    assert!((r["a"]["area"].as_f64().unwrap() - 1500.0).abs() < 1e-9);
+    // The top front edge is 50 long; the point (25, -7, 10) is 7 from it.
+    let edge = edge_between(&mut s, [0.0, 0.0, 10.0], [50.0, 0.0, 10.0]);
+    let r = s
+        .execute(
+            "inspect.measure",
+            &json!({"a": {"solid": name, "edge": edge}, "b": {"point": [25, -7, 10]}}),
+        )
+        .unwrap();
+    assert!((r["a"]["length"].as_f64().unwrap() - 50.0).abs() < 1e-12);
+    assert!((r["distance"].as_f64().unwrap() - 7.0).abs() < 1e-12);
+    // (The solved sketch puts its corners within rounding of the dimensions.)
+    for (k, want) in [25.0, 0.0, 10.0].into_iter().enumerate() {
+        assert!((r["on_a"][k].as_f64().unwrap() - want).abs() < 1e-9, "{r}");
+    }
+    // A vertex by its point, to the far corner: the diagonal √(50² + 30² + 10²).
+    let r = s
+        .execute(
+            "inspect.measure",
+            &json!({"a": {"solid": name, "vertex": [0, 0, 0]}, "b": {"point": [50, 30, 10]}}),
+        )
+        .unwrap();
+    assert!((r["distance"].as_f64().unwrap() - 3500.0f64.sqrt()).abs() < 1e-12);
+    // Unknown names are refused.
+    let bad = json!({"a": {"solid": name, "face": "2:nowhere"}});
+    assert!(s.execute("inspect.measure", &bad).is_err());
+}
+
+#[test]
+fn two_separated_boxes_are_their_gap_apart() {
+    // Box 1 is [0,50] x [0,30] x [0,10]; box 2 is a 10 x 10 rectangle at x 60..70
+    // extruded 10 mm: the gap is 10 along x.
+    let mut s = Session::new();
+    let a = measured_box(&mut s);
+    s.execute("sketch.create", &json!({"plane": "xy"})).unwrap();
+    s.execute(
+        "sketch.rectangle",
+        &json!({"x1": 60, "y1": 5, "x2": 70, "y2": 15}),
+    )
+    .unwrap();
+    let sketch = s.active_sketch.unwrap();
+    s.execute("sketch.finish", &json!({})).unwrap();
+    let r = s
+        .execute(
+            "solid.extrude",
+            &json!({"sketch": sketch, "profiles": [{"x": 65, "y": 10}], "distance": 10}),
+        )
+        .unwrap();
+    let b = r["solids"][0]["name"].as_str().unwrap().to_owned();
+    assert_ne!(a, b);
+    let r = s
+        .execute(
+            "inspect.measure",
+            &json!({"a": {"solid": a}, "b": {"solid": b}}),
+        )
+        .unwrap();
+    assert!(
+        (r["distance"].as_f64().unwrap() - 10.0).abs() < 1e-12,
+        "{r}"
+    );
+    assert!((r["on_a"][0].as_f64().unwrap() - 50.0).abs() < 1e-12);
+    assert!((r["on_b"][0].as_f64().unwrap() - 60.0).abs() < 1e-12);
+    assert!((r["delta"][0].as_f64().unwrap() - 10.0).abs() < 1e-12);
+}
+
+#[test]
+fn measure_at_picks_the_top_face_and_measures_from_an_earlier_pick() {
+    let mut s = Session::new();
+    let name = measured_box(&mut s);
+    let (w, h) = (800.0, 600.0);
+    s.execute("view.home", &json!({"width": w, "height": h}))
+        .unwrap();
+    // Where the top's centre (25, 15, 10) is on screen.
+    let vp = chamfera_render::mat_mul(
+        &s.camera.projection_matrix(w / h, s.scene.bounds().as_ref()),
+        &s.camera.view_matrix(),
+    );
+    let n = chamfera_render::transform_point(&vp, chamfera_geom::Point3::new(25.0, 15.0, 10.0))
+        .unwrap();
+    let (x, y) = ((n[0] + 1.0) * 0.5 * w, (1.0 - n[1]) * 0.5 * h);
+    let r = s
+        .execute(
+            "inspect.measure_at",
+            &json!({"x": x, "y": y, "width": w, "height": h}),
+        )
+        .unwrap();
+    assert_eq!(r["entity"]["face"], json!("2:top"), "{r}");
+    assert!((r["a"]["area"].as_f64().unwrap() - 1500.0).abs() < 1e-9);
+    // From the point 5 above the top's centre to the face under the pointer: 5.
+    let r = s
+        .execute(
+            "inspect.measure_at",
+            &json!({"x": x, "y": y, "width": w, "height": h, "from": {"point": [25, 15, 15]}}),
+        )
+        .unwrap();
+    assert!((r["distance"].as_f64().unwrap() - 5.0).abs() < 1e-12, "{r}");
+    assert_eq!(r["entity"]["solid"], json!(name));
+    // A corner pixel misses.
+    let r = s
+        .execute(
+            "inspect.measure_at",
+            &json!({"x": 1, "y": 1, "width": w, "height": h}),
+        )
+        .unwrap();
+    assert!(r["entity"].is_null());
+}
+
+#[test]
+fn inspect_commands_refuse_hostile_references_on_a_real_solid() {
+    let mut s = Session::new();
+    let name = measured_box(&mut s);
+    let long = "x".repeat(100_000);
+    let refs = [
+        json!({"solid": name, "face": long}),
+        json!({"solid": name, "edge": "#4294967296"}),
+        json!({"solid": name, "vertex": [1e300, 0, 0]}),
+        json!({"solid": name, "vertex": [f64::MAX, f64::MIN, 0]}),
+        json!({"solid": name, "face": ""}),
+        json!({"solid": name, "face": 5}),
+        json!({"solid": name, "point": [0, 0]}),
+        json!({"point": [1e7, 0, 0]}),
+        json!({"body": 4294967296u64}),
+        json!({"solid": [name]}),
+        json!(null),
+        json!("2:top"),
+    ];
+    for a in &refs {
+        assert!(
+            s.execute("inspect.measure", &json!({"a": a})).is_err(),
+            "{a}"
+        );
+        for b in &refs {
+            let _ = s.execute("inspect.measure", &json!({"a": a, "b": b}));
+        }
+        let at = json!({"x": 400, "y": 300, "width": 800, "height": 600, "from": a});
+        let _ = s.execute("inspect.measure_at", &at);
+    }
+    for d in [json!(-1), json!(f64::MAX), json!("1"), json!(1e-300)] {
+        let _ = s.execute("inspect.mass", &json!({"body": name, "density": d}));
+    }
 }
 
 // ----- selection filters and renaming -----

@@ -57,6 +57,7 @@ Ids: the rectangle is points 1-4, lines 5-8, constraints 9-12; fix, lengths 13-1
 
 ## 6. Check, then look
 - Compare `dof`, `status` and every profile area from `sketch.get` or `design_summary` with your hand values. DOF above 0: something can still move, add a constraint. `OverConstrained`: remove the redundant constraint (`sketch.remove {"constraint": id}`).
+- For solids, `inspect.mass {"body": name}` (centre of mass, inertia) and `inspect.measure {"a", "b"}` (distance, angle between faces or edges) check them against your hand values.
 - `snapshot {"view": "top"}` and look at the image: the outline, the holes where you meant them, construction lines in their own colour. Fully determined geometry of the sketch being edited is drawn in the constrained colour.
 - `sketch.finish` ends editing; `design.save {"path": "plate.chamfera"}` saves into the scratch folder (or a path inside an `--allow-path` folder).
 

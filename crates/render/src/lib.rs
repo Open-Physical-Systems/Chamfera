@@ -360,6 +360,8 @@ pub enum OverlayStyle {
     Construction,
     Preview,
     Highlight,
+    /// A measure result: the line between two closest points.
+    Measure,
     /// Construction planes' outlines, axes and points.
     Construct,
     /// What the pointer is over, before a click (`theme.hover_highlight`).
@@ -374,6 +376,7 @@ impl OverlayStyle {
             OverlayStyle::Construction => theme.sketch_construction,
             OverlayStyle::Preview => theme.sketch_preview,
             OverlayStyle::Highlight => theme.highlight,
+            OverlayStyle::Measure => theme.measure,
             OverlayStyle::Construct => theme.construct,
             OverlayStyle::Hover => theme.hover_highlight,
         }

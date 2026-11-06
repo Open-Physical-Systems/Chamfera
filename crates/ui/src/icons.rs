@@ -59,6 +59,8 @@ pub enum Icon {
     Home,
     ImportMesh,
     Line,
+    Mass,
+    Measure,
     Mirror,
     New,
     Offset,
@@ -90,7 +92,7 @@ pub enum Icon {
 
 impl Icon {
     #[cfg(test)]
-    pub const ALL: [Icon; 67] = [
+    pub const ALL: [Icon; 69] = [
         Icon::Arc,
         Icon::ArcTangent,
         Icon::ArcThreePoint,
@@ -131,6 +133,8 @@ impl Icon {
         Icon::Home,
         Icon::ImportMesh,
         Icon::Line,
+        Icon::Mass,
+        Icon::Measure,
         Icon::Mirror,
         Icon::New,
         Icon::Offset,
@@ -202,6 +206,8 @@ impl Icon {
             Icon::Home => master!("home"),
             Icon::ImportMesh => master!("import_mesh"),
             Icon::Line => master!("line"),
+            Icon::Mass => master!("mass"),
+            Icon::Measure => master!("measure"),
             Icon::New => master!("new"),
             Icon::Open => master!("open"),
             Icon::Origin => master!("origin"),
