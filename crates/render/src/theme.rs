@@ -45,6 +45,12 @@ pub struct Theme {
     /// The shape a tool would make (the extrude preview), drawn translucent over the
     /// model: its alpha is how much of the model shows through.
     pub preview_body: Rgba,
+    /// Edges behind faces in the "hidden edges" visual style (drawn dashed and faint).
+    pub edge_hidden: Rgba,
+    /// The cut faces of a section view.
+    pub section_cap: Rgba,
+    /// The hatch stripes over `section_cap`.
+    pub section_hatch: Rgba,
     // sketches
     /// Sketch geometry that can still move (under-constrained).
     pub sketch: Rgba,
@@ -149,6 +155,9 @@ impl Theme {
             body_selected: Rgba(64, 140, 230, 255),
             edge: Rgba(40, 46, 56, 255),
             preview_body: Rgba(30, 112, 214, 110),
+            edge_hidden: Rgba(40, 46, 56, 110),
+            section_cap: Rgba(214, 120, 64, 255),
+            section_hatch: Rgba(120, 58, 24, 255),
             sketch: Rgba(30, 100, 220, 255),
             sketch_constrained: Rgba(20, 24, 30, 255),
             sketch_construction: Rgba(214, 120, 30, 255),
@@ -214,6 +223,9 @@ impl Theme {
             body_selected: Rgba(84, 160, 255, 255),
             edge: Rgba(18, 20, 24, 255),
             preview_body: Rgba(84, 160, 255, 110),
+            edge_hidden: Rgba(200, 206, 216, 90),
+            section_cap: Rgba(200, 110, 60, 255),
+            section_hatch: Rgba(110, 52, 22, 255),
             sketch: Rgba(96, 170, 255, 255),
             sketch_constrained: Rgba(236, 240, 246, 255),
             sketch_construction: Rgba(240, 150, 60, 255),

@@ -1,5 +1,6 @@
 //! Layer 2: the design document: parameters and sketches now, the feature timeline from M4.
 
+pub mod appearance;
 pub mod component;
 pub mod construct;
 pub mod drawing;
@@ -9,6 +10,7 @@ pub mod imported;
 pub mod joint;
 pub mod timeline;
 
+pub use appearance::Appearance;
 pub use component::{Assembly, Component, ROOT};
 pub use construct::{
     AxisRef, ConstructKind, Construction, EdgeRef, OriginAxis, OriginPlane, PlaneRef, PointRef,
@@ -57,7 +59,9 @@ use thiserror::Error;
 /// - 18: drawings: sheets with views of the solids and dimensions (`drawing`).
 ///   Older files open with no sheets.
 /// - 19: projected (linked) sketch curves and ellipses.
-pub const FORMAT_VERSION: u32 = 19;
+/// - 21: body appearances (a colour and opacity per feature's body). Older files open
+///   with every body in the theme's colour.
+pub const FORMAT_VERSION: u32 = 21;
 /// The tag every design file starts with, so other JSON is not mistaken for a design.
 pub const FORMAT_TAG: &str = "chamfera";
 /// Longest parameter name.
@@ -236,6 +240,9 @@ pub struct Document {
     /// Drawing sheets (format 18).
     #[serde(default, skip_serializing_if = "Drawing::is_empty")]
     pub drawing: Drawing,
+    /// How the bodies a feature (or an import) made look, by its id. Display data only.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub appearances: BTreeMap<u32, Appearance>,
 }
 
 impl Default for Document {
@@ -251,6 +258,7 @@ impl Default for Document {
             timeline: Timeline::default(),
             assembly: Assembly::default(),
             drawing: Drawing::default(),
+            appearances: BTreeMap::new(),
         }
     }
 }
@@ -656,6 +664,8 @@ impl Document {
         checked.check_timeline(&mut seen)?;
         doc.drawing.check()?;
         checked.drawing = doc.drawing;
+        appearance::check(&doc.appearances, checked.last_feature_id)?;
+        checked.appearances = doc.appearances;
         // Values in the file must agree with their expressions.
         checked.evaluate()?;
         Ok(checked)

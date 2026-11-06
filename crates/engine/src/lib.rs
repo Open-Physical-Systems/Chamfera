@@ -8,6 +8,7 @@ pub mod assembly;
 pub mod box_select;
 pub mod cmd;
 pub mod construct;
+pub mod display;
 pub mod hole;
 mod imported;
 mod params;

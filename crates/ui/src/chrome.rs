@@ -147,6 +147,8 @@ impl ChamferaApp {
             self.run("view.projection", json!({ "mode": mode }));
         }
         ui.separator();
+        self.display_menu(ui);
+        ui.separator();
         widgets::caption(ui, self.look(), "THEME");
         for (c, text) in [
             (ThemeChoice::System, "Follow system"),

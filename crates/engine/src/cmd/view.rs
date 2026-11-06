@@ -58,11 +58,38 @@ pub static COMMANDS: &[CommandSpec] = &[
         run: projection,
     },
     CommandSpec {
+        id: "view.section",
+        label: "Section Analysis",
+        params: "plane: string (required) - xy, xz, yz, or a flat face by name (\"2:top\")\n\
+                 offset: number (optional) - mm along the plane's normal; default 0\n\
+                 flip: boolean (optional) - cut away the other side\n\
+                 The side the normal points to is cut away. Display only: the design is \
+                 unchanged.",
+        mutates: false,
+        run: crate::display::section,
+    },
+    CommandSpec {
+        id: "view.section_clear",
+        label: "Clear Section",
+        params: "(none)",
+        mutates: false,
+        run: crate::display::section_clear,
+    },
+    CommandSpec {
         id: "view.standard",
         label: "Standard View",
         params: "view: string (required) - front, back, left, right, top, bottom or iso",
         mutates: false,
         run: standard,
+    },
+    CommandSpec {
+        id: "view.style",
+        label: "Visual Style",
+        params: "style: string (required) - shaded, shaded_edges (visible edges), \
+                 shaded_hidden_edges (hidden edges dashed), wireframe, or wireframe_hidden \
+                 (hidden lines removed)",
+        mutates: false,
+        run: crate::display::style,
     },
     CommandSpec {
         id: "view.zoom",
@@ -80,7 +107,11 @@ fn get(s: &mut Session, p: &Value) -> CmdResult {
 }
 
 fn reply(s: &Session) -> Value {
-    json!({ "camera": s.camera, "eye": s.camera.eye() })
+    json!({
+        "camera": s.camera,
+        "eye": s.camera.eye(),
+        "display": crate::display::display_json(s),
+    })
 }
 
 fn fit(s: &mut Session, p: &Value) -> CmdResult {

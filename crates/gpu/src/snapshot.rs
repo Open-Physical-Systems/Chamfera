@@ -278,3 +278,135 @@ mod overlay_tests {
         assert!(is_sketch(px(27, 19)), "point pixel {:?}", px(27, 19));
     }
 }
+
+#[cfg(test)]
+mod display_tests {
+    use super::*;
+    use chamfera_geom::{Point3, TriMesh, Vec3};
+    use chamfera_render::{Camera, Rgba, Scene, Section, StandardView, Theme, VisualStyle};
+
+    const W: u32 = 64;
+    const H: u32 = 48;
+
+    /// The box -10..10 seen from the front (eye on -Y), distance 100: 0.761 px per mm
+    /// (see `overlays_draw_over_bodies_in_the_sketch_colour`), so it covers columns
+    /// 24.4..39.6 and rows 16.4..31.6 around the centre (32, 24). Row 24 holds the X axis
+    /// line, so pixels are checked on row 20.
+    fn render(scene: &Scene) -> Option<Vec<u8>> {
+        let mut camera = Camera::default();
+        camera.set_view(StandardView::Front);
+        camera.distance = 100.0;
+        let theme = Theme::light();
+        let frame = Frame {
+            scene,
+            camera: &camera,
+            theme: &theme,
+            width: W,
+            height: H,
+            scale: 1.0,
+        };
+        match snapshot_rgba(&frame) {
+            Ok(p) => Some(p),
+            Err(SnapshotError::NoAdapter(e)) | Err(SnapshotError::Device(e)) => {
+                skip_without_gpu(&e);
+                None
+            }
+            Err(e) => panic!("{e}"),
+        }
+    }
+
+    fn box_scene() -> (Scene, u32) {
+        let mut scene = Scene::default();
+        let id = scene
+            .add(
+                "box",
+                TriMesh::cuboid(
+                    Point3::new(-10.0, -10.0, -10.0),
+                    Point3::new(10.0, 10.0, 10.0),
+                ),
+            )
+            .unwrap();
+        (scene, id)
+    }
+
+    fn px(rgba: &[u8], x: u32, y: u32) -> [u8; 3] {
+        let i = ((y * W + x) * 4) as usize;
+        [rgba[i], rgba[i + 1], rgba[i + 2]]
+    }
+
+    fn near(c: [u8; 3], t: Rgba, tol: i32) -> bool {
+        (i32::from(c[0]) - i32::from(t.0)).abs() <= tol
+            && (i32::from(c[1]) - i32::from(t.1)).abs() <= tol
+            && (i32::from(c[2]) - i32::from(t.2)).abs() <= tol
+    }
+
+    /// Cut at y = 0 removing the front half (normal -Y, towards the eye): the view looks
+    /// into the cut and sees the inside of the back half, drawn as the flat cap colour.
+    /// Row 24 holds the X axis (y = z = 0), so the test looks at row 20. Pixel (35, 20):
+    /// 35 + 20 = 55, 55 mod 10 = 5, off the hatch stripes (0 and 1), so it is exactly
+    /// `section_cap`; (30, 20): 50 mod 10 = 0, a hatch stripe.
+    #[test]
+    fn a_sectioned_box_shows_its_cut_face_in_the_cap_colour() {
+        let theme = Theme::light();
+        let (mut scene, _) = box_scene();
+        let Some(plain) = render(&scene) else {
+            return;
+        };
+        assert!(!near(px(&plain, 35, 20), theme.section_cap, 24));
+        scene.display.section = Section::new(Point3::ORIGIN, -Vec3::Y);
+        let Some(cut) = render(&scene) else {
+            return;
+        };
+        assert!(
+            near(px(&cut, 35, 20), theme.section_cap, 2),
+            "cap pixel {:?}",
+            px(&cut, 35, 20)
+        );
+        assert!(
+            near(px(&cut, 30, 20), theme.section_hatch, 2),
+            "hatch pixel {:?}",
+            px(&cut, 30, 20)
+        );
+        // Outside the box the background is untouched.
+        assert!(px(&cut, 1, 1).iter().all(|&c| c > 220));
+    }
+
+    /// Wireframe draws no faces: inside the box outline the background shows (its light
+    /// colour, above 220), where the shaded style shows the grey body.
+    #[test]
+    fn wireframe_shows_the_background_through_the_faces() {
+        let (mut scene, _) = box_scene();
+        scene.display.style = VisualStyle::Wireframe;
+        let Some(rgba) = render(&scene) else {
+            return;
+        };
+        let c = px(&rgba, 35, 20);
+        assert!(c.iter().all(|&v| v > 220), "{c:?}");
+    }
+
+    /// A black body at opacity 0.3 over the light background blends to 70% of the
+    /// background in linear light, so it is darker than the background but far lighter
+    /// than the opaque black body.
+    #[test]
+    fn a_glass_body_lets_the_background_through() {
+        let (mut scene, id) = box_scene();
+        if let Some(b) = scene.body_mut(id) {
+            b.appearance.colour = Some(Rgba(0, 0, 0, 255));
+        }
+        let Some(opaque) = render(&scene) else {
+            return;
+        };
+        if let Some(b) = scene.body_mut(id) {
+            b.appearance.opacity = 0.3;
+        }
+        let Some(glass) = render(&scene) else {
+            return;
+        };
+        let (o, g, bg) = (px(&opaque, 35, 20), px(&glass, 35, 20), px(&glass, 1, 20));
+        // The opaque black face only has its specular highlight on it (0.18 of white at
+        // most, about 117 in sRGB).
+        assert!(o.iter().all(|&v| v < 120), "opaque {o:?}");
+        assert!(g.iter().all(|&v| v > 170), "glass {g:?}");
+        assert!(g[0] < bg[0], "glass {g:?} background {bg:?}");
+    }
+}
