@@ -2,7 +2,7 @@
 
 use super::CommandSpec;
 use crate::{CmdResult, CommandError, Session, params};
-use chamfera_doc::{Extrude, ExtrudeDirection, FeatureKind};
+use chamfera_doc::{Extrude, ExtrudeDirection, FeatureKind, Revolve};
 use chamfera_geom::Point2;
 use serde_json::{Value, json};
 
@@ -40,6 +40,16 @@ pub static COMMANDS: &[CommandSpec] = &[
                  direction: string (optional) - normal (default), reversed or symmetric",
         mutates: true,
         run: extrude,
+    },
+    CommandSpec {
+        id: "solid.revolve",
+        label: "Revolve",
+        params: "sketch: integer (required)\n\
+                 profiles: list of {x, y} (required) - a point inside each profile, in sketch mm\n\
+                 axis: integer (required) - a line of the same sketch to turn around\n\
+                 angle: string or number (optional) - default 360 deg; a plain number is degrees",
+        mutates: true,
+        run: revolve,
     },
     CommandSpec {
         id: "solid.profile_at",
@@ -122,6 +132,7 @@ fn feature_reply(s: &Session, id: u32) -> Value {
         "suppressed": f.map(|f| f.suppressed),
         "solids": solids,
         "error": s.feature_errors().get(&id),
+        "display_error": s.display_errors().get(&id),
     })
 }
 
@@ -133,6 +144,29 @@ fn extrude(s: &mut Session, p: &Value) -> CmdResult {
         profiles: seeds(p)?,
         distance,
         direction: direction(p)?.unwrap_or_default(),
+    });
+    let id = s.doc.add_feature(kind)?;
+    s.rebuild();
+    if let Some(e) = s.feature_errors().get(&id) {
+        return Err(CommandError::Unavailable(e.clone()));
+    }
+    Ok(feature_reply(s, id))
+}
+
+fn revolve(s: &mut Session, p: &Value) -> CmdResult {
+    let sketch = params::req_id(p, "sketch")?;
+    let axis = params::req_id(p, "axis")?;
+    let angle = match p.get("angle") {
+        None | Some(Value::Null) => "360 deg".to_owned(),
+        Some(Value::String(a)) => a.clone(),
+        Some(Value::Number(_)) => format!("{} deg", params::req_f64(p, "angle")?),
+        Some(_) => return Err(bad("`angle` must be a number or an expression")),
+    };
+    let kind = FeatureKind::Revolve(Revolve {
+        sketch,
+        profiles: seeds(p)?,
+        axis,
+        angle,
     });
     let id = s.doc.add_feature(kind)?;
     s.rebuild();

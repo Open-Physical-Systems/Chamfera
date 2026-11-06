@@ -7,22 +7,30 @@ use chamfera_geom::Point2;
 use chamfera_render::{Overlay, OverlayStyle};
 use serde_json::json;
 
-/// The Extrude tool while it is open.
+/// The Extrude or Revolve tool while it is open: both pick profiles the same way.
 pub struct ExtrudeTool {
+    /// Revolve instead of extrude.
+    pub revolve: bool,
     sketch: Option<u32>,
     /// A point inside each picked profile.
     seeds: Vec<Point2>,
     pub distance: String,
     direction: ExtrudeDirection,
+    /// Revolve: the sketch line to turn around, and the angle expression.
+    axis: Option<u32>,
+    angle: String,
 }
 
 impl Default for ExtrudeTool {
     fn default() -> Self {
         ExtrudeTool {
+            revolve: false,
             sketch: None,
             seeds: Vec::new(),
             distance: "10 mm".into(),
             direction: ExtrudeDirection::Normal,
+            axis: None,
+            angle: "360 deg".into(),
         }
     }
 }
@@ -63,6 +71,23 @@ impl ChamferaApp {
             {
                 self.solid.extrude = Some(ExtrudeTool::default());
                 self.message = Some(("Click inside the profiles to extrude".into(), false));
+            }
+            if ui
+                .add_enabled(
+                    has_profiles && self.solid.extrude.is_none(),
+                    egui::Button::new(label("solid.revolve")),
+                )
+                .on_disabled_hover_text("Draw a closed profile and a line to turn around")
+                .clicked()
+            {
+                self.solid.extrude = Some(ExtrudeTool {
+                    revolve: true,
+                    ..ExtrudeTool::default()
+                });
+                self.message = Some((
+                    "Click inside the profiles to revolve, then choose the axis line".into(),
+                    false,
+                ));
             }
         });
     }
@@ -136,12 +161,39 @@ impl ChamferaApp {
 
     /// The Extrude dialog.
     pub(crate) fn extrude_dialog(&mut self, ctx: &egui::Context) {
+        // The lines of the picked sketch, for the revolve axis.
+        let lines: Vec<(u32, String)> = self
+            .solid
+            .extrude
+            .as_ref()
+            .and_then(|t| t.sketch)
+            .and_then(|s| self.session.doc.sketch(s).ok())
+            .map(|f| {
+                f.sketch
+                    .curves()
+                    .filter(|(_, c)| c.is_line())
+                    .map(|(id, c)| {
+                        let kind = if c.is_construction() {
+                            "construction line"
+                        } else {
+                            "line"
+                        };
+                        (id.0, format!("{kind} {}", id.0))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         let Some(tool) = self.solid.extrude.as_mut() else {
             return;
         };
         let mut ok = false;
         let mut cancel = false;
-        egui::Window::new(label("solid.extrude"))
+        let title = if tool.revolve {
+            label("solid.revolve")
+        } else {
+            label("solid.extrude")
+        };
+        egui::Window::new(title)
             .default_pos([240.0, 110.0])
             .resizable(false)
             .collapsible(false)
@@ -154,6 +206,28 @@ impl ChamferaApp {
                 egui::Grid::new("extrude grid")
                     .num_columns(2)
                     .show(ui, |ui| {
+                        if tool.revolve {
+                            ui.label("Axis");
+                            let current = lines
+                                .iter()
+                                .find(|(id, _)| Some(*id) == tool.axis)
+                                .map_or("choose a line", |(_, n)| n.as_str());
+                            egui::ComboBox::from_id_salt("revolve axis")
+                                .selected_text(current)
+                                .show_ui(ui, |ui| {
+                                    for (id, name) in &lines {
+                                        ui.selectable_value(&mut tool.axis, Some(*id), name);
+                                    }
+                                });
+                            ui.end_row();
+                            ui.label("Angle");
+                            ui.add_sized(
+                                [160.0, 20.0],
+                                egui::TextEdit::singleline(&mut tool.angle),
+                            );
+                            ui.end_row();
+                            return;
+                        }
                         ui.label("Distance");
                         let edit = ui.add_sized(
                             [160.0, 20.0],
@@ -179,10 +253,8 @@ impl ChamferaApp {
                         ui.end_row();
                     });
                 ui.horizontal(|ui| {
-                    if ui
-                        .add_enabled(!tool.seeds.is_empty(), egui::Button::new("OK"))
-                        .clicked()
-                    {
+                    let ready = !tool.seeds.is_empty() && (!tool.revolve || tool.axis.is_some());
+                    if ui.add_enabled(ready, egui::Button::new("OK")).clicked() {
                         ok = true;
                     }
                     if ui.button("Cancel").clicked() {
@@ -190,7 +262,25 @@ impl ChamferaApp {
                     }
                 });
             });
-        if ok && !tool.seeds.is_empty() {
+        if ok && tool.revolve && !tool.seeds.is_empty() && tool.axis.is_some() {
+            let params = json!({
+                "sketch": tool.sketch,
+                "profiles": tool.seeds.iter().map(|p| json!({ "x": p.x, "y": p.y })).collect::<Vec<_>>(),
+                "axis": tool.axis,
+                "angle": tool.angle.trim(),
+            });
+            if let Some(r) = self.run("solid.revolve", params) {
+                let v = r["solids"][0]["volume"].as_f64().unwrap_or(0.0);
+                self.message = Some((
+                    format!(
+                        "{} · volume {v:.2} mm³",
+                        r["name"].as_str().unwrap_or("Revolve")
+                    ),
+                    false,
+                ));
+                self.solid.extrude = None;
+            }
+        } else if ok && !tool.revolve && !tool.seeds.is_empty() {
             let params = json!({
                 "sketch": tool.sketch,
                 "profiles": tool.seeds.iter().map(|p| json!({ "x": p.x, "y": p.y })).collect::<Vec<_>>(),

@@ -173,6 +173,9 @@ fn hostile_params_never_panic() {
         json!({"sketch": 1, "profiles": "all", "distance": [1], "suppressed": "no", "feature": 0}),
         json!({"sketch": 1, "profiles": [{"x": 10, "y": 10}], "distance": "1e7 mm"}),
         json!({"sketch": 1, "profiles": [{"x": 10, "y": 10}], "distance": -8, "direction": "symmetric"}),
+        json!({"sketch": 1, "profiles": [{"x": 10, "y": 10}], "axis": 5, "angle": 90}),
+        json!({"sketch": 1, "profiles": [{"x": 10, "y": 10}], "axis": 14, "angle": "720 deg"}),
+        json!({"sketch": 1, "profiles": [{"x": 10, "y": 10}], "axis": 1, "angle": [0]}),
     ];
     for c in registry() {
         for p in &hostile {
@@ -767,4 +770,117 @@ fn clicking_inside_a_profile_finds_it() {
         .unwrap();
     assert_eq!(r["sketch"], 1);
     assert!((r["area"].as_f64().unwrap() - 1500.0).abs() < 1e-6);
+}
+
+fn exact_volume(r: &serde_json::Value) -> f64 {
+    r["solids"][0]["volume"].as_f64().unwrap()
+}
+
+#[test]
+fn circles_extrude_exactly_now() {
+    // A full circle r = 5 extruded 10: π r² h = 250π exactly (no polygon error).
+    let mut s = Session::new();
+    s.execute("sketch.create", &json!({"plane": "xy"})).unwrap();
+    s.execute("sketch.circle", &json!({"cx": 0, "cy": 0, "radius": 5}))
+        .unwrap();
+    let r = s
+        .execute(
+            "solid.extrude",
+            &json!({"sketch": 1, "profiles": [{"x": 0, "y": 0}], "distance": 10}),
+        )
+        .unwrap();
+    let v = exact_volume(&r);
+    assert!((v - 250.0 * std::f64::consts::PI).abs() < 1e-9, "{v}");
+}
+
+#[test]
+fn the_example_plate_has_its_exact_volume() {
+    // examples/extruded-plate.json: 80 x 50 x 8 with two r = 8 holes:
+    // (4000 - 2 * 64π) * 8 = 28783.009...; the 128-gon approximation gave 28784.30.
+    let text = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../examples/extruded-plate.json"
+    ))
+    .unwrap();
+    let steps: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let mut s = Session::new();
+    for step in steps.as_array().unwrap() {
+        let params = step.get("params").cloned().unwrap_or(json!({}));
+        s.execute(step["command"].as_str().unwrap(), &params)
+            .unwrap();
+    }
+    let list = s.execute("feature.list", &json!({})).unwrap();
+    let v = list["features"][0]["solids"][0]["volume"].as_f64().unwrap();
+    let exact = (4000.0 - 128.0 * std::f64::consts::PI) * 8.0;
+    assert!((v - exact).abs() < 1e-6, "{v} vs {exact}");
+}
+
+#[test]
+fn revolving_a_rectangle_about_a_sketch_line_makes_a_tube() {
+    // The rectangle x in [10, 15], y in [0, 20] turned about the sketch's y axis (the line
+    // x = 0): a tube of π (15² - 10²) 20 = 2500π; a quarter turn is a quarter of it.
+    for (angle, fraction) in [(json!(360), 1.0), (json!("90 deg"), 0.25)] {
+        let mut s = Session::new();
+        s.execute("sketch.create", &json!({"plane": "xz"})).unwrap();
+        s.execute(
+            "sketch.rectangle",
+            &json!({"x1": 10, "y1": 0, "x2": 15, "y2": 20}),
+        )
+        .unwrap();
+        let axis = s
+            .execute(
+                "sketch.line",
+                &json!({"x1": 0, "y1": -5, "x2": 0, "y2": 25}),
+            )
+            .unwrap()["curve"]
+            .as_u64()
+            .unwrap();
+        s.execute(
+            "sketch.construction",
+            &json!({"curve": axis, "construction": true}),
+        )
+        .unwrap();
+        let r = s
+            .execute(
+                "solid.revolve",
+                &json!({"sketch": 1, "profiles": [{"x": 12, "y": 10}], "axis": axis, "angle": angle}),
+            )
+            .unwrap();
+        let v = exact_volume(&r);
+        let expected = 2500.0 * std::f64::consts::PI * fraction;
+        assert!((v - expected).abs() < 1e-6, "{v} vs {expected}");
+    }
+}
+
+#[test]
+fn a_revolve_that_crosses_its_axis_is_refused() {
+    let mut s = Session::new();
+    s.execute("sketch.create", &json!({"plane": "xz"})).unwrap();
+    s.execute(
+        "sketch.rectangle",
+        &json!({"x1": -5, "y1": 0, "x2": 5, "y2": 10}),
+    )
+    .unwrap();
+    let axis = s
+        .execute(
+            "sketch.line",
+            &json!({"x1": 0, "y1": -5, "x2": 0, "y2": 15}),
+        )
+        .unwrap()["curve"]
+        .as_u64()
+        .unwrap();
+    s.execute(
+        "sketch.construction",
+        &json!({"curve": axis, "construction": true}),
+    )
+    .unwrap();
+    let before = s.doc.clone();
+    assert!(
+        s.execute(
+            "solid.revolve",
+            &json!({"sketch": 1, "profiles": [{"x": 2, "y": 5}], "axis": axis}),
+        )
+        .is_err()
+    );
+    assert_eq!(s.doc, before);
 }
