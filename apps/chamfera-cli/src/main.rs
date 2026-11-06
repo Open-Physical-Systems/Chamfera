@@ -10,6 +10,7 @@
 
 use chamfera_engine::{Session, registry};
 use serde_json::{Value, json};
+use std::io::Write;
 use std::process::ExitCode;
 
 /// Largest script file accepted (bytes).
@@ -26,22 +27,57 @@ const USAGE: &str = "usage:
   chamfera-cli mcp [--allow-path DIR]...
   chamfera-cli --version";
 
+/// Why the CLI stopped early.
+#[derive(Debug)]
+enum Stop {
+    /// Something went wrong: printed to stderr, exit status 1.
+    Error(String),
+    /// Whoever reads stdout closed it (`chamfera-cli commands | head`): nobody wants the
+    /// rest, so stop quietly with status 0.
+    PipeClosed,
+}
+
+impl From<String> for Stop {
+    fn from(msg: String) -> Stop {
+        Stop::Error(msg)
+    }
+}
+
+impl From<&str> for Stop {
+    fn from(msg: &str) -> Stop {
+        Stop::Error(msg.to_owned())
+    }
+}
+
+/// Writes one line to stdout. A closed pipe stops the CLI quietly; `println!` would
+/// panic there.
+fn out(line: impl std::fmt::Display) -> Result<(), Stop> {
+    let mut stdout = std::io::stdout().lock();
+    writeln!(stdout, "{line}")
+        .and_then(|()| stdout.flush())
+        .map_err(|e| match e.kind() {
+            std::io::ErrorKind::BrokenPipe => Stop::PipeClosed,
+            _ => Stop::Error(format!("stdout: {e}")),
+        })
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match run(&args) {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(msg) => {
-            eprintln!("error: {msg}");
+        Ok(()) | Err(Stop::PipeClosed) => ExitCode::SUCCESS,
+        Err(Stop::Error(msg)) => {
+            // stderr may be closed too; there is nobody left to tell.
+            let _ = writeln!(std::io::stderr(), "error: {msg}");
             ExitCode::FAILURE
         }
     }
 }
 
-fn run(args: &[String]) -> Result<(), String> {
+fn run(args: &[String]) -> Result<(), Stop> {
     match args.first().map(String::as_str) {
         Some("commands") => {
             for c in registry() {
-                println!("{:<24} {}", c.id, c.label);
+                out(format_args!("{:<24} {}", c.id, c.label))?;
             }
             Ok(())
         }
@@ -54,23 +90,19 @@ fn run(args: &[String]) -> Result<(), String> {
             let reply = Session::new()
                 .execute(id, &params)
                 .map_err(|e| e.to_string())?;
-            println!("{reply}");
-            Ok(())
+            out(reply)
         }
         Some("run") => run_script(args.get(1).ok_or(USAGE)?, &mut Session::new()).map(|_| ()),
         Some("snapshot") => snapshot(&args[1..]),
         Some("mcp") => mcp(&args[1..]),
-        Some("--version") => {
-            println!("chamfera-cli {}", env!("CARGO_PKG_VERSION"));
-            Ok(())
-        }
-        _ => Err(USAGE.to_owned()),
+        Some("--version") => out(format_args!("chamfera-cli {}", env!("CARGO_PKG_VERSION"))),
+        _ => Err(USAGE.into()),
     }
 }
 
 /// `mcp`: serve the MCP server on stdio. File commands may use only the `--allow-path`
 /// folders and a scratch folder.
-fn mcp(args: &[String]) -> Result<(), String> {
+fn mcp(args: &[String]) -> Result<(), Stop> {
     let mut config = chamfera_mcp::Config::default();
     let mut it = args.iter();
     while let Some(flag) = it.next() {
@@ -78,14 +110,14 @@ fn mcp(args: &[String]) -> Result<(), String> {
             "--allow-path" => config
                 .allow
                 .push(it.next().ok_or("--allow-path needs a folder")?.into()),
-            other => return Err(format!("unknown option {other:?}\n{USAGE}")),
+            other => return Err(format!("unknown option {other:?}\n{USAGE}").into()),
         }
     }
-    chamfera_mcp::serve_stdio(config)
+    Ok(chamfera_mcp::serve_stdio(config)?)
 }
 
 /// Runs each step in order and prints one JSON reply per line. Stops at the first failure.
-fn run_script(path: &str, session: &mut Session) -> Result<(), String> {
+fn run_script(path: &str, session: &mut Session) -> Result<(), Stop> {
     let bytes = chamfera_engine::read_limited(std::path::Path::new(path), MAX_SCRIPT_BYTES)
         .map_err(|e| e.to_string())?;
     let text = String::from_utf8(bytes).map_err(|_| format!("{path}: not UTF-8 text"))?;
@@ -95,18 +127,15 @@ fn run_script(path: &str, session: &mut Session) -> Result<(), String> {
         .ok_or("a script is a JSON list of {\"command\": ..., \"params\": {...}}")?;
     let replies = chamfera_engine::script::run_steps(session, steps).map_err(|e| e.to_string())?;
     for (i, (step, reply)) in steps.iter().zip(&replies).enumerate() {
-        println!(
-            "{}",
-            json!({ "step": i + 1, "command": step.get("command"), "reply": reply })
-        );
+        out(json!({ "step": i + 1, "command": step.get("command"), "reply": reply }))?;
     }
     Ok(())
 }
 
 /// `snapshot`: build a scene from the options, run optional view commands, render a PNG.
-fn snapshot(args: &[String]) -> Result<(), String> {
+fn snapshot(args: &[String]) -> Result<(), Stop> {
     let mut session = Session::new();
-    let mut out = None;
+    let mut path = None;
     let (mut width, mut height) = (1280.0, 800.0);
     let mut view = None;
     let mut projection = None;
@@ -120,7 +149,7 @@ fn snapshot(args: &[String]) -> Result<(), String> {
         |s: &mut Session, id: &str, p: Value| s.execute(id, &p).map_err(|e| format!("{id}: {e}"));
     while let Some(flag) = it.next() {
         match flag.as_str() {
-            "--out" => out = Some(value(&mut it, flag)?),
+            "--out" => path = Some(value(&mut it, flag)?),
             "--sample" => {
                 run(&mut session, "body.sample", json!({}))?;
             }
@@ -135,7 +164,9 @@ fn snapshot(args: &[String]) -> Result<(), String> {
                 theme = match value(&mut it, flag)?.as_str() {
                     "light" => chamfera_render::Theme::light(),
                     "dark" => chamfera_render::Theme::dark(),
-                    other => return Err(format!("unknown theme {other:?}: use light or dark")),
+                    other => {
+                        return Err(format!("unknown theme {other:?}: use light or dark").into());
+                    }
                 }
             }
             "--size" => {
@@ -153,10 +184,10 @@ fn snapshot(args: &[String]) -> Result<(), String> {
                 let y: f64 = y.parse().map_err(|_| "--pick Y must be a number")?;
                 pick = Some((x, y));
             }
-            other => return Err(format!("unknown option {other:?}\n{USAGE}")),
+            other => return Err(format!("unknown option {other:?}\n{USAGE}").into()),
         }
     }
-    let out = out.ok_or("snapshot needs --out <file.png>")?;
+    let path = path.ok_or("snapshot needs --out <file.png>")?;
     let viewport = json!({ "width": width, "height": height });
     if let Some(p) = projection {
         run(&mut session, "view.projection", json!({ "mode": p }))?;
@@ -176,7 +207,7 @@ fn snapshot(args: &[String]) -> Result<(), String> {
             "select.pick",
             json!({ "x": x, "y": y, "width": width, "height": height }),
         )?;
-        println!("{}", json!({ "pick": hit }));
+        out(json!({ "pick": hit }))?;
     }
     let frame = chamfera_gpu::Frame {
         scene: &session.scene,
@@ -187,10 +218,6 @@ fn snapshot(args: &[String]) -> Result<(), String> {
         scale: 1.0,
     };
     let png = chamfera_gpu::snapshot_png(&frame).map_err(|e| e.to_string())?;
-    std::fs::write(&out, png).map_err(|e| format!("{out}: {e}"))?;
-    println!(
-        "{}",
-        json!({ "snapshot": out, "width": width, "height": height })
-    );
-    Ok(())
+    std::fs::write(&path, png).map_err(|e| format!("{path}: {e}"))?;
+    out(json!({ "snapshot": path, "width": width, "height": height }))
 }

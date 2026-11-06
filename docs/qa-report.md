@@ -71,7 +71,8 @@ failed command left the design unchanged.
 
 ## Open bugs (with repro)
 
-Each has an `#[ignore]`d test that fails today, so whoever fixes it has the check ready.
+Each open one has an `#[ignore]`d test that fails today, so whoever fixes it has the check
+ready; fixed ones say so and name their tests.
 
 1. **A sweep bend near a flat face cannot be joined** (kernel, booleans).
    Repro: `examples/qa/02-flanged-pipe.json` with the straight run 40 instead of 50
@@ -84,6 +85,15 @@ Each has an `#[ignore]`d test that fails today, so whoever fixes it has the chec
    arc's box grown by the minor radius, from the face's angular range about the axis)
    would let this and most real elbows join. Workaround: keep straight runs longer than
    R + r before a bend.
+   **Status: fixed** (`fix/qa-bugs`). Sphere and torus faces are now bounded by the
+   parameter ranges they cover (`crates/kernel/src/boolean/patch_box.rs`): the `u` and `v`
+   ranges of the loop images, the gaps between them classified by one point each, and the
+   exact box of the image of each `(u, v)` rectangle. The bend's box now starts at
+   z 68 - 12.5 and the 40 mm run joins with its hand volume. Tests:
+   `qa_a_sweep_bend_near_a_flat_face_joins`,
+   `a_quarter_torus_face_is_bounded_by_its_quarter_not_the_whole_torus`,
+   `a_half_sphere_face_is_bounded_by_its_half`. (The test's own text replacement also
+   rewrote the arc's end point before the arc, so the path did not join; fixed too.)
 2. **Drawing dimensions do not follow the model** (drawing). Repro: run part 1, then
    `07-enclosure-drawing.json`, then `param.set width 100 mm`: the views redraw at 100 mm
    but the width dimension still says 80 (`qa_drawing_dimensions_follow_the_model`).
@@ -107,6 +117,12 @@ Each has an `#[ignore]`d test that fails today, so whoever fixes it has the chec
    ("the edge 2:sweep 0 is no longer there"). Deleting the lid extrude is refused because
    a sketch and a hole use it. `feature_users` should count blend edges, shell faces and
    the other name references too (or deletion should offer to delete the dependants).
+   **Status: fixed** (`fix/qa-bugs`). `feature_users` now takes every item whose
+   timeline dependencies include the feature (fillets, chamfers, shells, face edits,
+   flanges, linked projections, ...) and every item holding a K8 reference signature to
+   one of its entities; the refusal reads "Extrude1 is used by Fillet1, Shell1, ...;
+   delete or change them first". Test:
+   `qa_deleting_a_feature_that_a_fillet_and_a_shell_name_is_refused`.
 7. **Mesh bodies are not part of the design.** `body.import_3mf` / `import_stl` /
    `import_obj` add bodies that undo does not remove and save does not keep: in part 8 the
    3MF read back is still there after undoing everything and gone after save and reopen,
@@ -119,6 +135,9 @@ Each has an `#[ignore]`d test that fails today, so whoever fixes it has the chec
 10. **`chamfera-cli` panics on a closed pipe**: `chamfera-cli exec app.commands | head`
     ends with "failed printing to stdout: Broken pipe" from `println!`. Harmless, but it is
     a panic in non-test code; write with `writeln!` and stop quietly on `BrokenPipe`.
+    **Status: fixed** (`fix/qa-bugs`): every line goes through one writer that turns
+    `BrokenPipe` into a quiet exit with status 0. Test (`apps/chamfera-cli/tests/cli.rs`):
+    `a_closed_stdout_pipe_ends_the_cli_quietly`.
 
 ## Smaller findings
 
