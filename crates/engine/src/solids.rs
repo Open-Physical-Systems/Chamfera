@@ -293,6 +293,8 @@ pub struct Built {
     /// The solids each direct face edit changed, by name (their faces keep the names of
     /// the features that made them).
     pub edited: BTreeMap<u32, Vec<String>>,
+    /// Exploded components: where each sits and how far it is shown moved.
+    pub exploded: BTreeMap<u32, crate::motion::Exploded>,
 }
 
 /// A sketch loop as exact kernel profile edges: lines stay lines, arcs and circles stay
@@ -1421,12 +1423,36 @@ impl Session {
         self.scene.deselect(|b| old.contains(&b));
         let options = TessOptions::default();
         let placed = self.place_components(made, &mut built);
+        // An exploded view moves what is shown, not the exact bodies.
+        built.exploded = if self.view_state.explode_factor.is_some()
+            || !self.view_state.explode_manual.is_empty()
+        {
+            crate::motion::explode_offsets(
+                &placed,
+                self.view_state.explode_factor,
+                &self.view_state.explode_manual,
+            )
+        } else {
+            BTreeMap::new()
+        };
+        // An interference highlight shows the design as it was checked.
+        self.view_state.overlaps.clear();
         for (feature, component, name, body) in placed {
             // A solid that cannot be shown is still built: its measures and export work.
             let mut faces = Vec::new();
             let mut edges = Vec::new();
             let scene_id = match tessellate(&body, &options) {
-                Ok(m) => {
+                Ok(mut m) => {
+                    if let Some(e) = built.exploded.get(&component) {
+                        for p in &mut m.mesh.positions {
+                            *p = *p + e.offset;
+                        }
+                        for (_, l) in &mut m.edge_polylines {
+                            for p in l.iter_mut() {
+                                *p = *p + e.offset;
+                            }
+                        }
+                    }
                     faces = m.face_of_triangle;
                     edges = m.edge_polylines;
                     let id = self.scene.add(&name, m.mesh);

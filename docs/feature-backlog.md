@@ -221,13 +221,13 @@ Close runners-up: selection filters and box selection (UI and NAV), splines (nee
 | External references | Insert another design as a linked component that updates | missing | P2 | L | doc, io |
 | Joints | Connect components at joint origins: rigid, revolute, slider, cylindrical, planar done (`joint.*`, solved as an exact tree, loops refused); pin-slot, ball and loops missing | done | P1 | L | doc, engine |
 | As-built joints | Joint components where they already sit | missing | P1 | M | doc |
-| Joint limits and motion | Ranges and driving a joint (`joint.set_value`): done; animation: missing | missing | P2 | M | doc, ui |
+| Joint limits and motion | Ranges enforced by `joint.set_value`; drag a jointed part in the viewport (`joint.drag`, ASSEMBLE > Drive Joint); motion study keyframes with linear interpolation, play, pause and scrub (`motion.*`, format 27) | done | P2 | M | doc, engine, ui |
 | Rigid groups | Lock several components together | missing | P2 | S | doc |
 | Ground / fix a component | Keep a component in place (`component.ground`) | done | P1 | S | doc |
 | Motion links and contact sets | One joint drives another; parts stop on contact | missing | P2 | L | doc, kernel |
-| Interference check | Find overlapping volumes between components | missing | P1 | M | kernel (K7), engine |
+| Interference check | Overlapping pairs and volumes from the exact K7 intersection of box-overlapping pairs, highlighted; also at each motion keyframe (`inspect.interference`, ASSEMBLE > Interference) | done | P1 | M | kernel (K7), engine |
 | Bill of materials | List of components with counts and properties | missing | P2 | M | doc, io |
-| Exploded views | Move components apart for presentation | missing | P2 | M | doc, ui |
+| Exploded views | A display state: auto-explode along the assembly's axes by a factor, manual offsets per component, trails (`view.explode`, `view.explode_clear`); saved exploded views missing | done | P2 | M | engine, ui |
 
 ## 9. Inspect
 
@@ -238,7 +238,7 @@ Close runners-up: selection filters and box selection (UI and NAV), splines (nee
 | Measure length, area, radius | Of a picked edge or face | done | P0 | S | kernel, engine |
 | Mass properties | Volume, area, mass, centre of mass, moments of inertia | done (`inspect.mass`, INSPECT > Mass Properties) | P0 | M | kernel, engine |
 | Section analysis | Cut the view with a plane and show the cut face | done (`view.section`, hatched cap) | P1 | M | gpu, render, kernel |
-| Interference | See assemblies | missing | P1 | M | kernel |
+| Interference | See assemblies (`inspect.interference`) | done | P1 | M | kernel |
 | Curvature and zebra analysis | Show surface quality (comb, zebra stripes, curvature map) | missing | P2 | M | gpu, kernel |
 | Draft analysis | Colour faces by draft angle | missing | P2 | M | gpu |
 | Accessibility (undercut) analysis | For machining and moulding | missing | P2 | M | gpu |

@@ -86,6 +86,13 @@ pub struct Theme {
     pub toolpath_feed: Rgba,
     /// Rapid moves, drawn dashed.
     pub toolpath_rapid: Rgba,
+    // assemblies
+    /// Where bodies overlap (`inspect.interference`): the outline, drawn over everything.
+    pub interference: Rgba,
+    /// The see-through fill of an overlap.
+    pub interference_fill: Rgba,
+    /// Exploded view trails: lines from where a component sits to where it is shown.
+    pub explode_trail: Rgba,
     // interface surfaces (see docs/design/ui.md)
     /// The app bar, ribbon, timeline and status bar.
     pub chrome: Rgba,
@@ -187,6 +194,9 @@ impl Theme {
             select_crossing_fill: Rgba(30, 135, 70, 36),
             toolpath_feed: Rgba(96, 72, 204, 255),
             toolpath_rapid: Rgba(200, 50, 60, 220),
+            interference: Rgba(214, 30, 60, 255),
+            interference_fill: Rgba(230, 40, 70, 120),
+            explode_trail: Rgba(52, 58, 72, 255),
             chrome: Rgba(252, 252, 253, 255),
             panel: Rgba(246, 247, 249, 255),
             panel_alt: Rgba(236, 239, 243, 255),
@@ -258,6 +268,9 @@ impl Theme {
             select_crossing_fill: Rgba(88, 196, 124, 40),
             toolpath_feed: Rgba(170, 150, 255, 255),
             toolpath_rapid: Rgba(255, 110, 110, 220),
+            interference: Rgba(255, 80, 110, 255),
+            interference_fill: Rgba(255, 70, 100, 120),
+            explode_trail: Rgba(200, 206, 218, 255),
             chrome: Rgba(29, 31, 35, 255),
             panel: Rgba(35, 38, 43, 255),
             panel_alt: Rgba(45, 49, 56, 255),

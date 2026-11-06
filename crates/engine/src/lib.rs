@@ -16,6 +16,7 @@ pub mod display;
 pub mod face_edit;
 pub mod hole;
 mod imported;
+pub mod motion;
 pub mod naming;
 #[cfg(test)]
 mod naming_tests;
@@ -74,6 +75,9 @@ pub struct Session {
     built: solids::Built,
     /// Toolpaths worked out from the CAM section, and whether they are shown.
     pub(crate) cam: cam::CamState,
+    /// What a joint drag, the motion study's time and an exploded view show. Display
+    /// state: not part of the design or of undo.
+    pub(crate) view_state: motion::AssemblyView,
     /// The file the design was last opened from or saved to.
     pub path: Option<std::path::PathBuf>,
     /// The design as last opened or saved, to tell whether there are unsaved changes.
@@ -192,6 +196,7 @@ impl Session {
         self.path = None;
         self.doc = doc;
         self.scene = Scene::default();
+        self.view_state = motion::AssemblyView::default();
         self.undo.clear();
         self.redo.clear();
     }

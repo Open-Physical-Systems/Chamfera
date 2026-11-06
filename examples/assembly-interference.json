@@ -1,0 +1,18 @@
+[
+  { "command": "sketch.create", "params": { "plane": "xy" }, "as": "s1" },
+  { "command": "sketch.rectangle", "params": { "x1": 0, "y1": 0, "x2": 30, "y2": 30 } },
+  { "command": "sketch.finish" },
+  { "command": "solid.extrude", "params": { "sketch": "$s1.sketch", "profiles": [{ "x": 15, "y": 15 }], "distance": 30 }, "as": "f1" },
+  { "command": "component.new", "params": { "name": "Block", "from_bodies": ["$f1.feature"] }, "as": "a" },
+  { "command": "component.activate", "params": { "component": 0 } },
+  { "command": "sketch.create", "params": { "plane": "xy" }, "as": "s2" },
+  { "command": "sketch.circle", "params": { "cx": 30, "cy": 15, "radius": 8 } },
+  { "command": "sketch.finish" },
+  { "command": "solid.extrude", "params": { "sketch": "$s2.sketch", "profiles": [{ "x": 30, "y": 15 }], "distance": 45 }, "as": "f2" },
+  { "command": "component.new", "params": { "name": "Pin", "from_bodies": ["$f2.feature"] }, "as": "b" },
+  { "command": "component.activate", "params": { "component": 0 } },
+  { "command": "component.tint", "params": { "component": "$a.component", "tint": true } },
+  { "command": "component.tint", "params": { "component": "$b.component", "tint": true } },
+  { "command": "inspect.interference", "params": {} },
+  { "command": "view.home", "params": { "width": 1100, "height": 760 } }
+]

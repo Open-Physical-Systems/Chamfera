@@ -181,6 +181,10 @@ impl Session {
         let (mut construct, fills) = self.construct_overlays();
         construct.append(&mut overlays);
         construct.extend(self.toolpath_overlays());
+        let (assembly, mut assembly_fills) = self.assembly_overlays();
+        construct.extend(assembly);
+        let mut fills = fills;
+        fills.append(&mut assembly_fills);
         self.scene.overlays = construct;
         self.scene.fills = fills;
     }

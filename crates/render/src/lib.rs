@@ -387,6 +387,10 @@ pub enum OverlayStyle {
     ToolpathFeed,
     /// A toolpath's rapid moves (the engine splits them into dashes).
     ToolpathRapid,
+    /// The outline of where bodies overlap (`theme.interference`).
+    Interference,
+    /// An exploded view's trail from a component's place to where it is shown.
+    ExplodeTrail,
 }
 
 impl OverlayStyle {
@@ -403,6 +407,8 @@ impl OverlayStyle {
             OverlayStyle::Hover => theme.hover_highlight,
             OverlayStyle::ToolpathFeed => theme.toolpath_feed,
             OverlayStyle::ToolpathRapid => theme.toolpath_rapid,
+            OverlayStyle::Interference => theme.interference,
+            OverlayStyle::ExplodeTrail => theme.explode_trail,
         }
     }
 }
@@ -413,12 +419,15 @@ impl OverlayStyle {
 pub enum FillStyle {
     /// Construction planes, see-through.
     Construct,
+    /// Where bodies overlap, see-through.
+    Interference,
 }
 
 impl FillStyle {
     pub fn color(self, theme: &Theme) -> Rgba {
         match self {
             FillStyle::Construct => theme.construct_fill,
+            FillStyle::Interference => theme.interference_fill,
         }
     }
 }
@@ -429,6 +438,9 @@ impl FillStyle {
 pub struct Fill {
     pub style: FillStyle,
     pub triangles: Vec<[Point3; 3]>,
+    /// Drawn over the bodies (an overlap inside them) instead of hidden by them.
+    #[serde(default)]
+    pub on_top: bool,
 }
 
 /// Lines and points drawn over the model: sketches, previews and highlights. Display

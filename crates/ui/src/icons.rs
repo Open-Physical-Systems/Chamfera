@@ -126,11 +126,19 @@ pub enum Icon {
     ViewRight,
     ViewTop,
     Warning,
+    DriveJoint,
+    MotionStudy,
+    Interference,
+    Explode,
 }
 
 impl Icon {
     #[cfg(test)]
-    pub const ALL: [Icon; 107] = [
+    pub const ALL: [Icon; 111] = [
+        Icon::DriveJoint,
+        Icon::MotionStudy,
+        Icon::Interference,
+        Icon::Explode,
         Icon::Arc,
         Icon::ArcTangent,
         Icon::ArcThreePoint,
@@ -354,6 +362,10 @@ impl Icon {
             Icon::Component => master!("component"),
             Icon::Ground => master!("ground"),
             Icon::Joint => master!("joint"),
+            Icon::DriveJoint => master!("drive_joint"),
+            Icon::MotionStudy => master!("motion_study"),
+            Icon::Interference => master!("interference"),
+            Icon::Explode => master!("explode"),
         }
     }
 }
