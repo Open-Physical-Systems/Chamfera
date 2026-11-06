@@ -14,41 +14,51 @@ use chamfera_kernel::{Body, FaceId};
 /// The bodies after an edit, and the names of those it changed.
 type Made = (Vec<(u32, String, Body)>, Vec<String>);
 
-/// Runs `edit` on every body holding one of `names`, refusing a name no body has.
+/// Runs `edit` on every body holding one of `names`, refusing a name no body has. Names
+/// go through the resolver (rung K8): every piece of a split face, or the one a `#k`
+/// name or the feature's signature picks.
 fn edit_named(
+    doc: &Document,
     made: &[(u32, String, Body)],
     names: &[String],
     feature: u32,
     word: &str,
     edit: impl Fn(&Body, &[FaceId]) -> Result<Body, chamfera_kernel::KernelError>,
 ) -> Result<Made, String> {
-    let mut found = vec![false; names.len()];
-    let mut next = made.to_vec();
-    let mut changed = Vec::new();
-    for (_, name, body) in &mut next {
-        let mut faces = Vec::new();
-        for f in body.faces() {
-            if let Some(n) = body.face_name(f).ok().flatten()
-                && let Some(i) = names.iter().position(|x| x == n)
-            {
-                faces.push(f);
-                if let Some(seen) = found.get_mut(i) {
-                    *seen = true;
+    let mut per_body: std::collections::BTreeMap<usize, Vec<FaceId>> = Default::default();
+    {
+        let bodies = crate::naming::bodies(made);
+        for n in names {
+            let found = crate::naming::resolve(
+                doc,
+                feature,
+                &bodies,
+                crate::naming::Kind::Face,
+                n,
+                crate::naming::Want::All,
+            )
+            .map_err(|x| format!("{word}: {x}"))?;
+            for f in found {
+                if let Some(face) = f.face() {
+                    let list = per_body.entry(f.body).or_default();
+                    if !list.contains(&face) {
+                        list.push(face);
+                    }
                 }
             }
         }
-        if faces.is_empty() {
+    }
+    let mut next = made.to_vec();
+    let mut changed = Vec::new();
+    for (i, (_, name, body)) in next.iter_mut().enumerate() {
+        let Some(faces) = per_body.remove(&i) else {
             continue;
-        }
+        };
         let mut out = edit(body, &faces).map_err(|x| format!("{word}: {x}"))?;
         name_faces(&mut out, feature);
         name_edges(&mut out, feature);
         *body = out;
         changed.push(name.clone());
-    }
-    if let Some(i) = found.iter().position(|f| !f) {
-        let name = names.get(i).map_or("", String::as_str);
-        return Err(format!("{word}: the face {name:?} is no longer there"));
     }
     Ok((next, changed))
 }
@@ -62,17 +72,19 @@ pub(crate) fn build_offset_face(
     let d = doc
         .evaluate_feature_value(&o.distance, Dim::LENGTH)
         .map_err(|x| x.to_string())?;
-    edit_named(made, &o.faces, feature, "offset face", |b, f| {
+    edit_named(doc, made, &o.faces, feature, "offset face", |b, f| {
         chamfera_kernel::offset_faces(b, f, d)
     })
 }
 
 pub(crate) fn build_delete_face(
+    doc: &Document,
     d: &DeleteFace,
     feature: u32,
     made: &[(u32, String, Body)],
 ) -> Result<Made, String> {
     edit_named(
+        doc,
         made,
         &d.faces,
         feature,
@@ -113,7 +125,7 @@ pub(crate) fn build_move_face(
     made: &[(u32, String, Body)],
 ) -> Result<Made, String> {
     let t = move_face_transform(doc, m)?;
-    edit_named(made, &m.faces, feature, "move face", |b, f| {
+    edit_named(doc, made, &m.faces, feature, "move face", |b, f| {
         chamfera_kernel::move_faces(b, f, &t)
     })
 }
@@ -235,12 +247,13 @@ impl crate::Session {
             });
         }
         if let Some(hit) = hit {
-            let solid = self
+            let (si, solid) = self
                 .solids()
                 .iter()
-                .find(|s| s.scene_id == Some(hit.body))?;
+                .enumerate()
+                .find(|(_, s)| s.scene_id == Some(hit.body))?;
             let face = *solid.faces.get(hit.triangle)?;
-            let name = solid.body.face_name(face).ok().flatten()?.to_owned();
+            let name = self.reference_name(si, chamfera_kernel::Entity::Face(face))?;
             return Some(PressPullTarget {
                 params: json!({ "face": name }),
                 operation: press_pull_face(&self.doc, &name),

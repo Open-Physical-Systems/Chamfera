@@ -79,15 +79,25 @@ fn base_plane(s: &Session, name: &str) -> Result<Frame, CommandError> {
             "unknown plane {name:?}: use xy, xz, yz or a face name such as \"2:top\""
         )));
     }
-    for solid in s.solids() {
-        for face in solid.body.faces() {
-            if solid.body.face_name(face).ok().flatten() == Some(name) {
-                return crate::solids::face_plane(&solid.body, face)
-                    .ok_or_else(|| bad(format!("face {name:?} is not flat")));
-            }
-        }
-    }
-    Err(bad(format!("no face named {name:?}")))
+    let found = s
+        .resolve_reference(
+            None,
+            crate::naming::Kind::Face,
+            name,
+            crate::naming::Want::Surface,
+        )
+        .map_err(|e| match e {
+            crate::naming::NameError::Gone { .. } => bad(format!("no face named {name:?}")),
+            e => bad(e.to_string()),
+        })?;
+    let f = found
+        .first()
+        .ok_or_else(|| bad(format!("no face named {name:?}")))?;
+    s.solids()
+        .get(f.body)
+        .zip(f.face())
+        .and_then(|(solid, face)| crate::solids::face_plane(&solid.body, face))
+        .ok_or_else(|| bad(format!("face {name:?} is not flat")))
 }
 
 pub(crate) fn section(s: &mut Session, p: &Value) -> CmdResult {

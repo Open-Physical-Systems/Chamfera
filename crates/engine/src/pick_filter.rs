@@ -151,12 +151,13 @@ impl Session {
 
     /// The face's name under a hit, for a solid's named face.
     fn face_name_of(&self, hit: &Hit) -> Option<String> {
-        let solid = self
+        let (si, solid) = self
             .solids()
             .iter()
-            .find(|s| s.scene_id == Some(hit.body))?;
+            .enumerate()
+            .find(|(_, s)| s.scene_id == Some(hit.body))?;
         let face = *solid.faces.get(hit.triangle)?;
-        solid.body.face_name(face).ok().flatten().map(str::to_owned)
+        self.reference_name(si, chamfera_kernel::Entity::Face(face))
     }
 
     /// What pixel `(x, y)` of a `w` x `h` viewport picks with this filter: an edge first,

@@ -16,6 +16,9 @@ pub mod display;
 pub mod face_edit;
 pub mod hole;
 mod imported;
+pub mod naming;
+#[cfg(test)]
+mod naming_tests;
 mod params;
 pub mod pick_filter;
 pub mod projection;

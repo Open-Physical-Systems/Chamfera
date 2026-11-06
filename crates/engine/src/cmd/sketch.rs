@@ -7,6 +7,7 @@
 //! Commands that change a sketch solve it, and a failed solve changes nothing.
 
 use super::CommandSpec;
+use crate::naming::{Kind, NameError, Want};
 use crate::sketching::SketchItem;
 use crate::{CmdResult, CommandError, Session, params};
 use chamfera_geom::{Frame, Point2};
@@ -95,7 +96,8 @@ pub static COMMANDS: &[CommandSpec] = &[
         id: "sketch.create_on_face",
         label: "Create Sketch on Face",
         params: "x, y, width, height: number - the pixel of a flat face of a solid; or\n\
-                 feature: integer and face: string - a face by its name, such as \"top\"",
+                 feature: integer and face: string - a face by its name, such as \"top\" (\"top#2\" for one piece of a split face)\n\
+                 point: {x, y, z} (optional) - a point on the face: it picks the piece of a split face, and the sketch stays on the piece holding it when the face splits later",
         mutates: true,
         run: create_on_face,
     },
@@ -446,35 +448,51 @@ fn create(s: &mut Session, p: &Value) -> CmdResult {
 }
 
 fn create_on_face(s: &mut Session, p: &Value) -> CmdResult {
+    let mut point = params::opt_point3(p, "point")?;
     let (feature, face, plane) = if p.get("feature").is_some_and(|v| !v.is_null()) {
         let feature = params::req_id(p, "feature")?;
         let face = params::req_str(p, "face")?.to_owned();
         // The face may be in any body: joins move a feature's faces into another body.
+        // Through the resolver (rung K8): `top#2` names one piece of a split face, and
+        // `point` picks the piece it lies on.
         let key = crate::solids::face_key(feature, &face);
-        let found = s.solids().iter().find_map(|x| {
-            x.body
-                .faces()
-                .into_iter()
-                .find(|f| x.body.face_name(*f).ok().flatten() == Some(key.as_str()))
-                .map(|f| (x, f))
-        });
-        let (solid, id) =
-            found.ok_or_else(|| bad(format!("feature {feature} has no face named {face:?}")))?;
-        let plane = crate::solids::face_plane(&solid.body, id)
+        let found = s
+            .resolve_at_point(Kind::Face, &key, point, Want::Surface)
+            .map_err(|e| match e {
+                NameError::Gone { .. } => {
+                    bad(format!("feature {feature} has no face named {face:?}"))
+                }
+                e => bad(e.to_string()),
+            })?;
+        let f = found
+            .first()
+            .ok_or_else(|| bad(format!("feature {feature} has no face named {face:?}")))?;
+        let plane = s
+            .solids()
+            .get(f.body)
+            .zip(f.face())
+            .and_then(|(solid, id)| crate::solids::face_plane(&solid.body, id))
             .ok_or_else(|| bad("sketches go on flat faces"))?;
         (feature, face, plane)
     } else {
         let (x, y, w, h) = params::pixel(p)?;
-        s.face_at(x, y, w, h)
-            .ok_or_else(|| bad("no flat face of a solid is under that point"))?
+        let at = s.face_hit_at(x, y, w, h).map(|h| h.2);
+        let found = s
+            .face_at(x, y, w, h)
+            .ok_or_else(|| bad("no flat face of a solid is under that point"))?;
+        point = point.or(at);
+        found
     };
     let id = s.doc.add_sketch(plane)?;
+    let r = chamfera_doc::FaceRef {
+        feature,
+        face: face.clone(),
+    };
     if let Ok(f) = s.doc.sketch_mut(id) {
-        f.attached = Some(chamfera_doc::FaceRef {
-            feature,
-            face: face.clone(),
-        });
+        f.attached = Some(r.clone());
     }
+    // What the sketch is on, so that it stays on that piece when the face splits.
+    s.record_face_signature(id, &r, point);
     s.active_sketch = Some(id);
     s.sketch_selection.clear();
     let n = plane.z();

@@ -1343,6 +1343,7 @@ impl Document {
             .position(|f| f.id == id)
             .ok_or(DocError::NoSuchFeature(id))?;
         let f = self.features.remove(i);
+        self.references.remove(&id);
         self.timeline_remove();
         Ok(f)
     }

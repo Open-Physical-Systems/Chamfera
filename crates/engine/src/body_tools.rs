@@ -24,7 +24,7 @@ pub(crate) fn build(
 ) -> Result<Made, String> {
     match &feature.kind {
         FeatureKind::Combine(c) => combine(c, made),
-        FeatureKind::SplitBody(s) => split_body(s, feature, made, constructs),
+        FeatureKind::SplitBody(s) => split_body(doc, s, feature, made, constructs),
         FeatureKind::SplitFace(s) => split_face(doc, s, feature.id, made, constructs),
         FeatureKind::Thicken(t) => thicken(doc, t, feature, made),
         FeatureKind::Remove(r) => remove(r, made),
@@ -103,21 +103,26 @@ fn plane_label(p: &PlaneRef) -> String {
     }
 }
 
+/// A face plane goes through the resolver (rung K8) with the signature item `owner`
+/// keeps for it.
 fn plane_frame(
+    doc: &Document,
+    owner: u32,
     made: &[(u32, String, Body)],
     constructs: &BTreeMap<u32, Constructed>,
     p: &PlaneRef,
 ) -> Result<Frame, String> {
-    crate::construct::plane_of(made, constructs, p).map(|(f, _)| f)
+    crate::construct::plane_of_made(doc, owner, made, constructs, p).map(|(f, _)| f)
 }
 
 fn split_body(
+    doc: &Document,
     s: &SplitBody,
     feature: &Feature,
     made: &[(u32, String, Body)],
     constructs: &BTreeMap<u32, Constructed>,
 ) -> Result<Made, String> {
-    let frame = plane_frame(made, constructs, &s.plane)?;
+    let frame = plane_frame(doc, feature.id, made, constructs, &s.plane)?;
     let face = format!("split {}", plane_label(&s.plane));
     let mut next = made.to_vec();
     let n = s.bodies.len();
@@ -150,14 +155,16 @@ fn split_body(
 /// to its sketch.
 fn split_face_plane(
     doc: &Document,
+    owner: u32,
     tool: &SplitFaceTool,
     made: &[(u32, String, Body)],
     constructs: &BTreeMap<u32, Constructed>,
 ) -> Result<(Frame, String), String> {
     match tool {
-        SplitFaceTool::Plane { plane } => {
-            Ok((plane_frame(made, constructs, plane)?, plane_label(plane)))
-        }
+        SplitFaceTool::Plane { plane } => Ok((
+            plane_frame(doc, owner, made, constructs, plane)?,
+            plane_label(plane),
+        )),
         SplitFaceTool::SketchLine { sketch, curve } => {
             let f = doc.sketch(*sketch).map_err(|e| e.to_string())?;
             let c = f
@@ -190,25 +197,37 @@ fn split_face(
     made: &[(u32, String, Body)],
     constructs: &BTreeMap<u32, Constructed>,
 ) -> Result<Made, String> {
-    let (frame, label) = split_face_plane(doc, &s.tool, made, constructs)?;
-    let mut found = vec![false; s.faces.len()];
-    let mut next = made.to_vec();
-    for (_, _, body) in &mut next {
-        let mut faces: Vec<(FaceId, String)> = Vec::new();
-        for f in body.faces() {
-            if let Some(n) = body.face_name(f).ok().flatten()
-                && let Some(i) = s.faces.iter().position(|x| x == n)
-            {
-                faces.push((f, n.to_owned()));
-                if let Some(seen) = found.get_mut(i) {
-                    *seen = true;
+    let (frame, label) = split_face_plane(doc, id, &s.tool, made, constructs)?;
+    // The faces through the resolver (rung K8): every piece of an already split face, or
+    // the piece a `#k` name or the signature picks.
+    let mut per_body: BTreeMap<usize, Vec<FaceId>> = BTreeMap::new();
+    {
+        let bodies = crate::naming::bodies(made);
+        for n in &s.faces {
+            let found = crate::naming::resolve(
+                doc,
+                id,
+                &bodies,
+                crate::naming::Kind::Face,
+                n,
+                crate::naming::Want::All,
+            )
+            .map_err(|e| format!("split face: {e}"))?;
+            for f in found {
+                if let Some(face) = f.face() {
+                    let list = per_body.entry(f.body).or_default();
+                    if !list.contains(&face) {
+                        list.push(face);
+                    }
                 }
             }
         }
-        if faces.is_empty() {
+    }
+    let mut next = made.to_vec();
+    for (i, (_, _, body)) in next.iter_mut().enumerate() {
+        let Some(ids) = per_body.remove(&i) else {
             continue;
-        }
-        let ids: Vec<FaceId> = faces.iter().map(|f| f.0).collect();
+        };
         let edge = face_key(id, &format!("split {label}"));
         let (mut out, front) = chamfera_kernel::split_faces(body, &ids, &frame, &edge)
             .map_err(|e| format!("split face: {e}"))?;
@@ -217,10 +236,6 @@ fn split_face(
             let _ = out.set_face_name(f, &face_key(id, &format!("split {label} of {old}")));
         }
         *body = out;
-    }
-    if let Some(i) = found.iter().position(|f| !f) {
-        let name = s.faces.get(i).map_or("", String::as_str);
-        return Err(format!("split face: the face {name:?} is no longer there"));
     }
     Ok(next)
 }
@@ -236,22 +251,31 @@ fn thicken(
         .map_err(|x| x.to_string())?;
     let (lo, hi) = t.direction.span(thickness);
     let mut shapes = Vec::new();
+    // Each face through the resolver (rung K8): every piece of a split face is thickened.
     // Surface bodies whose faces are thickened become the solids (they are used up).
+    let bodies = crate::naming::bodies(made);
+    let mut faces = Vec::new();
     let mut used_surfaces: Vec<usize> = Vec::new();
     for name in &t.faces {
-        let (k, body, face) = made
-            .iter()
-            .enumerate()
-            .find_map(|(k, (_, _, b))| {
-                b.faces()
-                    .into_iter()
-                    .find(|f| b.face_name(*f).ok().flatten() == Some(name.as_str()))
-                    .map(|f| (k, b, f))
-            })
-            .ok_or_else(|| format!("thicken: the face {name:?} is no longer there"))?;
-        if body.is_open() && !used_surfaces.contains(&k) {
-            used_surfaces.push(k);
+        let found = crate::naming::resolve(
+            doc,
+            feature.id,
+            &bodies,
+            crate::naming::Kind::Face,
+            name,
+            crate::naming::Want::All,
+        )
+        .map_err(|e| format!("thicken: {e}"))?;
+        for f in found {
+            if let (Some(b), Some(face)) = (bodies.get(f.body), f.face()) {
+                if b.is_open() && !used_surfaces.contains(&f.body) {
+                    used_surfaces.push(f.body);
+                }
+                faces.push((name, *b, face));
+            }
         }
+    }
+    for (name, body, face) in faces {
         let mut out = chamfera_kernel::thicken(body, face, lo, hi)
             .map_err(|e| format!("thicken {name}: {e}"))?;
         name_faces(&mut out, feature.id);

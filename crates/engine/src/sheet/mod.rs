@@ -11,7 +11,7 @@
 #[cfg(test)]
 mod tests;
 
-use crate::solids::{edge_ref, name_edges, name_faces};
+use crate::solids::{name_edges, name_faces};
 use chamfera_doc::{
     Document, Feature, FeatureKind, FlangePosition, FlangeSide, ReliefShape, SheetBase,
     SheetFlange, SheetRule, SheetUnfold,
@@ -137,22 +137,31 @@ fn flange_spec(doc: &Document, f: &SheetFlange, rule: &SheetRule) -> Result<Flan
 
 /// The sheet (its base id) whose solid has the edge named `edge`, the index of that solid
 /// in `made`, and the edge.
+/// The edge goes through the resolver (rung K8), with the flange's signature.
 fn find_sheet_edge(
+    doc: &Document,
+    owner: u32,
     made: &[(u32, String, Body)],
     state: &SheetState,
     edge: &str,
 ) -> Option<(u32, usize, chamfera_kernel::EdgeId)> {
-    for (i, (feature, _, body)) in made.iter().enumerate() {
-        if !state.sheets.contains_key(feature) {
-            continue;
-        }
-        for e in body.edges() {
-            if edge_ref(body, e).as_deref() == Some(edge) {
-                return Some((*feature, i, e));
-            }
-        }
-    }
-    None
+    let bodies = crate::naming::bodies(made);
+    let f = crate::naming::resolve(
+        doc,
+        owner,
+        &bodies,
+        crate::naming::Kind::Edge,
+        edge,
+        crate::naming::Want::One,
+    )
+    .ok()?
+    .into_iter()
+    .next()?;
+    let feature = made.get(f.body)?.0;
+    state
+        .sheets
+        .contains_key(&feature)
+        .then_some((feature, f.body, f.edge()?))
 }
 
 fn build_flange(
@@ -162,7 +171,7 @@ fn build_flange(
     made: &mut [(u32, String, Body)],
     state: &mut SheetState,
 ) -> Result<(), String> {
-    let (base, index, edge) = find_sheet_edge(made, state, &f.edge).ok_or_else(|| {
+    let (base, index, edge) = find_sheet_edge(doc, id, made, state, &f.edge).ok_or_else(|| {
         format!(
             "flange: the edge {:?} is not an edge of a sheet metal part (any more)",
             f.edge

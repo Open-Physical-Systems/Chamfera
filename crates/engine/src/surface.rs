@@ -89,9 +89,9 @@ pub(crate) fn build(
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(new_bodies(bodies))
         }
-        SurfaceFeature::Patch(p) => Ok(new_bodies(patch(doc, p, made)?)),
+        SurfaceFeature::Patch(p) => Ok(new_bodies(patch(doc, feature.id, p, made)?)),
         SurfaceFeature::Stitch(s) => stitch(s, feature, made),
-        SurfaceFeature::Trim(t) => trim(t, feature, made, constructs),
+        SurfaceFeature::Trim(t) => trim(doc, t, feature, made, constructs),
     }
 }
 
@@ -203,6 +203,7 @@ fn index_of(made: &[(u32, String, Body)], name: &str) -> Result<usize, String> {
 
 fn patch(
     doc: &Document,
+    owner: u32,
     p: &SurfacePatch,
     made: &[(u32, String, Body)],
 ) -> Result<Vec<Body>, String> {
@@ -215,32 +216,43 @@ fn patch(
             })
             .collect();
     }
-    // Every edge of one body.
-    for (_, _, body) in made {
-        let mut found = Vec::new();
-        for name in &p.edges {
-            if let Some(e) = body
-                .edges()
-                .into_iter()
-                .find(|e| body.edge_name(*e).ok().flatten() == Some(name.as_str()))
-            {
+    // Every edge through the resolver (rung K8), all in one body.
+    let bodies = crate::naming::bodies(made);
+    let mut body_index = None;
+    let mut found = Vec::new();
+    for name in &p.edges {
+        let hits = crate::naming::resolve(
+            doc,
+            owner,
+            &bodies,
+            crate::naming::Kind::Edge,
+            name,
+            crate::naming::Want::All,
+        )
+        .map_err(|e| format!("patch: {e}"))?;
+        for h in hits {
+            let Some(e) = h.edge() else { continue };
+            match body_index {
+                None => body_index = Some(h.body),
+                Some(b) if b != h.body => {
+                    return Err("patch: the edges must all belong to one body".into());
+                }
+                Some(_) => {}
+            }
+            if !found.contains(&e) {
                 found.push(e);
             }
         }
-        if found.is_empty() {
-            continue;
-        }
-        if found.len() != p.edges.len() {
-            return Err("patch: the edges must all belong to one body".into());
-        }
-        return chamfera_kernel::patch_edges(body, &found)
-            .map(|b| vec![b])
-            .map_err(|x| format!("patch: {x}"));
     }
-    Err(format!(
-        "patch: the edge {:?} is no longer there",
-        p.edges.first().map_or("", String::as_str)
-    ))
+    let body = body_index.and_then(|b| bodies.get(b)).ok_or_else(|| {
+        format!(
+            "patch: the edge {:?} is no longer there",
+            p.edges.first().map_or("", String::as_str)
+        )
+    })?;
+    chamfera_kernel::patch_edges(body, &found)
+        .map(|b| vec![b])
+        .map_err(|x| format!("patch: {x}"))
 }
 
 fn stitch(
@@ -273,6 +285,7 @@ fn stitch(
 }
 
 fn trim(
+    doc: &Document,
     t: &SurfaceTrim,
     feature: &Feature,
     made: &[(u32, String, Body)],
@@ -294,7 +307,8 @@ fn trim(
     };
     let mut out = match &t.tool {
         TrimTool::Plane { plane } => {
-            let (frame, _) = crate::construct::plane_of(made, constructs, plane)?;
+            let (frame, _) =
+                crate::construct::plane_of_made(doc, feature.id, made, constructs, plane)?;
             chamfera_kernel::trim_by_plane(surface, &frame, t.keep == TrimKeep::Below).map_err(k)?
         }
         TrimTool::Body { body } => {

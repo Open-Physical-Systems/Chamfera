@@ -139,3 +139,26 @@ pub fn req_display_name(params: &Value, key: &str) -> Result<String, CommandErro
     }
     Ok(name.to_owned())
 }
+
+/// An optional point `{x, y, z}` in mm, each finite and within the working range.
+pub fn opt_point3(
+    params: &Value,
+    key: &str,
+) -> Result<Option<chamfera_geom::Point3>, CommandError> {
+    let Some(v) = object_field(params, key)? else {
+        return Ok(None);
+    };
+    let c = |k: &str| -> Result<f64, CommandError> {
+        let x = req_f64(v, k).map_err(|_| {
+            CommandError::BadParams(format!("`{key}` must be {{x, y, z}} with finite numbers"))
+        })?;
+        if x.abs() > chamfera_geom::MAX_COORDINATE {
+            return Err(CommandError::BadParams(format!(
+                "`{key}.{k}` must be within ±{} mm",
+                chamfera_geom::MAX_COORDINATE
+            )));
+        }
+        Ok(x)
+    };
+    Ok(Some(chamfera_geom::Point3::new(c("x")?, c("y")?, c("z")?)))
+}
