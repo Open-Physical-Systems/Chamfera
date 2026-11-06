@@ -908,6 +908,14 @@ impl ChamferaApp {
                 pick = Some(action);
             }
         }
+        ui.separator();
+        let about = widgets::menu_item(ui, look, Icon::Body, "About Chamfera", true);
+        #[cfg(target_arch = "wasm32")]
+        self.web.target("About Chamfera", about.rect);
+        if about.clicked() {
+            ui.close();
+            self.about.open = true;
+        }
         if let Some(a) = pick {
             ui.close();
             self.run_action(a);

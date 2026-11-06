@@ -26,7 +26,9 @@ cp "$ROOT/packaging/linux/chamfera.desktop" "$APPDIR/usr/share/applications/"
 convert -background none "$ROOT/assets/icons/chamfera.svg" -resize 256x256 "$APPDIR/chamfera.png"
 cp "$APPDIR/chamfera.png" "$APPDIR/usr/share/icons/hicolor/256x256/apps/chamfera.png"
 ln -sf chamfera.png "$APPDIR/.DirIcon"
-cp "$ROOT/LICENSE-MIT" "$ROOT/LICENSE-APACHE" "$APPDIR/usr/"
+cp "$ROOT/LICENSE-MIT" "$ROOT/LICENSE-APACHE" "$ROOT/ATTRIBUTION.md" "$APPDIR/usr/"
+# The licence texts of the bundled crates; Help > About finds them in usr/.
+(cd "$ROOT" && cargo xtask notices --out "$APPDIR/usr/THIRD-PARTY-LICENSES.txt")
 
 if [ ! -x "$TOOL" ]; then
   curl -fsSL "$TOOL_URL" -o "$TOOL.part"
