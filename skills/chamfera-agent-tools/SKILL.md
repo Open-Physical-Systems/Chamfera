@@ -58,6 +58,11 @@ It uses the GPU if there is one, else a software Vulkan driver (lavapipe, `mesa-
 - 3D: `cam.op_add {"kind": "parallel", "tool", "stepover"|"scallop", "angle", "tolerance", "stock_to_leave"}`, `{"kind": "waterline", "stepdown", "tolerance"}`, `{"kind": "adaptive", "stepdown", "max_engagement", "stock_to_leave"}` (flat, ball or bull nose mills). `cam.simulate {setup?, ops?, resolution (<= 1024), time (0 to 1), tolerance}` cuts a dexel stock, shows it (gouges in the `gouge` colour) and replies with `removed_volume`, `rest_volume` and `gouges`; `{"clear": true}` ends it. A `--script` that runs `cam.simulate` opens with the Simulate panel (`examples/cam-3d-finish.json`, `examples/cam-3d-simulate.json`).
 - Check `cam.generate`'s reply (lengths, minutes, per-operation `error`) against values you worked out; a script that runs `cam.generate` opens the app in the MANUFACTURE tab with the toolpaths drawn.
 
+## Version history and recovery
+- Every `design.save` writes atomically and keeps a version in `<file>.history/` beside the file (`version` in the reply). `version.list`, `version.save {note}`, `version.restore {id}` (one undo step), `version.delete {id}` and `version.compare {a, b}` (ids or `"current"`; replies with `parameters`, `features.added/removed/changed` and `volume_delta`, and shows A shaded and B see-through in the viewport until `{"clear": true}`) all work on the open design's own history: save it to a file first.
+- A script that runs `version.compare` opens with the History panel showing it (`examples/version-history.json`, run it in a scratch folder: it saves `history-example.chamfera` there); `--history` opens the panel.
+- `--recovery-demo` keeps the design the script built as a crashed run's recovery file (a scratch folder) and starts with the recovery question. Screenshots otherwise never read or write recovery files.
+
 ## Commands and scripts
 - `chamfera-cli commands` lists every command; `chamfera-cli exec <id> '<json>'` runs one.
 - `chamfera-cli run script.json` runs a list of `{"command", "params"}` steps and prints one reply per line (`examples/parameters.json`).

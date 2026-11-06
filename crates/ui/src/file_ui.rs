@@ -99,6 +99,22 @@ impl ChamferaApp {
         }
         #[cfg(not(target_arch = "wasm32"))]
         let save_as = item_if(ui, Icon::Save, "Save As…", "Ctrl+Shift+S", true);
+        #[cfg(not(target_arch = "wasm32"))]
+        let save_version = item_if(
+            ui,
+            Icon::Save,
+            &format!("{}…", label("version.save")),
+            "Ctrl+Alt+S",
+            true,
+        );
+        #[cfg(not(target_arch = "wasm32"))]
+        let history = item_if(
+            ui,
+            Icon::Undo,
+            &format!("{}…", label("version.list")),
+            "",
+            true,
+        );
         ui.separator();
         let step = item_if(
             ui,
@@ -178,6 +194,16 @@ impl ChamferaApp {
             ui.close();
             self.save(true);
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        if save_version {
+            ui.close();
+            self.ask_version_note();
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if history {
+            ui.close();
+            self.open_history();
+        }
         if step {
             ui.close();
             self.export("STEP", &["step", "stp"], "design.export_step");
@@ -250,6 +276,8 @@ impl ChamferaApp {
             #[cfg(target_arch = "wasm32")]
             Pending::OpenPath(_) => {}
             Pending::Quit => {
+                // Quitting on purpose (changes saved or let go): no recovery file stays.
+                self.recovery_remove_own();
                 self.file.allow_close = true;
                 self.ctx_close = true;
             }
@@ -508,11 +536,16 @@ impl ChamferaApp {
                 p
             }
         };
-        if self
-            .run("design.save", json!({ "path": path.to_string_lossy() }))
-            .is_some()
-        {
+        if let Some(reply) = self.run("design.save", json!({ "path": path.to_string_lossy() })) {
             self.message = Some((format!("Saved {}", path.display()), false));
+            if let Some(e) = reply["history_error"].as_str() {
+                self.message = Some((
+                    format!("Saved {}; no version kept: {e}", path.display()),
+                    true,
+                ));
+            }
+            self.recovery_remove_own();
+            self.after_version_saved(&reply);
         }
     }
 
@@ -666,7 +699,9 @@ impl ChamferaApp {
             ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(m, k)))
         };
         // Longer shortcuts first, so Ctrl+Shift+S isn't also read as Ctrl+S.
-        if pressed(cmd_shift, Key::S) {
+        if pressed(Modifiers::COMMAND | Modifiers::ALT, Key::S) {
+            self.ask_version_note();
+        } else if pressed(cmd_shift, Key::S) {
             self.save(true);
         } else if pressed(cmd, Key::S) {
             self.save(false);

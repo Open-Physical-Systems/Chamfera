@@ -26,6 +26,7 @@ mod spline;
 mod surface;
 mod timeline;
 mod transform;
+mod version;
 mod view;
 
 use crate::{CmdResult, Session};
@@ -74,6 +75,7 @@ pub fn registry() -> Vec<&'static CommandSpec> {
         surface::COMMANDS,
         timeline::COMMANDS,
         transform::COMMANDS,
+        version::COMMANDS,
         view::COMMANDS,
     ] {
         all.extend(area.iter());

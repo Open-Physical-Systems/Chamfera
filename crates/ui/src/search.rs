@@ -226,7 +226,7 @@ fn context_of(action: Action) -> &'static str {
             Some("sketch") => "Sketch",
             Some("solid" | "feature" | "param" | "surface") => "Solid",
             Some("view" | "select") => "View",
-            Some("design" | "body") => "File",
+            Some("design" | "body" | "version") => "File",
             Some("edit") => "Edit",
             _ => "Command",
         },
@@ -601,6 +601,10 @@ impl ChamferaApp {
     fn run_command_item(&mut self, id: &'static str) {
         if id.starts_with("param.") {
             self.params.open = true;
+            return;
+        }
+        if id.starts_with("version.") {
+            self.history_command(id);
             return;
         }
         let Some(spec) = registry().into_iter().find(|c| c.id == id) else {

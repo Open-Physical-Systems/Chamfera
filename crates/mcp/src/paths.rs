@@ -161,7 +161,7 @@ impl PathGuard {
         };
         // A missing or non-string path (or folder) is left for the command to reject.
         let mut out = params.clone();
-        for key in ["path", "dir"] {
+        for key in ["path", "dir", "design_path"] {
             let Some(raw) = params.get(key).and_then(Value::as_str) else {
                 continue;
             };

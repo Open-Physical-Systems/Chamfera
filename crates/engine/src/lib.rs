@@ -36,6 +36,7 @@ pub mod sheet;
 pub mod sketching;
 pub mod solids;
 pub mod surface;
+pub mod versions;
 
 use chamfera_doc::{DocError, Document};
 use chamfera_render::{Camera, Scene};
@@ -96,6 +97,8 @@ pub struct Session {
     pub(crate) view_state: motion::AssemblyView,
     /// The file the design was last opened from or saved to.
     pub path: Option<std::path::PathBuf>,
+    /// Whether saves keep versions beside the file, and how many (`versions`).
+    pub history: versions::HistorySettings,
     /// The design as last opened or saved, to tell whether there are unsaved changes.
     saved: Document,
     undo: Vec<Document>,
@@ -272,3 +275,5 @@ mod qa_tests;
 mod surface_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod versions_tests;

@@ -320,7 +320,7 @@ Close runners-up: selection filters and box selection (UI and NAV), splines (nee
 | Undo and redo | Every change undoable | done | P0 | S | engine |
 | Themes (light, dark, system) | From theme tokens | done | P0 | S | render, ui |
 | Preferences | Units, grid, snaps, navigation, theme in one dialog | missing | P1 | M | ui |
-| Autosave and recovery | Recover work after a crash | missing | P1 | M | apps, io |
+| Autosave and recovery | Recover work after a crash | done (recovery file every N s of unsaved changes, atomic; offered at start; atomic `design.save`) | P1 | M | apps, io |
 | Recent files | Reopen designs quickly | missing | P1 | S | ui, apps |
 | Browser build | The app in a web page (WebGPU or WebGL 2) | branch (`web/browser-app`) | P1 | M | apps, gpu |
 | Scripting and add-ins | Run command scripts; later a plug-in API | done (command scripts via CLI and MCP) | P1 | M | engine, mcp |
@@ -370,8 +370,8 @@ Close runners-up: selection filters and box selection (UI and NAV), splines (nee
 
 | Feature | Description | Status | Pri | Size | Layer |
 |---|---|---|---|---|---|
-| Design history | Every save as a version; open or restore an older one | missing | P1 | M | io, doc |
-| Version comparison | Show what changed between two versions | missing | P2 | M | doc, gpu |
+| Design history | Every save as a version; open or restore an older one | done (`.chamfera.history/` beside the file, `version.*`, History panel) | P1 | M | io, doc |
+| Version comparison | Show what changed between two versions | done (`version.compare`: parameters, features, volume; both bodies tinted in the viewport) | P2 | M | doc, gpu |
 | Projects and folders | Organise designs | missing | P2 | M | apps |
 | Shared links and viewing in a browser | Send a read-only view | missing | P2 | L | apps (browser build) |
 | Comments and markup on the model | Notes pinned to the model | missing | P2 | M | doc, ui |
