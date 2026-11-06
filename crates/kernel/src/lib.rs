@@ -19,6 +19,7 @@ mod check;
 mod curve3;
 mod intersect;
 mod planar;
+mod tessellate;
 mod topology;
 
 pub use curve3::{
@@ -30,6 +31,7 @@ pub use intersect::{
     line_arc, line_circle, line_line, line_segment, segment_arc, segment_circle, segment_segment,
 };
 pub use planar::{Arc2, Circle2, Line2, Segment2};
+pub use tessellate::{BodyMesh, TessOptions, tessellate};
 pub use topology::{
     Body, Curve, CurveId, EdgeCurve, EdgeId, FaceId, HalfEdgeId, LoopId, MAX_NAME_LENGTH,
     MAX_PROFILE_VERTICES, MAX_TOPOLOGY_ENTITIES, Mvfs, PointId, ShellId, ShellReport, Surface,
