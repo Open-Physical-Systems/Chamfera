@@ -236,6 +236,7 @@ mod overlay_tests {
             style: OverlayStyle::Sketch,
             lines: vec![[Point3::new(-30.0, 20.0, 0.7), Point3::new(30.0, 20.0, 0.7)]],
             points: vec![Point3::new(-6.0, 20.0, 6.0)],
+            on_top: true,
         });
         let mut camera = Camera::default();
         camera.set_view(StandardView::Front);

@@ -494,6 +494,7 @@ impl ChamferaApp {
             style: OverlayStyle::Preview,
             lines,
             points: vec![w(hover)],
+            on_top: true,
         })
     }
 

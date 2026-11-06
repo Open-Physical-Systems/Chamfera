@@ -7,6 +7,7 @@
 pub mod cmd;
 mod params;
 pub mod sketching;
+pub mod solids;
 
 use chamfera_doc::{DocError, Document};
 use chamfera_render::{Camera, Scene};
@@ -48,6 +49,8 @@ pub struct Session {
     pub active_sketch: Option<u32>,
     /// Selected points and curves of the active sketch.
     pub sketch_selection: Vec<sketching::SketchItem>,
+    /// Solids built from the timeline (worked out again after every change).
+    built: solids::Built,
     undo: Vec<Document>,
     redo: Vec<Document>,
 }
@@ -84,6 +87,16 @@ impl Session {
         // Sketch display follows the design, the active sketch and its selection. Commands
         // that change none of these (camera moves, picks, queries: every mouse move) skip
         // the rebuild.
+        // Solids follow the design: rebuild after anything that may have changed it.
+        // solid.* and feature.* rebuild themselves; a failed command was rolled back, so
+        // the solids must follow the restored design.
+        let rebuilt_itself = id.starts_with("solid.") || id.starts_with("feature.");
+        if (spec.mutates && (result.is_err() || !rebuilt_itself))
+            || (id.starts_with("edit.") && result.is_ok())
+            || (id.starts_with("design.") && result.is_ok() && id != "design.save")
+        {
+            self.rebuild();
+        }
         if spec.mutates
             || id.starts_with("edit.")
             || id.starts_with("design.")
