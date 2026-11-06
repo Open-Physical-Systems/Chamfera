@@ -21,12 +21,18 @@ pub static COMMANDS: &[CommandSpec] = &[
         id: "feature.edit",
         label: "Edit Feature",
         params: "feature: integer (required)\n\
-                 distance: string or number (optional) - new extrude distance expression\n\
+                 distance: string or number (optional) - new extrude or offset plane distance\n\
+                 angle: string or number (optional) - new angle of a plane at an angle\n\
                  direction: string (optional) - normal, reversed or symmetric\n\
                  operation: string (optional) - new_body, join, cut or intersect\n\
                  size: string or number (optional) - new fillet radius or chamfer distance\n\
                  path_curves: list of integers (optional) - new sweep path curves\n\
                  sections: list of {sketch, x, y} (optional) - new loft profiles, in order\n\
+                 points, kind, diameter, depth, through_all, cb_diameter, cb_depth, cs_diameter,\n\
+                 cs_angle, tip_angle (optional) - a hole's new values, as for solid.hole\n\
+                 plane: string or object (optional) - a mirror's new plane, as in solid.mirror\n\
+                 dx, dy, dz, angle, axis, origin, from, to (optional) - a move's new transform\n\
+                 copy: boolean (optional) - whether a move keeps the originals\n\
                  thickness: string or number (optional) - new shell wall thickness\n\
                  faces: list of strings (optional) - new open faces of a shell\n\
                  suppressed: boolean (optional)",
@@ -87,7 +93,8 @@ pub static COMMANDS: &[CommandSpec] = &[
         label: "Revolve",
         params: "sketch: integer (required)\n\
                  profiles: list of {x, y} (required) - a point inside each profile, in sketch mm\n\
-                 axis: integer (required) - a line of the same sketch to turn around\n\
+                 axis: integer (required unless axis_feature) - a line of the sketch to turn around\n\
+                 axis_feature: integer (optional) - a construction axis in the sketch plane instead\n\
                  angle: string or number (optional) - default 360 deg; a plain number is degrees\n\
                  operation: string (optional) - new_body (default), join, cut or intersect",
         mutates: true,
@@ -126,7 +133,8 @@ pub static COMMANDS: &[CommandSpec] = &[
         params: "feature: integer (required) - the feature to repeat\n\
                  count: string or number (required) - copies including the original, 2 to 1000\n\
                  origin: {x, y, z} (required) - a point on the axis\n\
-                 axis: {x, y, z} (required) - the axis direction\n\
+                 axis: {x, y, z} (required unless axis_feature) - the axis direction\n\
+                 axis_feature: integer (optional) - a construction axis to turn around instead\n\
                  angle: string or number (optional) - spread, default 360 deg (plain = degrees)",
         mutates: true,
         run: pattern_circular,
@@ -197,7 +205,7 @@ fn direction(p: &Value) -> Result<Option<ExtrudeDirection>, CommandError> {
     })
 }
 
-fn operation(p: &Value) -> Result<Option<Operation>, CommandError> {
+pub(super) fn operation(p: &Value) -> Result<Option<Operation>, CommandError> {
     match params::opt_str(p, "operation")? {
         None => Ok(None),
         Some(o) => Operation::parse(o).map(Some).ok_or_else(|| {
@@ -230,7 +238,7 @@ fn seeds(p: &Value) -> Result<Vec<Point2>, CommandError> {
 }
 
 /// The reply for a feature: its solids' exact volumes from the kernel, and any error.
-fn feature_reply(s: &Session, id: u32) -> Value {
+pub(super) fn feature_reply(s: &Session, id: u32) -> Value {
     let solids: Vec<Value> = s
         .solids()
         .iter()
@@ -276,7 +284,15 @@ fn extrude(s: &mut Session, p: &Value) -> CmdResult {
 
 fn revolve(s: &mut Session, p: &Value) -> CmdResult {
     let sketch = params::req_id(p, "sketch")?;
-    let axis = params::req_id(p, "axis")?;
+    let axis_feature = match p.get("axis_feature") {
+        None | Some(Value::Null) => None,
+        Some(_) => Some(params::req_id(p, "axis_feature")?),
+    };
+    // With a construction axis the sketch line is not used (0 is no curve id).
+    let axis = match axis_feature {
+        Some(_) => 0,
+        None => params::req_id(p, "axis")?,
+    };
     let angle = match p.get("angle") {
         None | Some(Value::Null) => "360 deg".to_owned(),
         Some(Value::String(a)) => a.clone(),
@@ -287,6 +303,7 @@ fn revolve(s: &mut Session, p: &Value) -> CmdResult {
         sketch,
         profiles: seeds(p)?,
         axis,
+        axis_feature,
         angle,
         operation: operation(p)?.unwrap_or_default(),
     });
@@ -497,7 +514,7 @@ fn edges(s: &mut Session, _p: &Value) -> CmdResult {
     Ok(json!({ "solids": solids }))
 }
 
-fn expression(p: &Value, key: &str, unit: &str) -> Result<Option<String>, CommandError> {
+pub(super) fn expression(p: &Value, key: &str, unit: &str) -> Result<Option<String>, CommandError> {
     match p.get(key) {
         None | Some(Value::Null) => Ok(None),
         Some(Value::String(s)) => Ok(Some(s.clone())),
@@ -513,7 +530,7 @@ fn expression(p: &Value, key: &str, unit: &str) -> Result<Option<String>, Comman
     }
 }
 
-fn vec3(p: &Value, key: &str) -> Result<chamfera_geom::Vec3, CommandError> {
+pub(super) fn vec3(p: &Value, key: &str) -> Result<chamfera_geom::Vec3, CommandError> {
     let v = p
         .get(key)
         .ok_or_else(|| bad(format!("`{key}` is required")))?;
@@ -552,8 +569,27 @@ fn pattern_circular(s: &mut Session, p: &Value) -> CmdResult {
     let source = params::req_id(p, "feature")?;
     let count = expression(p, "count", "")?.ok_or_else(|| bad("`count` is required"))?;
     let angle = expression(p, "angle", "deg")?.unwrap_or_else(|| "360 deg".to_owned());
-    let o = vec3(p, "origin")?;
-    let axis = vec3(p, "axis")?;
+    let axis_feature = match p.get("axis_feature") {
+        None | Some(Value::Null) => None,
+        Some(_) => Some(params::req_id(p, "axis_feature")?),
+    };
+    // A construction axis gives the origin and direction (followed on rebuild).
+    let (o, axis) = match axis_feature {
+        Some(id) => match s.constructs().get(&id) {
+            Some(crate::construct::Constructed::Axis {
+                origin, direction, ..
+            }) => (
+                chamfera_geom::Vec3::new(origin.x, origin.y, origin.z),
+                *direction,
+            ),
+            _ => {
+                return Err(bad(format!(
+                    "feature {id} is not a built construction axis"
+                )));
+            }
+        },
+        None => (vec3(p, "origin")?, vec3(p, "axis")?),
+    };
     add_pattern(
         s,
         chamfera_doc::Pattern {
@@ -563,6 +599,7 @@ fn pattern_circular(s: &mut Session, p: &Value) -> CmdResult {
                 origin: chamfera_geom::Point3::new(o.x, o.y, o.z),
                 axis,
                 angle,
+                axis_feature,
             },
         },
     )
@@ -573,6 +610,7 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
     let new_distance = distance(p)?;
     let new_direction = direction(p)?;
     let new_operation = operation(p)?;
+    let new_angle = expression(p, "angle", "deg")?;
     let suppressed = match p.get("suppressed") {
         None | Some(Value::Null) => None,
         Some(_) => Some(params::req_bool(p, "suppressed")?),
@@ -587,14 +625,29 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
             FeatureKind::Pattern(_) => {
                 return Err(bad("a pattern does what the feature it repeats does"));
             }
+            FeatureKind::Construct(_) => {
+                return Err(bad("construction geometry has no operation"));
+            }
             FeatureKind::Blend(_) => {
                 return Err(bad("a fillet or chamfer has no operation"));
             }
+            FeatureKind::Hole(_) => return Err(bad("a hole always cuts")),
+            FeatureKind::Mirror(m) => m.operation = o,
+            FeatureKind::Move(_) => return Err(bad("a move has no operation")),
             FeatureKind::Shell(_) => {
                 return Err(bad("a shell has no operation"));
             }
         }
     }
+    let hole_keys = super::hole::EDIT_KEYS
+        .iter()
+        .any(|k| p.get(*k).is_some_and(|v| !v.is_null()));
+    if let FeatureKind::Hole(h) = &mut kind {
+        super::hole::apply(s, h, p)?;
+    } else if hole_keys {
+        return Err(bad("points, kind and the hole sizes belong to holes"));
+    }
+    super::transform::edit_transform(&mut kind, p)?;
     let new_size = expression(p, "size", "mm")?;
     if let Some(size) = new_size {
         let FeatureKind::Blend(b) = &mut kind else {
@@ -618,15 +671,41 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
             sh.faces = f;
         }
     }
-    if let FeatureKind::Extrude(e) = &mut kind {
-        if let Some(d) = new_distance {
-            e.distance = d;
+    match &mut kind {
+        FeatureKind::Extrude(e) => {
+            if let Some(d) = new_distance {
+                e.distance = d;
+            }
+            if let Some(d) = new_direction {
+                e.direction = d;
+            }
         }
-        if let Some(d) = new_direction {
-            e.direction = d;
+        FeatureKind::Construct(chamfera_doc::Construction::PlaneOffset { distance, .. })
+            if new_direction.is_none() =>
+        {
+            if let Some(d) = new_distance {
+                *distance = d;
+            }
         }
-    } else if new_distance.is_some() || new_direction.is_some() {
-        return Err(bad("distance and direction belong to extrudes"));
+        _ if new_distance.is_some() || new_direction.is_some() => {
+            return Err(bad(
+                "distance belongs to extrudes and offset planes, direction to extrudes",
+            ));
+        }
+        _ => {}
+    }
+    match &mut kind {
+        FeatureKind::Construct(chamfera_doc::Construction::PlaneAngle { angle, .. }) => {
+            if let Some(a) = new_angle {
+                *angle = a;
+            }
+        }
+        // A move's angle was applied by edit_transform above.
+        FeatureKind::Move(_) => {}
+        _ if new_angle.is_some() => {
+            return Err(bad("angle belongs to planes at an angle"));
+        }
+        _ => {}
     }
     if p.get("path_curves").is_some_and(|v| !v.is_null()) {
         let FeatureKind::Sweep(w) = &mut kind else {
@@ -658,7 +737,7 @@ fn delete(s: &mut Session, p: &Value) -> CmdResult {
     let users = s.doc.feature_users(id);
     if !users.is_empty() {
         return Err(CommandError::Unavailable(format!(
-            "{} is drawn on this feature's faces; delete it first",
+            "{} uses this feature; delete it first",
             users.join(", ")
         )));
     }

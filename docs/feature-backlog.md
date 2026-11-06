@@ -16,7 +16,7 @@ Items 1 to 7 can run in parallel (they touch different crates or files); 8 to 10
 | # | Feature | Why now | Size | Main crates | Depends on |
 |---|---|---|---|---|---|
 | 1 | **Shell** (hollow a solid, remove chosen faces, wall thickness) | The third most used solid feature after extrude and fillet; kernel rung K12 | L | kernel, engine | none |
-| 2 | **Measure and mass properties** (distance, angle, edge length, face area, volume, centre of mass) | Users and agents check every part with it; the kernel already computes exact area and volume | M | kernel, engine, ui | none |
+| 2 | **Measure and mass properties** (distance, angle, edge length, face area, volume, centre of mass) | Users and agents check every part with it; the kernel already computes exact area and volume (done) | M | kernel, engine, ui | none |
 | 3 | **Construction planes, axes and points** (offset, at angle, midplane, through three points, tangent; axis through edge/two points; points) | Needed to sketch anywhere other than XY/XZ/YZ or a flat face | M | doc, engine, ui | none |
 | 4 | **Command search and keyboard shortcuts** (search box listing every command; single-key shortcuts for the common tools; right-click context menus in the viewport) | Every command already exists in the registry, so this is mostly UI | M | ui | none |
 | 5 | **Typed values and richer inference while drawing** (type length and angle in fields beside the cursor; snaps to midpoint, centre, quadrant, on curve, tangent, perpendicular; Shift to suspend snaps) | The sketcher feels unfinished without it; AutoCAD and Fusion users both rely on it | M | ui, engine (sketch commands) | none |
@@ -146,14 +146,14 @@ Close runners-up: selection filters and box selection (UI and NAV), splines (nee
 | Rule fillet / full round | Round all edges of a face, or a full round between three faces | missing | P2 | M | kernel |
 | Tangent chain selection | Picking one edge selects its tangent-connected chain | missing | P0 | S | engine, ui |
 | Shell | Hollow a body with chosen faces removed | branch `kernel/k12-shell` (planes, cylinders, cones; inward or outward; closed hollow) | P0 | L | kernel (K12), engine |
-| Hole | Simple, counterbore, countersink; blind, to a face, through all | missing | P0 | M | engine, doc, kernel |
+| Hole | Simple, counterbore, countersink; blind, to a face, through all | branch (`solid/hole`: simple, counterbore, countersink, blind or through all, drill point; not yet "to a face") | P0 | M | engine, doc, kernel |
 | Thread | Cosmetic thread (attribute + drawing note), later modelled thread | missing | P1 | M | doc, kernel |
 | Linear (rectangular) pattern | Features repeated in one or two directions | done | P0 | M | engine, doc |
 | Circular pattern | Features repeated around an axis | done | P0 | M | engine, doc |
-| Pattern buttons in the ribbon | UI for the pattern commands | missing | P0 | S | ui |
+| Pattern buttons in the ribbon | UI for the pattern commands | branch (`solid/mirror-move`) | P0 | S | ui |
 | Pattern on a path, pattern of bodies or faces | Further pattern kinds | missing | P2 | M | engine |
-| Mirror | Mirror features or bodies across a plane | missing | P0 | M | engine, kernel |
-| Move / copy body | Translate or rotate a body, by drag handles or values | missing | P0 | M | engine, ui |
+| Mirror | Mirror features or bodies across a plane | branch (`solid/mirror-move`) | P0 | M | engine, kernel |
+| Move / copy body | Translate or rotate a body, by drag handles or values | branch (`solid/mirror-move`: typed values; drag handles missing) | P0 | M | engine, ui |
 | Align | Move a body so one face or edge meets another | missing | P2 | S | engine |
 | Sweep | Profile along a path, with guide rail and twist options | partial: tangent lines and arcs, exact surfaces; no rails, twist or mitred corners | P1 | L | kernel (K12, K10) |
 | Loft | Solid through several profiles, with rails and end conditions | partial: parallel planes, matching lines and coaxial arcs (planes, cones); no rails or end conditions | P1 | L | kernel (K12, K10) |
@@ -233,9 +233,9 @@ Close runners-up: selection filters and box selection (UI and NAV), splines (nee
 | Feature | Description | Status | Pri | Size | Layer |
 |---|---|---|---|---|---|
 | Point pick with normal | Picking a point on a body returns its position and normal | done | P0 | S | engine, gpu |
-| Measure distance and angle | Between any two picked points, edges, faces, bodies (minimum distance) | missing | P0 | M | kernel, engine, ui |
-| Measure length, area, radius | Of a picked edge or face | missing | P0 | S | kernel, engine |
-| Mass properties | Volume, area, mass, centre of mass, moments of inertia | missing | P0 | M | kernel, engine |
+| Measure distance and angle | Between any two picked points, edges, faces, bodies (minimum distance) | done (`inspect.measure`, `inspect.measure_at`, INSPECT > Measure) | P0 | M | kernel, engine, ui |
+| Measure length, area, radius | Of a picked edge or face | done | P0 | S | kernel, engine |
+| Mass properties | Volume, area, mass, centre of mass, moments of inertia | done (`inspect.mass`, INSPECT > Mass Properties) | P0 | M | kernel, engine |
 | Section analysis | Cut the view with a plane and show the cut face | missing | P1 | M | gpu, render, kernel |
 | Interference | See assemblies | missing | P1 | M | kernel |
 | Curvature and zebra analysis | Show surface quality (comb, zebra stripes, curvature map) | missing | P2 | M | gpu, kernel |

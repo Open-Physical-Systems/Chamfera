@@ -31,6 +31,9 @@
 //! intersection, splitting, classification and sewing, with coplanar and touching cases,
 //! multi-lump results and result faces named after the operand faces they came from.
 //!
+//! Inspect is here: [`Body::mass_properties`] (centre of mass and inertia from the exact
+//! faces, after Mirtich 1996) and [`closest_points`] / [`angle_between`] for measuring.
+//!
 //! Rung K11 (first part) is here: edge blends, constant-radius [`fillet`] and
 //! equal-distance [`chamfer`] on straight edges between planes (cylinders, sphere-octant
 //! corners) and on plane/cylinder rims (tori, cones).
@@ -42,8 +45,10 @@ mod blend;
 mod boolean;
 mod check;
 mod curve3;
+mod distance;
 mod intersect;
 mod loft;
+mod mass;
 mod planar;
 mod profile;
 mod shell;
@@ -62,11 +67,13 @@ pub use curve3::{
     Arc3, Circle3, ClosestPoint, ELLIPSE_LENGTH_RELATIVE_TOLERANCE, Ellipse3, EllipticalArc3,
     Line3, Segment3,
 };
+pub use distance::{Closest, Entity, MAX_DISTANCE_PAIRS, angle_between, closest_points};
 pub use intersect::{
     Contact, IntersectionPoint, Intersections, Overlap, arc_arc, circle_arc, circle_circle,
     line_arc, line_circle, line_line, line_segment, segment_arc, segment_circle, segment_segment,
 };
 pub use loft::{LOFT_PARALLEL_TOLERANCE, MAX_LOFT_SECTIONS, loft};
+pub use mass::{MASS_QUADRATURE_TOLERANCE, MAX_DENSITY, MassProperties};
 pub use planar::{Arc2, Circle2, Line2, Segment2};
 pub use profile::{PROFILE_JOIN_TOLERANCE, Profile, ProfileEdge, polygon_edges};
 pub use shell::shell;

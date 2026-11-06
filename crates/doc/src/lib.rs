@@ -1,12 +1,17 @@
 //! Layer 2: the design document: parameters and sketches now, the feature timeline from M4.
 
+pub mod construct;
 pub mod expr;
 pub mod feature;
 pub mod imported;
 
+pub use construct::{
+    AxisRef, ConstructKind, Construction, EdgeRef, OriginAxis, OriginPlane, PlaneRef, PointRef,
+};
 pub use feature::{
-    Blend, BlendKind, Extrude, ExtrudeDirection, Feature, FeatureKind, Loft, LoftSection,
-    Operation, Pattern, PatternLayout, Revolve, Shell, Sweep,
+    Blend, BlendKind, Extrude, ExtrudeDirection, Feature, FeatureKind, Hole, HoleKind, HoleSizes,
+    Loft, LoftSection, Mirror, MirrorPlane, Move, MoveTransform, Operation, Pattern, PatternLayout,
+    Revolve, Shell, Sweep,
 };
 pub use imported::ImportedBody;
 
@@ -26,7 +31,13 @@ use thiserror::Error;
 /// - 8: imported solid bodies.
 /// - 9: fillets and chamfers of edges.
 /// - 10: shells (hollowed solids with open faces).
-/// - 17: sweeps along a path and lofts between profiles (11 to 16 are taken by work
+/// - 11: construction planes, axes and points as timeline features (`construct`), sketches
+///   on a construction plane (`on_plane`), and revolves and circular patterns about a
+///   construction axis (`axis_feature`). Older files open unchanged: every new field is
+///   optional.
+/// - 12: hole features (simple, counterbore, countersink) on a flat face.
+/// - 14: mirror and move/copy of bodies and features.
+/// - 17: sweeps along a path and lofts between profiles (15 and 16 are taken by work
 ///   landing alongside; the merge renumbers).
 pub const FORMAT_VERSION: u32 = 17;
 /// The tag every design file starts with, so other JSON is not mistaken for a design.
@@ -141,6 +152,10 @@ pub struct SketchFeature {
     /// rebuilds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attached: Option<FaceRef>,
+    /// The construction plane (its feature id) this sketch lies on, if any: its plane
+    /// follows that construction when the design rebuilds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_plane: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -431,6 +446,7 @@ impl Document {
             sketch: chamfera_sketch::Sketch::new(),
             expressions: BTreeMap::new(),
             attached: None,
+            on_plane: None,
         });
         Ok(id)
     }
@@ -541,6 +557,11 @@ impl Document {
                 return Err(DocError::BadFeature {
                     reason: format!("feature {} has a name longer than 256", f.id),
                 });
+            }
+            if let FeatureKind::Construct(c) = &f.kind {
+                c.check_shape().map_err(|reason| DocError::BadFeature {
+                    reason: format!("feature {}: {reason}", f.id),
+                })?;
             }
         }
         checked.features = doc.features;

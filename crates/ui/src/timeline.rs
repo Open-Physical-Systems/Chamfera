@@ -92,6 +92,8 @@ impl ChamferaApp {
                     Icon::PatternRectangular,
                     format!("Pattern × {} of feature {}", p.count, p.source),
                 ),
+                FeatureKind::Hole(h) => (Icon::Hole, crate::hole_ui::hole_details(h)),
+                FeatureKind::Construct(c) => (crate::construct_ui::feature_icon(c), c.describe()),
                 FeatureKind::Blend(b) => (
                     match b.blend {
                         chamfera_doc::BlendKind::Fillet => Icon::Fillet,
@@ -108,6 +110,10 @@ impl ChamferaApp {
                         if b.edges.len() == 1 { "" } else { "s" }
                     ),
                 ),
+                FeatureKind::Mirror(m) => {
+                    (Icon::MirrorBody, crate::transform_ui::mirror_details(m))
+                }
+                FeatureKind::Move(m) => (Icon::Move, crate::transform_ui::move_details(m)),
                 FeatureKind::Shell(sh) => (
                     Icon::Shell,
                     format!(
@@ -365,11 +371,25 @@ impl ChamferaApp {
         let Ok(f) = self.session.doc.feature(id) else {
             return;
         };
+        if let FeatureKind::Hole(h) = &f.kind {
+            self.solid.hole = Some(crate::hole_ui::HoleTool::editing(id, h));
+            return;
+        }
         let (distance, direction) = match &f.kind {
             FeatureKind::Extrude(e) => (e.distance.clone(), e.direction),
             FeatureKind::Revolve(r) => (r.angle.clone(), ExtrudeDirection::Normal),
             FeatureKind::Pattern(p) => (p.count.clone(), ExtrudeDirection::Normal),
+            FeatureKind::Construct(_) => return self.edit_construct(id),
             FeatureKind::Blend(b) => (b.size.clone(), ExtrudeDirection::Normal),
+            FeatureKind::Hole(h) => (h.diameter.clone(), ExtrudeDirection::Normal),
+            FeatureKind::Mirror(m) => (
+                crate::transform_ui::mirror_details(m),
+                ExtrudeDirection::Normal,
+            ),
+            FeatureKind::Move(m) => (
+                crate::transform_ui::move_details(m),
+                ExtrudeDirection::Normal,
+            ),
             FeatureKind::Shell(sh) => (sh.thickness.clone(), ExtrudeDirection::Normal),
             FeatureKind::Sweep(w) => (format!("{} curves", w.path.len()), ExtrudeDirection::Normal),
             FeatureKind::Loft(l) => (
@@ -404,6 +424,7 @@ impl ChamferaApp {
         let value_label = match &feature.kind {
             FeatureKind::Revolve(_) => "Angle",
             FeatureKind::Pattern(_) => "Count",
+            FeatureKind::Mirror(_) | FeatureKind::Move(_) => "Definition",
             FeatureKind::Shell(_) => "Thickness",
             FeatureKind::Sweep(_) => "Path",
             FeatureKind::Loft(_) => "Profiles",

@@ -46,6 +46,10 @@ pub struct SolidUi {
     pub extrude: Option<ExtrudeTool>,
     /// The Fillet or Chamfer tool.
     pub blend: Option<crate::blend_ui::BlendTool>,
+    /// The Hole tool.
+    pub hole: Option<crate::hole_ui::HoleTool>,
+    /// The Mirror, Move or pattern tool.
+    pub transform: Option<crate::transform_ui::TransformTool>,
     /// The Shell tool.
     pub shell: Option<crate::shell_ui::ShellTool>,
     /// The Sweep or Loft tool.
@@ -54,6 +58,8 @@ pub struct SolidUi {
     pub pick_face: bool,
     /// `--extrude`: pick the profile under the viewport's centre on the first frame.
     pub pick_centre: bool,
+    /// The Measure or Mass Properties tool (`inspect_ui.rs`).
+    pub inspect: Option<crate::inspect_ui::InspectTool>,
 }
 
 impl ChamferaApp {
@@ -69,6 +75,9 @@ impl ChamferaApp {
         let has_solids = !self.session.solids().is_empty();
         let tool_free = self.solid.extrude.is_none()
             && self.solid.blend.is_none()
+            && self.solid.hole.is_none()
+            && self.solid.transform.is_none()
+            && self.solid.inspect.is_none()
             && self.solid.shell.is_none()
             && self.solid.sweep.is_none();
         let sweep_open = self.solid.sweep.as_ref().map(|t| t.loft);
@@ -77,8 +86,11 @@ impl ChamferaApp {
         let revolving = self.solid.extrude.as_ref().is_some_and(|t| t.revolve);
         let mut plane: Option<(&str, &str)> = None;
         let mut on_face = false;
+        let construct_planes = self.construct_planes();
+        let mut on_construct: Option<u32> = None;
         let mut open_tool: Option<bool> = None;
         let mut sketch_button: Option<egui::Response> = None;
+        let (mut open_hole, holing) = (false, self.solid.hole.is_some());
         let (_, menu) = widgets::ribbon_group(ui, look, "CREATE", true, |ui| {
             let r = widgets::tool_button(
                 ui,
@@ -134,6 +146,7 @@ impl ChamferaApp {
             }
             open_sweep =
                 crate::sweep_ui::ribbon_buttons(ui, look, has_profiles, tool_free, sweep_open);
+            open_hole = crate::hole_ui::hole_button(ui, look, has_solids, tool_free, holing);
         });
         // Create Sketch opens the list of planes under its button.
         if let Some(r) = &sketch_button {
@@ -145,6 +158,7 @@ impl ChamferaApp {
                         plane = Some((p, view));
                     }
                 }
+                on_construct = crate::construct_ui::plane_menu(ui, look, &construct_planes);
                 ui.separator();
                 if widgets::menu_item(ui, look, Icon::Body, "A flat face…", has_solids).clicked()
                 {
@@ -201,6 +215,12 @@ impl ChamferaApp {
         });
         if let Some((p, view)) = plane {
             self.create_sketch(p, view);
+        }
+        if let Some(id) = on_construct {
+            self.sketch_on_construct(id);
+        }
+        if open_hole {
+            self.open_hole_tool();
         }
         if on_face {
             self.start_sketch_on_face();
@@ -280,6 +300,14 @@ impl ChamferaApp {
         if let Some(chamfer) = open_blend {
             self.open_blend(chamfer);
         }
+        self.transform_group(ui, has_solids && tool_free);
+        let look = self.look();
+        widgets::ribbon_divider(ui, look);
+        self.construct_group(ui);
+        let look = self.look();
+        widgets::ribbon_divider(ui, look);
+        let modelling_free = self.solid.extrude.is_none() && self.solid.blend.is_none();
+        self.inspect_group(ui, has_solids, modelling_free);
         let look = self.look();
         widgets::ribbon_divider(ui, look);
         let mut import = false;
