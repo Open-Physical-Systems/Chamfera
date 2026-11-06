@@ -1,0 +1,12 @@
+[
+  { "command": "param.set", "params": { "name": "thickness", "expression": "10 mm" } },
+  { "command": "sketch.create", "params": { "plane": "xy" } },
+  { "command": "sketch.rectangle", "params": { "x1": 0, "y1": 0, "x2": 80, "y2": 50 } },
+  { "command": "sketch.finish" },
+  { "command": "solid.extrude", "params": { "sketch": 1, "profiles": [{ "x": 5, "y": 5 }], "distance": "thickness" } },
+  { "command": "sketch.create_on_face", "params": { "feature": 2, "face": "top" } },
+  { "command": "sketch.rectangle", "params": { "x1": 25, "y1": 15, "x2": 55, "y2": 35 } },
+  { "command": "sketch.finish" },
+  { "command": "solid.extrude", "params": { "sketch": 3, "profiles": [{ "x": 40, "y": 25 }], "distance": "thickness * 1.5" } },
+  { "command": "view.home", "params": { "width": 1100, "height": 760 } }
+]

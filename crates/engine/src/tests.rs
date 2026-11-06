@@ -173,6 +173,11 @@ fn hostile_params_never_panic() {
         json!({"sketch": 1, "profiles": "all", "distance": [1], "suppressed": "no", "feature": 0}),
         json!({"sketch": 1, "profiles": [{"x": 10, "y": 10}], "distance": "1e7 mm"}),
         json!({"sketch": 1, "profiles": [{"x": 10, "y": 10}], "distance": -8, "direction": "symmetric"}),
+        json!({"sketch": 1, "profiles": [{"x": 10, "y": 10}], "axis": 5, "angle": 90}),
+        json!({"sketch": 1, "profiles": [{"x": 10, "y": 10}], "axis": 14, "angle": "720 deg"}),
+        json!({"sketch": 1, "profiles": [{"x": 10, "y": 10}], "axis": 1, "angle": [0]}),
+        json!({"feature": 2, "face": "top", "x": 0, "y": 0, "z": 0}),
+        json!({"feature": 99, "face": "nowhere", "x": 1e300, "y": 0, "z": f64::NAN}),
     ];
     for c in registry() {
         for p in &hostile {
@@ -767,4 +772,273 @@ fn clicking_inside_a_profile_finds_it() {
         .unwrap();
     assert_eq!(r["sketch"], 1);
     assert!((r["area"].as_f64().unwrap() - 1500.0).abs() < 1e-6);
+}
+
+fn exact_volume(r: &serde_json::Value) -> f64 {
+    r["solids"][0]["volume"].as_f64().unwrap()
+}
+
+#[test]
+fn circles_extrude_exactly_now() {
+    // A full circle r = 5 extruded 10: π r² h = 250π exactly (no polygon error).
+    let mut s = Session::new();
+    s.execute("sketch.create", &json!({"plane": "xy"})).unwrap();
+    s.execute("sketch.circle", &json!({"cx": 0, "cy": 0, "radius": 5}))
+        .unwrap();
+    let r = s
+        .execute(
+            "solid.extrude",
+            &json!({"sketch": 1, "profiles": [{"x": 0, "y": 0}], "distance": 10}),
+        )
+        .unwrap();
+    let v = exact_volume(&r);
+    assert!((v - 250.0 * std::f64::consts::PI).abs() < 1e-9, "{v}");
+}
+
+#[test]
+fn the_example_plate_has_its_exact_volume() {
+    // examples/extruded-plate.json: 80 x 50 x 8 with two r = 8 holes:
+    // (4000 - 2 * 64π) * 8 = 28783.009...; the 128-gon approximation gave 28784.30.
+    let text = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../examples/extruded-plate.json"
+    ))
+    .unwrap();
+    let steps: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let mut s = Session::new();
+    for step in steps.as_array().unwrap() {
+        let params = step.get("params").cloned().unwrap_or(json!({}));
+        s.execute(step["command"].as_str().unwrap(), &params)
+            .unwrap();
+    }
+    let list = s.execute("feature.list", &json!({})).unwrap();
+    let v = list["features"][0]["solids"][0]["volume"].as_f64().unwrap();
+    let exact = (4000.0 - 128.0 * std::f64::consts::PI) * 8.0;
+    assert!((v - exact).abs() < 1e-6, "{v} vs {exact}");
+}
+
+#[test]
+fn revolving_a_rectangle_about_a_sketch_line_makes_a_tube() {
+    // The rectangle x in [10, 15], y in [0, 20] turned about the sketch's y axis (the line
+    // x = 0): a tube of π (15² - 10²) 20 = 2500π; a quarter turn is a quarter of it.
+    for (angle, fraction) in [(json!(360), 1.0), (json!("90 deg"), 0.25)] {
+        let mut s = Session::new();
+        s.execute("sketch.create", &json!({"plane": "xz"})).unwrap();
+        s.execute(
+            "sketch.rectangle",
+            &json!({"x1": 10, "y1": 0, "x2": 15, "y2": 20}),
+        )
+        .unwrap();
+        let axis = s
+            .execute(
+                "sketch.line",
+                &json!({"x1": 0, "y1": -5, "x2": 0, "y2": 25}),
+            )
+            .unwrap()["curve"]
+            .as_u64()
+            .unwrap();
+        s.execute(
+            "sketch.construction",
+            &json!({"curve": axis, "construction": true}),
+        )
+        .unwrap();
+        let r = s
+            .execute(
+                "solid.revolve",
+                &json!({"sketch": 1, "profiles": [{"x": 12, "y": 10}], "axis": axis, "angle": angle}),
+            )
+            .unwrap();
+        let v = exact_volume(&r);
+        let expected = 2500.0 * std::f64::consts::PI * fraction;
+        assert!((v - expected).abs() < 1e-6, "{v} vs {expected}");
+    }
+}
+
+#[test]
+fn a_revolve_that_crosses_its_axis_is_refused() {
+    let mut s = Session::new();
+    s.execute("sketch.create", &json!({"plane": "xz"})).unwrap();
+    s.execute(
+        "sketch.rectangle",
+        &json!({"x1": -5, "y1": 0, "x2": 5, "y2": 10}),
+    )
+    .unwrap();
+    let axis = s
+        .execute(
+            "sketch.line",
+            &json!({"x1": 0, "y1": -5, "x2": 0, "y2": 15}),
+        )
+        .unwrap()["curve"]
+        .as_u64()
+        .unwrap();
+    s.execute(
+        "sketch.construction",
+        &json!({"curve": axis, "construction": true}),
+    )
+    .unwrap();
+    let before = s.doc.clone();
+    assert!(
+        s.execute(
+            "solid.revolve",
+            &json!({"sketch": 1, "profiles": [{"x": 2, "y": 5}], "axis": axis}),
+        )
+        .is_err()
+    );
+    assert_eq!(s.doc, before);
+}
+
+#[test]
+fn saving_tracks_the_file_and_unsaved_changes_and_exports_write_files() {
+    let dir = std::env::temp_dir().join(format!("chamfera-export-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let design = dir.join("box.chamfera");
+    let mut s = Session::new();
+    assert!(!s.has_unsaved_changes());
+    extruded_plate(&mut s, json!(10));
+    assert!(s.has_unsaved_changes());
+    // No file yet: a save needs a path.
+    assert!(s.execute("design.save", &json!({})).is_err());
+    s.execute("design.save", &json!({"path": design.to_str().unwrap()}))
+        .unwrap();
+    assert!(!s.has_unsaved_changes());
+    s.execute("param.set", &json!({"name": "x", "value": 1}))
+        .unwrap();
+    assert!(s.has_unsaved_changes());
+    s.execute("design.save", &json!({})).unwrap();
+    assert!(!s.has_unsaved_changes(), "saved again to the same file");
+    // STEP: one solid, a valid Part 21 file that our reader counts as a 6-face box.
+    let step = dir.join("box.step");
+    s.execute(
+        "design.export_step",
+        &json!({"path": step.to_str().unwrap()}),
+    )
+    .unwrap();
+    let text = std::fs::read_to_string(&step).unwrap();
+    assert!(text.starts_with("ISO-10303-21;"));
+    assert_eq!(text.matches("ADVANCED_FACE(").count(), 6);
+    // STL: the 12 triangles of the box, volume 15000 when read back.
+    let stl = dir.join("box.stl");
+    let r = s
+        .execute("design.export_stl", &json!({"path": stl.to_str().unwrap()}))
+        .unwrap();
+    assert_eq!(r["triangles"], 12);
+    let mesh = chamfera_io::stl::read(&std::fs::read(&stl).unwrap()).unwrap();
+    assert!((mesh.signed_volume() - 15_000.0).abs() < 1e-3);
+    // Opening it back gives the same design and nothing unsaved.
+    let mut t = Session::new();
+    t.execute("design.open", &json!({"path": design.to_str().unwrap()}))
+        .unwrap();
+    assert!(!t.has_unsaved_changes());
+    assert_eq!(t.solids().len(), 1, "opening rebuilds the solids");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn a_sketch_on_the_top_face_follows_the_plate_when_it_gets_thicker() {
+    // Plate 50 x 30, 10 thick; a 10 x 10 boss sketched on its top face, extruded 5:
+    // the boss spans z 10..15. Make the plate 20 thick: the boss moves to z 20..25.
+    let mut s = Session::new();
+    extruded_plate(&mut s, json!("10"));
+    let r = s
+        .execute(
+            "sketch.create_on_face",
+            &json!({"feature": 2, "face": "top"}),
+        )
+        .unwrap();
+    assert!(
+        (r["origin"]["z"].as_f64().unwrap() - 10.0).abs() < 1e-9,
+        "{r}"
+    );
+    assert!(
+        (r["normal"]["z"].as_f64().unwrap() - 1.0).abs() < 1e-12,
+        "outward normal"
+    );
+    let sketch = r["sketch"].as_u64().unwrap();
+    // The face frame's x and y match the base sketch's: a rectangle at (20..30, 10..20).
+    s.execute(
+        "sketch.rectangle",
+        &json!({"x1": 20, "y1": 10, "x2": 30, "y2": 20}),
+    )
+    .unwrap();
+    s.execute("sketch.finish", &json!({})).unwrap();
+    let boss = s
+        .execute(
+            "solid.extrude",
+            &json!({"sketch": sketch, "profiles": [{"x": 25, "y": 15}], "distance": 5}),
+        )
+        .unwrap();
+    let boss_id = boss["feature"].as_u64().unwrap();
+    let z_range = |s: &Session| {
+        let solid = s
+            .solids()
+            .iter()
+            .find(|x| u64::from(x.feature) == boss_id)
+            .unwrap();
+        let b = s
+            .scene
+            .body(solid.scene_id.unwrap())
+            .unwrap()
+            .mesh
+            .bounds()
+            .unwrap();
+        (b.min.z, b.max.z)
+    };
+    assert_eq!(z_range(&s), (10.0, 15.0));
+    s.execute("feature.edit", &json!({"feature": 2, "distance": "20"}))
+        .unwrap();
+    assert_eq!(z_range(&s), (20.0, 25.0));
+    // The plate cannot be deleted while the boss's sketch sits on it.
+    assert!(s.execute("feature.delete", &json!({"feature": 2})).is_err());
+    // A side face works too: its normal points out of the plate.
+    let side = s
+        .execute(
+            "sketch.create_on_face",
+            &json!({"feature": 2, "face": "side 0"}),
+        )
+        .unwrap();
+    let n = &side["normal"];
+    let len = (n["x"].as_f64().unwrap().powi(2) + n["y"].as_f64().unwrap().powi(2)).sqrt();
+    assert!(
+        (len - 1.0).abs() < 1e-9 && n["z"].as_f64().unwrap().abs() < 1e-12,
+        "{side}"
+    );
+}
+
+#[test]
+fn clicking_a_face_creates_a_sketch_on_it() {
+    // Top view of the 10-thick plate centred on (25, 15): the centre pixel hits the top.
+    let mut s = Session::new();
+    extruded_plate(&mut s, json!(10));
+    s.execute("view.standard", &json!({"view": "top"})).unwrap();
+    s.camera.target = chamfera_geom::Point3::new(25.0, 15.0, 5.0);
+    let r = s
+        .execute(
+            "sketch.create_on_face",
+            &json!({"x": 400, "y": 300, "width": 800, "height": 600}),
+        )
+        .unwrap();
+    assert_eq!(r["face"], "top");
+    // Nothing under a corner pixel: refused.
+    let mut t = Session::new();
+    extruded_plate(&mut t, json!(10));
+    t.execute("view.standard", &json!({"view": "top"})).unwrap();
+    t.camera.target = chamfera_geom::Point3::new(25.0, 15.0, 5.0);
+    assert!(
+        t.execute(
+            "sketch.create_on_face",
+            &json!({"x": 1, "y": 1, "width": 800, "height": 600}),
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn a_sketch_used_by_a_feature_is_hidden_until_it_is_edited() {
+    let mut s = Session::new();
+    extruded_plate(&mut s, json!(10));
+    assert!(s.scene.overlays.is_empty(), "the consumed sketch is hidden");
+    s.execute("sketch.edit", &json!({"sketch": 1})).unwrap();
+    assert!(!s.scene.overlays.is_empty(), "editing shows it");
+    s.execute("sketch.finish", &json!({})).unwrap();
+    assert!(s.scene.overlays.is_empty());
 }

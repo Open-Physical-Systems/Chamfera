@@ -49,6 +49,11 @@ todo = "deny"
 unimplemented = "deny"
 dbg_macro = "deny"
 
+# Debug builds keep line numbers for backtraces but not full debug info: build folders are
+# about half the size (each agent worktree has its own, and disk space is limited).
+[profile.dev]
+debug = "line-tables-only"
+
 [profile.release]
 lto = "thin"
 codegen-units = 1

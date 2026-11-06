@@ -6,10 +6,10 @@
 //! timeline) and the rest of the timeline still builds, as CAD users expect.
 
 use crate::Session;
-use chamfera_doc::{Extrude, ExtrudeDirection, FeatureKind};
-use chamfera_geom::{Frame, Point2, Point3};
-use chamfera_kernel::{Body, TessOptions, tessellate};
-use chamfera_sketch::{Region, Sketch};
+use chamfera_doc::{Extrude, ExtrudeDirection, FeatureKind, Revolve};
+use chamfera_geom::{Point2, Point3};
+use chamfera_kernel::{Body, Line2, Profile, ProfileEdge, TessOptions, tessellate};
+use chamfera_sketch::{Curve, ProfileLoop, Region, Sketch};
 use std::collections::BTreeMap;
 
 /// A solid built by a feature.
@@ -18,8 +18,41 @@ pub struct Solid {
     pub feature: u32,
     pub name: String,
     pub body: Body,
-    /// The scene body that shows it.
-    pub scene_id: u32,
+    /// The scene body that shows it, if it could be displayed.
+    pub scene_id: Option<u32>,
+    /// The kernel face behind each displayed triangle (for picking faces).
+    pub faces: Vec<chamfera_kernel::FaceId>,
+}
+
+/// The plane of a flat face, with its normal pointing out of the solid.
+pub fn face_plane(body: &Body, face: chamfera_kernel::FaceId) -> Option<chamfera_geom::Frame> {
+    match body.face_surface(face).ok()?? {
+        (chamfera_kernel::Surface::Plane(frame), same_sense) => {
+            Some(if same_sense { frame } else { frame.flipped() })
+        }
+        _ => None,
+    }
+}
+
+/// The plane of the face `r.face` of feature `r.feature`'s solid, from bodies built so
+/// far in this rebuild.
+fn attached_plane(
+    made: &[(u32, String, Body)],
+    r: &chamfera_doc::FaceRef,
+) -> Result<chamfera_geom::Frame, String> {
+    for (feature, _, body) in made.iter().filter(|m| m.0 == r.feature) {
+        let _ = feature;
+        for face in body.faces() {
+            if body.face_name(face).ok().flatten() == Some(r.face.as_str()) {
+                return face_plane(body, face)
+                    .ok_or_else(|| format!("the face {:?} is not flat", r.face));
+            }
+        }
+    }
+    Err(format!(
+        "the face {:?} it is drawn on is gone (feature {} changed or failed)",
+        r.face, r.feature
+    ))
 }
 
 /// What the last rebuild produced.
@@ -28,14 +61,71 @@ pub struct Built {
     pub solids: Vec<Solid>,
     /// Features that could not be built, and why.
     pub errors: BTreeMap<u32, String>,
+    /// Features whose solids were built but cannot be shown yet, and why.
+    pub display_errors: BTreeMap<u32, String>,
 }
 
-/// A region as polygons in sketch coordinates: the outer loop and its holes.
-/// Arcs are subdivided until the kernel's extrude takes arcs exactly (K4).
-fn region_polygons(sketch: &Sketch, r: &Region) -> (Vec<Point2>, Vec<Vec<Point2>>) {
-    let outer = sketch.loop_polyline(&r.outer);
-    let holes = r.holes.iter().map(|h| sketch.loop_polyline(h)).collect();
-    (outer, holes)
+/// A sketch loop as exact kernel profile edges: lines stay lines, arcs and circles stay
+/// arcs and circles, in the loop's direction.
+fn loop_edges(sketch: &Sketch, l: &ProfileLoop) -> Result<Vec<ProfileEdge>, String> {
+    let gone = || "a curve of the profile is gone".to_owned();
+    l.segments
+        .iter()
+        .map(|seg| {
+            let curve = sketch.curve(seg.curve).ok_or_else(gone)?;
+            let edge = match curve {
+                Curve::Line { start, end, .. } => {
+                    let (a, b) = (
+                        sketch.point(*start).ok_or_else(gone)?,
+                        sketch.point(*end).ok_or_else(gone)?,
+                    );
+                    ProfileEdge::line(a, b)
+                }
+                Curve::Circle { centre, radius, .. } => {
+                    ProfileEdge::circle(sketch.point(*centre).ok_or_else(gone)?, *radius)
+                }
+                Curve::Arc {
+                    centre, start, end, ..
+                } => ProfileEdge::arc_from_points(
+                    sketch.point(*centre).ok_or_else(gone)?,
+                    sketch.point(*start).ok_or_else(gone)?,
+                    sketch.point(*end).ok_or_else(gone)?,
+                )
+                .map_err(|e| format!("an arc of the profile: {e}"))?,
+            };
+            Ok(if seg.reversed { edge.reversed() } else { edge })
+        })
+        .collect()
+}
+
+/// A sketch region as an exact kernel profile (outer loop and holes).
+fn region_profile(sketch: &Sketch, r: &Region) -> Result<Profile, String> {
+    let outer = loop_edges(sketch, &r.outer)?;
+    let holes = r
+        .holes
+        .iter()
+        .map(|h| loop_edges(sketch, h))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(Profile::new(outer, holes))
+}
+
+/// The profiles a feature uses, found from its seed points.
+fn feature_profiles(
+    f: &chamfera_doc::SketchFeature,
+    seeds: &[Point2],
+) -> Result<Vec<Profile>, String> {
+    seeds
+        .iter()
+        .map(|seed| {
+            let region = f.sketch.region_at(*seed).ok_or_else(|| {
+                format!(
+                    "the profile at ({:.2}, {:.2}) of {} is no longer closed",
+                    seed.x, seed.y, f.name
+                )
+            })?;
+            region_profile(&f.sketch, &region)
+        })
+        .collect()
 }
 
 /// The bodies one extrude makes: one per profile.
@@ -44,36 +134,45 @@ fn build_extrude(doc: &chamfera_doc::Document, e: &Extrude) -> Result<Vec<Body>,
     let distance = doc
         .evaluate_feature_value(&e.distance, chamfera_doc::expr::Dim::LENGTH)
         .map_err(|x| x.to_string())?;
-    let (start, height) = match e.direction {
-        ExtrudeDirection::Normal => (0.0, distance),
-        ExtrudeDirection::Reversed => (-distance, distance),
-        ExtrudeDirection::Symmetric => (-distance / 2.0, distance),
+    feature_profiles(f, &e.profiles)?
+        .iter()
+        .map(|profile| {
+            match e.direction {
+                ExtrudeDirection::Normal => chamfera_kernel::extrude(&f.plane, profile, distance),
+                ExtrudeDirection::Reversed => {
+                    chamfera_kernel::extrude(&f.plane, profile, -distance)
+                }
+                ExtrudeDirection::Symmetric => {
+                    chamfera_kernel::extrude_symmetric(&f.plane, profile, distance)
+                }
+            }
+            .map_err(|x| format!("extrude: {x}"))
+        })
+        .collect()
+}
+
+/// The bodies one revolve makes: one per profile, about a line of the same sketch.
+fn build_revolve(doc: &chamfera_doc::Document, r: &Revolve) -> Result<Vec<Body>, String> {
+    let f = doc.sketch(r.sketch).map_err(|x| x.to_string())?;
+    let angle = doc
+        .evaluate_feature_value(&r.angle, chamfera_doc::expr::Dim::ANGLE)
+        .map_err(|x| x.to_string())?;
+    let axis = match f.sketch.curve(chamfera_sketch::CurveId(r.axis)) {
+        Some(Curve::Line { start, end, .. }) => {
+            let (Some(a), Some(b)) = (f.sketch.point(*start), f.sketch.point(*end)) else {
+                return Err("the axis line has lost a point".into());
+            };
+            Line2::new(a, b - a).map_err(|e| format!("the axis: {e}"))?
+        }
+        _ => return Err(format!("the axis {} is not a line of {}", r.axis, f.name)),
     };
-    // A negative distance goes the other way.
-    let (start, height) = if height < 0.0 {
-        (start + height, -height)
-    } else {
-        (start, height)
-    };
-    let origin: Point3 = f.plane.origin() + f.plane.z() * start;
-    let frame: Frame = f
-        .plane
-        .with_origin(origin)
-        .ok_or("the extrude start is outside the working range")?;
-    let mut bodies = Vec::new();
-    for seed in &e.profiles {
-        let region = f.sketch.region_at(*seed).ok_or_else(|| {
-            format!(
-                "the profile at ({:.2}, {:.2}) of {} is no longer closed",
-                seed.x, seed.y, f.name
-            )
-        })?;
-        let (outer, holes) = region_polygons(&f.sketch, &region);
-        let body = Body::prism_with_holes(&frame, &outer, &holes, height)
-            .map_err(|x| format!("extrude: {x}"))?;
-        bodies.push(body);
-    }
-    Ok(bodies)
+    feature_profiles(f, &r.profiles)?
+        .iter()
+        .map(|profile| {
+            chamfera_kernel::revolve(&f.plane, profile, &axis, angle)
+                .map_err(|x| format!("revolve: {x}"))
+        })
+        .collect()
 }
 
 impl Session {
@@ -82,15 +181,19 @@ impl Session {
     pub fn rebuild(&mut self) {
         let mut built = Built::default();
         let mut made: Vec<(u32, String, Body)> = Vec::new();
-        for feature in &self.doc.features {
+        let features = self.doc.features.clone();
+        for feature in &features {
             if feature.suppressed {
+                continue;
+            }
+            // A sketch drawn on a face follows that face (built earlier in the timeline).
+            if let Err(e) = self.follow_attached_sketch(feature.kind.sketch(), &made) {
+                built.errors.insert(feature.id, e);
                 continue;
             }
             let result = match &feature.kind {
                 FeatureKind::Extrude(e) => build_extrude(&self.doc, e),
-                FeatureKind::Revolve(_) => {
-                    Err("revolve is not available yet (it comes with kernel rung K4)".into())
-                }
+                FeatureKind::Revolve(r) => build_revolve(&self.doc, r),
             };
             match result {
                 Ok(bodies) => {
@@ -109,30 +212,52 @@ impl Session {
                 }
             }
         }
+        // Sketches on faces that no feature uses yet follow their face too.
+        let attached: Vec<u32> = self
+            .doc
+            .sketches
+            .iter()
+            .filter(|s| s.attached.is_some())
+            .map(|s| s.id)
+            .collect();
+        for id in attached {
+            let _ = self.follow_attached_sketch(id, &made);
+        }
         // Replace the scene's solid bodies.
-        let old: Vec<u32> = self.built.solids.iter().map(|s| s.scene_id).collect();
+        let old: Vec<u32> = self
+            .built
+            .solids
+            .iter()
+            .filter_map(|s| s.scene_id)
+            .collect();
         self.scene.bodies.retain(|b| !old.contains(&b.id));
         if self.scene.selection.is_some_and(|h| old.contains(&h.body)) {
             self.scene.selection = None;
         }
         let options = TessOptions::default();
         for (feature, name, body) in made {
-            let mesh = match tessellate(&body, &options) {
-                Ok(m) => m.mesh,
+            // A solid that cannot be shown is still built: its measures and export work.
+            let mut faces = Vec::new();
+            let scene_id = match tessellate(&body, &options) {
+                Ok(m) => {
+                    faces = m.face_of_triangle;
+                    let id = self.scene.add(&name, m.mesh);
+                    if id.is_none() {
+                        built
+                            .display_errors
+                            .insert(feature, "the scene holds no more bodies".into());
+                    }
+                    id
+                }
                 Err(e) => {
                     built
-                        .errors
-                        .insert(feature, format!("could not display the solid: {e}"));
-                    continue;
+                        .display_errors
+                        .insert(feature, format!("the solid cannot be shown yet: {e}"));
+                    None
                 }
             };
-            let Some(scene_id) = self.scene.add(&name, mesh) else {
-                built
-                    .errors
-                    .insert(feature, "the scene holds no more bodies".into());
-                continue;
-            };
             built.solids.push(Solid {
+                faces,
                 feature,
                 name,
                 body,
@@ -140,6 +265,48 @@ impl Session {
             });
         }
         self.built = built;
+    }
+
+    /// Moves an attached sketch's plane onto its face, as built so far.
+    fn follow_attached_sketch(
+        &mut self,
+        sketch: u32,
+        made: &[(u32, String, Body)],
+    ) -> Result<(), String> {
+        let Ok(f) = self.doc.sketch(sketch) else {
+            return Ok(());
+        };
+        let Some(r) = f.attached.clone() else {
+            return Ok(());
+        };
+        let plane = attached_plane(made, &r)?;
+        if let Ok(f) = self.doc.sketch_mut(sketch) {
+            f.plane = plane;
+        }
+        Ok(())
+    }
+
+    /// The solid face under pixel `(x, y)`: (feature, face name, plane), for flat faces
+    /// with a name.
+    pub fn face_at(
+        &self,
+        x: f64,
+        y: f64,
+        w: f64,
+        h: f64,
+    ) -> Option<(u32, String, chamfera_geom::Frame)> {
+        let bounds = self.scene.bounds();
+        let ray = self.camera.ray_through(x, y, w, h, bounds.as_ref())?;
+        let hit = self.scene.pick(&ray)?;
+        let solid = self
+            .built
+            .solids
+            .iter()
+            .find(|s| s.scene_id == Some(hit.body))?;
+        let face = *solid.faces.get(hit.triangle)?;
+        let name = solid.body.face_name(face).ok().flatten()?.to_owned();
+        let plane = face_plane(&solid.body, face)?;
+        Some((solid.feature, name, plane))
     }
 
     /// The solids of the last rebuild.
@@ -150,6 +317,12 @@ impl Session {
     /// Features that failed in the last rebuild.
     pub fn feature_errors(&self) -> &BTreeMap<u32, String> {
         &self.built.errors
+    }
+
+    /// Features built but not displayable (for example curved faces before their
+    /// tessellation exists).
+    pub fn display_errors(&self) -> &BTreeMap<u32, String> {
+        &self.built.display_errors
     }
 
     /// The profile under pixel `(x, y)`: the nearest sketch plane the ray meets where a

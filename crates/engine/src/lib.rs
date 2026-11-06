@@ -6,6 +6,7 @@
 
 pub mod cmd;
 mod params;
+pub mod script;
 pub mod sketching;
 pub mod solids;
 
@@ -51,6 +52,10 @@ pub struct Session {
     pub sketch_selection: Vec<sketching::SketchItem>,
     /// Solids built from the timeline (worked out again after every change).
     built: solids::Built,
+    /// The file the design was last opened from or saved to.
+    pub path: Option<std::path::PathBuf>,
+    /// The design as last opened or saved, to tell whether there are unsaved changes.
+    saved: Document,
     undo: Vec<Document>,
     redo: Vec<Document>,
 }
@@ -144,8 +149,20 @@ impl Session {
         }
     }
 
+    /// True when the design differs from the file it was last opened from or saved to.
+    pub fn has_unsaved_changes(&self) -> bool {
+        self.doc != self.saved
+    }
+
+    pub(crate) fn mark_saved(&mut self, path: std::path::PathBuf) {
+        self.saved = self.doc.clone();
+        self.path = Some(path);
+    }
+
     /// Replaces the design and forgets its history (open, new).
     pub(crate) fn replace_document(&mut self, doc: Document) {
+        self.saved = doc.clone();
+        self.path = None;
         self.doc = doc;
         self.scene = Scene::default();
         self.undo.clear();

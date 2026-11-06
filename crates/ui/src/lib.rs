@@ -10,6 +10,7 @@ use egui::{Color32, PointerButton, Rect, Sense, UiBuilder, Vec2};
 use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
 
+mod file_ui;
 mod params_ui;
 mod sketch_ui;
 mod solid_ui;
@@ -77,6 +78,9 @@ pub struct ChamferaApp {
     sketch: sketch_ui::SketchUi,
     params: params_ui::ParamsUi,
     solid: solid_ui::SolidUi,
+    file: file_ui::FileUi,
+    /// Close the window on the next frame (Quit was confirmed).
+    ctx_close: bool,
 }
 
 /// A command's label, so menus show the same words as the command list.
@@ -132,6 +136,8 @@ impl ChamferaApp {
             sketch: sketch_ui::SketchUi::default(),
             params: params_ui::ParamsUi::default(),
             solid: solid_ui::SolidUi::default(),
+            file: file_ui::FileUi::default(),
+            ctx_close: false,
         };
         if options.sample {
             app.run("body.sample", json!({}));
@@ -199,28 +205,7 @@ impl ChamferaApp {
 
     fn menu_bar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            ui.menu_button("File", |ui| {
-                #[cfg(not(target_arch = "wasm32"))]
-                if ui
-                    .button(format!("{}…", label("body.import_stl")))
-                    .clicked()
-                {
-                    ui.close();
-                    self.import_dialog();
-                }
-                if ui.button(label("body.sample")).clicked() {
-                    ui.close();
-                    self.run("body.sample", json!({}));
-                    self.fit_pending = true;
-                }
-                #[cfg(not(target_arch = "wasm32"))]
-                {
-                    ui.separator();
-                    if ui.button("Quit").clicked() {
-                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
-                    }
-                }
-            });
+            ui.menu_button("File", |ui| self.file_menu(ui));
             ui.menu_button("Sketch", |ui| {
                 ui.label(label("sketch.create"));
                 for (plane, text, view) in sketch_ui::PLANES {
@@ -475,6 +460,14 @@ impl ChamferaApp {
                 self.run("view.zoom", p);
             }
         }
+        if self.solid.pick_face
+            && response.clicked()
+            && let Some(pos) = response.interact_pointer_pos()
+        {
+            let (x, y) = local(pos);
+            self.face_click(x, y, w, h);
+            return;
+        }
         if self.solid.extrude.is_some()
             && response.clicked()
             && let Some(pos) = response.interact_pointer_pos()
@@ -669,6 +662,7 @@ impl ChamferaApp {
                         Err(e) => eprintln!("screenshot failed: {e}"),
                     }
                     *state = Shot::Done;
+                    self.file.allow_close = true;
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 } else {
                     ctx.request_repaint();
@@ -715,6 +709,10 @@ impl eframe::App for ChamferaApp {
             .show(ui, |ui| self.browser(ui));
         egui::CentralPanel::no_frame().show(ui, |ui| self.viewport(ui, frame));
         self.parameters_window(&ctx);
+        self.unsaved_dialog(&ctx);
+        self.file_shortcuts(&ctx);
+        self.update_title(&ctx);
+        self.handle_close_request(&ctx);
         self.extrude_dialog(&ctx);
         self.screenshot_step(&ctx);
     }

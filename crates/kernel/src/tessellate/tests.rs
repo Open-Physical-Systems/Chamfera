@@ -479,8 +479,9 @@ fn a_finer_tolerance_converges_to_the_exact_disc_area() {
 
 #[test]
 fn a_face_without_a_surface_is_unsupported() {
-    // The cylinder's lateral face waits for K3.
-    let body = Body::cylinder_topology(&Frame::XY, 5.0, 10.0).unwrap();
+    // MVFS makes a valid skeletal body whose one face has no surface yet.
+    let mut body = Body::new();
+    body.mvfs(Point3::ORIGIN).unwrap();
     assert!(matches!(
         tessellate(&body, &TessOptions::default()),
         Err(KernelError::Unsupported(_))
@@ -889,4 +890,590 @@ fn a_curved_patch_is_refined_until_it_is_within_tolerance_of_its_surface() {
         area < exact && area > exact * (1.0 - 10.0 * tol / r),
         "{area} vs {exact}"
     );
+}
+
+// --- Curved faces (K3 surfaces from K4 sweeps) ------------------------------------------
+
+mod curved {
+    use super::*;
+    use crate::{Line2, Profile, ProfileEdge, extrude, polygon_edges, revolve};
+    use chamfera_geom::Vec2;
+
+    fn y_axis() -> Line2 {
+        Line2::new(Point2::ORIGIN, Vec2::Y).unwrap()
+    }
+
+    fn rect(x0: f64, y0: f64, w: f64, h: f64) -> Vec<ProfileEdge> {
+        polygon_edges(&[
+            Point2::new(x0, y0),
+            Point2::new(x0 + w, y0),
+            Point2::new(x0 + w, y0 + h),
+            Point2::new(x0, y0 + h),
+        ])
+    }
+
+    fn half_disc(r: f64) -> Profile {
+        Profile::new(
+            vec![
+                ProfileEdge::Arc {
+                    centre: Point2::ORIGIN,
+                    radius: r,
+                    start_angle: -FRAC_PI_2,
+                    sweep: PI,
+                },
+                ProfileEdge::line(Point2::new(0.0, r), Point2::new(0.0, -r)),
+            ],
+            vec![],
+        )
+    }
+
+    /// A named test body with its exact volume and area (closed forms), and the
+    /// coefficient `k` of its area error bound `|A_mesh - A| <= k · tol`.
+    ///
+    /// # Error bounds
+    /// Every mesh vertex lies on the body's surface and the refinement keeps every
+    /// triangle within `tol` of it (edge chords by the sagitta formula, triangles at their
+    /// centroid and side midpoints), so mesh and solid differ only inside the shell of
+    /// thickness `tol` around the boundary:
+    ///
+    /// - **Volume:** `|V_mesh - V| <= A · tol` (the shell's volume, to first order).
+    /// - **Area:** a flat facet whose vertices lie on a surface of mean curvature `H` and
+    ///   which strays at most `δ` from it is smaller than the surface by about `H δ` per
+    ///   unit area (a spherical cap of depth `δ` over its base: `2πrδ - π(2rδ - δ²) =
+    ///   πδ²`, i.e. `δ / 2r` relative, `H = 1/r`); and a planar face bounded by a curved
+    ///   edge loses at most `chord × sagitta <= tol` per unit length of that edge. With a
+    ///   factor 2 for the facets' error not being uniform:
+    ///   `|A_mesh - A| <= tol · (2 ∫|H| dA + L)`, `L` the length of the curved edges of
+    ///   planar faces. `∫|H| dA`: a cylinder `π h`, a sphere `4π r`, a cone `π s cos α`
+    ///   (slant `s`, half-angle `α` to the axis), a torus with `R > 2a`
+    ///   `∫∫ (R + 2a cos v) / 2 du dv = 2π² R`.
+    struct Case {
+        name: &'static str,
+        body: Body,
+        volume: f64,
+        area: f64,
+        area_k: f64,
+    }
+
+    fn cases() -> Vec<Case> {
+        let slot = vec![
+            ProfileEdge::line(Point2::new(0.0, -5.0), Point2::new(20.0, -5.0)),
+            ProfileEdge::Arc {
+                centre: Point2::new(20.0, 0.0),
+                radius: 5.0,
+                start_angle: -FRAC_PI_2,
+                sweep: PI,
+            },
+            ProfileEdge::line(Point2::new(20.0, 5.0), Point2::new(0.0, 5.0)),
+            ProfileEdge::Arc {
+                centre: Point2::ORIGIN,
+                radius: 5.0,
+                start_angle: FRAC_PI_2,
+                sweep: PI,
+            },
+        ];
+        let plate = Profile::new(
+            rect(0.0, 0.0, 80.0, 40.0),
+            vec![
+                vec![ProfileEdge::circle(Point2::new(20.0, 20.0), 5.0)],
+                vec![ProfileEdge::circle(Point2::new(60.0, 20.0), 8.0)],
+            ],
+        );
+        let cone =
+            Profile::polygon(&[Point2::ORIGIN, Point2::new(3.0, 0.0), Point2::new(0.0, 4.0)]);
+        let tube = Profile::new(rect(3.0, 0.0, 2.0, 4.0), vec![]);
+        let torus = Profile::circle(Point2::new(5.0, 0.0), 2.0);
+        let pi2 = PI * PI;
+        let xy = Frame::XY;
+        // Area bound coefficients `k = 2 ∫|H| dA + L` (see `Case`), per body.
+        vec![
+            // π r² h = 250π; 2π r h + 2π r² = 150π. k: 2 π h + two circles 2π r each.
+            Case {
+                name: "cylinder",
+                body: extrude(&xy, &Profile::circle(Point2::ORIGIN, 5.0), 10.0).unwrap(),
+                volume: 250.0 * PI,
+                area: 150.0 * PI,
+                area_k: 20.0 * PI + 20.0 * PI,
+            },
+            // 10 (3200 - 25π - 64π); caps 2 (3200 - 89π), outer walls 2 (80 + 40) 10,
+            // hole walls 2π (5 + 8) 10. k: 2 (10π + 10π) + circles 2 · 2π (5 + 8).
+            Case {
+                name: "plate with two round holes",
+                body: extrude(&xy, &plate, 10.0).unwrap(),
+                volume: 10.0 * (3200.0 - 89.0 * PI),
+                area: 2.0 * (3200.0 - 89.0 * PI) + 2400.0 + 260.0 * PI,
+                area_k: 40.0 * PI + 52.0 * PI,
+            },
+            // 10 (200 + 25π); caps 2 (200 + 25π), flat sides 400, half cylinders 100π.
+            // k: 2 (two half cylinders, π h / 2 each) + two half circles on each cap.
+            Case {
+                name: "slot",
+                body: extrude(&xy, &Profile::new(slot, vec![]), 10.0).unwrap(),
+                volume: 2000.0 + 250.0 * PI,
+                area: 800.0 + 150.0 * PI,
+                area_k: 20.0 * PI + 20.0 * PI,
+            },
+            // π (5² - 3²) 4 = 64π; cylinders 2π (3 + 5) 4 = 64π, annuli 2π (25 - 9) = 32π.
+            // k: 2 (4π + 4π) + the annuli's four circles 2 · 2π (3 + 5).
+            Case {
+                name: "tube",
+                body: revolve(&xy, &tube, &y_axis(), TAU).unwrap(),
+                volume: 64.0 * PI,
+                area: 96.0 * PI,
+                area_k: 16.0 * PI + 32.0 * PI,
+            },
+            // 4/3 π 3³ = 36π; 4π 3² = 36π. k: 2 · 4π r.
+            Case {
+                name: "sphere",
+                body: revolve(&xy, &half_disc(3.0), &y_axis(), TAU).unwrap(),
+                volume: 36.0 * PI,
+                area: 36.0 * PI,
+                area_k: 24.0 * PI,
+            },
+            // 2π² R a² = 40π²; 4π² R a = 40π². k: 2 · 2π² R.
+            Case {
+                name: "torus",
+                body: revolve(&xy, &torus, &y_axis(), TAU).unwrap(),
+                volume: 40.0 * pi2,
+                area: 40.0 * pi2,
+                area_k: 20.0 * pi2,
+            },
+            // π r² h / 3 = 12π; base π r² = 9π, lateral π r s = 15π (slant s = 5).
+            // k: 2 π s cos α with cos α = h / s = 4/5, plus the base circle 2π r.
+            Case {
+                name: "cone",
+                body: revolve(&xy, &cone, &y_axis(), TAU).unwrap(),
+                volume: 12.0 * PI,
+                area: 24.0 * PI,
+                area_k: 8.0 * PI + 6.0 * PI,
+            },
+            // Half a turn: 2/3 π r³ = 18π; 2π r² plus two half discs π r² = 27π.
+            // k: half the sphere's, plus the caps' two half circles π r.
+            Case {
+                name: "half ball",
+                body: revolve(&xy, &half_disc(3.0), &y_axis(), PI).unwrap(),
+                volume: 18.0 * PI,
+                area: 27.0 * PI,
+                area_k: 12.0 * PI + 6.0 * PI,
+            },
+            // A quarter of the torus, 10π²; a quarter of its area, 10π², plus two
+            // discs π a² = 8π. k: a quarter of the torus's, plus the discs' circles.
+            Case {
+                name: "quarter torus",
+                body: revolve(&xy, &torus, &y_axis(), FRAC_PI_2).unwrap(),
+                volume: 10.0 * pi2,
+                area: 10.0 * pi2 + 8.0 * PI,
+                area_k: 5.0 * pi2 + 8.0 * PI,
+            },
+            // A quarter cone: 3π; (9π + 15π) / 4 plus two triangles r h / 2 = 6 each.
+            // k: a quarter of the cone's lateral term, plus the base's quarter circle.
+            Case {
+                name: "quarter cone",
+                body: revolve(&xy, &cone, &y_axis(), FRAC_PI_2).unwrap(),
+                volume: 3.0 * PI,
+                area: 6.0 * PI + 12.0,
+                area_k: 2.0 * PI + 1.5 * PI,
+            },
+        ]
+    }
+
+    /// The outward unit normal of face `f` at the surface point nearest to `p`.
+    fn outward_at(body: &Body, f: FaceId, p: Point3) -> Vec3 {
+        let (s, same) = body.face_surface(f).unwrap().unwrap();
+        let q = s.parameters(p);
+        let n = s.normal_at(q.u, q.v);
+        if same { n } else { -n }
+    }
+
+    fn centroid([a, b, c]: [Point3; 3]) -> Point3 {
+        Point3::ORIGIN
+            + ((a - Point3::ORIGIN) + (b - Point3::ORIGIN) + (c - Point3::ORIGIN)) * (1.0 / 3.0)
+    }
+
+    /// The largest angle between a triangle's normal and its face's outward normal at
+    /// the triangle's centroid; every triangle has a normal and none is turned inside
+    /// out; every mesh vertex lies on the surface of each face that uses it.
+    fn worst_normal(body: &Body, m: &BodyMesh) -> f64 {
+        let mut worst: f64 = 0.0;
+        for (i, f) in m.face_of_triangle.iter().enumerate() {
+            let n = m.mesh.triangle_normal(i).expect("a triangle without area");
+            let corners = m.mesh.triangle(i).unwrap();
+            let (s, _) = body.face_surface(*f).unwrap().unwrap();
+            for p in corners {
+                assert!(s.distance(p) < 1e-9, "{p:?} is off its surface");
+            }
+            let out = outward_at(body, *f, centroid(corners));
+            assert!(n.dot(out) > 0.0, "triangle {i} of {f} is inside out");
+            worst = worst.max(n.angle_to(out).unwrap());
+        }
+        worst
+    }
+
+    fn with_tol(tol: f64) -> TessOptions {
+        TessOptions {
+            chord_tolerance: tol,
+            ..TessOptions::default()
+        }
+    }
+
+    #[test]
+    fn every_sweep_tessellates_watertight_with_normals_along_its_surface() {
+        let d = TessOptions::default();
+        for c in cases() {
+            let m = tessellate(&c.body, &d).unwrap();
+            assert_watertight(&m.mesh);
+            assert_edges_shared(&c.body, &m);
+            // The refinement lets the surface normal turn by at most twice the angle
+            // tolerance along an interior side and a facet's normal lies between its
+            // corners' normals, so no facet is further than that from the surface;
+            // (thin facets on a curved edge chord or at a pole come closest).
+            let worst = worst_normal(&c.body, &m);
+            assert!(worst <= 2.0 * d.angle_tolerance, "{}: {worst}", c.name);
+            // The derived bounds (see `Case`) at the default tolerance.
+            let dv = (m.mesh.signed_volume() - c.volume).abs();
+            assert!(
+                dv <= c.area * d.chord_tolerance,
+                "{}: volume off by {dv}",
+                c.name
+            );
+            let da = (m.mesh.area() - c.area).abs();
+            assert!(
+                da <= c.area_k * d.chord_tolerance,
+                "{}: area off by {da}",
+                c.name
+            );
+            // And the body's own exact measures (K3) agree with the closed forms.
+            assert!(
+                close(c.body.volume().unwrap(), c.volume, 1e-9),
+                "{}",
+                c.name
+            );
+            assert!(close(c.body.area().unwrap(), c.area, 1e-9), "{}", c.name);
+        }
+    }
+
+    #[test]
+    fn volume_and_area_converge_within_the_derived_bounds() {
+        // Errors at 0.1, 0.01 and 0.002 mm are within `A tol` and `k tol`, and fall
+        // about linearly with the tolerance: by at least half the ratio of tolerances
+        // from 0.01 to 0.002 (both chord-limited, unlike 0.1 on small circles, where
+        // the 15° angle limit takes over).
+        for c in cases() {
+            let mut errors = Vec::new();
+            for tol in [0.1, 0.01, 0.002] {
+                let m = tessellate(&c.body, &with_tol(tol)).unwrap();
+                assert_watertight(&m.mesh);
+                let dv = (m.mesh.signed_volume() - c.volume).abs();
+                let da = (m.mesh.area() - c.area).abs();
+                assert!(
+                    dv <= c.area * tol,
+                    "{} at {tol}: volume off by {dv}",
+                    c.name
+                );
+                assert!(
+                    da <= c.area_k * tol,
+                    "{} at {tol}: area off by {da}",
+                    c.name
+                );
+                errors.push((dv, da));
+            }
+            let (v1, a1) = errors[1];
+            let (v2, a2) = errors[2];
+            assert!(v2 <= v1 / 2.5, "{}: volume {v1} -> {v2}", c.name);
+            assert!(a2 <= a1 / 2.5, "{}: area {a1} -> {a2}", c.name);
+        }
+    }
+
+    #[test]
+    fn an_extruded_circle_is_the_inscribed_prism_of_the_sagitta_formula() {
+        // r = 5, tol = 0.01: φ = 4 asin(sqrt(0.01 / 10)) = 0.12650 rad, so the circles
+        // get n = ceil(2π / φ) = 50 segments (the 15° angle limit is looser). The side's
+        // triangles span a top and a bottom point: their centroids are at most
+        // r (1 - sqrt(5 + 4 cos φ) / 3) = 0.0088 and their side midpoints the sagitta
+        // r (1 - cos(π/50)) = 0.0099 from the cylinder, both within 0.01, so nothing is
+        // inserted and the mesh is exactly the prism over the inscribed 50-gon:
+        // V = (n/2) r² sin(2π/n) h, A = n r² sin(2π/n) + 2 n r sin(π/n) h.
+        let (r, h, n) = (5.0, 10.0, 50.0);
+        let body = extrude(&Frame::XY, &Profile::circle(Point2::ORIGIN, r), h).unwrap();
+        let m = tessellate(&body, &TessOptions::default()).unwrap();
+        let s = (TAU / n).sin();
+        assert!(close(
+            m.mesh.signed_volume(),
+            n / 2.0 * r * r * s * h,
+            1e-12
+        ));
+        let area = n * r * r * s + 2.0 * n * r * (PI / n).sin() * h;
+        assert!(close(m.mesh.area(), area, 1e-12));
+        // The inscribed polygon contains the circle of radius r cos(π/n) >= r - tol, so
+        // the volume lost is at most π (r² - (r - tol)²) h = π tol (2r - tol) h.
+        let lost = 250.0 * PI - m.mesh.signed_volume();
+        assert!(
+            lost > 0.0 && lost <= PI * 0.01 * (2.0 * r - 0.01) * h,
+            "{lost}"
+        );
+        // 2 (n - 2) cap triangles and 2n on the side.
+        assert_eq!(m.mesh.triangles.len(), 2 * 48 + 100);
+    }
+
+    /// The angles of the triangles of `m` at the mesh vertex at `p`, summed.
+    fn angle_sum_at(m: &BodyMesh, p: Point3) -> f64 {
+        let mut sum = 0.0;
+        for i in 0..m.mesh.triangles.len() {
+            let t = m.mesh.triangle(i).unwrap();
+            for k in 0..3 {
+                if t[k].distance(p) < 1e-9 {
+                    let (a, b) = (t[(k + 1) % 3] - t[k], t[(k + 2) % 3] - t[k]);
+                    sum += a.angle_to(b).unwrap();
+                }
+            }
+        }
+        sum
+    }
+
+    #[test]
+    fn poles_and_apexes_become_closed_fans() {
+        // A smooth point: the facets around it unfold to about a full turn (a little
+        // less on a convex fan; a thin facet tilted along a meridian chord can wrinkle
+        // it a little above), within 1%. A cone's apex unfolds to the developed cone's
+        // sector, 2π r / s = 2π · 3/5 for r = 3, s = 5; the inscribed fan is a little
+        // less.
+        let d = TessOptions::default();
+        let sphere = revolve(&Frame::XY, &half_disc(3.0), &y_axis(), TAU).unwrap();
+        let m = tessellate(&sphere, &d).unwrap();
+        for pole in [Point3::new(0.0, 3.0, 0.0), Point3::new(0.0, -3.0, 0.0)] {
+            let sum = angle_sum_at(&m, pole);
+            assert!((sum - TAU).abs() < 0.01 * TAU, "pole {pole:?}: {sum}");
+        }
+        let cone =
+            Profile::polygon(&[Point2::ORIGIN, Point2::new(3.0, 0.0), Point2::new(0.0, 4.0)]);
+        let body = revolve(&Frame::XY, &cone, &y_axis(), TAU).unwrap();
+        let m = tessellate(&body, &d).unwrap();
+        let sector = TAU * 3.0 / 5.0;
+        let sum = angle_sum_at(&m, Point3::new(0.0, 4.0, 0.0));
+        assert!(
+            sum < sector && sum > 0.99 * sector,
+            "apex: {sum} vs {sector}"
+        );
+        // At the apex of the quarter cone the curved face's fan spans a quarter of the
+        // sector, and the two triangular caps add their angles there, atan(3/4) each.
+        let quarter = revolve(&Frame::XY, &cone, &y_axis(), FRAC_PI_2).unwrap();
+        let m = tessellate(&quarter, &d).unwrap();
+        let want = sector / 4.0 + 2.0 * (3.0f64 / 4.0).atan();
+        let sum = angle_sum_at(&m, Point3::new(0.0, 4.0, 0.0));
+        assert!(
+            sum < want && sum > want - 0.01 * sector,
+            "quarter apex: {sum} vs {want}"
+        );
+    }
+
+    #[test]
+    fn more_revolves_match_the_bodys_exact_measures() {
+        let tilted = Frame::from_normal_and_x(
+            Point3::new(-3.0, 7.0, 1.0),
+            Vec3::new(-2.0, 1.0, 4.0),
+            Vec3::new(1.0, 1.0, 0.0),
+        )
+        .unwrap();
+        // A spindle (apple) torus: the arc of the circle about (1, 0) of radius 2 right
+        // of the axis, from (0, -√3) through (3, 0) to (0, √3), closed along the axis;
+        // its tips are poles of a torus with R = 1 < a = 2.
+        let apple = Profile::new(
+            vec![
+                ProfileEdge::Arc {
+                    centre: Point2::new(1.0, 0.0),
+                    radius: 2.0,
+                    start_angle: -2.0 * PI / 3.0,
+                    sweep: 4.0 * PI / 3.0,
+                },
+                ProfileEdge::line(
+                    Point2::new(0.0, 3f64.sqrt()),
+                    Point2::new(0.0, -(3f64.sqrt())),
+                ),
+            ],
+            vec![],
+        );
+        // The lemon torus of the K4 tests: a circular segment beyond the axis's centre.
+        let rr = 5f64.sqrt();
+        let half = 0.5f64.atan();
+        let lemon = Profile::new(
+            vec![
+                ProfileEdge::Arc {
+                    centre: Point2::new(-1.0, 0.0),
+                    radius: rr,
+                    start_angle: -half,
+                    sweep: 2.0 * half,
+                },
+                ProfileEdge::line(Point2::new(1.0, 1.0), Point2::new(1.0, -1.0)),
+            ],
+            vec![],
+        );
+        // A quarter disc turned fully: a hemisphere on a flat disc.
+        let quarter_disc = Profile::new(
+            vec![
+                ProfileEdge::line(Point2::ORIGIN, Point2::new(4.0, 0.0)),
+                ProfileEdge::Arc {
+                    centre: Point2::ORIGIN,
+                    radius: 4.0,
+                    start_angle: 0.0,
+                    sweep: FRAC_PI_2,
+                },
+                ProfileEdge::line(Point2::new(0.0, 4.0), Point2::ORIGIN),
+            ],
+            vec![],
+        );
+        let bodies = [
+            (
+                "apple",
+                revolve(&Frame::XY, &apple, &y_axis(), TAU).unwrap(),
+            ),
+            (
+                "apple part",
+                revolve(&Frame::XY, &apple, &y_axis(), 2.0).unwrap(),
+            ),
+            (
+                "lemon",
+                revolve(&Frame::XY, &lemon, &y_axis(), TAU).unwrap(),
+            ),
+            (
+                "hemisphere",
+                revolve(&Frame::XY, &quarter_disc, &y_axis(), TAU).unwrap(),
+            ),
+            (
+                "tilted sphere",
+                revolve(&tilted, &half_disc(2.0), &y_axis(), TAU).unwrap(),
+            ),
+            (
+                "tilted half ball",
+                revolve(&tilted, &half_disc(2.0), &y_axis(), -2.5).unwrap(),
+            ),
+            (
+                "tilted torus part",
+                revolve(
+                    &tilted,
+                    &Profile::circle(Point2::new(6.0, 1.0), 1.5),
+                    &y_axis(),
+                    4.0,
+                )
+                .unwrap(),
+            ),
+        ];
+        let d = TessOptions::default();
+        for (name, body) in &bodies {
+            let m = tessellate(body, &d).unwrap();
+            assert_watertight(&m.mesh);
+            assert_edges_shared(body, &m);
+            let worst = worst_normal(body, &m);
+            assert!(worst <= 2.0 * d.angle_tolerance, "{name}: {worst}");
+            let (v, a) = (body.volume().unwrap(), body.area().unwrap());
+            let dv = (m.mesh.signed_volume() - v).abs();
+            assert!(dv <= a * d.chord_tolerance, "{name}: volume off by {dv}");
+            // Area: within 0.5% (the bound needs ∫|H| dA, which the spindle's
+            // self-crossing torus makes awkward; the shell argument still holds).
+            let da = (m.mesh.area() - a).abs();
+            assert!(da <= 5e-3 * a, "{name}: area off by {da} of {a}");
+        }
+    }
+
+    // --- Hostile and degenerate curved input ------------------------------------------
+
+    #[test]
+    fn tiny_curved_bodies_near_the_tolerance_tessellate_closed() {
+        // Radii a few hundred times the linear tolerance: the chord tolerance (0.01 or
+        // the finest, 1e-7) is far above or near the radius, so the angle limit decides.
+        for r in [1e-5, 3e-5] {
+            let bodies = [
+                extrude(&Frame::XY, &Profile::circle(Point2::ORIGIN, r), 2.0 * r).unwrap(),
+                revolve(&Frame::XY, &half_disc(r), &y_axis(), TAU).unwrap(),
+                revolve(
+                    &Frame::XY,
+                    &Profile::circle(Point2::new(3.0 * r, 0.0), r),
+                    &y_axis(),
+                    TAU,
+                )
+                .unwrap(),
+            ];
+            for body in &bodies {
+                for tol in [0.01, LINEAR_TOLERANCE] {
+                    let m = tessellate(body, &with_tol(tol)).unwrap();
+                    assert_watertight(&m.mesh);
+                    assert_edges_shared(body, &m);
+                    let (v, a) = (body.volume().unwrap(), body.area().unwrap());
+                    // The shell bound with the effective tolerance: with the chord
+                    // tolerance above the radius, a side is limited by the normal
+                    // turning at most twice the 15° angle along it, a sagitta of at most
+                    // r (1 - cos 15°) < 0.035 r.
+                    let eff = tol.min(0.035 * r);
+                    let dv = (m.mesh.signed_volume() - v).abs();
+                    assert!(dv <= a * eff, "r {r}, tol {tol}: {dv} vs {}", a * eff);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_long_thin_cylinder_stays_within_the_budget_or_is_refused() {
+        // r = 0.5, h = 10⁶ (the working range): at tol 0.01 the chord allows
+        // 4 asin(sqrt(0.01)) = 0.40 rad, the angle 15°, so n = 24 and the mesh is the
+        // inscribed 24-gon prism: 2 (24 - 2) + 48 = 92 triangles, however long.
+        let (r, h, n) = (0.5, 1.0e6, 24.0);
+        let body = extrude(&Frame::XY, &Profile::circle(Point2::ORIGIN, r), h).unwrap();
+        let m = tessellate(&body, &TessOptions::default()).unwrap();
+        assert_eq!(m.mesh.triangles.len(), 92);
+        assert_watertight(&m.mesh);
+        assert!(close(
+            m.mesh.signed_volume(),
+            n / 2.0 * r * r * (TAU / n).sin() * h,
+            1e-9
+        ));
+        // Under a budget of 91 triangles it is refused, cleanly.
+        let tight = TessOptions {
+            max_triangles: 91,
+            ..TessOptions::default()
+        };
+        assert!(matches!(
+            tessellate(&body, &tight),
+            Err(KernelError::InvalidInput(_))
+        ));
+        // A finer tolerance needs more segments, and a sphere at the finest tolerance
+        // far more triangles than a small budget allows: refused, not truncated.
+        let sphere = revolve(&Frame::XY, &half_disc(100.0), &y_axis(), TAU).unwrap();
+        // r = 100 at 1e-6: each half meridian needs π / (4 asin(sqrt(5e-9))) ≈ 11100
+        // segments, so the face's boundary alone has more points than 20000 triangles
+        // can hold.
+        let fine = TessOptions {
+            chord_tolerance: 1e-6,
+            max_triangles: 20_000,
+            ..TessOptions::default()
+        };
+        assert!(matches!(
+            tessellate(&sphere, &fine),
+            Err(KernelError::InvalidInput(_))
+        ));
+    }
+
+    #[test]
+    fn coarse_tolerances_still_give_closed_meshes_without_folds() {
+        // The coarsest allowed angle (π) and a chord tolerance larger than the body:
+        // the quarter-turn span limit alone keeps triangles from folding over a pole.
+        // A coarse facet's centroid may lie nearer the far side of a thin part, so its
+        // normal is compared with the outward normals at its corners (on the surface).
+        let coarse = TessOptions {
+            chord_tolerance: 100.0,
+            angle_tolerance: PI,
+            ..TessOptions::default()
+        };
+        for c in cases() {
+            let m = tessellate(&c.body, &coarse).unwrap();
+            assert_watertight(&m.mesh);
+            assert_edges_shared(&c.body, &m);
+            for (i, f) in m.face_of_triangle.iter().enumerate() {
+                let n = m.mesh.triangle_normal(i).unwrap();
+                let corners = m.mesh.triangle(i).unwrap();
+                let sum = corners
+                    .iter()
+                    .fold(Vec3::ZERO, |s, p| s + outward_at(&c.body, *f, *p));
+                assert!(n.dot(sum) > 0.0, "{}: triangle {i}", c.name);
+            }
+        }
+    }
 }

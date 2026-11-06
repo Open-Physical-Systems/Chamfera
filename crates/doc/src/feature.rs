@@ -222,6 +222,15 @@ impl Document {
         Ok(self.features.remove(i))
     }
 
+    /// Sketches attached to a face of a feature (so deleting the feature can be refused).
+    pub fn feature_users(&self, feature: u32) -> Vec<String> {
+        self.sketches
+            .iter()
+            .filter(|s| s.attached.as_ref().is_some_and(|a| a.feature == feature))
+            .map(|s| s.name.clone())
+            .collect()
+    }
+
     /// Features that use a sketch (so deleting the sketch can be refused).
     pub fn sketch_users(&self, sketch: u32) -> Vec<String> {
         self.features

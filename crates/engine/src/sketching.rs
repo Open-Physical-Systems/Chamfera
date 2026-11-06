@@ -92,6 +92,11 @@ impl Session {
         let mut overlays = Vec::new();
         for f in &self.doc.sketches {
             let active = Some(f.id) == self.active_sketch;
+            // A finished sketch that a feature has used is hidden, as CAD users expect:
+            // its curves lie on the solid's edges and seams. Editing it shows it again.
+            if !active && !self.doc.sketch_users(f.id).is_empty() {
+                continue;
+            }
             let dof = if active {
                 f.sketch.analyze().ok()
             } else {
