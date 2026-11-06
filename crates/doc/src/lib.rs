@@ -2,6 +2,7 @@
 
 pub mod component;
 pub mod construct;
+pub mod drawing;
 pub mod expr;
 pub mod feature;
 pub mod imported;
@@ -12,6 +13,7 @@ pub use component::{Assembly, Component, ROOT};
 pub use construct::{
     AxisRef, ConstructKind, Construction, EdgeRef, OriginAxis, OriginPlane, PlaneRef, PointRef,
 };
+pub use drawing::Drawing;
 pub use feature::{
     Blend, BlendKind, Extrude, ExtrudeDirection, ExtrudeExtent, ExtrudeTo, ExtrudeValues, Feature,
     FeatureKind, Hole, HoleKind, HoleSizes, Loft, LoftSection, Mirror, MirrorPlane, Move,
@@ -52,6 +54,8 @@ use thiserror::Error;
 ///   marker and groups (`timeline`). Older files open in id order with the marker at
 ///   the end, as their timeline showed them.
 /// - 17: sweeps along a path and lofts between profiles.
+/// - 18: drawings: sheets with views of the solids and dimensions (`drawing`).
+///   Older files open with no sheets.
 /// - 19: projected (linked) sketch curves and ellipses.
 pub const FORMAT_VERSION: u32 = 19;
 /// The tag every design file starts with, so other JSON is not mistaken for a design.
@@ -100,6 +104,8 @@ pub enum DocError {
     BadFeature { reason: String },
     #[error("timeline: {0}")]
     Timeline(String),
+    #[error("drawing: {reason}")]
+    BadDrawing { reason: String },
 }
 
 /// What a parameter measures. Values are stored in internal units: mm and radians.
@@ -227,6 +233,9 @@ pub struct Document {
     /// Components and joints (format 15). A design without them is one root component.
     #[serde(default, skip_serializing_if = "Assembly::is_empty")]
     pub assembly: Assembly,
+    /// Drawing sheets (format 18).
+    #[serde(default, skip_serializing_if = "Drawing::is_empty")]
+    pub drawing: Drawing,
 }
 
 impl Default for Document {
@@ -241,6 +250,7 @@ impl Default for Document {
             imported: Vec::new(),
             timeline: Timeline::default(),
             assembly: Assembly::default(),
+            drawing: Drawing::default(),
         }
     }
 }
@@ -644,6 +654,8 @@ impl Document {
         checked.assembly = doc.assembly;
         checked.timeline = doc.timeline;
         checked.check_timeline(&mut seen)?;
+        doc.drawing.check()?;
+        checked.drawing = doc.drawing;
         // Values in the file must agree with their expressions.
         checked.evaluate()?;
         Ok(checked)

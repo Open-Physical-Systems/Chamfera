@@ -225,6 +225,12 @@ fn hostile_params_never_panic() {
         json!({"item": 2, "to": 0, "position": 0.5, "items": [], "name": "\u{7}"}),
         json!({"item": 1, "to": 1, "position": 1e7, "items": [1, 1, 1], "group": 99, "name": long}),
         json!({"item": [1], "to": "end", "position": "0", "items": 3, "sketch": 1, "name": 5}),
+        json!({"view": "front", "x": 1e300, "y": -1e300, "scale": 0, "body": long, "sheet": 0}),
+        json!({"view": "iso", "x": 100, "y": 100, "scale": 1e-300, "sheet": 4294967295u64}),
+        json!({"view": 1, "kind": "angular", "x1": 1e300, "y1": 0, "x2": 0, "y2": 0, "offset": 1e300}),
+        json!({"view": 2, "kind": "diameter", "x1": 0, "y1": 0, "format": "exe", "path": "/dev/null"}),
+        json!({"paper": "a0", "orientation": 5, "projection": "second", "part_name": long, "date": "\u{1}"}),
+        json!({"sheet": 1, "dimension": -1, "view": [1], "format": "pdf", "kind": "radius"}),
         json!({"face": "2:top", "points": [{"x": 1e300, "y": 0}], "diameter": 1e300, "through_all": true}),
         json!({"face": "2:top", "points": [{"x": 0, "y": 0}], "diameter": "6 mm", "depth": f64::MAX, "tip_angle": 1e-300}),
         json!({"face": ":", "points": [{"x": 0, "y": 0, "width": 0, "height": -1}], "diameter": 6, "depth": 4}),
@@ -2088,6 +2094,216 @@ fn body_import_step_adds_exact_solids_that_undo_save_and_open_keep() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// A 50 x 30 x 10 plate with a through hole of diameter 6 at (25, 15), by commands.
+fn plate_with_hole(s: &mut Session) {
+    s.execute("sketch.create", &json!({"plane": "xy"})).unwrap();
+    s.execute(
+        "sketch.rectangle",
+        &json!({"x1": 0, "y1": 0, "x2": 50, "y2": 30}),
+    )
+    .unwrap();
+    s.execute("sketch.circle", &json!({"cx": 25, "cy": 15, "radius": 3}))
+        .unwrap();
+    s.execute("sketch.finish", &json!({})).unwrap();
+    s.execute(
+        "solid.extrude",
+        &json!({"sketch": 1, "profiles": [{"x": 5, "y": 5}], "distance": 10}),
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_drawing_of_the_plate_has_projected_views_dimensions_and_exports() {
+    let mut s = Session::new();
+    plate_with_hole(&mut s);
+    let r = s
+        .execute(
+            "drawing.new_sheet",
+            &json!({"paper": "a3", "part_name": "Plate", "drawn_by": "CI"}),
+        )
+        .unwrap();
+    assert_eq!(
+        (r["width"].as_f64(), r["height"].as_f64()),
+        (Some(420.0), Some(297.0))
+    );
+    let front = s
+        .execute(
+            "drawing.add_view",
+            &json!({"view": "front", "x": 120, "y": 150}),
+        )
+        .unwrap();
+    let front_id = front["view"].as_u64().unwrap();
+    let top = s
+        .execute(
+            "drawing.add_view",
+            &json!({"view": "top", "x": 100, "y": 220}),
+        )
+        .unwrap();
+    // The top view is projected from the front view (third angle: above it, aligned).
+    assert_eq!(top["parent"].as_u64(), Some(front_id));
+    s.execute(
+        "drawing.add_view",
+        &json!({"view": "right", "x": 200, "y": 150}),
+    )
+    .unwrap();
+    s.execute(
+        "drawing.add_view",
+        &json!({"view": "iso", "x": 320, "y": 200}),
+    )
+    .unwrap();
+    let list = s.execute("drawing.list", &json!({})).unwrap();
+    let views = list["sheets"][0]["views"].as_array().unwrap().clone();
+    assert_eq!(views.len(), 4);
+    assert_eq!(
+        views[1]["x"].as_f64(),
+        Some(120.0),
+        "aligned with the front view"
+    );
+    // Front view: the 50 x 10 outline at (95..145, 145..155), and the hole's two hidden
+    // silhouettes.
+    let b = views[0]["bounds"].as_array().unwrap();
+    let b: Vec<f64> = b.iter().map(|v| v.as_f64().unwrap()).collect();
+    assert!(
+        (b[2] - b[0] - 50.0).abs() < 1e-6 && (b[3] - b[1] - 10.0).abs() < 1e-6,
+        "{b:?}"
+    );
+    assert_eq!(views[0]["hidden_curves"].as_u64(), Some(2));
+    // A horizontal dimension across the front view's bottom corners: 50.
+    let d = s
+        .execute(
+            "drawing.add_dimension",
+            &json!({"view": front_id, "kind": "horizontal", "x1": 95.5, "y1": 145.3, "x2": 144.8, "y2": 145.0, "offset": -10}),
+        )
+        .unwrap();
+    assert!((d["value"].as_f64().unwrap() - 50.0).abs() < 1e-9);
+    assert_eq!(d["text"], "50");
+    // The hole in the top view (centre at (120, 220)): Ø6.
+    let top_id = top["view"].as_u64().unwrap();
+    let d = s
+        .execute(
+            "drawing.add_dimension",
+            &json!({"view": top_id, "kind": "diameter", "x1": 123.2, "y1": 220.4}),
+        )
+        .unwrap();
+    assert_eq!(d["text"], "Ø6");
+    assert!(
+        s.execute(
+            "drawing.add_dimension",
+            &json!({"view": 4, "kind": "horizontal", "x1": 0, "y1": 0, "x2": 1, "y2": 1})
+        )
+        .is_err()
+    );
+    // Exports.
+    let dir = std::env::temp_dir().join(format!("chamfera-drawing-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    for ext in ["svg", "dxf", "pdf"] {
+        let path = dir.join(format!("plate.{ext}"));
+        let r = s
+            .execute("drawing.export", &json!({"path": path.to_str().unwrap()}))
+            .unwrap();
+        assert_eq!(r["format"], ext);
+        let bytes = std::fs::read(&path).unwrap();
+        assert_eq!(r["bytes"].as_u64(), Some(bytes.len() as u64));
+    }
+    assert!(
+        std::fs::read(dir.join("plate.pdf"))
+            .unwrap()
+            .starts_with(b"%PDF-1.4")
+    );
+    assert!(
+        s.execute(
+            "drawing.export",
+            &json!({"path": dir.join("x.txt").to_str().unwrap()})
+        )
+        .is_err()
+    );
+    // The drawing is saved with the design and reopens the same.
+    let path = dir.join("plate.chamfera");
+    s.execute("design.save", &json!({"path": path.to_str().unwrap()}))
+        .unwrap();
+    let saved = s.doc.drawing.clone();
+    let mut t = Session::new();
+    t.execute("design.open", &json!({"path": path.to_str().unwrap()}))
+        .unwrap();
+    assert_eq!(t.doc.drawing, saved);
+    assert_eq!(t.doc.version, chamfera_doc::FORMAT_VERSION);
+    let _ = std::fs::remove_dir_all(&dir);
+    // Deleting the front view takes the views projected from it and the dimensions.
+    s.execute("drawing.delete", &json!({"view": front_id}))
+        .unwrap();
+    let sheet = &s.doc.drawing.sheets[0];
+    assert_eq!(sheet.views.len(), 1, "only the iso view is left");
+    assert!(sheet.dimensions.is_empty());
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.doc.drawing.sheets[0].views.len(), 4);
+}
+
+#[test]
+fn views_follow_the_model() {
+    let mut s = Session::new();
+    plate_with_hole(&mut s);
+    s.execute(
+        "drawing.add_view",
+        &json!({"view": "front", "x": 150, "y": 150}),
+    )
+    .unwrap();
+    let width = |s: &mut Session| {
+        let l = s.execute("drawing.list", &json!({})).unwrap();
+        let b: Vec<f64> = l["sheets"][0]["views"][0]["bounds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_f64().unwrap())
+            .collect();
+        (b[2] - b[0], b[3] - b[1])
+    };
+    let (w, h) = width(&mut s);
+    assert!((w - 50.0).abs() < 1e-6 && (h - 10.0).abs() < 1e-6);
+    // Extruding 20 instead of 10 makes the front view 20 high.
+    let f = s.doc.features[0].id;
+    s.execute("feature.edit", &json!({"feature": f, "distance": 20}))
+        .unwrap();
+    let (w, h) = width(&mut s);
+    assert!(
+        (w - 50.0).abs() < 1e-6 && (h - 20.0).abs() < 1e-6,
+        "{w} x {h}"
+    );
+}
+
+#[test]
+fn drawing_commands_with_a_solid_refuse_hostile_input() {
+    let mut s = Session::new();
+    plate_with_hole(&mut s);
+    s.execute(
+        "drawing.add_view",
+        &json!({"view": "front", "x": 150, "y": 150}),
+    )
+    .unwrap();
+    for p in [
+        json!({"view": "front", "x": 1e5, "y": 0}),
+        json!({"view": "top", "x": 0, "y": 0, "body": "Nope"}),
+        json!({"view": "top", "x": 0, "y": 0, "scale": 1e9}),
+        json!({"view": 2, "kind": "horizontal", "x1": 150, "y1": 150, "x2": 150, "y2": 150}),
+        json!({"view": 2, "kind": "angular", "x1": 125, "y1": 145, "x2": 175, "y2": 145}),
+        json!({"view": 2, "kind": "radius", "x1": 10, "y1": 10}),
+        json!({"paper": "a4", "part_name": "x".repeat(65)}),
+        json!({"sheet": 99}),
+    ] {
+        let before = s.doc.clone();
+        for id in [
+            "drawing.add_view",
+            "drawing.add_dimension",
+            "drawing.new_sheet",
+            "drawing.edit_sheet",
+            "drawing.delete",
+        ] {
+            if s.execute(id, &p).is_err() {
+                assert_eq!(s.doc, before, "{id} {p}");
+            }
+            s.doc = before.clone();
+        }
+    }
+}
 /// A box from a rectangle `(x1, y1)..(x2, y2)` on the XY plane extruded by `h`, with the
 /// given operation. Returns the extrude's reply.
 fn box_feature(s: &mut Session, corners: [f64; 4], h: f64, operation: &str) -> serde_json::Value {
