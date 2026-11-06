@@ -1,0 +1,18 @@
+[
+  { "command": "sketch.create", "params": { "plane": "xy" }, "as": "s" },
+  { "command": "sketch.import_dxf", "params": { "path": "examples/qa/08-plate.dxf" }, "as": "dxf" },
+  { "command": "sketch.finish" },
+  { "command": "solid.extrude", "params": { "sketch": "$s.sketch", "profiles": [{ "x": 40, "y": 5 }], "distance": 10 }, "as": "plate" },
+  { "command": "sketch.create", "params": { "plane": "xy", "offset": -10 }, "as": "c" },
+  { "command": "sketch.circle", "params": { "cx": 40, "cy": 20, "radius": 10 } },
+  { "command": "sketch.finish" },
+  { "command": "solid.extrude", "params": { "sketch": "$c.sketch", "profiles": [{ "x": 40, "y": 20 }], "distance": 30 }, "as": "tool" },
+  { "command": "solid.combine", "params": { "target": "$plate.name", "tools": ["$tool.name"], "operation": "cut" }, "as": "cut" },
+  { "command": "design.export_step", "params": { "path": "target/qa/08-plate.step" } },
+  { "command": "design.export_3mf", "params": { "path": "target/qa/08-plate.3mf" } },
+  { "command": "design.export_glb", "params": { "path": "target/qa/08-plate.glb" } },
+  { "command": "body.import_step", "params": { "path": "target/qa/08-plate.step" }, "as": "step_back" },
+  { "command": "body.import_3mf", "params": { "path": "target/qa/08-plate.3mf" }, "as": "mf_back" },
+  { "command": "body.list", "as": "bodies" },
+  { "command": "view.home", "params": { "width": 1600, "height": 950 } }
+]

@@ -206,6 +206,33 @@ fn spline_bodies_move_and_round_trip() {
 }
 
 #[test]
+fn spline_bodies_mirror_with_their_extruded_faces_outward() {
+    // The arch (area 400/3, see `arch`) extruded 5: V = 2000/3, in every mirror plane.
+    // A mirror keeps volume and area, and the YZ mirror of x 0..20 is x -20..0.
+    let body = extrude(&Frame::XY, &arch(), 5.0).unwrap();
+    for (p, n) in [
+        (Point3::ORIGIN, Vec3::X),
+        (Point3::ORIGIN, Vec3::Y),
+        (Point3::new(0.0, 0.0, -2.0), Vec3::Z),
+        (Point3::new(3.0, -1.0, 4.0), Vec3::new(1.0, -2.0, 3.0)),
+    ] {
+        let m = body.mirrored(p, n).unwrap();
+        m.validate().unwrap();
+        assert!(close(m.volume().unwrap(), 2000.0 / 3.0, 1e-10), "{n:?}");
+        assert!(close(m.area().unwrap(), body.area().unwrap(), 1e-10), "{n:?}");
+        check_mesh(&m, 2000.0 / 3.0);
+    }
+    let m = body.mirrored(Point3::ORIGIN, Vec3::X).unwrap();
+    let bb = m.bounding_box().unwrap();
+    assert!((bb.min.x + 20.0).abs() < 1e-9 && bb.max.x.abs() < 1e-9);
+    // The rational circle r = 3, h = 7 mirrored stays a cylinder: 63 pi.
+    let disc = extrude(&Frame::XY, &spline_disc(pt(10.0, 0.0), 3.0), 7.0).unwrap();
+    let m = disc.mirrored(Point3::ORIGIN, Vec3::X).unwrap();
+    assert!(close(m.volume().unwrap(), 63.0 * PI, 1e-10));
+    check_mesh(&m, 63.0 * PI);
+}
+
+#[test]
 fn operations_that_do_not_handle_splines_yet_refuse_cleanly() {
     let body = extrude(&Frame::XY, &arch(), 5.0).unwrap();
     let block = extrude(
