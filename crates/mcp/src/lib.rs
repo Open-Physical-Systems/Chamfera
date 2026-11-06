@@ -14,7 +14,6 @@
 //! error, a bad tool argument gets a tool error (`isError: true`) the agent can act on.
 //! See `docs/mcp.md`.
 
-mod base64;
 mod paths;
 mod tools;
 

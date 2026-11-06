@@ -19,10 +19,17 @@ pub enum Page {
     Navigation,
     Units,
     Grid,
+    Assistant,
 }
 
 impl Page {
-    pub const ALL: [Page; 4] = [Page::General, Page::Navigation, Page::Units, Page::Grid];
+    pub const ALL: [Page; 5] = [
+        Page::General,
+        Page::Navigation,
+        Page::Units,
+        Page::Grid,
+        Page::Assistant,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -30,6 +37,7 @@ impl Page {
             Page::Navigation => "Navigation",
             Page::Units => "Units",
             Page::Grid => "Grid and Snap",
+            Page::Assistant => "Assistant",
         }
     }
 
@@ -40,6 +48,7 @@ impl Page {
             "navigation" => Some(Page::Navigation),
             "units" => Some(Page::Units),
             "grid" => Some(Page::Grid),
+            "assistant" => Some(Page::Assistant),
             _ => None,
         }
     }
@@ -120,6 +129,7 @@ impl ChamferaApp {
         let mut grid_text = self.prefs_ui.grid_text.take();
         let error = self.prefs_ui.error.clone();
         let p = &mut self.prefs;
+        let assistant = &mut self.assistant;
         egui::Window::new("Preferences")
             .id(egui::Id::unique("preferences window"))
             .title_bar(false)
@@ -167,6 +177,7 @@ impl ChamferaApp {
                                 Page::Navigation => navigation_page(ui, look, p),
                                 Page::Units => units_page(ui, look, &mut units),
                                 Page::Grid => grid_page(ui, look, p, &mut grid_text, units),
+                                Page::Assistant => assistant_page(ui, look, p, assistant),
                             }
                             if let Some(e) = &error {
                                 ui.add_space(S2);
@@ -404,5 +415,135 @@ fn grid_page(
         look,
         "Clicks on empty space land on the nearest grid point; clicks on a point still snap \
          to the point.",
+    );
+}
+
+fn assistant_page(
+    ui: &mut egui::Ui,
+    look: Look,
+    p: &mut Preferences,
+    a: &mut crate::assistant_ui::AssistantUi,
+) {
+    use chamfera_assistant::{Effort, Model};
+    let ap = &mut p.assistant;
+    widgets::caption(ui, look, "API KEY");
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = a;
+        hint(
+            ui,
+            look,
+            "The Assistant works in the desktop app for now: a web page that calls the Claude \
+             API would expose your key to the page.",
+        );
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use chamfera_assistant::key::KeySource;
+        let status = match &a.key {
+            Some((k, KeySource::File)) => format!("Saved on this computer ({})", k.hint()),
+            Some((k, KeySource::Environment)) => {
+                format!("From ANTHROPIC_API_KEY ({})", k.hint())
+            }
+            None => "No key yet".to_owned(),
+        };
+        ui.horizontal(|ui| {
+            row_label(ui, look, "Key");
+            ui.label(
+                egui::RichText::new(status)
+                    .size(T_BODY)
+                    .color(look.c(|t| t.text)),
+            );
+        });
+        ui.horizontal(|ui| {
+            row_label(ui, look, "New key");
+            ui.add(
+                egui::TextEdit::singleline(&mut a.key_text)
+                    .password(true)
+                    .hint_text("sk-ant-…")
+                    .desired_width(220.0)
+                    .char_limit(chamfera_assistant::key::MAX_KEY_BYTES),
+            );
+            if ui.button("Save").clicked() {
+                let result = chamfera_assistant::ApiKey::new(&a.key_text).and_then(|k| {
+                    let path = crate::assistant_ui::key_path()
+                        .ok_or("no config folder (HOME is not set)")?;
+                    chamfera_assistant::key::save(&path, &k)?;
+                    a.key = Some((k, KeySource::File));
+                    Ok(())
+                });
+                a.key_text.clear();
+                a.key_message = Some(match result {
+                    Ok(()) => ("Key saved, readable by you only.".into(), false),
+                    Err(e) => (e, true),
+                });
+            }
+            if ui.button("Remove").clicked() {
+                let result = crate::assistant_ui::key_path()
+                    .map_or(Ok(()), |p| chamfera_assistant::key::remove(&p));
+                a.load_key();
+                a.key_message = Some(match result {
+                    Ok(()) => ("Saved key removed.".into(), false),
+                    Err(e) => (e, true),
+                });
+            }
+        });
+        if let Some((m, err)) = &a.key_message {
+            ui.label(egui::RichText::new(m).size(T_SMALL).color(if *err {
+                look.c(|t| t.error)
+            } else {
+                look.c(|t| t.text_muted)
+            }));
+        }
+        hint(
+            ui,
+            look,
+            "The key is kept in its own file in your config folder (or read from \
+             ANTHROPIC_API_KEY), never in a design or the preferences file.",
+        );
+    }
+    ui.add_space(S2);
+    widgets::caption(ui, look, "MODEL");
+    ui.horizontal(|ui| {
+        row_label(ui, look, "Model");
+        egui::ComboBox::from_id_salt("assistant model")
+            .width(180.0)
+            .selected_text(ap.model.name())
+            .show_ui(ui, |ui| {
+                for m in Model::ALL {
+                    ui.selectable_value(&mut ap.model, m, m.name());
+                }
+            });
+    });
+    ui.horizontal(|ui| {
+        row_label(ui, look, "Effort");
+        egui::ComboBox::from_id_salt("assistant effort")
+            .width(180.0)
+            .selected_text(ap.effort.key())
+            .show_ui(ui, |ui| {
+                for e in Effort::ALL {
+                    ui.selectable_value(&mut ap.effort, e, e.key());
+                }
+            });
+    });
+    hint(
+        ui,
+        look,
+        "More effort thinks longer: slower and costlier, better on hard parts. Changes apply \
+         to the next conversation (Clear in the panel).",
+    );
+    ui.add_space(S2);
+    widgets::caption(ui, look, "SAFETY");
+    ui.checkbox(
+        &mut ap.confirm_destructive,
+        "Ask before Claude deletes features or bodies or starts a new design",
+    );
+    ui.checkbox(
+        &mut ap.allow_file_commands,
+        "Let Claude open, save, import and export files (asks each time)",
+    );
+    ui.checkbox(
+        &mut ap.screenshots,
+        "Let Claude look at the viewport (screenshots)",
     );
 }

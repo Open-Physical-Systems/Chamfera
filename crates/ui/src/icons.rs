@@ -20,6 +20,7 @@ const MAX_PIXELS: u32 = 256;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Icon {
     Arc,
+    Assistant,
     ArcTangent,
     ArcThreePoint,
     Body,
@@ -138,7 +139,8 @@ pub enum Icon {
 
 impl Icon {
     #[cfg(test)]
-    pub const ALL: [Icon; 115] = [
+    pub const ALL: [Icon; 116] = [
+        Icon::Assistant,
         Icon::DriveJoint,
         Icon::MotionStudy,
         Icon::Interference,
@@ -264,6 +266,7 @@ impl Icon {
         }
         match self {
             Icon::Arc => master!("arc"),
+            Icon::Assistant => master!("assistant"),
             Icon::Body => master!("body"),
             Icon::ChevronDown => master!("chevron_down"),
             Icon::ChevronRight => master!("chevron_right"),

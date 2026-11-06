@@ -7,7 +7,7 @@
 | L2 | `doc` | parameters, expressions, the feature timeline, persistent names, the design format |
 | L3 | `io`, `drawing`, `cam` | design files; STEP, STL, 3MF import and export. 2D drawings: projected views with hidden lines from the exact B-rep, sheets, dimensions, SVG/DXF/PDF export. CAM: 2.5D milling toolpaths (facing, contour, pocket, drilling) from the exact model, and G-code for LinuxCNC and GRBL |
 | L4 | `engine` | the session, undo, and the command registry (everything is a command) |
-| L5 | `gpu` | the wgpu viewport renderer, and windowless snapshots of the same picture |
+| L5 | `gpu`, `assistant` | the wgpu viewport renderer, and windowless snapshots of the same picture; the in-app Claude assistant (Messages API client, streaming, the tool loop; no egui) |
 | L6 | `ui`, `mcp` | the egui front end for desktop and browser; the MCP server for agents over stdio (`docs/mcp.md`) |
 | L7 | `chamfera`, `chamfera-cli`, `chamfera-web` | desktop app, headless CLI, browser app |
 
@@ -15,6 +15,9 @@ A crate depends only on lower layers (`cargo xtask layers`). Nothing below L5 us
 
 ## The viewport
 `render` (L1) holds everything the picture depends on as plain data: the camera, the scene of bodies, the selection and the theme colours. `gpu` (L5) draws that into its own texture; the UI shows the texture, and `chamfera-cli snapshot` draws the same frame without a window. The UI never moves the camera itself: mouse, touchpad and keys become `view.*` and `select.*` commands (`navigate` in `crates/ui/src/lib.rs`).
+
+## The Assistant
+`chamfera-assistant` (L5, beside `gpu`, depending only on `engine`) lets Claude build a design live from the Assistant panel (`crates/ui/src/assistant_ui.rs`, View > Assistant, Ctrl+Shift+A). Every registry command except the file ones becomes a Claude tool (`solid.extrude` is `solid_extrude`, its input schema read from the parameter docs), plus `design_summary` and `screenshot`; `chamfera_engine::agent` holds what it shares with the MCP server (the file-command list, the design summary with exact volumes, base64). The Messages API is called over HTTPS (`ureq` + `rustls`, desktop only) on a worker thread; each tool call is sent to the UI thread over a channel and runs through `Session::execute`, so the viewport updates after each step. Destructive and file commands wait for Allow in the panel; Stop cancels between steps; a request's steps are merged into one undo step (`Session::group_undo_since`). The key lives in `assistant-key` (0600) beside the preferences file, or comes from `ANTHROPIC_API_KEY`; never in a design. The browser build shows a desktop-only note. `chamfera --assistant-demo` plays a recorded conversation for screenshots.
 
 ## Data flow
 ```

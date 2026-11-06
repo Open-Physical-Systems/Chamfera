@@ -377,7 +377,7 @@ fn snapshot(session: &mut Session, args: &Value) -> ToolResult {
     let png = render_png(session, &opts)?;
     Ok(json!({
         "content": [
-            { "type": "image", "data": crate::base64::encode(&png), "mimeType": "image/png" },
+            { "type": "image", "data": chamfera_engine::agent::base64(&png), "mimeType": "image/png" },
             { "type": "text", "text": json!({
                 "view": opts.view, "width": opts.width, "height": opts.height, "bytes": png.len()
             }).to_string() },
@@ -386,56 +386,18 @@ fn snapshot(session: &mut Session, args: &Value) -> ToolResult {
     }))
 }
 
-/// The compact overview behind `design_summary`.
+/// The compact overview behind `design_summary`: the shared summary plus the folders
+/// this server may use.
 pub fn summary(session: &mut Session, paths: &PathGuard) -> Value {
-    let ids: Vec<u32> = session.doc.sketches.iter().map(|f| f.id).collect();
-    let sketches: Vec<Value> = ids
-        .into_iter()
-        .map(
-            |id| match session.execute("sketch.get", &json!({ "sketch": id })) {
-                Ok(r) => {
-                    let count = |k: &str| r.get(k).and_then(Value::as_array).map_or(0, Vec::len);
-                    json!({
-                        "sketch": id,
-                        "name": r.get("name"),
-                        "points": count("points"),
-                        "curves": count("curves"),
-                        "constraints": count("constraints"),
-                        "dof": r.get("dof"),
-                        "status": r.get("status"),
-                        "profiles": r.get("profiles"),
-                    })
-                }
-                Err(e) => json!({ "sketch": id, "error": e.to_string() }),
-            },
-        )
-        .collect();
-    let bodies: Vec<Value> = session
-        .execute("body.list", &json!({}))
-        .ok()
-        .and_then(|r| r.get("bodies").and_then(Value::as_array).cloned())
-        .unwrap_or_default()
-        .into_iter()
-        .map(|b| {
+    let mut v = chamfera_engine::agent::summary(session);
+    if let Some(obj) = v.as_object_mut() {
+        obj.insert(
+            "folders".into(),
             json!({
-                "body": b.get("body"),
-                "name": b.get("name"),
-                "visible": b.get("visible"),
-                "volume": b.get("volume"),
-                "bounds": b.get("bounds"),
-            })
-        })
-        .collect();
-    json!({
-        "parameters": session.doc.parameters,
-        "active_sketch": session.active_sketch,
-        "sketches": sketches,
-        "bodies": bodies,
-        "can_undo": session.can_undo(),
-        "can_redo": session.can_redo(),
-        "folders": {
-            "scratch": paths.scratch().display().to_string(),
-            "allowed": paths.allowed().iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
-        },
-    })
+                "scratch": paths.scratch().display().to_string(),
+                "allowed": paths.allowed().iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
+            }),
+        );
+    }
+    v
 }

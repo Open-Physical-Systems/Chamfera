@@ -20,6 +20,7 @@ const LAYERS: &[(&str, u32)] = &[
     ("chamfera-cam", 3),
     ("chamfera-engine", 4),
     ("chamfera-gpu", 5),
+    ("chamfera-assistant", 5),
     ("chamfera-ui", 6),
     ("chamfera-mcp", 6),
     ("chamfera", 7),
@@ -42,6 +43,7 @@ const WASM_CRATES: &[&str] = &[
     "chamfera-cam",
     "chamfera-engine",
     "chamfera-gpu",
+    "chamfera-assistant",
     "chamfera-ui",
     "chamfera-web",
 ];

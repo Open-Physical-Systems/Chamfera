@@ -15,6 +15,7 @@ use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
 
 mod assembly_ui;
+mod assistant_ui;
 mod blend_ui;
 mod browser;
 mod cam_ui;
@@ -112,6 +113,9 @@ pub struct Options {
     pub preferences: Option<String>,
     /// Open the dropdown of this ribbon group (by caption, such as `MODIFY`) at start.
     pub ribbon_menu: Option<String>,
+    /// Open the Assistant and play a recorded conversation that builds a plate, without
+    /// an API key or a network call (for screenshots).
+    pub assistant_demo: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -222,6 +226,8 @@ pub struct ChamferaApp {
     nav_drag: Option<navigation::NavDrag>,
     /// The design file last added to the recent list.
     recent_seen: Option<std::path::PathBuf>,
+    /// The Assistant panel (`assistant_ui`).
+    assistant: assistant_ui::AssistantUi,
 }
 
 /// A command's label, so menus show the same words as the command list.
@@ -245,6 +251,9 @@ impl ChamferaApp {
         });
         let mut app = ChamferaApp::with_gpu(gpu, &options, prefs::load());
         app.prefs_store = true;
+        if app.assistant.transport.is_none() {
+            app.assistant.load_key();
+        }
         if app.gpu.is_none() {
             app.message = Some(("No GPU device: the viewport cannot draw.".into(), true));
         }
@@ -315,6 +324,7 @@ impl ChamferaApp {
             prefs_ui: prefs_ui::PrefsUi::default(),
             nav_drag: None,
             recent_seen: None,
+            assistant: assistant_ui::AssistantUi::default(),
         };
         if app.prefs.default_length != chamfera_doc::LengthUnit::Mm {
             let length = app.prefs.default_length.symbol();
@@ -396,6 +406,9 @@ impl ChamferaApp {
         if let Some(q) = &options.search {
             app.run_action(shortcuts::Action::Search);
             app.search.query = q.chars().take(120).collect();
+        }
+        if options.assistant_demo {
+            app.assistant_demo();
         }
         if let Some(caption) = &options.ribbon_menu {
             let tab = app.ribbon_tab();
@@ -850,6 +863,12 @@ impl ChamferaApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             return;
         }
+        // A request of the Assistant still running is part of the picture to wait for.
+        if self.assistant.running() && matches!(state, Shot::Waiting(_)) {
+            *state = Shot::Waiting(6);
+            ctx.request_repaint();
+            return;
+        }
         match state {
             Shot::Waiting(0) => {
                 let slot = self.shot_image.clone();
@@ -973,6 +992,22 @@ impl eframe::App for ChamferaApp {
                     self.browser(ui);
                 }
             });
+        self.assistant_poll(&ctx);
+        if self.assistant.open {
+            egui::Panel::right("assistant")
+                .frame(
+                    egui::Frame::new()
+                        .fill(color(self.theme.panel))
+                        .inner_margin(egui::Margin::symmetric(
+                            widgets::S3 as i8 + 2,
+                            widgets::S3 as i8,
+                        )),
+                )
+                .resizable(true)
+                .default_size(360.0)
+                .size_range(280.0..=640.0)
+                .show(ui, |ui| self.assistant_panel(ui));
+        }
         egui::CentralPanel::no_frame().show(ui, |ui| {
             if self.drawing.active && self.session.active_sketch.is_none() {
                 self.drawing_canvas(ui);

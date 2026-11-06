@@ -13,37 +13,8 @@
 use serde_json::Value;
 use std::path::{Component, Path, PathBuf};
 
-/// Whether a command reads an existing file or writes one.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Access {
-    Read,
-    Write,
-}
-
-/// Every command that takes a `path`, and what it does with it.
-pub const PATH_COMMANDS: &[(&str, Access)] = &[
-    ("body.import_3mf", Access::Read),
-    ("body.import_obj", Access::Read),
-    ("body.import_step", Access::Read),
-    ("body.import_stl", Access::Read),
-    ("cam.post", Access::Write),
-    // Its `dir` is resolved like a written path: the folder or its parent must be inside.
-    ("config.export_all", Access::Write),
-    ("design.open", Access::Read),
-    ("design.export_3mf", Access::Write),
-    ("design.export_glb", Access::Write),
-    // Also writes the .mtl file of the same name beside it, in the same allowed folder.
-    ("design.export_obj", Access::Write),
-    ("design.export_step", Access::Write),
-    ("design.export_stl", Access::Write),
-    ("design.save", Access::Write),
-    ("param.export_csv", Access::Write),
-    ("param.import_csv", Access::Read),
-    ("sheet.export_flat", Access::Write),
-    ("drawing.export", Access::Write),
-    ("sketch.export_dxf", Access::Write),
-    ("sketch.import_dxf", Access::Read),
-];
+pub(crate) use chamfera_engine::agent::takes_path;
+pub use chamfera_engine::agent::{Access, PATH_COMMANDS};
 
 /// Longest path accepted (bytes).
 const MAX_PATH_BYTES: usize = 4096;
@@ -205,15 +176,4 @@ impl PathGuard {
         }
         Ok(out)
     }
-}
-
-/// True when a command's parameter docs name a path parameter.
-pub(crate) fn takes_path(params_doc: &str) -> bool {
-    params_doc.lines().any(|l| {
-        let name = l.split(':').next().unwrap_or_default();
-        name.split(',').any(|n| {
-            let n = n.trim();
-            n == "path" || n.ends_with("_path") || n == "file" || n == "folder" || n == "dir"
-        })
-    })
 }

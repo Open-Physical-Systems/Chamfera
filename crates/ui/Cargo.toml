@@ -9,6 +9,7 @@ rust-version.workspace = true
 authors.workspace = true
 
 [dependencies]
+chamfera-assistant.workspace = true
 chamfera-doc.workspace = true
 chamfera-drawing.workspace = true
 chamfera-engine.workspace = true

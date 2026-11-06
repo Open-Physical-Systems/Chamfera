@@ -157,6 +157,23 @@ impl ChamferaApp {
             self.run("view.projection", json!({ "mode": mode }));
         }
         ui.separator();
+        let look = self.look();
+        let r = widgets::menu_item(ui, look, Icon::Assistant, "Assistant", true);
+        if self.assistant.open {
+            widgets::menu_check(ui, look, &r);
+        }
+        ui.painter().text(
+            egui::pos2(r.rect.max.x - 8.0, r.rect.center().y),
+            egui::Align2::RIGHT_CENTER,
+            "Ctrl+Shift+A",
+            FontId::proportional(T_SMALL),
+            look.c(|t| t.text_muted),
+        );
+        if r.clicked() {
+            ui.close();
+            self.assistant.open = !self.assistant.open;
+        }
+        ui.separator();
         self.display_menu(ui);
         ui.separator();
         widgets::caption(ui, self.look(), "THEME");

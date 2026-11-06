@@ -4,6 +4,7 @@
 //! [`Session::execute`] with a command id and JSON parameters, so they behave the same way.
 //! Read `skills/chamfera-commands/SKILL.md` before adding one.
 
+pub mod agent;
 pub mod assembly;
 mod body_tools;
 pub mod box_select;
@@ -88,6 +89,18 @@ pub struct Session {
     saved: Document,
     undo: Vec<Document>,
     redo: Vec<Document>,
+    /// Undo steps recorded so far, and how often the history was rewound (undo, redo, a
+    /// new design): an [`UndoMark`] holds both.
+    undo_pushes: u64,
+    history_epoch: u64,
+}
+
+/// A place in the undo history, so the steps recorded after it can be merged into one
+/// ([`Session::group_undo_since`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UndoMark {
+    pushes: u64,
+    epoch: u64,
 }
 
 impl Session {
@@ -152,6 +165,34 @@ impl Session {
             self.undo.remove(0);
         }
         self.undo.push(doc);
+        self.undo_pushes += 1;
+    }
+
+    /// Where the undo history is now.
+    pub fn undo_mark(&self) -> UndoMark {
+        UndoMark {
+            pushes: self.undo_pushes,
+            epoch: self.history_epoch,
+        }
+    }
+
+    /// Merges the undo steps recorded since `mark` into one, so a single undo takes the
+    /// design back to how it was at the mark. Nothing is merged when the history was
+    /// rewound in between (an undo, a redo, a new or opened design). Returns how many
+    /// steps the merged one stands for.
+    pub fn group_undo_since(&mut self, mark: UndoMark) -> usize {
+        if mark.epoch != self.history_epoch || mark.pushes > self.undo_pushes {
+            return 0;
+        }
+        let since = usize::try_from(self.undo_pushes - mark.pushes).unwrap_or(usize::MAX);
+        // Steps older than the undo limit are gone; the oldest kept one stands in.
+        let n = since.min(self.undo.len());
+        if n >= 2 {
+            let keep = self.undo.len() - n;
+            // The snapshot taken before the first step is the one to go back to.
+            self.undo.truncate(keep + 1);
+        }
+        n
     }
 
     pub fn can_undo(&self) -> bool {
@@ -163,6 +204,7 @@ impl Session {
     }
 
     pub(crate) fn undo(&mut self) -> bool {
+        self.history_epoch += 1;
         match self.undo.pop() {
             Some(prev) => {
                 let current = std::mem::replace(&mut self.doc, prev);
@@ -174,6 +216,7 @@ impl Session {
     }
 
     pub(crate) fn redo(&mut self) -> bool {
+        self.history_epoch += 1;
         match self.redo.pop() {
             Some(next) => {
                 let current = std::mem::replace(&mut self.doc, next);
@@ -203,6 +246,7 @@ impl Session {
         self.view_state = motion::AssemblyView::default();
         self.undo.clear();
         self.redo.clear();
+        self.history_epoch += 1;
     }
 }
 
