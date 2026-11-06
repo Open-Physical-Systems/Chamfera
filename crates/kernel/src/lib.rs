@@ -40,11 +40,13 @@ mod boolean;
 mod check;
 mod curve3;
 mod intersect;
+mod loft;
 mod planar;
 mod profile;
 mod ssi;
 mod surface;
 mod sweep;
+mod sweep_path;
 mod tessellate;
 mod topology;
 
@@ -60,6 +62,7 @@ pub use intersect::{
     Contact, IntersectionPoint, Intersections, Overlap, arc_arc, circle_arc, circle_circle,
     line_arc, line_circle, line_line, line_segment, segment_arc, segment_circle, segment_segment,
 };
+pub use loft::{LOFT_PARALLEL_TOLERANCE, MAX_LOFT_SECTIONS, loft};
 pub use planar::{Arc2, Circle2, Line2, Segment2};
 pub use profile::{PROFILE_JOIN_TOLERANCE, Profile, ProfileEdge, polygon_edges};
 pub use ssi::{
@@ -69,6 +72,7 @@ pub use ssi::{
 };
 pub use surface::{Cone, Cylinder, Sphere, Surface, SurfaceParameters, SurfacePoint, Torus};
 pub use sweep::{extrude, extrude_symmetric, revolve};
+pub use sweep_path::{MAX_PATH_SEGMENTS, PATH_TANGENT_TOLERANCE, PathSegment, sweep_path};
 pub use tessellate::{BodyMesh, TessOptions, tessellate};
 pub use topology::{
     Body, Curve, CurveId, EdgeCurve, EdgeId, FaceId, HalfEdgeId, LoopId, MAX_NAME_LENGTH,

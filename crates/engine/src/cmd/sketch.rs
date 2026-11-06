@@ -81,7 +81,9 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         id: "sketch.create",
         label: "Create Sketch",
-        params: "plane: string (required) - xy, xz or yz (top, front, right)",
+        params: "plane: string (required) - xy, xz or yz (top, front, right)\n\
+                 offset: string or number (optional) - move the plane along its normal, in mm \
+                 (profiles for a loft)",
         mutates: true,
         run: create,
     },
@@ -336,6 +338,18 @@ fn create(s: &mut Session, p: &Value) -> CmdResult {
         "xz" => Frame::XZ,
         "yz" => Frame::YZ,
         other => return Err(bad(format!("unknown plane {other:?}: use xy, xz or yz"))),
+    };
+    let plane = match params::opt_f64(p, "offset")? {
+        None => plane,
+        Some(d) if d.is_finite() && d.abs() <= chamfera_geom::MAX_COORDINATE => plane
+            .with_origin(plane.origin() + plane.z() * d)
+            .ok_or_else(|| bad("the offset plane is out of range"))?,
+        Some(_) => {
+            return Err(bad(format!(
+                "`offset` must be a finite distance of at most {} mm",
+                chamfera_geom::MAX_COORDINATE
+            )));
+        }
     };
     let id = s.doc.add_sketch(plane)?;
     s.active_sketch = Some(id);

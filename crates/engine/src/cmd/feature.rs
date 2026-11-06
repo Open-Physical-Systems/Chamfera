@@ -2,7 +2,10 @@
 
 use super::CommandSpec;
 use crate::{CmdResult, CommandError, Session, params};
-use chamfera_doc::{Blend, BlendKind, Extrude, ExtrudeDirection, FeatureKind, Operation, Revolve};
+use chamfera_doc::{
+    Blend, BlendKind, Extrude, ExtrudeDirection, FeatureKind, Loft, LoftSection, Operation, Revolve,
+    Sweep,
+};
 use chamfera_geom::Point2;
 use serde_json::{Value, json};
 
@@ -22,6 +25,8 @@ pub static COMMANDS: &[CommandSpec] = &[
                  direction: string (optional) - normal, reversed or symmetric\n\
                  operation: string (optional) - new_body, join, cut or intersect\n\
                  size: string or number (optional) - new fillet radius or chamfer distance\n\
+                 path: list of integers (optional) - new sweep path curves\n\
+                 sections: list of {sketch, x, y} (optional) - new loft profiles, in order\n\
                  suppressed: boolean (optional)",
         mutates: true,
         run: edit,
@@ -88,6 +93,15 @@ pub static COMMANDS: &[CommandSpec] = &[
         run: fillet,
     },
     CommandSpec {
+        id: "solid.loft",
+        label: "Loft",
+        params: "sections: list of {sketch, x, y} (required) - a point inside each profile, in order, \
+                 2 or more, on parallel planes\n\
+                 operation: string (optional) - new_body (default), join, cut or intersect",
+        mutates: true,
+        run: loft,
+    },
+    CommandSpec {
         id: "solid.pattern_circular",
         label: "Circular Pattern",
         params: "feature: integer (required) - the feature to repeat\n\
@@ -114,6 +128,18 @@ pub static COMMANDS: &[CommandSpec] = &[
         params: "x, y, width, height: number (required) - pixel and viewport size",
         mutates: false,
         run: profile_at,
+    },
+    CommandSpec {
+        id: "solid.sweep",
+        label: "Sweep",
+        params: "sketch: integer (required) - the profile's sketch\n\
+                 profiles: list of {x, y} (required) - a point inside each profile, in sketch mm\n\
+                 path_sketch: integer (required) - the sketch the path is drawn in\n\
+                 path: list of integers (required) - its lines and arcs, joined tangentially, \
+                 starting on the profile's plane\n\
+                 operation: string (optional) - new_body (default), join, cut or intersect",
+        mutates: true,
+        run: sweep,
     },
 ];
 
@@ -244,6 +270,73 @@ fn revolve(s: &mut Session, p: &Value) -> CmdResult {
         return Err(CommandError::Unavailable(e.clone()));
     }
     Ok(feature_reply(s, id))
+}
+
+/// A list of curve ids.
+fn ids(p: &Value, key: &str) -> Result<Vec<u32>, CommandError> {
+    let list = p
+        .get(key)
+        .and_then(Value::as_array)
+        .ok_or_else(|| bad(format!("`{key}` must be a list of curve ids")))?;
+    if list.len() > chamfera_doc::feature::MAX_SWEEP_PATH_CURVES {
+        return Err(bad(format!("`{key}` has too many curves")));
+    }
+    list.iter()
+        .map(|v| {
+            v.as_u64()
+                .and_then(|n| u32::try_from(n).ok())
+                .ok_or_else(|| bad(format!("`{key}` must hold curve ids (whole numbers)")))
+        })
+        .collect()
+}
+
+/// A loft's profiles: `[{sketch, x, y}, ...]`.
+fn sections(p: &Value) -> Result<Vec<LoftSection>, CommandError> {
+    let list = p
+        .get("sections")
+        .and_then(Value::as_array)
+        .ok_or_else(|| bad("`sections` must be a list of {sketch, x, y}"))?;
+    if list.len() > chamfera_doc::feature::MAX_LOFT_SECTIONS {
+        return Err(bad("too many sections"));
+    }
+    list.iter()
+        .map(|v| {
+            let sketch = params::req_id(v, "sketch")?;
+            let profile = Point2::new(params::req_f64(v, "x")?, params::req_f64(v, "y")?);
+            if !profile.is_valid() {
+                return Err(bad("a profile point is outside the working range"));
+            }
+            Ok(LoftSection { sketch, profile })
+        })
+        .collect()
+}
+
+fn add_feature(s: &mut Session, kind: FeatureKind) -> CmdResult {
+    let id = s.doc.add_feature(kind)?;
+    s.rebuild();
+    if let Some(e) = s.feature_errors().get(&id) {
+        return Err(CommandError::Unavailable(e.clone()));
+    }
+    Ok(feature_reply(s, id))
+}
+
+fn sweep(s: &mut Session, p: &Value) -> CmdResult {
+    let kind = FeatureKind::Sweep(Sweep {
+        sketch: params::req_id(p, "sketch")?,
+        profiles: seeds(p)?,
+        path_sketch: params::req_id(p, "path_sketch")?,
+        path: ids(p, "path")?,
+        operation: operation(p)?.unwrap_or_default(),
+    });
+    add_feature(s, kind)
+}
+
+fn loft(s: &mut Session, p: &Value) -> CmdResult {
+    let kind = FeatureKind::Loft(Loft {
+        sections: sections(p)?,
+        operation: operation(p)?.unwrap_or_default(),
+    });
+    add_feature(s, kind)
 }
 
 /// The edges a fillet or chamfer names: a list, or the one under a pixel.
@@ -422,6 +515,8 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
         match &mut kind {
             FeatureKind::Extrude(e) => e.operation = o,
             FeatureKind::Revolve(r) => r.operation = o,
+            FeatureKind::Sweep(w) => w.operation = o,
+            FeatureKind::Loft(l) => l.operation = o,
             FeatureKind::Pattern(_) => {
                 return Err(bad("a pattern does what the feature it repeats does"));
             }
@@ -446,6 +541,18 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
         }
     } else if new_distance.is_some() || new_direction.is_some() {
         return Err(bad("distance and direction belong to extrudes"));
+    }
+    if p.get("path").is_some_and(|v| !v.is_null()) {
+        let FeatureKind::Sweep(w) = &mut kind else {
+            return Err(bad("path belongs to sweeps"));
+        };
+        w.path = ids(p, "path")?;
+    }
+    if p.get("sections").is_some_and(|v| !v.is_null()) {
+        let FeatureKind::Loft(l) = &mut kind else {
+            return Err(bad("sections belong to lofts"));
+        };
+        l.sections = sections(p)?;
     }
     s.doc.check_feature(&kind)?;
     let f = s.doc.feature_mut(id)?;

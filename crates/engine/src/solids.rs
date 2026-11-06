@@ -6,7 +6,9 @@
 //! timeline) and the rest of the timeline still builds, as CAD users expect.
 
 use crate::Session;
-use chamfera_doc::{Blend, BlendKind, Extrude, ExtrudeDirection, FeatureKind, Operation, Revolve};
+use chamfera_doc::{
+    Blend, BlendKind, Extrude, ExtrudeDirection, FeatureKind, Loft, Operation, Revolve, Sweep,
+};
 use chamfera_geom::{Point2, Point3};
 use chamfera_kernel::{Body, EdgeId, Line2, Profile, ProfileEdge, TessOptions, tessellate};
 use chamfera_sketch::{Curve, ProfileLoop, Region, Sketch};
@@ -475,6 +477,73 @@ fn build_revolve(doc: &chamfera_doc::Document, r: &Revolve) -> Result<Vec<Body>,
         .collect()
 }
 
+/// A sweep's path as kernel segments in space (lines, and arcs counter-clockwise about
+/// the path sketch's normal as the sketch stores them).
+fn sweep_path_segments(
+    f: &chamfera_doc::SketchFeature,
+    curves: &[u32],
+) -> Result<Vec<chamfera_kernel::PathSegment>, String> {
+    use chamfera_kernel::PathSegment;
+    let gone = || format!("a curve of the path in {} is gone", f.name);
+    curves
+        .iter()
+        .map(|id| {
+            let at = |p: chamfera_sketch::PointId| {
+                f.sketch
+                    .point(p)
+                    .map(|q| f.plane.from_plane(q))
+                    .ok_or_else(gone)
+            };
+            match f.sketch.curve(chamfera_sketch::CurveId(*id)) {
+                Some(Curve::Line { start, end, .. }) => Ok(PathSegment::Line {
+                    start: at(*start)?,
+                    end: at(*end)?,
+                }),
+                Some(Curve::Arc {
+                    centre, start, end, ..
+                }) => PathSegment::arc_from_points(
+                    at(*centre)?,
+                    f.plane.z(),
+                    at(*start)?,
+                    at(*end)?,
+                )
+                .map_err(|e| format!("an arc of the path: {e}")),
+                Some(_) => Err(format!("curve {id} of {} is not a line or an arc", f.name)),
+                None => Err(gone()),
+            }
+        })
+        .collect()
+}
+
+/// The bodies one sweep makes: one per profile, along the same path.
+fn build_sweep(doc: &chamfera_doc::Document, s: &Sweep) -> Result<Vec<Body>, String> {
+    let f = doc.sketch(s.sketch).map_err(|x| x.to_string())?;
+    let p = doc.sketch(s.path_sketch).map_err(|x| x.to_string())?;
+    let path = sweep_path_segments(p, &s.path)?;
+    feature_profiles(f, &s.profiles)?
+        .iter()
+        .map(|profile| {
+            chamfera_kernel::sweep_path(&f.plane, profile, &path).map_err(|x| format!("sweep: {x}"))
+        })
+        .collect()
+}
+
+/// The body one loft makes, through its profiles in order.
+fn build_loft(doc: &chamfera_doc::Document, l: &Loft) -> Result<Vec<Body>, String> {
+    let mut sections = Vec::with_capacity(l.sections.len());
+    for s in &l.sections {
+        let f = doc.sketch(s.sketch).map_err(|x| x.to_string())?;
+        let profile = feature_profiles(f, &[s.profile])?
+            .into_iter()
+            .next()
+            .ok_or("a loft profile is missing")?;
+        sections.push((f.plane, profile));
+    }
+    chamfera_kernel::loft(&sections)
+        .map(|b| vec![b])
+        .map_err(|x| format!("loft: {x}"))
+}
+
 impl Session {
     /// Rebuilds every feature, in timeline order, and replaces the solid bodies in the
     /// scene. Meshes and other bodies (imported STL) are left alone.
@@ -489,9 +558,12 @@ impl Session {
                 continue;
             }
             // A sketch drawn on a face follows that face (built earlier in the timeline).
-            if let Some(sketch) = feature.kind.sketch()
-                && let Err(e) = self.follow_attached_sketch(sketch, &made)
-            {
+            let follow = feature
+                .kind
+                .sketches()
+                .into_iter()
+                .try_for_each(|sketch| self.follow_attached_sketch(sketch, &made));
+            if let Err(e) = follow {
                 built.errors.insert(feature.id, e);
                 continue;
             }
@@ -530,6 +602,8 @@ impl Session {
             let result = match &feature.kind {
                 FeatureKind::Extrude(e) => build_extrude(&self.doc, e),
                 FeatureKind::Revolve(r) => build_revolve(&self.doc, r),
+                FeatureKind::Sweep(s) => build_sweep(&self.doc, s),
+                FeatureKind::Loft(l) => build_loft(&self.doc, l),
                 FeatureKind::Pattern(_) | FeatureKind::Blend(_) => continue,
             };
             let operation = feature.kind.operation();
