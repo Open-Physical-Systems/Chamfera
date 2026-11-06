@@ -483,6 +483,143 @@ fn pattern_copies(
     Ok((out, *op))
 }
 
+/// How far past the farthest body a through-all extrude goes, so that its far cap lies
+/// clear of every face instead of on one (a coplanar cap would make the boolean decide
+/// touching faces).
+pub const THROUGH_ALL_MARGIN: f64 = 1.0;
+
+/// The prefix of the face and edge roles of a tapered two-sided extrude's second side
+/// (`back top`, `back side 0`), so they differ from the first side's.
+const BACK_SIDE: &str = "back ";
+
+/// Where an extrude reaches, as signed distances along the sketch plane's normal from
+/// its start plane: `(back, front)` with `back <= 0 <= front`, one of them non-zero.
+fn extrude_span(
+    e: &Extrude,
+    values: &chamfera_doc::ExtrudeValues,
+    start: &chamfera_geom::Frame,
+    bodies: &[&Body],
+) -> Result<(f64, f64), String> {
+    use chamfera_doc::{ExtrudeExtent, ExtrudeTo};
+    let tol = chamfera_geom::LINEAR_TOLERANCE;
+    let n = start.z();
+    let (back, front) = match e.extent {
+        ExtrudeExtent::Distance => {
+            let d = values.distance;
+            match e.direction {
+                ExtrudeDirection::Normal => (d.min(0.0), d.max(0.0)),
+                ExtrudeDirection::Reversed => ((-d).min(0.0), (-d).max(0.0)),
+                ExtrudeDirection::Symmetric => (-d.abs() * 0.5, d.abs() * 0.5),
+                ExtrudeDirection::TwoSides => (-values.distance2, d),
+            }
+        }
+        ExtrudeExtent::ThroughAll => {
+            // The corners of every body's box, measured along the normal: the extrude
+            // reaches past the farthest one.
+            let along: Vec<f64> = bodies
+                .iter()
+                .filter_map(|b| b.bounding_box())
+                .flat_map(|bb| {
+                    let (a, b) = (bb.min, bb.max);
+                    [
+                        (a.x, a.y, a.z),
+                        (b.x, a.y, a.z),
+                        (a.x, b.y, a.z),
+                        (b.x, b.y, a.z),
+                        (a.x, a.y, b.z),
+                        (b.x, a.y, b.z),
+                        (a.x, b.y, b.z),
+                        (b.x, b.y, b.z),
+                    ]
+                })
+                .map(|(x, y, z)| (chamfera_geom::Point3::new(x, y, z) - start.origin()).dot(n))
+                .collect();
+            if along.is_empty() {
+                return Err("through all: there is no body to go through yet".into());
+            }
+            let ahead = along.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+            let behind = along.iter().copied().fold(f64::INFINITY, f64::min);
+            let fwd = if ahead > tol {
+                ahead + THROUGH_ALL_MARGIN
+            } else {
+                0.0
+            };
+            let bwd = if behind < -tol {
+                behind - THROUGH_ALL_MARGIN
+            } else {
+                0.0
+            };
+            match e.direction {
+                ExtrudeDirection::Normal => (0.0, fwd),
+                ExtrudeDirection::Reversed => (bwd, 0.0),
+                ExtrudeDirection::Symmetric | ExtrudeDirection::TwoSides => (bwd, fwd),
+            }
+        }
+        ExtrudeExtent::ToObject => {
+            let (plane, what) = match &e.to {
+                Some(ExtrudeTo::Face(r)) => {
+                    let wanted = face_key(r.feature, &r.face);
+                    let found = bodies.iter().find_map(|b| {
+                        b.faces()
+                            .into_iter()
+                            .find(|f| b.face_name(*f).ok().flatten() == Some(wanted.as_str()))
+                            .map(|f| face_plane(b, f))
+                    });
+                    match found {
+                        Some(Some(p)) => (p, format!("the face {wanted}")),
+                        Some(None) => {
+                            return Err(format!(
+                                "to object: the face {wanted} is not flat; pick a flat face or a plane"
+                            ));
+                        }
+                        None => {
+                            return Err(format!(
+                                "to object: the face {wanted} is gone (feature {} changed, failed or comes later)",
+                                r.feature
+                            ));
+                        }
+                    }
+                }
+                Some(ExtrudeTo::Plane(p)) => (*p, "the plane".to_owned()),
+                None => return Err("to object: pick the face or plane to extrude up to".into()),
+            };
+            if plane.z().cross(n).length() > chamfera_geom::ANGULAR_TOLERANCE {
+                return Err(format!(
+                    "to object: {what} is not parallel to the profile's plane; only parallel faces and planes are supported"
+                ));
+            }
+            let t = (plane.origin() - start.origin()).dot(n);
+            (t.min(0.0), t.max(0.0))
+        }
+    };
+    if !(back.is_finite() && front.is_finite()) || front - back <= tol {
+        return Err(match e.extent {
+            ExtrudeExtent::ThroughAll => {
+                "through all: no body lies that way from the profile".to_owned()
+            }
+            ExtrudeExtent::ToObject => {
+                "to object: the face or plane lies on the start plane".to_owned()
+            }
+            ExtrudeExtent::Distance => "the extrude has no length".to_owned(),
+        });
+    }
+    Ok((back, front))
+}
+
+/// Puts `prefix` in front of every face and edge role of `body`.
+fn prefix_names(body: &mut Body, prefix: &str) {
+    for f in body.faces() {
+        if let Some(n) = body.face_name(f).ok().flatten().map(str::to_owned) {
+            let _ = body.set_face_name(f, &format!("{prefix}{n}"));
+        }
+    }
+    for e in body.edges() {
+        if let Some(n) = body.edge_name(e).ok().flatten().map(str::to_owned) {
+            let _ = body.set_edge_name(e, &format!("{prefix}{n}"));
+        }
+    }
+}
+
 /// Renames a copy's faces and edges `<feature>:<k> <role>` (from `<source>:<role>`), so
 /// each copy's names are its own and a fillet or sketch finds the one it means.
 fn rename_copy(body: &mut Body, feature: u32, k: usize) {
@@ -596,27 +733,64 @@ fn move_bodies(
     Ok(next)
 }
 
-/// The bodies one extrude makes: one per profile.
-fn build_extrude(doc: &chamfera_doc::Document, e: &Extrude) -> Result<Vec<Body>, String> {
+/// The bodies one extrude makes: one per profile. `bodies` are the solids built before
+/// it, for through all and to object.
+fn build_extrude(
+    doc: &chamfera_doc::Document,
+    e: &Extrude,
+    bodies: &[&Body],
+) -> Result<Vec<Body>, String> {
     let f = doc.sketch(e.sketch).map_err(|x| x.to_string())?;
-    let distance = doc
-        .evaluate_feature_value(&e.distance, chamfera_doc::expr::Dim::LENGTH)
-        .map_err(|x| x.to_string())?;
+    let values = doc.extrude_values(e).map_err(|x| x.to_string())?;
+    let start = f
+        .plane
+        .with_origin(f.plane.origin() + f.plane.z() * values.start_offset)
+        .ok_or("extrude: the start offset leaves the working range")?;
+    let (back, front) = extrude_span(e, &values, &start, bodies)?;
+    let tol = chamfera_geom::LINEAR_TOLERANCE;
+    let taper = values.taper;
+    let tapered = taper.abs() > chamfera_geom::ANGULAR_TOLERANCE;
     feature_profiles(f, &e.profiles)?
         .iter()
         .map(|profile| {
-            match e.direction {
-                ExtrudeDirection::Normal => chamfera_kernel::extrude(&f.plane, profile, distance),
-                ExtrudeDirection::Reversed => {
-                    chamfera_kernel::extrude(&f.plane, profile, -distance)
-                }
-                ExtrudeDirection::Symmetric => {
-                    chamfera_kernel::extrude_symmetric(&f.plane, profile, distance)
-                }
+            let k = |x: chamfera_kernel::KernelError| format!("extrude: {x}");
+            // One side: from the start plane (its `bottom`), tapering away from it.
+            if back.abs() <= tol {
+                return chamfera_kernel::extrude_tapered(&start, profile, front, taper).map_err(k);
             }
-            .map_err(|x| format!("extrude: {x}"))
+            if front.abs() <= tol {
+                return chamfera_kernel::extrude_tapered(&start, profile, back, taper).map_err(k);
+            }
+            if !tapered {
+                // Both ways without a taper: one prism from the back (`bottom`) to the
+                // front, as symmetric extrudes always were.
+                let from = start
+                    .with_origin(start.origin() + start.z() * back)
+                    .ok_or("extrude: the extrude leaves the working range")?;
+                return chamfera_kernel::extrude(&from, profile, front - back).map_err(k);
+            }
+            // Tapered both ways: each side narrows away from the start plane; the two
+            // halves meet in the profile and are joined.
+            let one = chamfera_kernel::extrude_tapered(&start, profile, front, taper).map_err(k)?;
+            let mut two =
+                chamfera_kernel::extrude_tapered(&start, profile, back, taper).map_err(k)?;
+            prefix_names(&mut two, BACK_SIDE);
+            chamfera_kernel::union(&one, &two)
+                .map_err(|x| format!("extrude: joining the two tapered sides: {x}"))
         })
         .collect()
+}
+
+impl Session {
+    /// The shapes an extrude would make now, after every built solid, without changing
+    /// anything (for a preview while its options change).
+    pub fn extrude_shapes(&self, e: &Extrude) -> Result<Vec<Body>, String> {
+        self.doc
+            .check_feature(&FeatureKind::Extrude(e.clone()))
+            .map_err(|x| x.to_string())?;
+        let bodies: Vec<&Body> = self.built.solids.iter().map(|s| &s.body).collect();
+        build_extrude(&self.doc, e, &bodies)
+    }
 }
 
 /// A built construction axis: a point on it and its direction.
@@ -689,6 +863,8 @@ impl Session {
     /// Rebuilds every feature, in timeline order, and replaces the solid bodies in the
     /// scene. Meshes and other bodies (imported STL) are left alone.
     pub fn rebuild(&mut self) {
+        // A preview shows what a tool would make of the design as it was.
+        self.scene.previews.clear();
         let mut built = Built::default();
         let mut made: Vec<(u32, String, Body)> = Vec::new();
         // Each built feature's own shapes (before they were combined), for patterns.
@@ -806,7 +982,10 @@ impl Session {
                 continue;
             }
             let result = match &feature.kind {
-                FeatureKind::Extrude(e) => build_extrude(&self.doc, e),
+                FeatureKind::Extrude(e) => {
+                    let bodies: Vec<&Body> = made.iter().map(|m| &m.2).collect();
+                    build_extrude(&self.doc, e, &bodies)
+                }
                 FeatureKind::Revolve(r) => build_revolve(&self.doc, r, &built.constructs),
                 FeatureKind::Pattern(_)
                 | FeatureKind::Construct(_)

@@ -243,6 +243,18 @@ fn hostile_params_never_panic() {
         json!({"x1": 0, "y1": 0, "x2": 0, "y2": 0, "width": 1, "height": 1, "mode": "crossing", "add": "yes"}),
         json!({"x": 400, "y": 300, "width": 800, "height": 600, "mode": "toggle"}),
         json!({"x": 400, "y": 300, "width": 800, "height": 600, "mode": "flip"}),
+        json!({"sketch": 1, "profiles": [{"x": 10, "y": 10}], "distance": 5, "taper": 1e308,
+            "start_offset": -1e308, "distance2": f64::NAN, "direction": "two_sides"}),
+        json!({"sketch": 1, "profiles": [{"x": 10, "y": 10}], "extent": "through_all",
+            "taper": "-88 deg", "direction": "symmetric", "feature": 2}),
+        json!({"sketch": 1, "profiles": [{"x": 10, "y": 10}], "extent": "to_object",
+            "to": {"feature": 99, "face": long}, "feature": 2}),
+        json!({"sketch": 1, "profiles": [{"x": 10, "y": 10}], "extent": 7,
+            "to": {"plane": {"origin": {"x": 1e300, "y": 0, "z": 0}, "normal": "up"}}}),
+        json!({"sketch": 1, "profiles": [{"x": 10, "y": 10}], "distance": 5,
+            "to": {"pick": {"x": 1e300, "y": -1, "width": 0, "height": 0}}, "clear": "yes"}),
+        json!({"sketch": 1, "profiles": [{"x": 10, "y": 10}], "distance": 5, "to": [1],
+            "taper": [5], "start_offset": {"x": 1}, "distance2": true, "clear": true}),
     ];
     for c in registry() {
         for p in &hostile {
@@ -2793,4 +2805,344 @@ fn picked_edges_follow_the_pick_modes() {
     assert_eq!(pick(bx, by + 3.0, "add"), json!([front, back]));
     assert_eq!(pick(fx, fy - 3.0, "toggle"), json!([back]));
     assert_eq!(pick(bx, by + 3.0, "remove"), json!([]));
+}
+
+// ---------------------------------------------------------------- extrude options
+
+fn close_to(got: f64, want: f64) -> bool {
+    (got - want).abs() <= 1e-6 * want.abs().max(1.0)
+}
+
+/// The 50 x 30 plate profile of `dimensioned_rectangle`, extruded with extra options.
+fn plate_with(s: &mut Session, options: serde_json::Value) -> CmdResult {
+    dimensioned_rectangle(s);
+    s.execute("sketch.finish", &json!({})).unwrap();
+    let mut p = json!({"sketch": 1, "profiles": [{"x": 25, "y": 15}]});
+    for (k, v) in options.as_object().unwrap() {
+        p[k] = v.clone();
+    }
+    s.execute("solid.extrude", &p)
+}
+
+fn z_range(s: &Session) -> (f64, f64) {
+    let b = s.solids()[0].body.bounding_box().unwrap();
+    (b.min.z, b.max.z)
+}
+
+#[test]
+fn two_sides_extrude_each_side_by_its_own_distance() {
+    // 10 up and 4 down: 50 · 30 · 10 + 50 · 30 · 4 = 15000 + 6000, spanning z -4 to 10.
+    let mut s = Session::new();
+    let r = plate_with(
+        &mut s,
+        json!({"distance": 10, "direction": "two_sides", "distance2": 4}),
+    )
+    .unwrap();
+    assert!(close_to(exact_volume(&r), 21_000.0), "{r}");
+    let (lo, hi) = z_range(&s);
+    assert!(close_to(lo, -4.0) && close_to(hi, 10.0), "{lo} {hi}");
+}
+
+#[test]
+fn an_offset_start_moves_the_extrude_off_the_sketch_plane() {
+    // Start 5 above the sketch, 10 tall: the box spans z 5 to 15, volume 15000.
+    let mut s = Session::new();
+    let r = plate_with(&mut s, json!({"distance": 10, "start_offset": 5})).unwrap();
+    assert!(close_to(exact_volume(&r), 15_000.0), "{r}");
+    let (lo, hi) = z_range(&s);
+    assert!(close_to(lo, 5.0) && close_to(hi, 15.0), "{lo} {hi}");
+    // Reversed from the offset start: z -5 to 5.
+    s.execute(
+        "feature.edit",
+        &json!({"feature": 2, "direction": "reversed"}),
+    )
+    .unwrap();
+    let (lo, hi) = z_range(&s);
+    assert!(close_to(lo, -5.0) && close_to(hi, 5.0), "{lo} {hi}");
+    // A 0 offset removes it.
+    s.execute("feature.edit", &json!({"feature": 2, "start_offset": 0}))
+        .unwrap();
+    let chamfera_doc::FeatureKind::Extrude(e) = &s.doc.feature(2).unwrap().kind else {
+        panic!()
+    };
+    assert_eq!(e.start_offset, None);
+}
+
+/// The plate 50 x 30 x 10 and a circle d = 6 at its centre on its top face; returns the
+/// circle's sketch.
+fn plate_with_hole_sketch(s: &mut Session) -> u64 {
+    extruded_plate(s, json!(10));
+    let top = s
+        .execute(
+            "sketch.create_on_face",
+            &json!({"feature": 2, "face": "top"}),
+        )
+        .unwrap()["sketch"]
+        .as_u64()
+        .unwrap();
+    s.execute("sketch.circle", &json!({"cx": 25, "cy": 15, "radius": 3}))
+        .unwrap();
+    s.execute("sketch.finish", &json!({})).unwrap();
+    top
+}
+
+#[test]
+fn a_through_all_cut_goes_through_the_plate_however_thick_it_gets() {
+    // A d = 6 hole through the 10 mm plate: 15000 - π 3² 10 = 15000 - 90π.
+    let mut s = Session::new();
+    let top = plate_with_hole_sketch(&mut s);
+    let cut = json!({"sketch": top, "profiles": [{"x": 25, "y": 15}], "extent": "through_all",
+        "direction": "reversed", "operation": "cut"});
+    let r = s.execute("solid.extrude", &cut).unwrap();
+    let pi = std::f64::consts::PI;
+    assert!(close_to(exact_volume(&r), 15_000.0 - 90.0 * pi), "{r}");
+    // The plate made 20 thick: the hole still goes through, 30000 - 180π.
+    s.execute("feature.edit", &json!({"feature": 2, "distance": 20}))
+        .unwrap();
+    let v = s.solids()[0].body.volume().unwrap();
+    assert!(close_to(v, 30_000.0 - 180.0 * pi), "{v}");
+    // Through all upward from the top face: no body lies that way, refused, unchanged.
+    let before = s.doc.clone();
+    let up = json!({"sketch": top, "profiles": [{"x": 25, "y": 15}], "extent": "through_all",
+        "operation": "cut"});
+    assert!(s.execute("solid.extrude", &up).is_err());
+    assert_eq!(s.doc, before);
+}
+
+#[test]
+fn a_through_all_needs_a_body() {
+    let mut s = Session::new();
+    let before_err = plate_with(&mut s, json!({"extent": "through_all"}));
+    assert!(before_err.is_err());
+    assert!(s.doc.features.is_empty() && s.solids().is_empty());
+}
+
+#[test]
+fn to_object_goes_up_to_a_parallel_face_and_follows_it() {
+    // The plate 50 x 30 x 10 (feature 2), then a block 10 x 10 beside it, 25 tall
+    // (feature 4: its top face is at z = 25). A 10 x 10 square on the plate's top
+    // (z = 10) extruded to the block's top: a boss 15 tall, 1500.
+    let mut s = Session::new();
+    extruded_plate(&mut s, json!(10));
+    s.execute("sketch.create", &json!({"plane": "xy"})).unwrap();
+    s.execute(
+        "sketch.rectangle",
+        &json!({"x1": 60, "y1": 0, "x2": 70, "y2": 10}),
+    )
+    .unwrap();
+    s.execute("sketch.finish", &json!({})).unwrap();
+    let block = s
+        .execute(
+            "solid.extrude",
+            &json!({"sketch": 3, "profiles": [{"x": 65, "y": 5}], "distance": 25}),
+        )
+        .unwrap()["feature"]
+        .as_u64()
+        .unwrap();
+    let on_top = s
+        .execute(
+            "sketch.create_on_face",
+            &json!({"feature": 2, "face": "top"}),
+        )
+        .unwrap()["sketch"]
+        .as_u64()
+        .unwrap();
+    s.execute(
+        "sketch.rectangle",
+        &json!({"x1": 20, "y1": 10, "x2": 30, "y2": 20}),
+    )
+    .unwrap();
+    s.execute("sketch.finish", &json!({})).unwrap();
+    let boss = |to: serde_json::Value| json!({"sketch": on_top, "profiles": [{"x": 25, "y": 15}], "extent": "to_object", "to": to});
+    // Not parallel: the block's side is vertical. Refused, nothing changes.
+    let before = s.doc.clone();
+    let side = s.execute(
+        "solid.extrude",
+        &boss(json!({"feature": block, "face": "side 0"})),
+    );
+    assert!(
+        side.as_ref()
+            .is_err_and(|e| e.to_string().contains("not parallel")),
+        "{side:?}"
+    );
+    assert_eq!(s.doc, before);
+    let r = s
+        .execute(
+            "solid.extrude",
+            &boss(json!({"feature": block, "face": "top"})),
+        )
+        .unwrap();
+    let id = r["feature"].as_u64().unwrap();
+    assert!(close_to(exact_volume(&r), 1_500.0), "{r}");
+    let boss_box = |s: &Session| {
+        let solid = s
+            .solids()
+            .iter()
+            .find(|x| u64::from(x.feature) == id)
+            .unwrap();
+        let b = solid.body.bounding_box().unwrap();
+        (b.min.z, b.max.z)
+    };
+    let (lo, hi) = boss_box(&s);
+    assert!(close_to(lo, 10.0) && close_to(hi, 25.0), "{lo} {hi}");
+    // The block grows to 30: the boss follows its top, 2000.
+    s.execute("feature.edit", &json!({"feature": block, "distance": 30}))
+        .unwrap();
+    let (_, hi) = boss_box(&s);
+    assert!(close_to(hi, 30.0), "{hi}");
+    // The block cannot be deleted while the boss goes up to its face.
+    assert!(
+        s.execute("feature.delete", &json!({"feature": block}))
+            .is_err()
+    );
+    // Up to a fixed plane at z = 40 instead: 10 x 10 x 30 = 3000.
+    let r = s
+        .execute(
+            "feature.edit",
+            &json!({"feature": id, "to": {"plane": {"origin": {"x": 0, "y": 0, "z": 40},
+                "normal": {"x": 0, "y": 0, "z": 1}}}}),
+        )
+        .unwrap();
+    assert!(close_to(exact_volume(&r), 3_000.0), "{r}");
+    // A tilted plane is refused, and the boss keeps its plane.
+    let before = s.doc.clone();
+    let tilted = json!({"feature": id, "to": {"plane": {"origin": {"x": 0, "y": 0, "z": 40},
+        "normal": {"x": 0, "y": 1, "z": 1}}}});
+    assert!(s.execute("feature.edit", &tilted).is_err());
+    assert_eq!(s.doc, before);
+}
+
+#[test]
+fn a_tapered_plate_is_the_prismatoid_frustum() {
+    // 50 x 30, 10 tall, 5° taper: each side moves in by d = 10 tan 5° at the top; the
+    // section (50 - 2δ)(30 - 2δ) is quadratic in the height, so the prismatoid formula
+    // is exact: V = h/6 [A₀ + 4 A_mid + A_top] = 10 (1500 - 80 d + 4/3 d²).
+    let mut s = Session::new();
+    let r = plate_with(&mut s, json!({"distance": 10, "taper": 5})).unwrap();
+    let d = 10.0 * 5f64.to_radians().tan();
+    let want = 10.0 * (1500.0 - 80.0 * d + 4.0 / 3.0 * d * d);
+    assert!(close_to(exact_volume(&r), want), "{r} vs {want}");
+    assert!(r["display_error"].is_null(), "{r}");
+    // Symmetric with the taper: two halves of 5, each narrowing away from the sketch.
+    let r = s
+        .execute(
+            "feature.edit",
+            &json!({"feature": 2, "direction": "symmetric"}),
+        )
+        .unwrap();
+    let d = 5.0 * 5f64.to_radians().tan();
+    let half = 5.0 * (1500.0 - 80.0 * d + 4.0 / 3.0 * d * d);
+    assert!(
+        close_to(exact_volume(&r), 2.0 * half),
+        "{r} vs {}",
+        2.0 * half
+    );
+    let (lo, hi) = z_range(&s);
+    assert!(close_to(lo, -5.0) && close_to(hi, 5.0), "{lo} {hi}");
+}
+
+#[test]
+fn a_tapered_circle_is_a_cone_frustum() {
+    // r = 5, h = 10, 10°: r₂ = 5 - 10 tan 10°, V = π h / 3 (r₁² + r₁ r₂ + r₂²).
+    let mut s = Session::new();
+    s.execute("sketch.create", &json!({"plane": "xy"})).unwrap();
+    s.execute("sketch.circle", &json!({"cx": 0, "cy": 0, "radius": 5}))
+        .unwrap();
+    s.execute("sketch.finish", &json!({})).unwrap();
+    let r = s
+        .execute(
+            "solid.extrude",
+            &json!({"sketch": 1, "profiles": [{"x": 0, "y": 0}], "distance": 10, "taper": "10 deg"}),
+        )
+        .unwrap();
+    let (r1, r2) = (5.0, 5.0 - 10.0 * 10f64.to_radians().tan());
+    let want = std::f64::consts::PI * 10.0 / 3.0 * (r1 * r1 + r1 * r2 + r2 * r2);
+    assert!(close_to(exact_volume(&r), want), "{r} vs {want}");
+    assert!(r["display_error"].is_null(), "{r}");
+}
+
+#[test]
+fn refused_extrude_options_change_nothing() {
+    let mut s = Session::new();
+    extruded_plate(&mut s, json!(10));
+    let before = s.doc.clone();
+    let volume = s.solids()[0].body.volume().unwrap();
+    s.execute("edit.undo", &json!({})).unwrap();
+    s.execute("edit.redo", &json!({})).unwrap();
+    for bad in [
+        // 60° closes the 30 mm side before the top (10 tan 60° > 15).
+        json!({"feature": 2, "taper": 60}),
+        json!({"feature": 2, "taper": "89 deg"}),
+        json!({"feature": 2, "direction": "two_sides"}),
+        json!({"feature": 2, "direction": "two_sides", "distance2": -1}),
+        json!({"feature": 2, "extent": "to_object"}),
+        json!({"feature": 2, "extent": "sideways"}),
+        json!({"feature": 2, "to": {"feature": 2, "face": "top"}}),
+        json!({"feature": 2, "to": {"plane": {"origin": {"x": 0, "y": 0, "z": 0},
+            "normal": {"x": 0, "y": 0, "z": 0}}}}),
+        json!({"feature": 2, "start_offset": "5 deg"}),
+    ] {
+        assert!(s.execute("feature.edit", &bad).is_err(), "{bad}");
+        assert_eq!(s.doc, before, "{bad}");
+        assert!(close_to(s.solids()[0].body.volume().unwrap(), volume));
+    }
+    // A revolve takes no extrude options.
+    assert!(
+        s.execute("feature.edit", &json!({"feature": 2, "size": 1}))
+            .is_err()
+    );
+}
+
+#[test]
+fn the_extrude_preview_shows_the_shape_without_changing_the_design() {
+    let mut s = Session::new();
+    dimensioned_rectangle(&mut s);
+    s.execute("sketch.finish", &json!({})).unwrap();
+    let before = s.doc.clone();
+    let r = s
+        .execute(
+            "solid.extrude_preview",
+            &json!({"sketch": 1, "profiles": [{"x": 25, "y": 15}], "distance": 10,
+                "direction": "two_sides", "distance2": 4}),
+        )
+        .unwrap();
+    assert!(close_to(r["volume"].as_f64().unwrap(), 21_000.0), "{r}");
+    assert!(
+        close_to(r["bounds"]["min"][2].as_f64().unwrap(), -4.0),
+        "{r}"
+    );
+    assert_eq!(s.scene.previews.len(), 1);
+    // The preview mesh holds the same volume; nothing was added to the design.
+    assert!(close_to(s.scene.previews[0].signed_volume(), 21_000.0));
+    assert_eq!(s.doc, before);
+    assert!(s.solids().is_empty());
+    // A refused preview shows nothing.
+    assert!(
+        s.execute(
+            "solid.extrude_preview",
+            &json!({"sketch": 1, "profiles": [{"x": 25, "y": 15}], "distance": 10, "taper": 60}),
+        )
+        .is_err()
+    );
+    assert!(s.scene.previews.is_empty());
+    s.execute(
+        "solid.extrude_preview",
+        &json!({"sketch": 1, "profiles": [{"x": 25, "y": 15}], "distance": 3}),
+    )
+    .unwrap();
+    s.execute("solid.extrude_preview", &json!({"clear": true}))
+        .unwrap();
+    assert!(s.scene.previews.is_empty());
+    // Extruding for real removes the preview.
+    s.execute(
+        "solid.extrude_preview",
+        &json!({"sketch": 1, "profiles": [{"x": 25, "y": 15}], "distance": 3}),
+    )
+    .unwrap();
+    s.execute(
+        "solid.extrude",
+        &json!({"sketch": 1, "profiles": [{"x": 25, "y": 15}], "distance": 3}),
+    )
+    .unwrap();
+    assert!(s.scene.previews.is_empty());
 }

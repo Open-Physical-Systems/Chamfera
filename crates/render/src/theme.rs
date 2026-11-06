@@ -42,6 +42,9 @@ pub struct Theme {
     pub body: Rgba,
     pub body_selected: Rgba,
     pub edge: Rgba,
+    /// The shape a tool would make (the extrude preview), drawn translucent over the
+    /// model: its alpha is how much of the model shows through.
+    pub preview_body: Rgba,
     // sketches
     /// Sketch geometry that can still move (under-constrained).
     pub sketch: Rgba,
@@ -115,6 +118,7 @@ impl Theme {
             body: Rgba(176, 184, 196, 255),
             body_selected: Rgba(64, 140, 230, 255),
             edge: Rgba(40, 46, 56, 255),
+            preview_body: Rgba(30, 112, 214, 110),
             sketch: Rgba(30, 100, 220, 255),
             sketch_constrained: Rgba(20, 24, 30, 255),
             sketch_construction: Rgba(214, 120, 30, 255),
@@ -162,6 +166,7 @@ impl Theme {
             body: Rgba(150, 158, 170, 255),
             body_selected: Rgba(84, 160, 255, 255),
             edge: Rgba(18, 20, 24, 255),
+            preview_body: Rgba(84, 160, 255, 110),
             sketch: Rgba(96, 170, 255, 255),
             sketch_constrained: Rgba(236, 240, 246, 255),
             sketch_construction: Rgba(240, 150, 60, 255),

@@ -450,6 +450,7 @@ mod tests {
                 distance: "10".into(),
                 direction: ExtrudeDirection::Normal,
                 operation: Operation::NewBody,
+                ..Extrude::default()
             }))
             .unwrap();
         (doc, f)
