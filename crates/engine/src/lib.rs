@@ -13,6 +13,8 @@ mod cam_tests;
 pub mod cmd;
 pub mod construct;
 pub mod display;
+#[cfg(test)]
+mod drawing_tests;
 pub mod face_edit;
 pub mod hole;
 mod imported;

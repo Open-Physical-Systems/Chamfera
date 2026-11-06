@@ -21,6 +21,20 @@ use serde_json::json;
 pub(crate) enum DrawTool {
     PlaceView(ViewDirection),
     Dimension(DimensionKind),
+    /// Two clicks for the cutting line on a view, one to place the section.
+    Section,
+    /// The circle's centre, a point on it, then where the detail goes.
+    Detail,
+    Note,
+    /// The arrow's tip, then where the text goes.
+    Leader,
+    SurfaceFinish,
+    /// The feature the leader points at, then the frame's corner.
+    Gdt,
+    /// Two circles of a view.
+    CentreLine,
+    /// A view whose components get balloons.
+    Balloons,
 }
 
 /// The drawing workspace's state.
@@ -40,6 +54,8 @@ pub(crate) struct DrawingUi {
     cache: Option<(Document, u32, SheetGeometry)>,
     /// The canvas on screen, for turning clicks into sheet points.
     rect: Option<Rect>,
+    /// The fields of the annotation tools (`drawing_tools_ui.rs`).
+    pub options: crate::drawing_tools_ui::DrawOptions,
 }
 
 /// Sheet mm to screen points and back (y up on paper, down on screen).
@@ -109,7 +125,9 @@ fn layer_colour(app: &ChamferaApp, layer: Layer) -> Color32 {
         Layer::Visible => t.sheet_line,
         Layer::Hidden => t.sheet_hidden,
         Layer::Center => t.sheet_centre,
+        Layer::Hatch => t.sheet_hatch,
         Layer::Dim => t.sheet_dimension,
+        Layer::Dangling => t.sheet_dangling,
         Layer::Border => t.sheet_border,
     })
 }
@@ -177,6 +195,16 @@ impl ChamferaApp {
         let sheet = self.drawing_sheet();
         match self.drawing.tool {
             None => {}
+            Some(
+                t @ (DrawTool::Section
+                | DrawTool::Detail
+                | DrawTool::Note
+                | DrawTool::Leader
+                | DrawTool::SurfaceFinish
+                | DrawTool::Gdt
+                | DrawTool::CentreLine
+                | DrawTool::Balloons),
+            ) => self.drawing_tool_click(t, p),
             Some(DrawTool::PlaceView(d)) => {
                 let mut params = json!({ "view": d.id(), "x": p.x, "y": p.y });
                 if let Some(s) = sheet {
@@ -400,6 +428,7 @@ impl ChamferaApp {
             let p = m.to_sheet(h);
             self.drawing_click(p);
         }
+        self.drawing_options_dialog(ui.ctx(), rect);
     }
 
     /// True when the shown sheet has a view to dimension or export.
@@ -509,6 +538,7 @@ impl ChamferaApp {
                 "Click two straight edges · Esc cancels"
             }
             Some(DrawTool::Dimension(_)) => "Click two vertices or edges · Esc cancels",
+            Some(t) => crate::drawing_tools_ui::hint(t),
             None => {
                 "Pick a view or dimension tool · Middle- or right-drag: pan · Wheel: zoom · Middle double-click: fit"
             }

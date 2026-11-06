@@ -104,7 +104,13 @@ use thiserror::Error;
 ///   files open unchanged: they hold none.
 /// - 29: motion studies: keyframes of joint values over time (`motion.keys`: joint,
 ///   time in seconds, value). Older files open with no keys.
-pub const FORMAT_VERSION: u32 = 29;
+/// - 30: drawings version 2: dimensions store what they measure on the model (`refs`:
+///   vertices and edges by their K8 names, with signatures) and follow it; section views
+///   (`section`) and detail views (`detail`); sheet annotations (`annotations`: notes,
+///   leaders, surface texture symbols, feature control frames, centre lines, balloons)
+///   and a parts list (`parts_list`). Older files open unchanged: their dimensions keep
+///   their points, as before.
+pub const FORMAT_VERSION: u32 = 30;
 /// The tag every design file starts with, so other JSON is not mistaken for a design.
 pub const FORMAT_TAG: &str = "chamfera";
 /// Longest parameter name.

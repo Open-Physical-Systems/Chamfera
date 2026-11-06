@@ -16,6 +16,8 @@ description: "Use when running Chamfera to see a change working: the desktop app
 
 ## Drawings
 - `drawing.new_sheet`, `drawing.add_view {view, x, y}`, `drawing.add_dimension {view, kind, x1, y1, x2, y2}` (sheet mm, snapped to projected vertices and edges) and `drawing.export {path}` (svg, dxf or pdf); `drawing.list` gives each view's place, box and line counts and each dimension's value.
+- Dimensions keep references to model vertices and edges and follow edits; `drawing.list` says `associative` and, when a reference is gone, `dangling` with the reason.
+- `drawing.add_section {view, x1, y1, x2, y2, x, y}` (cutting line on a view, sheet mm; replies `hatched_area`), `drawing.add_detail {view, cx, cy, radius, x, y, scale}`, `drawing.add_note`, `drawing.add_leader {points, text}`, `drawing.add_surface_finish`, `drawing.add_gdt {characteristic, tolerance, datums, x, y}`, `drawing.add_centre_line`, `drawing.add_parts_list` and `drawing.add_balloons {view}`; `examples/drawing-annotated.json` uses them all.
 - `chamfera --script examples/drawing-sheet.json --drawing --screenshot shot.png` shows the sheet in the DRAWING workspace. An exported SVG can be looked at with `google-chrome --headless --screenshot`, a PDF with `pdftoppm -png`.
 
 ## Snapshots without a window

@@ -146,6 +146,8 @@ pub const GROUPS: &[Group] = &[
     group(Tab::Drawing, "SHEET"),
     group(Tab::Drawing, "VIEWS"),
     group(Tab::Drawing, "DIMENSIONS"),
+    group(Tab::Drawing, "ANNOTATE"),
+    group(Tab::Drawing, "TABLES"),
     group(Tab::Drawing, "EXPORT"),
     group(Tab::Manufacture, "SETUP"),
     group(Tab::Manufacture, "2D"),
@@ -928,6 +930,26 @@ pub const TOOLS: &[RibbonTool] = &[
         "Isometric",
         Icon::ViewIso,
     ),
+    tool(
+        D,
+        "VIEWS",
+        Action::Tool("drawing.add_section"),
+        Icon::SplitBody,
+        "Section View",
+        "Draw a cutting line across a view, then place the section: cut faces hatched, labelled A-A",
+    )
+    .primary()
+    .short("Section")
+    .sep(),
+    tool(
+        D,
+        "VIEWS",
+        Action::Tool("drawing.add_detail"),
+        Icon::Fit,
+        "Detail View",
+        "Circle part of a view, then place it enlarged (2:1 unless set)",
+    )
+    .short("Detail"),
     // DRAWING > DIMENSIONS
     dimension(
         "drawing.dim.horizontal",
@@ -974,6 +996,70 @@ pub const TOOLS: &[RibbonTool] = &[
         Icon::ConstraintPerpendicular,
         "Click two straight edges",
     ),
+    // DRAWING > ANNOTATE
+    tool(
+        D,
+        "ANNOTATE",
+        Action::Tool("drawing.add_note"),
+        Icon::Edit,
+        "Note",
+        "Type the text, then click where it goes",
+    )
+    .primary(),
+    tool(
+        D,
+        "ANNOTATE",
+        Action::Tool("drawing.add_leader"),
+        Icon::Project,
+        "Leader",
+        "Click the arrow's tip, then where its text goes",
+    )
+    .primary(),
+    tool(
+        D,
+        "ANNOTATE",
+        Action::Tool("drawing.add_gdt"),
+        Icon::Measure,
+        "Feature Control Frame",
+        "Flatness, perpendicularity, position and more, with datums: click the feature, then the frame's place",
+    )
+    .primary()
+    .short("GD&T"),
+    tool(
+        D,
+        "ANNOTATE",
+        Action::Tool("drawing.add_surface_finish"),
+        Icon::OffsetFace,
+        "Surface Texture",
+        "Click the surface: the texture symbol with its requirement (Ra 1.6)",
+    ),
+    tool(
+        D,
+        "ANNOTATE",
+        Action::Tool("drawing.add_centre_line"),
+        Icon::ConstructAxis,
+        "Centre Line",
+        "Click two circles of a view: a centre line through both centres",
+    ),
+    // DRAWING > TABLES
+    tool(
+        D,
+        "TABLES",
+        Action::Tool("drawing.add_parts_list"),
+        Icon::Component,
+        "Parts List",
+        "A table of the design's components above the title block: item, name, quantity, material",
+    )
+    .primary(),
+    tool(
+        D,
+        "TABLES",
+        Action::Tool("drawing.add_balloons"),
+        Icon::Origin,
+        "Balloons",
+        "Click a view: a numbered balloon on each component, as in the parts list",
+    )
+    .primary(),
     // DRAWING > EXPORT
     export("drawing.export.pdf", "Export Sheet as PDF…", "PDF").primary(),
     export("drawing.export.svg", "Export Sheet as SVG…", "SVG").primary(),
@@ -1202,6 +1288,14 @@ fn draw_tool(id: &str) -> Option<crate::drawing_ui::DrawTool> {
         "drawing.dim.diameter" => DrawTool::Dimension(DimensionKind::Diameter),
         "drawing.dim.radius" => DrawTool::Dimension(DimensionKind::Radius),
         "drawing.dim.angle" => DrawTool::Dimension(DimensionKind::Angular),
+        "drawing.add_section" => DrawTool::Section,
+        "drawing.add_detail" => DrawTool::Detail,
+        "drawing.add_note" => DrawTool::Note,
+        "drawing.add_leader" => DrawTool::Leader,
+        "drawing.add_surface_finish" => DrawTool::SurfaceFinish,
+        "drawing.add_gdt" => DrawTool::Gdt,
+        "drawing.add_centre_line" => DrawTool::CentreLine,
+        "drawing.add_balloons" => DrawTool::Balloons,
         _ => return None,
     })
 }
@@ -1586,7 +1680,31 @@ impl ChamferaApp {
                 _ if id.starts_with("drawing.view.") && !has_solids => {
                     format!("{name}: build a solid first")
                 }
-                _ if (id.starts_with("drawing.dim.") || id.starts_with("drawing.export."))
+                "drawing.add_parts_list" | "drawing.add_balloons"
+                    if self.session.doc.assembly.components.is_empty() =>
+                {
+                    format!("{name}: make components first")
+                }
+                "drawing.add_parts_list" if self.drawing_sheet().is_none() => {
+                    format!("{name}: add a sheet first")
+                }
+                "drawing.add_note"
+                | "drawing.add_leader"
+                | "drawing.add_gdt"
+                | "drawing.add_surface_finish"
+                    if self.drawing_sheet().is_none() =>
+                {
+                    format!("{name}: add a sheet first")
+                }
+                _ if (id.starts_with("drawing.dim.")
+                    || id.starts_with("drawing.export.")
+                    || matches!(
+                        id,
+                        "drawing.add_section"
+                            | "drawing.add_detail"
+                            | "drawing.add_centre_line"
+                            | "drawing.add_balloons"
+                    ))
                     && !self.drawing_has_views() =>
                 {
                     format!("{name}: place a view on the sheet first")
@@ -1657,6 +1775,7 @@ impl ChamferaApp {
             }
             "drawing.new_sheet" => self.drawing_new_sheet(),
             "drawing.projection" => self.drawing_toggle_projection(),
+            "drawing.add_parts_list" => self.drawing_parts_list(),
             "cam.setup" => self.cam_setup(),
             "cam.tool_add" => self.open_cam_tool_dialog(),
             "cam.generate" => self.generate_toolpaths(),
@@ -1700,6 +1819,7 @@ impl ChamferaApp {
                 if id.starts_with("inspect.")
                     || id.starts_with("drawing.view.")
                     || id.starts_with("drawing.dim.")
+                    || draw_tool(id).is_some()
                     || matches!(
                         id,
                         "joint.create"
