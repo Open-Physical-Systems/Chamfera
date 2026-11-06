@@ -200,7 +200,7 @@ fn materials_survive_save_and_open_and_bad_ones_change_nothing() {
     t.execute("design.open", &json!({"path": path.to_str().unwrap()}))
         .unwrap();
     assert_eq!(t.doc, s.doc);
-    assert_eq!(t.doc.version, 34);
+    assert_eq!(t.doc.version, chamfera_doc::FORMAT_VERSION);
     let shown = t.scene.bodies[0].appearance;
     assert_eq!(shown.metallic, 1.0);
     assert!((shown.roughness - 0.4).abs() < 1e-6);

@@ -4,7 +4,10 @@
 //! tessellation (`debug.timings`), then times the same edits with the rebuild cache off
 //! (every change rebuilds the whole timeline) and on: undoing and redoing the script's
 //! last step, and suppressing and restoring the last feature. Run it from the repository
-//! root in a release build: `cargo run --release -p chamfera-cli -- bench`.
+//! root in a release build: `cargo run --release -p chamfera-cli -- bench`. With `--cam`
+//! it times edits of the designs with machining operations instead: toolpaths made again
+//! on the spot, the time the UI waits with background generation, the worker's time, and
+//! undo and redo from the toolpath cache.
 
 use chamfera_engine::Session;
 use serde_json::{Value, json};
@@ -142,9 +145,69 @@ fn bench_one(path: &str, runs: usize) -> Result<Row, String> {
     })
 }
 
+/// `bench --cam`: for each design with machining operations, an edit to the part (the
+/// last feature suppressed, then restored): with every toolpath made again on the spot
+/// (the toolpath cache off, as before), the time the UI waits with background generation
+/// (the rebuild, the toolpath keys and the job's snapshot; the cache emptied first, so
+/// every 3D toolpath misses), the worker's time for that job, and undo and redo with the
+/// cache on (every toolpath taken from the cache).
+fn bench_cam(path: &str, runs: usize) -> Result<Option<[f64; 5]>, String> {
+    let steps = crate::load_script(path)?;
+    let mut s = Session::new();
+    run_steps(&mut s, &steps)?;
+    if s.doc.cam.operations.is_empty() {
+        return Ok(None);
+    }
+    let Some(last) = s
+        .doc
+        .timeline_order()
+        .into_iter()
+        .rev()
+        .find(|id| s.doc.feature(*id).is_ok())
+    else {
+        return Ok(None);
+    };
+    let edit = |on: bool| json!({ "feature": last, "suppressed": on });
+    let mut out = [0.0; 5];
+    // Before: every toolpath made again after the edit.
+    s.set_toolpath_cache(false);
+    for _ in 0..runs {
+        exec(&mut s, "feature.edit", edit(true))?;
+        out[0] += time(|| exec(&mut s, "feature.edit", edit(false)).map(|_| ()))?;
+    }
+    // Background: what the UI waits for, then the worker's job.
+    s.set_toolpath_cache(true);
+    s.set_cam_background(true);
+    for _ in 0..runs {
+        exec(&mut s, "feature.edit", edit(true))?;
+        s.ensure_cam_current();
+        s.set_toolpath_cache(false);
+        s.set_toolpath_cache(true);
+        out[1] += time(|| exec(&mut s, "feature.edit", edit(false)).map(|_| ()))?;
+        let job = s.take_cam_job();
+        out[2] += time(|| {
+            if let Some(j) = job {
+                let r = j.run();
+                s.accept_cam_result(r);
+            }
+            Ok(())
+        })?;
+    }
+    s.set_cam_background(false);
+    // Undo and redo with the cache on, once to fill it.
+    exec(&mut s, "edit.undo", json!({}))?;
+    exec(&mut s, "edit.redo", json!({}))?;
+    for _ in 0..runs {
+        out[3] += time(|| exec(&mut s, "edit.undo", json!({})).map(|_| ()))?;
+        out[4] += time(|| exec(&mut s, "edit.redo", json!({})).map(|_| ()))?;
+    }
+    Ok(Some(out.map(|x| x / runs as f64)))
+}
+
 pub fn bench(args: &[String]) -> Result<(), crate::Stop> {
     let mut runs = 3usize;
     let mut scripts = Vec::new();
+    let mut cam = false;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -155,6 +218,7 @@ pub fn bench(args: &[String]) -> Result<(), crate::Stop> {
                     .filter(|n| (1..=50).contains(n))
                     .ok_or("--runs needs a whole number from 1 to 50")?;
             }
+            "--cam" => cam = true,
             other if other.starts_with("--") => {
                 return Err(format!("unknown option {other:?}").into());
             }
@@ -166,6 +230,31 @@ pub fn bench(args: &[String]) -> Result<(), crate::Stop> {
     }
     // The QA scripts save into target/qa/.
     std::fs::create_dir_all("target/qa").map_err(|e| format!("target/qa: {e}"))?;
+    if cam {
+        crate::out(
+            "| Design | Edit, every toolpath made again | Edit, UI waits (background) | Worker | Undo (cached) | Redo (cached) |",
+        )?;
+        crate::out("|---|---|---|---|---|---|")?;
+        for path in &scripts {
+            match bench_cam(path, runs) {
+                Ok(Some(r)) => crate::out(format_args!(
+                    "| {} | {:.1} | {:.1} | {:.1} | {:.1} | {:.1} |",
+                    std::path::Path::new(path)
+                        .file_stem()
+                        .map(|s| s.to_string_lossy().into_owned())
+                        .unwrap_or_default(),
+                    r[0],
+                    r[1],
+                    r[2],
+                    r[3],
+                    r[4]
+                ))?,
+                Ok(None) => {}
+                Err(e) => crate::out(format_args!("| {path} | failed: {e} |"))?,
+            }
+        }
+        return Ok(());
+    }
     crate::out(
         "| Design | Items | Script off / on | Full rebuild | Kernel | Booleans | Naming | Tess. | Other | Undo off / on | Redo off / on | Edit last off / on | Slowest item |",
     )?;

@@ -93,10 +93,63 @@ Where time still goes:
 - An edit that changes a curved solid re-tessellates that solid: the flanged pipe's
   combined body takes about 345 ms (one face of the bend has about 49 000 triangles at the
   default tolerances); refinement, smoothing and flip improvement each take about a third.
-- The 3D CAM examples (`cam-3d-*`) spend 0.5 to 5 s after every change working the
-  toolpaths out again (`regenerate_cam`); the rebuild itself is 68 ms. Toolpaths are not
-  cached yet: they could be keyed by the placed bodies and the design's `cam` section.
+- The 3D CAM examples (`cam-3d-*`) spent 0.5 to 5 s after every change working the
+  toolpaths out again. Toolpaths are now cached and made on a worker in the app: see
+  "Toolpaths" below.
 - QA 8 regenerates its 2D toolpaths and DXF profile after every change (2.5 to 7 ms).
+
+## Toolpaths (`crates/engine/src/cam_cache.rs`)
+- **Keys.** Each operation's toolpath is kept in an LRU (64 MB) under a 128-bit key of
+  what it reads: its definition, tool (with its holder) and setup (their JSON); the
+  setup's geometry worked out from the model (stock box, model box, work coordinates,
+  clearance, bit for bit); and the geometry it machines. Facing reads nothing more. The
+  3D operations and drilling every hole read the whole model: each body's exact data is
+  hashed. A contour, a pocket or drilling named holes resolve their persistent names
+  through K8 naming and hash what those resolve to (which body; the face or edge, exactly,
+  with its name, surface, loops, edges and the faces across them, without ids, which a
+  rebuild may renumber), and only the rest of the model they can read: for a pocket its
+  walls whole and, of every other face, the edges whose boxes meet the floor's box (the
+  points it checks for overhangs lie on them); for named holes every face in reach whose
+  surface is a cylinder (a coaxial one's box holds the axis). A feature far from the
+  machined faces leaves the key as it was, and the toolpath is taken from the cache.
+- **Same result.** `perf_tests.rs` runs every example and QA part, undo and redo of every
+  step and random edits with a fixed seed in a session with the caches and one without
+  (`set_rebuild_cache(false)` turns the toolpath cache off too) and compares every
+  toolpath after every step. `the_toolpath_cache_hits_after_a_far_edit_and_misses_after_an_edit_to_the_machined_face`
+  checks the hits and misses by hand on the CAM plate: a slot far from the pocket keeps
+  facing, the pocket and the contour (3 hits, drilling misses); deepening the pocket
+  misses it and drilling (2 and 2); undo hits all 4.
+- **Background generation.** The desktop app turns it on (`Session::set_cam_background`):
+  a rebuild then takes what the cache has and leaves the rest as a `CamJob` (a snapshot of
+  the CAM section and the bodies) for a worker thread, which runs the same pure function
+  (`CamJob::run`; `generate_snapshot` for a whole design). Until the results come back the
+  old toolpaths show dimmed (`toolpath_stale`) with a "Regenerating toolpaths…" badge; a
+  newer rebuild bumps the generation and the 3D operations' loops stop at their next
+  check (`chamfera_cam::cancel`). Results go into the cache and replace a shown toolpath
+  only if its key is still current. Commands that read toolpaths (`cam.generate`,
+  `cam.post`, `cam.simulate`, `cam.list`, adding or editing an operation or a tool) first
+  make whatever is stale on the spot, so replies never depend on the worker; scripts,
+  tests and agents never turn it on. `background_generation_gives_the_same_toolpaths_as_synchronous_generation`
+  checks a cancelled job, the replacing job and `cam.post` against a synchronous session.
+
+Measured with `cargo run --release -p chamfera-cli -- bench --cam` (mean of 3 runs, ms):
+an edit to the part (its last feature suppressed, then restored) with every toolpath
+made again on the spot as before; with background generation, the time the UI waits
+(the rebuild, the keys and the job's snapshot, the cache emptied first so every 3D
+toolpath misses) and the worker's time; and undo and redo from the cache.
+
+| Design | Edit, every toolpath made again | Edit, UI waits (background) | Worker | Undo (cached) | Redo (cached) |
+|---|---|---|---|---|---|
+| cam-3d-finish | 5056.7 | 1.2 | 5036.2 | 1.0 | 1.7 |
+| cam-3d-simulate | 5063.6 | 1.5 | 5047.1 | 0.8 | 1.1 |
+| cam-3d-pencil | 31.6 | 0.5 | 32.5 | 0.1 | 0.2 |
+| cam-plate | 0.8 | 0.6 | 0.2 | 0.3 | 0.6 |
+| cam-holder-collision | 0.3 | 0.2 | 0.1 | 0.1 | 0.3 |
+
+The goal, edits to a modelled part with 3D operations under 100 ms of UI-blocking time,
+is met: about 1.5 ms where they took 5 s, the toolpaths arriving from the worker about
+5 s later (dimmed until then); undo and redo back to a design generated before take
+about a millisecond.
 
 ## Background rebuild (design, not built yet)
 A rebuild on a worker thread would keep typing in a dialog responsive while a curved

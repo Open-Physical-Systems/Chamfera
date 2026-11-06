@@ -1,5 +1,6 @@
 //! Manufacturing in the session: toolpaths worked out from the design's CAM section and
-//! the built solids, after every rebuild, and drawn as viewport overlays.
+//! the built solids, after every rebuild (from the toolpath cache where nothing they read
+//! changed, `cam_cache.rs`), and drawn as viewport overlays.
 
 use crate::Session;
 use chamfera_cam::Toolpath;
@@ -21,26 +22,13 @@ const STOCK_MESH_SIDE: usize = 256;
 
 /// The toolpath of each operation (or why it could not be made), whether they show, and
 /// the stock simulation.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default)]
 pub struct CamState {
     pub paths: BTreeMap<u32, Result<Toolpath, String>>,
     pub visible: bool,
     pub sim: Option<SimState>,
-    /// The last 3D toolpaths and what they were made from (the model, the operation, its
-    /// setup and tool): these take seconds, so they are made again only when one of those
-    /// changed.
-    cache: BTreeMap<u32, Cached>,
-}
-
-#[derive(Debug, Clone)]
-struct Cached {
-    bodies: Vec<chamfera_kernel::Body>,
-    inputs: (
-        chamfera_doc::cam::CamOperation,
-        Option<chamfera_doc::cam::Setup>,
-        Option<chamfera_doc::cam::Tool>,
-    ),
-    result: Result<Toolpath, String>,
+    /// The toolpath cache, the stale operations and the background job.
+    pub(crate) tc: crate::cam_cache::ToolpathCache,
 }
 
 /// A stock simulation: what it simulates, the part's heights over its columns (kept, so
@@ -56,6 +44,20 @@ pub struct SimState {
     pub heights: Vec<Option<f64>>,
     pub report: Report,
     pub cell: f64,
+    /// Holder and shank collisions: moves that collided, columns touched, the deepest
+    /// (mm), and whether every move was checked.
+    pub holder: HolderReport,
+}
+
+/// What the holder check of a simulation found.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct HolderReport {
+    /// Some simulated tool has a holder to check.
+    pub checked: bool,
+    pub moves: usize,
+    pub cells: usize,
+    pub max_depth: f64,
+    pub incomplete: bool,
 }
 
 /// What `cam.simulate` asks for.
@@ -97,59 +99,6 @@ fn dashes(a: Point3, b: Point3, out: &mut Vec<[Point3; 2]>) {
 }
 
 impl Session {
-    /// Works out every operation's toolpath from the model as it is now.
-    pub fn regenerate_cam(&mut self) {
-        self.cam.paths.clear();
-        // The model or the operations changed: an old simulation no longer holds.
-        self.clear_simulation();
-        if self.doc.cam.operations.is_empty() {
-            return;
-        }
-        let bodies: Vec<chamfera_kernel::Body> =
-            self.built.solids.iter().map(|s| s.body.clone()).collect();
-        let mut cache = std::mem::take(&mut self.cam.cache);
-        for op in &self.doc.cam.operations {
-            let inputs = (
-                op.clone(),
-                self.doc.cam.setup(op.setup).cloned(),
-                self.doc.cam.tool(op.tool).cloned(),
-            );
-            let three_d = matches!(
-                op.op,
-                chamfera_doc::cam::OpKind::Parallel { .. }
-                    | chamfera_doc::cam::OpKind::Waterline { .. }
-                    | chamfera_doc::cam::OpKind::Adaptive { .. }
-            );
-            if three_d
-                && let Some(c) = cache.get(&op.id)
-                && c.inputs == inputs
-                && c.bodies == bodies
-            {
-                self.cam.paths.insert(op.id, c.result.clone());
-                continue;
-            }
-            let r = if op.suppressed {
-                Err("suppressed".to_owned())
-            } else {
-                chamfera_cam::generate(&self.doc.cam, op, &bodies, crate::solids::edge_ref)
-                    .map_err(|e| e.to_string())
-            };
-            if three_d {
-                cache.insert(
-                    op.id,
-                    Cached {
-                        bodies: bodies.clone(),
-                        inputs,
-                        result: r.clone(),
-                    },
-                );
-            }
-            self.cam.paths.insert(op.id, r);
-        }
-        cache.retain(|id, _| self.doc.cam.operation(*id).is_some());
-        self.cam.cache = cache;
-    }
-
     /// Ends the stock simulation and takes its stock out of the viewport.
     pub fn clear_simulation(&mut self) {
         self.cam.sim = None;
@@ -216,6 +165,8 @@ impl Session {
         if self.cam.paths.is_empty() {
             self.regenerate_cam();
         }
+        // The simulation cuts the current toolpaths, never stale ones.
+        self.ensure_cam_current();
         let same =
             self.cam.sim.as_ref().is_some_and(|s| {
                 s.setup == setup_id && s.ops == ops && s.resolution == req.resolution
@@ -251,32 +202,56 @@ impl Session {
                 .tool(o.tool)
                 .ok_or_else(|| format!("no tool {}", o.tool))?;
             let shape = sim_shape(tool)?;
+            let holder = chamfera_cam::holder::NonCutting::of(tool).map_err(|e| e.to_string())?;
             match self.cam.paths.get(id) {
-                Some(Ok(tp)) => paths.push((shape, tp.clone())),
+                Some(Ok(tp)) => paths.push((shape, holder, tp.clone())),
                 Some(Err(e)) => return Err(format!("{} has no toolpath: {e}", o.name)),
                 None => return Err(format!("{} has no toolpath", o.name)),
             }
         }
         let rate = setup.rapid_rate;
-        let minutes: Vec<f64> = paths.iter().map(|(_, tp)| tp.stats(rate).minutes).collect();
+        let minutes: Vec<f64> = paths
+            .iter()
+            .map(|(_, _, tp)| tp.stats(rate).minutes)
+            .collect();
         let total: f64 = minutes.iter().sum();
         let mut left = total * req.time;
         let mut stock = blank.clone();
-        for ((shape, tp), m) in paths.iter().zip(&minutes) {
-            if req.time >= 1.0 || *m <= left {
-                stock.cut_toolpath(shape, tp, rate, 1.0);
-                left -= m;
+        let mut hits = sim::HolderHits::new(&stock);
+        let checked = paths.iter().any(|(_, h, _)| h.is_some());
+        for ((shape, holder, tp), m) in paths.iter().zip(&minutes) {
+            let fraction = if req.time >= 1.0 || *m <= left {
+                1.0
+            } else if *m > 0.0 && left > 0.0 {
+                left / m
             } else {
-                if *m > 0.0 && left > 0.0 {
-                    stock.cut_toolpath(shape, tp, rate, left / m);
-                }
+                break;
+            };
+            let check = holder
+                .as_ref()
+                .map(|nc| (nc, heights.as_slice(), req.tolerance, &mut hits));
+            stock.cut_toolpath_checked(shape, check, tp, rate, fraction);
+            if fraction < 1.0 {
                 break;
             }
+            left -= m;
         }
         let report = sim::report(&stock, &heights, req.tolerance);
-        let (good, bad) = sim::meshes(&stock, &heights, req.tolerance, STOCK_MESH_SIDE);
+        let holder = HolderReport {
+            checked,
+            moves: hits.moves,
+            cells: hits.cells(),
+            max_depth: hits.max_depth,
+            incomplete: hits.incomplete,
+        };
+        let (good, bad, held) =
+            sim::meshes_with(&stock, &heights, req.tolerance, STOCK_MESH_SIDE, &hits.hit);
         self.scene.stock.clear();
-        for (style, mesh) in [(StockStyle::Stock, good), (StockStyle::Gouge, bad)] {
+        for (style, mesh) in [
+            (StockStyle::Stock, good),
+            (StockStyle::Gouge, bad),
+            (StockStyle::HolderCollision, held),
+        ] {
             if !mesh.triangles.is_empty() {
                 self.scene.stock.push(StockMesh { style, mesh });
             }
@@ -291,6 +266,7 @@ impl Session {
             heights,
             report,
             cell,
+            holder,
         });
         self.cam.sim.as_ref().ok_or_else(|| "no simulation".into())
     }
@@ -317,19 +293,33 @@ impl Session {
         }
         let mut feeds = Vec::new();
         let mut rapids = Vec::new();
-        for tp in self.cam.paths.values().flatten() {
+        let mut stale = Vec::new();
+        let mut count = 0usize;
+        for (id, tp) in &self.cam.paths {
+            let Ok(tp) = tp else { continue };
+            let old = self.toolpath_stale(*id);
             let (r, f) = tp.polylines(0.1);
             for [a, b] in r {
-                dashes(a, b, &mut rapids);
+                dashes(a, b, if old { &mut stale } else { &mut rapids });
             }
-            feeds.extend(f);
-            if feeds.len() + rapids.len() > MAX_TOOLPATH_LINES {
-                feeds.truncate(MAX_TOOLPATH_LINES);
+            if old {
+                stale.extend(f);
+            } else {
+                feeds.extend(f);
+            }
+            count = feeds.len() + rapids.len() + stale.len();
+            if count > MAX_TOOLPATH_LINES {
                 break;
             }
         }
+        if count > MAX_TOOLPATH_LINES {
+            feeds.truncate(MAX_TOOLPATH_LINES);
+            stale.truncate(MAX_TOOLPATH_LINES.saturating_sub(feeds.len()));
+        }
         let mut out = Vec::new();
         for (style, lines) in [
+            // Stale toolpaths (being made again on the worker) are drawn dimmed.
+            (OverlayStyle::ToolpathStale, stale),
             (OverlayStyle::ToolpathRapid, rapids),
             (OverlayStyle::ToolpathFeed, feeds),
         ] {

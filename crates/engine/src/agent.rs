@@ -19,6 +19,8 @@ pub const PATH_COMMANDS: &[(&str, Access)] = &[
     ("body.import_step", Access::Read),
     ("body.import_stl", Access::Read),
     ("cam.post", Access::Write),
+    ("cam.tool_library_export", Access::Write),
+    ("cam.tool_library_import", Access::Read),
     // Its `dir` is resolved like a written path: the folder or its parent must be inside.
     ("config.export_all", Access::Write),
     ("design.open", Access::Read),

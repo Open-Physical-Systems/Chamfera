@@ -132,6 +132,77 @@ pub struct Tool {
     pub feed: f64,
     /// Feed for plunges and ramps (mm/min).
     pub plunge_feed: f64,
+    /// What holds the tool: the shank above the flutes and the holder's stack of
+    /// cylinders and cones. `None`: not modelled (no holder collisions are checked).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub holder: Option<Holder>,
+}
+
+/// Most cylinders and cones one holder may stack.
+pub const MAX_HOLDER_SEGMENTS: usize = 32;
+
+/// One piece of a holder: a cylinder of `diameter`, or a cone from `diameter` at its
+/// bottom to `top_diameter`, `length` long.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HolderSegment {
+    pub diameter: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_diameter: Option<f64>,
+    pub length: f64,
+}
+
+/// The tool's non-cutting parts above its tip: the shank from the top of the flutes up
+/// to `stickout` (how far the tool sticks out of the holder, from its tip), then the
+/// holder's segments stacked upward from there.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Holder {
+    /// From the tool's tip to the holder's face (mm); at least the flute length.
+    pub stickout: f64,
+    /// The shank's diameter; `None` for the tool's diameter.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shank_diameter: Option<f64>,
+    /// Bottom first.
+    #[serde(default)]
+    pub segments: Vec<HolderSegment>,
+}
+
+/// What a 3D operation does where the tool's holder or shank would hit the part.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum HolderCheck {
+    /// Not checked.
+    #[default]
+    Ignore,
+    /// Parallel: the tool is raised until the holder clears (leaving material there);
+    /// adaptive: the place is left uncut at that level.
+    Lift,
+    /// The pass is broken where the holder would collide (the tool lifts over it).
+    Refuse,
+}
+
+impl HolderCheck {
+    pub fn parse(s: &str) -> Option<HolderCheck> {
+        match s {
+            "ignore" => Some(HolderCheck::Ignore),
+            "lift" => Some(HolderCheck::Lift),
+            "refuse" => Some(HolderCheck::Refuse),
+            _ => None,
+        }
+    }
+
+    pub fn key(self) -> &'static str {
+        match self {
+            HolderCheck::Ignore => "ignore",
+            HolderCheck::Lift => "lift",
+            HolderCheck::Refuse => "refuse",
+        }
+    }
+
+    fn is_ignore(&self) -> bool {
+        *self == HolderCheck::Ignore
+    }
 }
 
 /// Which side of the path the tool runs on, looking along a counter-clockwise boundary
@@ -260,6 +331,9 @@ pub enum OpKind {
         /// Material left on the part (mm).
         #[serde(default)]
         stock_to_leave: f64,
+        /// Where the holder would hit the part.
+        #[serde(default, skip_serializing_if = "HolderCheck::is_ignore")]
+        holder_check: HolderCheck,
     },
     /// 3D finishing in contours at Z levels, where the tool touches the part.
     Waterline {
@@ -275,6 +349,28 @@ pub enum OpKind {
         max_engagement: f64,
         #[serde(default)]
         stock_to_leave: f64,
+        #[serde(default, skip_serializing_if = "HolderCheck::is_ignore")]
+        holder_check: HolderCheck,
+    },
+    /// 3D clean-up along concave corners: where the tool touches the part in two places
+    /// at once (the cutter-location surface has a crease).
+    Pencil {
+        tolerance: f64,
+        #[serde(default)]
+        stock_to_leave: f64,
+        /// Least change of slope across a crease that is traced (radians).
+        min_angle: f64,
+    },
+    /// Experimental 3D finishing: passes a constant distance apart measured along the
+    /// surface, offset from the borders of the area it can reach.
+    Scallop {
+        /// Distance between passes along the surface, as a fraction of the tool diameter.
+        stepover: f64,
+        tolerance: f64,
+        #[serde(default)]
+        stock_to_leave: f64,
+        /// Steeper than this (radians from horizontal) is a border, not machined.
+        max_slope: f64,
     },
 }
 
@@ -288,7 +384,21 @@ impl OpKind {
             OpKind::Parallel { .. } => "parallel",
             OpKind::Waterline { .. } => "waterline",
             OpKind::Adaptive { .. } => "adaptive",
+            OpKind::Pencil { .. } => "pencil",
+            OpKind::Scallop { .. } => "scallop",
         }
+    }
+
+    /// True for the operations that drop the tool on the whole model (3D).
+    pub fn is_3d(&self) -> bool {
+        matches!(
+            self,
+            OpKind::Parallel { .. }
+                | OpKind::Waterline { .. }
+                | OpKind::Adaptive { .. }
+                | OpKind::Pencil { .. }
+                | OpKind::Scallop { .. }
+        )
     }
 }
 
@@ -443,6 +553,9 @@ impl Cam {
             check_len("the spindle speed", t.spindle_rpm, 0.0, MAX_SPINDLE_RPM)?;
             check_len("the feed", t.feed, 0.0, MAX_FEED)?;
             check_len("the plunge feed", t.plunge_feed, 0.0, MAX_FEED)?;
+            if let Some(h) = &t.holder {
+                check_holder(h, t.flute_length)?;
+            }
         }
         for o in &self.operations {
             ids_ok(o.id, &mut ids)?;
@@ -457,6 +570,47 @@ impl Cam {
         }
         Ok(())
     }
+}
+
+/// Checks a holder: positive sizes, a stickout no shorter than the flutes, at most
+/// [`MAX_HOLDER_SEGMENTS`] pieces, and the whole stack no taller than
+/// [`MAX_TOOL_SIZE`] mm.
+pub fn check_holder(h: &Holder, flute_length: f64) -> Result<(), DocError> {
+    check_len("the stickout", h.stickout, 0.0, MAX_TOOL_SIZE)?;
+    if h.stickout < flute_length {
+        return Err(bad(format!(
+            "the stickout ({}) must be at least the flute length ({flute_length})",
+            h.stickout
+        )));
+    }
+    if let Some(d) = h.shank_diameter {
+        check_len("the shank diameter", d, 0.0, MAX_TOOL_SIZE)?;
+    }
+    if h.segments.len() > MAX_HOLDER_SEGMENTS {
+        return Err(bad(format!(
+            "a holder has at most {MAX_HOLDER_SEGMENTS} segments"
+        )));
+    }
+    let mut total = h.stickout;
+    for s in &h.segments {
+        check_len(
+            "a holder segment's diameter",
+            s.diameter,
+            0.0,
+            MAX_TOOL_SIZE,
+        )?;
+        if let Some(d) = s.top_diameter {
+            check_len("a holder segment's top diameter", d, 0.0, MAX_TOOL_SIZE)?;
+        }
+        check_len("a holder segment's length", s.length, 0.0, MAX_TOOL_SIZE)?;
+        total += s.length;
+    }
+    if total > MAX_TOOL_SIZE {
+        return Err(bad(format!(
+            "the tool and its holder are taller than {MAX_TOOL_SIZE} mm"
+        )));
+    }
+    Ok(())
 }
 
 fn check_refs(what: &str, refs: &[String]) -> Result<(), DocError> {
@@ -529,6 +683,7 @@ fn check_op(op: &OpKind) -> Result<(), DocError> {
             angle,
             tolerance,
             stock_to_leave,
+            ..
         } => {
             check_len("the stepover", *stepover, 0.0, 1.0)?;
             if let Some(h) = scallop {
@@ -543,6 +698,26 @@ fn check_op(op: &OpKind) -> Result<(), DocError> {
             check_range("the tolerance", *tolerance, 1e-4, 10.0)?;
             check_range("the stock to leave", *stock_to_leave, 0.0, MAX_TOOL_SIZE)?;
         }
+        OpKind::Pencil {
+            tolerance,
+            stock_to_leave,
+            min_angle,
+        } => {
+            check_range("the tolerance", *tolerance, 1e-4, 10.0)?;
+            check_range("the stock to leave", *stock_to_leave, 0.0, MAX_TOOL_SIZE)?;
+            check_range("the crease angle", *min_angle, 1e-3, half_turn)?;
+        }
+        OpKind::Scallop {
+            stepover,
+            tolerance,
+            stock_to_leave,
+            max_slope,
+        } => {
+            check_len("the stepover", *stepover, 0.0, 1.0)?;
+            check_range("the tolerance", *tolerance, 1e-4, 10.0)?;
+            check_range("the stock to leave", *stock_to_leave, 0.0, MAX_TOOL_SIZE)?;
+            check_range("the steepest slope", *max_slope, 0.05, 1.5)?;
+        }
         OpKind::Waterline {
             stepdown,
             tolerance,
@@ -556,6 +731,7 @@ fn check_op(op: &OpKind) -> Result<(), DocError> {
             stepdown,
             max_engagement,
             stock_to_leave,
+            ..
         } => {
             check_len("the stepdown", *stepdown, 0.0, MAX_TOOL_SIZE)?;
             check_range(
@@ -570,9 +746,176 @@ fn check_op(op: &OpKind) -> Result<(), DocError> {
     Ok(())
 }
 
+// ---- Tool libraries -----------------------------------------------------------------
+
+/// The tag a tool library file starts with.
+pub const TOOL_LIBRARY_FORMAT: &str = "chamfera-tools";
+/// The tool library schema this build writes and reads.
+pub const TOOL_LIBRARY_VERSION: u32 = 1;
+/// Largest tool library file read (bytes).
+pub const MAX_TOOL_LIBRARY_BYTES: u64 = 8 * 1024 * 1024;
+
+/// A tool in a library file: a [`Tool`] without the design's id.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LibraryTool {
+    pub number: u32,
+    pub name: String,
+    pub kind: ToolKind,
+    pub diameter: f64,
+    pub flute_length: f64,
+    pub corner_radius: f64,
+    pub flutes: u32,
+    pub tip_angle: f64,
+    pub spindle_rpm: f64,
+    pub feed: f64,
+    pub plunge_feed: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub holder: Option<Holder>,
+}
+
+impl LibraryTool {
+    pub fn from_tool(t: &Tool) -> LibraryTool {
+        LibraryTool {
+            number: t.number,
+            name: t.name.clone(),
+            kind: t.kind,
+            diameter: t.diameter,
+            flute_length: t.flute_length,
+            corner_radius: t.corner_radius,
+            flutes: t.flutes,
+            tip_angle: t.tip_angle,
+            spindle_rpm: t.spindle_rpm,
+            feed: t.feed,
+            plunge_feed: t.plunge_feed,
+            holder: t.holder.clone(),
+        }
+    }
+
+    pub fn to_tool(&self, id: u32) -> Tool {
+        Tool {
+            id,
+            number: self.number,
+            name: self.name.clone(),
+            kind: self.kind,
+            diameter: self.diameter,
+            flute_length: self.flute_length,
+            corner_radius: self.corner_radius,
+            flutes: self.flutes,
+            tip_angle: self.tip_angle,
+            spindle_rpm: self.spindle_rpm,
+            feed: self.feed,
+            plunge_feed: self.plunge_feed,
+            holder: self.holder.clone(),
+        }
+    }
+}
+
+/// A tool library file (our own JSON schema):
+/// `{"format": "chamfera-tools", "version": 1, "tools": [ ... ]}`, each tool as in a
+/// design without its id.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ToolLibrary {
+    pub format: String,
+    pub version: u32,
+    pub tools: Vec<LibraryTool>,
+}
+
+impl ToolLibrary {
+    pub fn new(tools: Vec<LibraryTool>) -> ToolLibrary {
+        ToolLibrary {
+            format: TOOL_LIBRARY_FORMAT.into(),
+            version: TOOL_LIBRARY_VERSION,
+            tools,
+        }
+    }
+
+    pub fn to_json(&self) -> Result<String, DocError> {
+        serde_json::to_string_pretty(self).map_err(|e| DocError::Format(e.to_string()))
+    }
+
+    /// Reads a library, refusing other JSON, newer versions and any tool a design would
+    /// refuse (a file is hostile input).
+    pub fn from_json(text: &str) -> Result<ToolLibrary, DocError> {
+        let lib: ToolLibrary =
+            serde_json::from_str(text).map_err(|e| DocError::Format(e.to_string()))?;
+        if lib.format != TOOL_LIBRARY_FORMAT {
+            return Err(DocError::Format(format!(
+                "not a tool library: the format tag is {:?}",
+                lib.format.chars().take(64).collect::<String>()
+            )));
+        }
+        if lib.version == 0 || lib.version > TOOL_LIBRARY_VERSION {
+            return Err(DocError::Format(format!(
+                "the tool library uses version {}, this build reads up to \
+                 {TOOL_LIBRARY_VERSION}",
+                lib.version
+            )));
+        }
+        if lib.tools.len() > MAX_CAM_ITEMS {
+            return Err(bad(format!(
+                "a tool library holds at most {MAX_CAM_ITEMS} tools"
+            )));
+        }
+        // Each tool is checked exactly as a design checks its tools.
+        let mut cam = Cam::default();
+        for t in &lib.tools {
+            let id = cam.next_id()?;
+            cam.tools.push(t.to_tool(id));
+        }
+        cam.validate()?;
+        Ok(lib)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_tool_library_round_trips_and_refuses_bad_files() {
+        let mut t = tool(1);
+        t.holder = Some(Holder {
+            stickout: 25.0,
+            shank_diameter: Some(6.0),
+            segments: vec![
+                HolderSegment {
+                    diameter: 20.0,
+                    top_diameter: Some(32.0),
+                    length: 15.0,
+                },
+                HolderSegment {
+                    diameter: 40.0,
+                    top_diameter: None,
+                    length: 30.0,
+                },
+            ],
+        });
+        let lib = ToolLibrary::new(vec![LibraryTool::from_tool(&t)]);
+        let text = lib.to_json().unwrap();
+        let back = ToolLibrary::from_json(&text).unwrap();
+        assert_eq!(back, lib);
+        assert_eq!(back.tools[0].to_tool(1), t);
+        for bad in [
+            "",
+            "[]",
+            r#"{"format":"chamfera","version":1,"tools":[]}"#,
+            r#"{"format":"chamfera-tools","version":99,"tools":[]}"#,
+            r#"{"format":"chamfera-tools","version":1,"tools":[],"extra":1}"#,
+        ] {
+            assert!(ToolLibrary::from_json(bad).is_err(), "{bad}");
+        }
+        // A stickout shorter than the flutes, a negative diameter.
+        let mut short = lib.clone();
+        if let Some(h) = short.tools[0].holder.as_mut() {
+            h.stickout = 5.0;
+        }
+        assert!(ToolLibrary::from_json(&short.to_json().unwrap()).is_err());
+        let mut neg = lib;
+        neg.tools[0].diameter = -1.0;
+        assert!(ToolLibrary::from_json(&neg.to_json().unwrap()).is_err());
+    }
 
     fn tool(id: u32) -> Tool {
         Tool {
@@ -588,6 +931,7 @@ mod tests {
             spindle_rpm: 10_000.0,
             feed: 800.0,
             plunge_feed: 300.0,
+            holder: None,
         }
     }
 

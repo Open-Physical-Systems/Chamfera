@@ -5,7 +5,7 @@
 //! chamfera-cli exec <id> [json]         run one command, print its reply
 //! chamfera-cli run <script.json>        run a script: a JSON list of {"command", "params"}
 //! chamfera-cli snapshot [options]       render the viewport to a PNG, no window needed
-//! chamfera-cli bench [--runs N] [s.json] time rebuilds and edits of the examples (release)
+//! chamfera-cli bench [--runs N] [--cam] [s.json] time rebuilds and edits of the examples (release)
 //! chamfera-cli mcp [--allow-path DIR]... serve MCP on stdio for AI agents (docs/mcp.md)
 //! ```
 
@@ -27,7 +27,7 @@ const USAGE: &str = "usage:
                         [--view iso|front|back|left|right|top|bottom]
                         [--projection perspective|orthographic] [--theme light|dark]
                         [--size 1280x800] [--pick X,Y]
-  chamfera-cli bench [--runs N] [script.json]...
+  chamfera-cli bench [--runs N] [--cam] [script.json]...
   chamfera-cli mcp [--allow-path DIR]...
   chamfera-cli --version";
 
