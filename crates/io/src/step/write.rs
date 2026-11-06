@@ -257,7 +257,10 @@ impl BodyWriter<'_> {
         for lp in body.face_inner_loops(face).map_err(k)? {
             bounds.push(self.bound(out, lp, false)?);
         }
-        let surface = surface(out, &surf, self.name)?;
+        let step = StepSurface::of(&surf);
+        let surface = step.write(out)?;
+        // Our flag is relative to the kernel's normal, STEP's to the entity's normal.
+        let same_sense = same_sense == step.normal_agrees(&surf, self.name)?;
         let bounds = bounds
             .iter()
             .map(Ref::to_string)
@@ -395,39 +398,204 @@ fn ellipse(out: &mut Out, frame: &Frame, rx: f64, ry: f64) -> Result<Ref, IoErro
     out.add(&format!("ELLIPSE('',{a},{},{})", real(rx)?, real(ry)?))
 }
 
-/// The STEP surface under a face.
+/// The STEP surface under a face: an elementary surface of ISO 10303-42 over an
+/// `AXIS2_PLACEMENT_3D` (origin, z = `axis`, x = `ref_direction`, written by
+/// [`Out::axis`]). With `e(u) = cos u x + sin u y`, Part 42 parameterises them as
 ///
-/// Mapping of kernel surfaces (all elementary surfaces of ISO 10303-42 over an
-/// `AXIS2_PLACEMENT_3D` built from the surface's frame with [`Out::axis`]: origin,
-/// z = axis, x = ref_direction):
+/// | Kernel `Surface` | STEP entity | Part 42 `σ(u, v)` |
+/// |---|---|---|
+/// | `Plane(frame)` | `PLANE(name, position)` | `C + u x + v y` |
+/// | cylinder, radius `r` | `CYLINDRICAL_SURFACE(name, position, r)` | `C + r e(u) + v z` |
+/// | cone, radius `r` at the frame origin, half-angle `α` | `CONICAL_SURFACE(name, position, r, |α|)`, placed on the frame, turned over about its x axis (z → -z) when `α < 0` | `C + (r + v tan α') e(u) + v z` |
+/// | sphere, radius `r` | `SPHERICAL_SURFACE(name, position, r)` | `C + r cos v e(u) + r sin v z` |
+/// | torus `R`, `a` with `R >= a` | `TOROIDAL_SURFACE(name, position, R, a)` | `C + (R + a cos v) e(u) + a sin v z` |
+/// | spindle torus `0 < R < a` | `DEGENERATE_TOROIDAL_SURFACE(name, position, R, a, .T.)` (the outer, apple part) | as the torus |
+/// | lemon torus `R < 0` | `DEGENERATE_TOROIDAL_SURFACE(name, position, -R, a, .F.)` (the inner, lemon part) | as the torus |
 ///
-/// | Kernel `Surface` | STEP entity |
-/// |---|---|
-/// | `Plane(frame)` | `PLANE(name, position)`, normal = position z |
-/// | cylinder (K3) | `CYLINDRICAL_SURFACE(name, position, radius)`, axis = position z |
-/// | cone (K3) | `CONICAL_SURFACE(name, position, radius, semi_angle)`: `radius` at the placement's origin plane, `semi_angle` in radians (the plane angle unit) |
-/// | sphere (K3) | `SPHERICAL_SURFACE(name, position, radius)` |
-/// | torus (K3) | `TOROIDAL_SURFACE(name, position, major_radius, minor_radius)` |
+/// **Cones.** Our cone is `o + (r + w sin α) e(θ) + w cos α z` (`w` along the generator),
+/// i.e. radius `r + h tan α` at height `h`: the radius at the placement's origin is the
+/// same `r`, and Part 42's `v` is our height. Part 42 wants `0 < semi_angle < π/2`, so a
+/// cone narrowing toward +z (`α < 0`) is written on its frame turned over about x
+/// (axis -z, ref_direction x): its radius at height `h' = -h` is `r + h' |tan α|`.
 ///
-/// Each K3 surface's parameterisation and normal direction must be checked against
-/// Part 42's definition (e.g. the cylinder's normal points away from the axis); when it
-/// is the opposite of the kernel's, flip the face's `same_sense` flag rather than the
-/// placement.
-fn surface(out: &mut Out, s: &Surface, body: &str) -> Result<Ref, IoError> {
-    #[allow(
-        unreachable_patterns,
-        reason = "K3 adds surfaces in parallel; until they are mapped here they are refused"
-    )]
-    match s {
-        Surface::Plane(frame) => {
-            let a = out.axis(frame)?;
-            out.add(&format!("PLANE('',{a})"))
+/// **Tori.** Part 42 radii are positive and a `TOROIDAL_SURFACE` must not cross its
+/// axis, so spindle tori are `DEGENERATE_TOROIDAL_SURFACE`s (`major < minor`). Our lemon
+/// torus (`R < 0`: the tube circle's centre on the far side of the axis) is the inner
+/// part of the degenerate torus with major radius `-R`: the point `(R + a cos v) e(θ) + a
+/// sin v z` is Part 42's `(u, v) = (θ + π, π - v)`, where `-R + a cos(π - v) < 0`.
+///
+/// **same_sense.** Part 42 orients each face against the entity's normal, the direction
+/// of `σ_u × σ_v`; ours against the kernel's `S_u × S_v`. [`StepSurface::normal_agrees`]
+/// compares the two at a regular point of the kernel surface and the face's flag is
+/// flipped where they disagree. For the plane, cylinder, cone (either sense), sphere and
+/// the non-degenerate and spindle tori both point away from the axis, the centre or the
+/// tube's centre circle, and the flag is kept. On the inner part of a degenerate torus
+/// Part 42's `R + a cos v` is negative, so `σ_u × σ_v` points toward the tube's centre
+/// circle, against ours: lemon faces are written with the flag flipped.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum StepSurface {
+    Plane(Frame),
+    Cylinder {
+        frame: Frame,
+        radius: f64,
+    },
+    Cone {
+        frame: Frame,
+        radius: f64,
+        semi_angle: f64,
+    },
+    Sphere {
+        frame: Frame,
+        radius: f64,
+    },
+    Torus {
+        frame: Frame,
+        major: f64,
+        minor: f64,
+        /// `None` for a `TOROIDAL_SURFACE`, else the `select_outer` of a
+        /// `DEGENERATE_TOROIDAL_SURFACE`.
+        select_outer: Option<bool>,
+    },
+}
+
+impl StepSurface {
+    fn of(s: &Surface) -> StepSurface {
+        match s {
+            Surface::Plane(frame) => StepSurface::Plane(*frame),
+            Surface::Cylinder(c) => StepSurface::Cylinder {
+                frame: *c.frame(),
+                radius: c.radius(),
+            },
+            Surface::Cone(c) => {
+                let a = c.half_angle();
+                StepSurface::Cone {
+                    frame: if a < 0.0 {
+                        c.frame().flipped()
+                    } else {
+                        *c.frame()
+                    },
+                    radius: c.radius(),
+                    semi_angle: a.abs(),
+                }
+            }
+            Surface::Sphere(s) => StepSurface::Sphere {
+                frame: *s.frame(),
+                radius: s.radius(),
+            },
+            Surface::Torus(t) => {
+                let (big, a) = (t.major_radius(), t.minor_radius());
+                StepSurface::Torus {
+                    frame: *t.frame(),
+                    major: big.abs(),
+                    minor: a,
+                    select_outer: if big >= a { None } else { Some(big > 0.0) },
+                }
+            }
         }
-        // ---- K3: add Cylinder, Cone, Sphere and Torus here (see the table above). ----
-        _ => Err(kernel(
-            body,
-            format!("STEP export of the surface {s:?} is not supported yet"),
-        )),
+    }
+
+    fn write(&self, out: &mut Out) -> Result<Ref, IoError> {
+        match *self {
+            StepSurface::Plane(frame) => {
+                let a = out.axis(&frame)?;
+                out.add(&format!("PLANE('',{a})"))
+            }
+            StepSurface::Cylinder { frame, radius } => {
+                let a = out.axis(&frame)?;
+                out.add(&format!("CYLINDRICAL_SURFACE('',{a},{})", real(radius)?))
+            }
+            StepSurface::Cone {
+                frame,
+                radius,
+                semi_angle,
+            } => {
+                let a = out.axis(&frame)?;
+                out.add(&format!(
+                    "CONICAL_SURFACE('',{a},{},{})",
+                    real(radius)?,
+                    real(semi_angle)?
+                ))
+            }
+            StepSurface::Sphere { frame, radius } => {
+                let a = out.axis(&frame)?;
+                out.add(&format!("SPHERICAL_SURFACE('',{a},{})", real(radius)?))
+            }
+            StepSurface::Torus {
+                frame,
+                major,
+                minor,
+                select_outer,
+            } => {
+                let a = out.axis(&frame)?;
+                let (major, minor) = (real(major)?, real(minor)?);
+                match select_outer {
+                    None => out.add(&format!("TOROIDAL_SURFACE('',{a},{major},{minor})")),
+                    Some(outer) => out.add(&format!(
+                        "DEGENERATE_TOROIDAL_SURFACE('',{a},{major},{minor},{})",
+                        logical(outer)
+                    )),
+                }
+            }
+        }
+    }
+
+    /// The direction of Part 42's `σ_u × σ_v` at a point `p` of the surface (see the
+    /// table on [`StepSurface`]): `e` is the unit direction from the axis to `p`, `h`
+    /// its height along the placement's z.
+    fn normal_at(&self, p: Point3) -> Option<Vec3> {
+        let radial = |f: &Frame| {
+            let l = f.to_local(p);
+            let e = (f.x() * l.x + f.y() * l.y).normalized();
+            (e, l.x.hypot(l.y), l.z)
+        };
+        match *self {
+            StepSurface::Plane(frame) => Some(frame.z()),
+            // σ_u × σ_v = r e.
+            StepSurface::Cylinder { frame, .. } => radial(&frame).0,
+            // σ_u × σ_v = (r + v tan α)(e - tan α z), with r + v tan α the point's
+            // distance from the axis (not negative on the nappe).
+            StepSurface::Cone {
+                frame, semi_angle, ..
+            } => {
+                let (e, _, _) = radial(&frame);
+                (e? - frame.z() * semi_angle.tan()).normalized()
+            }
+            // σ_u × σ_v = r² cos v (cos v e + sin v z), cos v >= 0: away from the centre.
+            StepSurface::Sphere { frame, .. } => (p - frame.origin()).normalized(),
+            // σ_u × σ_v = a (R + a cos v)(cos v e(u) + sin v z). On the outer part the
+            // point's tube centre is R e (R + a cos v = ρ >= 0); on the inner part it is
+            // -R e and R + a cos v = -ρ <= 0, so the product points toward it.
+            StepSurface::Torus {
+                frame,
+                major,
+                select_outer,
+                ..
+            } => {
+                let (e, _, _) = radial(&frame);
+                let e = e?;
+                let outer = select_outer != Some(false);
+                let centre = frame.origin() + e * if outer { major } else { -major };
+                let away = (p - centre).normalized()?;
+                Some(if outer { away } else { -away })
+            }
+        }
+    }
+
+    /// Whether Part 42's normal of this entity agrees with the kernel's normal of `s`,
+    /// compared at a regular point of `s` (off its axis).
+    fn normal_agrees(&self, s: &Surface, body: &str) -> Result<bool, IoError> {
+        let v = match s {
+            // ρ = r + v sin α > 0: v = 0 unless the reference circle is the apex.
+            Surface::Cone(c) if c.radius() <= LINEAR_TOLERANCE => c.half_angle().signum(),
+            _ => 0.0,
+        };
+        let u = 0.7;
+        let p = s.point_at(u, v);
+        let ours = s.normal_at(u, v);
+        let theirs = self
+            .normal_at(p)
+            .ok_or_else(|| kernel(body, "a surface's sample point lies on its axis".to_owned()))?;
+        Ok(ours.dot(theirs) > 0.0)
     }
 }
 

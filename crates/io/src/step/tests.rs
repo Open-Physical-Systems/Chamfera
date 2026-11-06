@@ -445,10 +445,11 @@ fn hostile_exports_give_errors_not_panics() {
         ..StepOptions::default()
     };
     assert!(write(&[("box", &body)], &options).is_err());
-    // A body that is not a finished solid (the cylinder's lateral face has no surface
-    // until K3).
-    let cyl = Body::cylinder_topology(&Frame::XY, 5.0, 10.0).unwrap();
-    assert!(write(&[("cyl", &cyl)], &StepOptions::default()).is_err());
+    // A body that is not a finished solid: MVFS's skeleton (a face of one vertex, with
+    // no surface).
+    let mut skeleton = Body::new();
+    skeleton.mvfs(Point3::ORIGIN).unwrap();
+    assert!(write(&[("skeleton", &skeleton)], &StepOptions::default()).is_err());
     // A body with a NaN coordinate cannot be built: constructors and deserialization
     // validate every point. Tampering with a saved body is refused on load, so the
     // writer never sees it (it also checks every number it writes, see format.rs).
@@ -545,4 +546,442 @@ fn an_external_validator_accepts_the_file_when_installed() {
         .unwrap();
     std::fs::remove_dir_all(&dir).unwrap();
     assert!(status.success(), "the validator rejected the file");
+}
+
+// --- Curved faces (K3 surfaces from K4 sweeps) ------------------------------------------
+
+mod curved {
+    use super::*;
+    use chamfera_geom::Vec2;
+    use chamfera_kernel::{
+        Line2, Profile, ProfileEdge, Surface, TessOptions, extrude, polygon_edges, revolve,
+        tessellate,
+    };
+    use std::f64::consts::{FRAC_PI_2, PI, TAU};
+
+    fn y_axis() -> Line2 {
+        Line2::new(Point2::ORIGIN, Vec2::Y).unwrap()
+    }
+
+    fn half_disc(r: f64) -> Profile {
+        Profile::new(
+            vec![
+                ProfileEdge::Arc {
+                    centre: Point2::ORIGIN,
+                    radius: r,
+                    start_angle: -FRAC_PI_2,
+                    sweep: PI,
+                },
+                ProfileEdge::line(Point2::new(0.0, r), Point2::new(0.0, -r)),
+            ],
+            vec![],
+        )
+    }
+
+    fn cone_profile() -> Profile {
+        Profile::polygon(&[Point2::ORIGIN, Point2::new(3.0, 0.0), Point2::new(0.0, 4.0)])
+    }
+
+    /// Every kind of K4 solid, with a name.
+    fn solids() -> Vec<(&'static str, Body)> {
+        let xy = Frame::XY;
+        let rect = polygon_edges(&[
+            Point2::new(0.0, 0.0),
+            Point2::new(80.0, 0.0),
+            Point2::new(80.0, 40.0),
+            Point2::new(0.0, 40.0),
+        ]);
+        let plate = Profile::new(
+            rect,
+            vec![
+                vec![ProfileEdge::circle(Point2::new(20.0, 20.0), 5.0)],
+                vec![ProfileEdge::circle(Point2::new(60.0, 20.0), 8.0)],
+            ],
+        );
+        let slot = Profile::new(
+            vec![
+                ProfileEdge::line(Point2::new(0.0, -5.0), Point2::new(20.0, -5.0)),
+                ProfileEdge::Arc {
+                    centre: Point2::new(20.0, 0.0),
+                    radius: 5.0,
+                    start_angle: -FRAC_PI_2,
+                    sweep: PI,
+                },
+                ProfileEdge::line(Point2::new(20.0, 5.0), Point2::new(0.0, 5.0)),
+                ProfileEdge::Arc {
+                    centre: Point2::ORIGIN,
+                    radius: 5.0,
+                    start_angle: FRAC_PI_2,
+                    sweep: PI,
+                },
+            ],
+            vec![],
+        );
+        let tube = Profile::polygon(&[
+            Point2::new(3.0, 0.0),
+            Point2::new(5.0, 0.0),
+            Point2::new(5.0, 4.0),
+            Point2::new(3.0, 4.0),
+        ]);
+        let torus = Profile::circle(Point2::new(5.0, 0.0), 2.0);
+        // Spindle: the arc of the circle about (1, 0), radius 2, right of the axis.
+        let apple = Profile::new(
+            vec![
+                ProfileEdge::Arc {
+                    centre: Point2::new(1.0, 0.0),
+                    radius: 2.0,
+                    start_angle: -2.0 * PI / 3.0,
+                    sweep: 4.0 * PI / 3.0,
+                },
+                ProfileEdge::line(
+                    Point2::new(0.0, 3f64.sqrt()),
+                    Point2::new(0.0, -(3f64.sqrt())),
+                ),
+            ],
+            vec![],
+        );
+        // Lemon: the circular segment between x = 1 and the arc about (-1, 0), radius √5.
+        let half = 0.5f64.atan();
+        let lemon = Profile::new(
+            vec![
+                ProfileEdge::Arc {
+                    centre: Point2::new(-1.0, 0.0),
+                    radius: 5f64.sqrt(),
+                    start_angle: -half,
+                    sweep: 2.0 * half,
+                },
+                ProfileEdge::line(Point2::new(1.0, 1.0), Point2::new(1.0, -1.0)),
+            ],
+            vec![],
+        );
+        let tilted = Frame::from_normal_and_x(
+            Point3::new(-3.0, 7.0, 1.0),
+            Vec3::new(-2.0, 1.0, 4.0),
+            Vec3::new(1.0, 1.0, 0.0),
+        )
+        .unwrap();
+        vec![
+            (
+                "cylinder",
+                extrude(&xy, &Profile::circle(Point2::ORIGIN, 5.0), 10.0).unwrap(),
+            ),
+            (
+                "plate with round holes",
+                extrude(&xy, &plate, 10.0).unwrap(),
+            ),
+            ("slot", extrude(&xy, &slot, 10.0).unwrap()),
+            ("tube", revolve(&xy, &tube, &y_axis(), TAU).unwrap()),
+            (
+                "sphere",
+                revolve(&xy, &half_disc(3.0), &y_axis(), TAU).unwrap(),
+            ),
+            ("torus", revolve(&xy, &torus, &y_axis(), TAU).unwrap()),
+            (
+                "cone",
+                revolve(&xy, &cone_profile(), &y_axis(), TAU).unwrap(),
+            ),
+            (
+                "half ball",
+                revolve(&xy, &half_disc(3.0), &y_axis(), PI).unwrap(),
+            ),
+            (
+                "quarter torus",
+                revolve(&xy, &torus, &y_axis(), FRAC_PI_2).unwrap(),
+            ),
+            (
+                "quarter cone",
+                revolve(&xy, &cone_profile(), &y_axis(), FRAC_PI_2).unwrap(),
+            ),
+            ("apple", revolve(&xy, &apple, &y_axis(), TAU).unwrap()),
+            ("lemon", revolve(&xy, &lemon, &y_axis(), TAU).unwrap()),
+            (
+                "tilted torus part",
+                revolve(&tilted, &torus, &y_axis(), -2.0).unwrap(),
+            ),
+        ]
+    }
+
+    /// The STEP entity a kernel surface should become (see `write::StepSurface`).
+    fn entity_for(s: &Surface) -> &'static str {
+        match s {
+            Surface::Plane(_) => "PLANE",
+            Surface::Cylinder(_) => "CYLINDRICAL_SURFACE",
+            Surface::Cone(_) => "CONICAL_SURFACE",
+            Surface::Sphere(_) => "SPHERICAL_SURFACE",
+            Surface::Torus(t) if t.major_radius() >= t.minor_radius() => "TOROIDAL_SURFACE",
+            Surface::Torus(_) => "DEGENERATE_TOROIDAL_SURFACE",
+        }
+    }
+
+    fn only_solid(ex: &Exchange) -> SolidSummary {
+        let s = summarize(ex).unwrap();
+        let [solid] = s.solids.as_slice() else {
+            panic!("one solid expected");
+        };
+        solid.clone()
+    }
+
+    #[test]
+    fn every_k4_solid_exports_with_counts_matching_its_topology() {
+        for (name, body) in solids() {
+            let (_, ex) = export(&[(name, &body)]);
+            let t = body.summary();
+            let s = only_solid(&ex);
+            // One-to-one topology: faces, edges, vertices, a bound per loop (inner ones
+            // for rings), an oriented edge per half-edge.
+            assert_eq!(
+                (s.faces, s.edges, s.vertices),
+                (t.faces, t.edges, t.vertices),
+                "{name}"
+            );
+            assert_eq!(s.outer_bounds + s.inner_bounds, t.loops, "{name}");
+            assert_eq!(s.inner_bounds, t.rings, "{name}");
+            assert_eq!(s.oriented_edges, t.half_edges, "{name}");
+            assert_eq!(ex.count("ADVANCED_FACE"), t.faces, "{name}");
+            assert_eq!(ex.count("EDGE_CURVE"), t.edges, "{name}");
+            assert_eq!(ex.count("VERTEX_POINT"), t.vertices, "{name}");
+            // Vertex coordinates round-trip exactly.
+            assert_eq!(file_points(&s), body_points(&body), "{name}");
+            // Each face's surface is the entity of the table, and the counts per entity
+            // match the body's faces.
+            let mut want: Vec<&str> = body
+                .faces()
+                .into_iter()
+                .map(|f| entity_for(&body.face_surface(f).unwrap().unwrap().0))
+                .collect();
+            let mut got: Vec<&str> = s.face_surfaces.iter().map(|f| f.entity.as_str()).collect();
+            want.sort_unstable();
+            got.sort_unstable();
+            assert_eq!(got, want, "{name}");
+        }
+    }
+
+    fn sub(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+        [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+    }
+    fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
+        a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+    }
+    fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+        [
+            a[1] * b[2] - a[2] * b[1],
+            a[2] * b[0] - a[0] * b[2],
+            a[0] * b[1] - a[1] * b[0],
+        ]
+    }
+    fn arr(v: Vec3) -> [f64; 3] {
+        [v.x, v.y, v.z]
+    }
+
+    /// Local coordinates `(x, y, z)` of `p` in the written placement (y = z × x).
+    fn local(f: &SurfaceSummary, p: [f64; 3]) -> [f64; 3] {
+        let y = cross(f.axis, f.ref_direction);
+        let d = sub(p, f.origin);
+        [dot(d, f.ref_direction), dot(d, y), dot(d, f.axis)]
+    }
+
+    /// Part 42's `σ(u, v)` of the written surface, in its placement's local coordinates
+    /// (the formulas of ISO 10303-42, written out here independently of the writer).
+    fn sigma(f: &SurfaceSummary, u: f64, v: f64) -> [f64; 3] {
+        let (c, s) = (u.cos(), u.sin());
+        let at = |rho: f64, h: f64| [rho * c, rho * s, h];
+        match (f.entity.as_str(), f.values.as_slice()) {
+            ("CYLINDRICAL_SURFACE", [r]) => at(*r, v),
+            ("CONICAL_SURFACE", [r, a]) => at(r + v * a.tan(), v),
+            ("SPHERICAL_SURFACE", [r]) => at(r * v.cos(), r * v.sin()),
+            (_, [big, a]) => at(big + a * v.cos(), a * v.sin()),
+            _ => panic!("no σ for {}", f.entity),
+        }
+    }
+
+    /// Part 42's `(u, v)` of a local point `l` of the written surface.
+    fn parameters(f: &SurfaceSummary, l: [f64; 3]) -> (f64, f64) {
+        let rho = l[0].hypot(l[1]);
+        let u = l[1].atan2(l[0]);
+        match (f.entity.as_str(), f.values.as_slice()) {
+            ("CYLINDRICAL_SURFACE", _) | ("CONICAL_SURFACE", _) => (u, l[2]),
+            ("SPHERICAL_SURFACE", _) => (u, l[2].atan2(rho)),
+            (_, [big, _]) if f.select_outer == Some(false) => {
+                // The inner (lemon) part: the point's tube circle is centred at -R e(u),
+                // so it is σ(u + π, v) with R + a cos v = -ρ.
+                (u + PI, l[2].atan2(-rho - big))
+            }
+            (_, [big, _]) => (u, l[2].atan2(rho - big)),
+            _ => panic!("no parameters for {}", f.entity),
+        }
+    }
+
+    /// The written face's normal (Part 42: along `σ_u × σ_v`, by central differences;
+    /// a plane's is its axis) times its `same_sense`, in local coordinates.
+    fn written_outward(f: &SurfaceSummary, p: [f64; 3]) -> [f64; 3] {
+        let n = if f.entity == "PLANE" {
+            [0.0, 0.0, 1.0]
+        } else {
+            let (u, v) = parameters(f, local(f, p));
+            // σ reproduces the point.
+            let back = sigma(f, u, v);
+            assert!(
+                sub(back, local(f, p)).iter().all(|d| d.abs() < 1e-9),
+                "{} does not pass through {p:?}",
+                f.entity
+            );
+            let h = 1e-6;
+            let su = sub(sigma(f, u + h, v), sigma(f, u - h, v));
+            let sv = sub(sigma(f, u, v + h), sigma(f, u, v - h));
+            cross(su, sv)
+        };
+        let s = if f.same_sense { 1.0 } else { -1.0 };
+        // Back to world coordinates.
+        let y = cross(f.axis, f.ref_direction);
+        [0, 1, 2].map(|i| s * (f.ref_direction[i] * n[0] + y[i] * n[1] + f.axis[i] * n[2]))
+    }
+
+    #[test]
+    fn same_sense_agrees_with_the_outward_normal_on_every_face() {
+        // For each face, at a mesh vertex of the face away from the surface's axis: the
+        // written surface passes through it, and its Part 42 normal times same_sense
+        // points along the kernel's outward normal there.
+        for (name, body) in solids() {
+            let (_, ex) = export(&[(name, &body)]);
+            let s = only_solid(&ex);
+            let mesh = tessellate(&body, &TessOptions::default()).unwrap();
+            let faces = body.faces();
+            assert_eq!(s.face_surfaces.len(), faces.len());
+            // Faces pair up by their (unique) names.
+            for f in &faces {
+                let fname = body.face_name(*f).unwrap().unwrap();
+                let k = s.face_names.iter().position(|n| n == fname).unwrap();
+                let written = &s.face_surfaces[k];
+                let (surf, same) = body.face_surface(*f).unwrap().unwrap();
+                assert_eq!(written.entity, entity_for(&surf), "{name}");
+                let sample = (0..mesh.mesh.triangles.len())
+                    .filter(|&i| mesh.face_of_triangle[i] == *f)
+                    .flat_map(|i| mesh.mesh.triangle(i).unwrap())
+                    .find(|p| {
+                        let l = local(written, arr(*p - Point3::ORIGIN));
+                        l[0].hypot(l[1]) > 1e-3
+                    })
+                    .expect("a sample point off the axis");
+                let q = surf.parameters(sample);
+                let n = surf.normal_at(q.u, q.v);
+                let outward = arr(if same { n } else { -n });
+                let w = written_outward(written, arr(sample - Point3::ORIGIN));
+                assert!(dot(w, outward) > 0.0, "{name}: face {f}");
+            }
+        }
+    }
+
+    fn surface_of(ex: &Exchange, entity: &str) -> SurfaceSummary {
+        let s = only_solid(ex);
+        let found: Vec<_> = s
+            .face_surfaces
+            .into_iter()
+            .filter(|f| f.entity == entity)
+            .collect();
+        let [one] = found.as_slice() else {
+            panic!("one {entity} expected, found {}", found.len());
+        };
+        one.clone()
+    }
+
+    #[test]
+    fn an_extruded_circle_writes_its_cylinder() {
+        // Circle r = 5 about the origin extruded 10 along +z: the cylinder about the z
+        // axis, radius exactly 5; two planes, two circles and the seam line.
+        let body = extrude(&Frame::XY, &Profile::circle(Point2::ORIGIN, 5.0), 10.0).unwrap();
+        let (_, ex) = export(&[("cylinder", &body)]);
+        assert_eq!(ex.count("CYLINDRICAL_SURFACE"), 1);
+        assert_eq!(ex.count("PLANE"), 2);
+        assert_eq!(ex.count("CIRCLE"), 2);
+        assert_eq!(ex.count("LINE"), 1);
+        let c = surface_of(&ex, "CYLINDRICAL_SURFACE");
+        assert_eq!(c.values, vec![5.0]);
+        assert_eq!(cross(c.axis, [0.0, 0.0, 1.0]), [0.0, 0.0, 0.0]);
+        assert_eq!((c.origin[0], c.origin[1]), (0.0, 0.0));
+        // The outward normal points away from the axis, as Part 42's does.
+        assert!(c.same_sense);
+    }
+
+    #[test]
+    fn a_revolved_half_disc_writes_a_sphere_and_a_triangle_a_cone() {
+        let sphere = revolve(&Frame::XY, &half_disc(3.0), &y_axis(), TAU).unwrap();
+        let (_, ex) = export(&[("sphere", &sphere)]);
+        assert_eq!(ex.count("ADVANCED_FACE"), 1);
+        let s = surface_of(&ex, "SPHERICAL_SURFACE");
+        assert_eq!(s.values, vec![3.0]);
+        assert!(s.origin.iter().all(|x| x.abs() < 1e-12));
+        assert!(s.same_sense);
+        // The cone of the right triangle (0, 0), (3, 0), (0, 4) about y: apex (0, 4, 0),
+        // base radius 3 at y = 0: semi-angle atan(3/4), and both the apex and the base
+        // circle's vertex (3, 0, 0) satisfy ρ = r + h tan α in the written placement.
+        let body = revolve(&Frame::XY, &cone_profile(), &y_axis(), TAU).unwrap();
+        let (_, ex) = export(&[("cone", &body)]);
+        let c = surface_of(&ex, "CONICAL_SURFACE");
+        let [r, a] = c.values.as_slice() else {
+            panic!()
+        };
+        assert!((a - (3.0f64 / 4.0).atan()).abs() < 1e-12, "{a}");
+        assert!(*a > 0.0 && *a < FRAC_PI_2);
+        for p in [[0.0, 4.0, 0.0], [3.0, 0.0, 0.0]] {
+            let l = local(&c, p);
+            let off = l[0].hypot(l[1]) - (r + l[2] * a.tan());
+            assert!(off.abs() < 1e-12, "{p:?}: {off}");
+        }
+        assert!(c.same_sense);
+    }
+
+    #[test]
+    fn tori_write_their_radii_and_spindle_parts_are_degenerate() {
+        let cases = solids();
+        let get = |n: &str| &cases.iter().find(|(name, _)| *name == n).unwrap().1;
+        let (_, ex) = export(&[("torus", get("torus"))]);
+        let t = surface_of(&ex, "TOROIDAL_SURFACE");
+        assert_eq!(t.values, vec![5.0, 2.0]);
+        assert!(t.same_sense);
+        // The apple: tube centre 1 from the axis, radius 2: the outer part.
+        let (_, ex) = export(&[("apple", get("apple"))]);
+        let t = surface_of(&ex, "DEGENERATE_TOROIDAL_SURFACE");
+        assert_eq!(
+            (t.values.as_slice(), t.select_outer),
+            (&[1.0, 2.0][..], Some(true))
+        );
+        // The lemon: tube centre 1 beyond the axis, radius √5: the inner part, whose
+        // Part 42 normal points into the tube, against ours (same_sense flipped).
+        let (_, ex) = export(&[("lemon", get("lemon"))]);
+        let t = surface_of(&ex, "DEGENERATE_TOROIDAL_SURFACE");
+        assert!((t.values[0] - 1.0).abs() < 1e-12 && (t.values[1] - 5f64.sqrt()).abs() < 1e-12);
+        assert_eq!(t.select_outer, Some(false));
+        let lemon = get("lemon");
+        let f = lemon
+            .faces()
+            .into_iter()
+            .find(|f| {
+                matches!(
+                    lemon.face_surface(*f).unwrap(),
+                    Some((Surface::Torus(_), _))
+                )
+            })
+            .unwrap();
+        let (_, ours) = lemon.face_surface(f).unwrap().unwrap();
+        assert_eq!(t.same_sense, !ours);
+    }
+
+    #[test]
+    fn bad_surfaces_in_a_file_are_refused() {
+        let body = extrude(&Frame::XY, &Profile::circle(Point2::ORIGIN, 5.0), 10.0).unwrap();
+        let (text, _) = export(&[("cylinder", &body)]);
+        let line = text
+            .lines()
+            .find(|l| l.contains("CYLINDRICAL_SURFACE("))
+            .unwrap()
+            .to_owned();
+        for bad in [
+            line.replace(",5.);", ",-5.);"),
+            line.replace(",5.);", ",0.);"),
+            line.replace("CYLINDRICAL_SURFACE", "WOBBLY_SURFACE"),
+        ] {
+            let ex = read::parse(&text.replace(&line, &bad)).unwrap();
+            assert!(summarize(&ex).is_err(), "{bad}");
+        }
+    }
 }

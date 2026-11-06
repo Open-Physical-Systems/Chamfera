@@ -36,9 +36,13 @@
 //! `CIRCLE`; ellipses and elliptical arcs `ELLIPSE` (`semi_axis_1` along the frame's x).
 //! An edge is bounded by its vertices, so arcs need no `TRIMMED_CURVE`.
 //!
-//! Surfaces: see [`write`]'s surface mapping. Rung K2 has planes only (`PLANE`); the K3
-//! surfaces map to `CYLINDRICAL_SURFACE`, `CONICAL_SURFACE`, `SPHERICAL_SURFACE` and
-//! `TOROIDAL_SURFACE` (see `write::surface`).
+//! Surfaces: `PLANE`, `CYLINDRICAL_SURFACE`, `CONICAL_SURFACE`, `SPHERICAL_SURFACE`,
+//! `TOROIDAL_SURFACE` and, for spindle and lemon tori, `DEGENERATE_TOROIDAL_SURFACE`,
+//! each on the surface's frame (a cone narrowing toward +z on its frame turned over, as
+//! Part 42's semi-angle is positive). `ADVANCED_FACE.same_sense` is the kernel's flag,
+//! flipped where Part 42's normal (`σ_u × σ_v` of the entity) is against the kernel's:
+//! only on the lemon part of a degenerate torus. See `write::StepSurface` for the
+//! mapping and its derivation.
 //!
 //! # Reading
 //! [`read`] parses Part 21 text into entity instances and [`read::summarize`] rebuilds
@@ -52,7 +56,9 @@ mod write;
 #[cfg(test)]
 mod tests;
 
-pub use read::{BrepSummary, Exchange, Instance, Param, Record, SolidSummary, summarize};
+pub use read::{
+    BrepSummary, Exchange, Instance, Param, Record, SolidSummary, SurfaceSummary, summarize,
+};
 pub use write::write;
 
 use crate::IoError;
