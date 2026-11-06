@@ -1,7 +1,7 @@
 //! Layer 3: design files, import and export.
 //!
 //! Design documents are versioned JSON. STL import and export arrived in M1 (mesh bodies);
-//! STEP export of B-rep bodies arrived with K9 (`step`); STEP import and 3MF come later.
+//! STEP export and import of B-rep bodies arrived with K9 (`step`); 3MF comes later.
 
 pub mod step;
 pub mod stl;

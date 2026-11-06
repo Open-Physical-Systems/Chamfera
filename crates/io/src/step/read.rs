@@ -1,14 +1,21 @@
-//! A minimal Part 21 reader: enough to parse and check the files we write.
+//! The Part 21 reader: the exchange structure as entity instances, and a summary of the
+//! B-rep for checking our own output.
 //!
 //! [`parse`] turns the text into header records and DATA instances (`#id = NAME(...)`,
-//! including complex instances `#id = (A(...) B(...))`), decoding strings, and checks that
-//! every `#ref` names an instance. [`summarize`] walks the advanced B-rep from each
-//! `MANIFOLD_SOLID_BREP` down to the vertex coordinates and checks the closed-shell
-//! conditions. This is not STEP import: it does not build kernel bodies and knows only
-//! the entities we write. Full import is a later task.
+//! including complex instances `#id = (A(...) B(...))`) in any order, with forward
+//! references, and checks that every `#ref` names an instance. Parameters are typed
+//! (`NAME(value)`), enumerations, `$`, `*`, lists, binaries, integers, reals and strings.
+//! Strings decode `''`, `\\`, `\X\hh`, `\X2\…\X0\`, `\X4\…\X0\` and `\S\c`, skip the
+//! `\P?\` page directive and the line breaks inside a string (layout, not text), and take
+//! UTF-8 text as it is (edition 3 allows it). Comments may stand between any two tokens.
+//! Several DATA sections (edition 3) are merged; user-defined entities (`!NAME`) are kept.
+//!
+//! [`summarize`] walks the advanced B-rep from each `MANIFOLD_SOLID_BREP` down to the
+//! vertex coordinates and checks the closed-shell conditions; it knows only the entities
+//! we write. Mapping files into kernel bodies is `super::import`.
 //!
 //! The text is hostile input: size, instance count, nesting depth and string length are
-//! limited, and every lookup is checked.
+//! limited, every lookup is checked, and nothing panics.
 
 use super::{MAX_STEP_BYTES, MAX_STEP_ENTITIES};
 use crate::IoError;
@@ -113,6 +120,7 @@ pub fn parse_real(s: &str) -> Result<f64, IoError> {
 }
 
 struct Parser<'a> {
+    text: &'a str,
     b: &'a [u8],
     at: usize,
 }
@@ -155,9 +163,14 @@ impl Parser<'_> {
         }
     }
 
-    /// A keyword: letters, digits, `_`, `-` (for `END-ISO-10303-21`), upper-cased.
+    /// A keyword: letters, digits, `_`, `-` (for `END-ISO-10303-21`), upper-cased; a
+    /// user-defined keyword keeps its leading `!`.
     fn keyword(&mut self) -> Result<String, IoError> {
         self.skip()?;
+        let user = self.b.get(self.at) == Some(&b'!');
+        if user {
+            self.at += 1;
+        }
         let start = self.at;
         while self
             .b
@@ -171,7 +184,8 @@ impl Parser<'_> {
         }
         let k = std::str::from_utf8(self.b.get(start..self.at).unwrap_or_default())
             .map_err(|_| self.fail("a keyword must be ASCII"))?;
-        Ok(k.to_ascii_uppercase())
+        let k = k.to_ascii_uppercase();
+        Ok(if user { format!("!{k}") } else { k })
     }
 
     fn statement(&mut self, word: &str) -> Result<(), IoError> {
@@ -214,14 +228,17 @@ impl Parser<'_> {
             is_real = true;
             self.at += 1;
             self.digits();
-            if self.b.get(self.at) == Some(&b'E') {
+        }
+        // Part 21 writes `E` after a decimal point; `e`, and an exponent without the
+        // point, are accepted as other writers produce them.
+        if matches!(self.b.get(self.at), Some(b'E' | b'e')) {
+            is_real = true;
+            self.at += 1;
+            if matches!(self.b.get(self.at), Some(b'+' | b'-')) {
                 self.at += 1;
-                if matches!(self.b.get(self.at), Some(b'+' | b'-')) {
-                    self.at += 1;
-                }
-                if self.digits() == 0 {
-                    return Err(self.fail("expected exponent digits"));
-                }
+            }
+            if self.digits() == 0 {
+                return Err(self.fail("expected exponent digits"));
             }
         }
         let s = std::str::from_utf8(self.b.get(start..self.at).unwrap_or_default())
@@ -267,7 +284,19 @@ impl Parser<'_> {
                 }
                 b'\\' => self.escape(&mut out)?,
                 b' '..=b'~' => out.push(char::from(c)),
-                _ => return Err(self.fail("a string holds a character outside printable ASCII")),
+                // A line break inside a string is layout, not text.
+                b'\n' | b'\r' => {}
+                0x80.. => {
+                    // UTF-8 text (edition 3): the whole character.
+                    let ch = self
+                        .text
+                        .get(self.at - 1..)
+                        .and_then(|rest| rest.chars().next())
+                        .ok_or_else(|| self.fail("a string holds a broken character"))?;
+                    out.push(ch);
+                    self.at += ch.len_utf8() - 1;
+                }
+                _ => return Err(self.fail("a string holds a control character")),
             }
             if out.len() > MAX_STEP_BYTES {
                 return Err(self.fail("a string is too long"));
@@ -286,6 +315,10 @@ impl Parser<'_> {
             self.at += 2;
             let v = self.hex(2)?;
             out.push(char::from_u32(v).ok_or_else(|| bad(self))?);
+        } else if rest.first() == Some(&b'P') && rest.get(2) == Some(&b'\\') {
+            // `\P?\` picks the ISO 8859 page of later `\S\` escapes; they are read as
+            // page 1 (Latin-1).
+            self.at += 3;
         } else if rest.starts_with(b"S\\") {
             self.at += 2;
             let c = *self
@@ -401,7 +434,8 @@ impl Parser<'_> {
     }
 }
 
-/// Parses a Part 21 exchange structure (one DATA section) and checks every reference.
+/// Parses a Part 21 exchange structure (one or more DATA sections) and checks every
+/// reference.
 pub fn parse(text: &str) -> Result<Exchange, IoError> {
     if text.len() > MAX_STEP_BYTES {
         return Err(err(format!(
@@ -409,6 +443,7 @@ pub fn parse(text: &str) -> Result<Exchange, IoError> {
         )));
     }
     let mut p = Parser {
+        text,
         b: text.as_bytes(),
         at: 0,
     };
@@ -422,18 +457,49 @@ pub fn parse(text: &str) -> Result<Exchange, IoError> {
             None => break,
         }
     }
-    if p.keyword()? != "DATA" {
-        return Err(p.fail("expected DATA"));
-    }
-    if p.peek()? == Some(b'(') {
-        p.list(0)?; // Part 21 edition 3: DATA(name, schemas)
-    }
-    p.expect(b';')?;
+    let mut sections = 0usize;
     loop {
-        if p.peek()? != Some(b'#') {
-            p.statement("ENDSEC")?;
-            break;
+        match p.keyword()?.as_str() {
+            "DATA" => sections += 1,
+            "END-ISO-10303-21" if sections > 0 => {
+                p.expect(b';')?;
+                break;
+            }
+            "ANCHOR" | "REFERENCE" | "SIGNATURE" => {
+                return Err(
+                    p.fail("edition 3 ANCHOR, REFERENCE and SIGNATURE sections are not supported")
+                );
+            }
+            _ => return Err(p.fail("expected DATA")),
         }
+        if p.peek()? == Some(b'(') {
+            p.list(0)?; // Part 21 edition 3: DATA(name, schemas)
+        }
+        p.expect(b';')?;
+        p.data_section(&mut ex)?;
+    }
+    if p.peek()?.is_some() {
+        return Err(p.fail("text after END-ISO-10303-21"));
+    }
+    check_references(&ex)?;
+    Ok(ex)
+}
+
+impl Parser<'_> {
+    /// The instances of one DATA section, through its `ENDSEC;`.
+    fn data_section(&mut self, ex: &mut Exchange) -> Result<(), IoError> {
+        let p = self;
+        loop {
+            if p.peek()? != Some(b'#') {
+                return p.statement("ENDSEC");
+            }
+            p.instance(ex)?;
+        }
+    }
+
+    /// `#id = record;` or `#id = (record record ...);`, added to `ex`.
+    fn instance(&mut self, ex: &mut Exchange) -> Result<(), IoError> {
+        let p = self;
         let id = p.instance_name()?;
         p.expect(b'=')?;
         let records = if p.peek()? == Some(b'(') {
@@ -459,16 +525,8 @@ pub fn parse(text: &str) -> Result<Exchange, IoError> {
         if ex.data.insert(id, Instance { records }).is_some() {
             return Err(err(format!("instance #{id} is defined twice")));
         }
+        Ok(())
     }
-    p.statement("END-ISO-10303-21")?;
-    if p.peek()?.is_some() {
-        return Err(p.fail("text after END-ISO-10303-21"));
-    }
-    check_references(&ex)?;
-    Ok(ex)
-}
-
-impl Parser<'_> {
     /// A header record, or `None` after `ENDSEC;`.
     fn record_or_endsec(&mut self) -> Result<Option<Record>, IoError> {
         let name = self.keyword()?;

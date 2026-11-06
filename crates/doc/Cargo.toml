@@ -10,6 +10,7 @@ authors.workspace = true
 
 [dependencies]
 chamfera-geom.workspace = true
+chamfera-kernel.workspace = true
 chamfera-sketch.workspace = true
 serde.workspace = true
 serde_json.workspace = true
