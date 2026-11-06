@@ -349,6 +349,21 @@ impl ChamferaApp {
         }
         // A script that generated toolpaths opens in the Manufacture workspace.
         app.cam.active = app.session.toolpaths_visible() && app.session.active_sketch.is_none();
+        // One that simulated the stock opens with the Simulate panel at that time.
+        if let Some(sim) = app.session.simulation() {
+            app.cam.active = true;
+            let r = sim.report;
+            app.cam.sim_panel = Some(cam_ui::SimPanel {
+                time: sim.time,
+                resolution: u32::try_from(sim.resolution).unwrap_or(256),
+                result: Some(json!({
+                    "removed_volume": r.removed_volume,
+                    "rest_volume": r.rest_volume,
+                    "gouges": {"cells": r.gouge_cells, "volume": r.gouge_volume,
+                               "max_depth": r.max_gouge},
+                })),
+            });
+        }
         if app.session.active_sketch.is_some() {
             app.sketch.tool = Some(sketch_ui::Tool::Select);
             app.refresh_sketch_status();

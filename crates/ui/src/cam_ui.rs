@@ -1,4 +1,5 @@
-//! The MANUFACTURE workspace: its ribbon (setup, tools, 2D operations, generate, post),
+//! The MANUFACTURE workspace: its ribbon (setup, tools, 2D and 3D operations, generate,
+//! post, simulate), the stock simulation's time slider panel,
 //! the setup and operations tree in the left panel, the operation dialog (pick faces or
 //! edges in the viewport, choose the tool, depths and stepover) and Post G-code in the
 //! File menu. Acts only through `cam.*` commands; toolpaths are drawn by the engine as
@@ -16,6 +17,17 @@ pub struct CamUi {
     pub active: bool,
     pub dialog: Option<OpDialog>,
     pub tool_dialog: Option<ToolDialog>,
+    /// The Simulate panel while it is open.
+    pub sim_panel: Option<SimPanel>,
+}
+
+/// The Simulate panel: the time slider, the resolution and the last result.
+#[derive(Debug, Clone)]
+pub struct SimPanel {
+    /// How far through the cycle time (0 to 1).
+    pub time: f64,
+    pub resolution: u32,
+    pub result: Option<Value>,
 }
 
 /// The operation dialog while it is open (adding, or editing `edit`).
@@ -32,6 +44,14 @@ pub struct OpDialog {
     pub outside: bool,
     pub entry: &'static str,
     pub peck: String,
+    /// Parallel: a scallop height instead of the stepover (empty for none).
+    pub scallop: String,
+    /// Parallel: the pass direction (degrees).
+    pub angle: String,
+    /// Adaptive: the engagement limit (degrees).
+    pub engagement: String,
+    /// 3D: material left on the part.
+    pub leave: String,
 }
 
 /// The Add Tool dialog.
@@ -48,12 +68,20 @@ fn num(v: f64) -> String {
     s.trim_end_matches('0').trim_end_matches('.').to_owned()
 }
 
-const KINDS: [(&str, &str, Icon); 4] = [
+const KINDS: [(&str, &str, Icon); 7] = [
     ("facing", "Facing", Icon::CamFacing),
     ("contour", "2D Contour", Icon::CamContour),
     ("pocket", "2D Pocket", Icon::CamPocket),
     ("drill", "Drill", Icon::CamDrill),
+    ("adaptive", "Adaptive Clearing", Icon::CamAdaptive),
+    ("parallel", "Parallel", Icon::CamParallel),
+    ("waterline", "Waterline", Icon::CamWaterline),
 ];
+
+/// The 3D operations, which have no face to pick.
+fn is_3d(kind: &str) -> bool {
+    matches!(kind, "adaptive" | "parallel" | "waterline")
+}
 
 fn kind_icon(kind: &str) -> Icon {
     KINDS
@@ -80,17 +108,26 @@ impl OpDialog {
             pick_edges: false,
             stepover: match kind {
                 "facing" => "50",
+                "parallel" => "10",
                 _ => "40",
             }
             .into(),
             stepdown: match kind {
-                "facing" => "1 mm",
+                "facing" | "waterline" => "1 mm",
                 _ => "2 mm",
             }
             .into(),
             outside: true,
             entry: "helix",
             peck: String::new(),
+            scallop: String::new(),
+            angle: "0".into(),
+            engagement: "60".into(),
+            leave: match kind {
+                "adaptive" => "0.3 mm",
+                _ => "0 mm",
+            }
+            .into(),
         }
     }
 
@@ -124,12 +161,16 @@ impl OpDialog {
             .trim_end_matches('%')
             .trim()
             .parse::<f64>()
-            && matches!(self.kind, "facing" | "pocket")
+            && matches!(self.kind, "facing" | "pocket" | "parallel")
+            && (self.kind != "parallel" || self.scallop.trim().is_empty())
         {
             p["stepover"] = json!(v);
         }
-        if self.kind != "drill" && !self.stepdown.trim().is_empty() {
+        if !matches!(self.kind, "drill" | "parallel") && !self.stepdown.trim().is_empty() {
             p["stepdown"] = json!(self.stepdown.trim());
+        }
+        if is_3d(self.kind) && !self.leave.trim().is_empty() {
+            p["stock_to_leave"] = json!(self.leave.trim());
         }
         match self.kind {
             "contour" => {
@@ -145,6 +186,31 @@ impl OpDialog {
                     p["face"] = json!(f);
                 }
                 p["entry"] = json!(self.entry);
+            }
+            "parallel" => {
+                if !self.scallop.trim().is_empty() {
+                    p["scallop"] = json!(self.scallop.trim());
+                }
+                if let Ok(a) = self
+                    .angle
+                    .trim()
+                    .trim_end_matches('°')
+                    .trim()
+                    .parse::<f64>()
+                {
+                    p["angle"] = json!(a);
+                }
+            }
+            "adaptive" => {
+                if let Ok(a) = self
+                    .engagement
+                    .trim()
+                    .trim_end_matches('°')
+                    .trim()
+                    .parse::<f64>()
+                {
+                    p["max_engagement"] = json!(a);
+                }
             }
             "drill" => {
                 if !self.peck.trim().is_empty() {
@@ -166,6 +232,9 @@ impl ChamferaApp {
         if !on {
             self.cam.dialog = None;
             self.cam.tool_dialog = None;
+            if self.cam.sim_panel.take().is_some() {
+                self.run("cam.simulate", json!({ "clear": true }));
+            }
         }
         self.run("cam.show", json!({ "visible": on }));
     }
@@ -436,6 +505,35 @@ impl ChamferaApp {
             OpKind::Drill { peck, .. } => {
                 d.peck = peck.map(mm).unwrap_or_default();
             }
+            OpKind::Parallel {
+                stepover,
+                scallop,
+                angle,
+                stock_to_leave,
+                ..
+            } => {
+                d.stepover = pct(stepover);
+                d.scallop = scallop.map(mm).unwrap_or_default();
+                d.angle = num(angle.to_degrees());
+                d.leave = mm(stock_to_leave);
+            }
+            OpKind::Waterline {
+                stepdown,
+                stock_to_leave,
+                ..
+            } => {
+                d.stepdown = mm(stepdown);
+                d.leave = mm(stock_to_leave);
+            }
+            OpKind::Adaptive {
+                stepdown,
+                max_engagement,
+                stock_to_leave,
+            } => {
+                d.stepdown = mm(stepdown);
+                d.engagement = num(max_engagement.to_degrees());
+                d.leave = mm(stock_to_leave);
+            }
         }
         self.cam.dialog = Some(d);
     }
@@ -478,6 +576,7 @@ impl ChamferaApp {
             return;
         }
         self.tool_window(ctx);
+        self.sim_window(ctx);
         const WIDTH: f32 = 320.0;
         let pos = self.tool_dialog_pos(WIDTH);
         let look = Look {
@@ -572,7 +671,7 @@ impl ChamferaApp {
                                 });
                                 ui.end_row();
                             }
-                            if matches!(d.kind, "facing" | "pocket") {
+                            if matches!(d.kind, "facing" | "pocket" | "parallel") {
                                 widgets::field_label(ui, look, "Stepover %");
                                 ui.add_sized(
                                     widgets::FIELD,
@@ -580,7 +679,38 @@ impl ChamferaApp {
                                 );
                                 ui.end_row();
                             }
-                            if d.kind != "drill" {
+                            if d.kind == "parallel" {
+                                widgets::field_label(ui, look, "Scallop");
+                                ui.add_sized(
+                                    widgets::FIELD,
+                                    egui::TextEdit::singleline(&mut d.scallop)
+                                        .hint_text("ball mill: cusp height"),
+                                );
+                                ui.end_row();
+                                widgets::field_label(ui, look, "Angle °");
+                                ui.add_sized(
+                                    widgets::FIELD,
+                                    egui::TextEdit::singleline(&mut d.angle),
+                                );
+                                ui.end_row();
+                            }
+                            if d.kind == "adaptive" {
+                                widgets::field_label(ui, look, "Engagement °");
+                                ui.add_sized(
+                                    widgets::FIELD,
+                                    egui::TextEdit::singleline(&mut d.engagement),
+                                );
+                                ui.end_row();
+                            }
+                            if is_3d(d.kind) {
+                                widgets::field_label(ui, look, "Stock to leave");
+                                ui.add_sized(
+                                    widgets::FIELD,
+                                    egui::TextEdit::singleline(&mut d.leave),
+                                );
+                                ui.end_row();
+                            }
+                            if !matches!(d.kind, "drill" | "parallel") {
                                 widgets::field_label(ui, look, "Stepdown");
                                 ui.add_sized(
                                     widgets::FIELD,
@@ -644,6 +774,142 @@ impl ChamferaApp {
         }
         if cancel {
             self.cam.dialog = None;
+        }
+    }
+
+    /// Simulate: opens the panel and simulates the whole cycle, or closes it and takes
+    /// the stock away.
+    pub(crate) fn toggle_simulation(&mut self) {
+        if self.cam.sim_panel.take().is_some() {
+            self.run("cam.simulate", json!({ "clear": true }));
+            return;
+        }
+        let mut panel = SimPanel {
+            time: 1.0,
+            resolution: 256,
+            result: None,
+        };
+        panel.result = self.run(
+            "cam.simulate",
+            json!({ "time": 1.0, "resolution": panel.resolution }),
+        );
+        if panel.result.is_some() {
+            self.cam.sim_panel = Some(panel);
+        }
+    }
+
+    /// Runs the simulation again at the panel's time and resolution.
+    pub(crate) fn resimulate(&mut self) {
+        let Some(p) = self.cam.sim_panel.clone() else {
+            return;
+        };
+        let r = self.run(
+            "cam.simulate",
+            json!({ "time": p.time, "resolution": p.resolution }),
+        );
+        if let Some(panel) = self.cam.sim_panel.as_mut() {
+            panel.result = r;
+        }
+    }
+
+    /// The Simulate panel: a time slider through the cycle, the resolution, and what the
+    /// stock shows (removed and rest volume, gouges).
+    fn sim_window(&mut self, ctx: &egui::Context) {
+        let look = Look {
+            theme: &self.theme,
+            icons: &self.icons,
+        };
+        let units = self.units();
+        let pos = self.tool_dialog_pos(300.0);
+        let Some(p) = self.cam.sim_panel.as_mut() else {
+            return;
+        };
+        let (mut changed, mut close) = (false, false);
+        egui::Window::new("Simulate")
+            .id(egui::Id::unique("cam simulate panel"))
+            .title_bar(false)
+            .frame(widgets::dialog_frame(look))
+            .default_pos(pos)
+            .fade_in(false)
+            .default_width(300.0)
+            .resizable(false)
+            .show(ctx, |ui| {
+                if widgets::dialog_title(ui, look, Icon::CamSimulate, label("cam.simulate")) {
+                    close = true;
+                }
+                widgets::dialog_body(ui, |ui| {
+                    egui::Grid::new("cam sim grid")
+                        .num_columns(2)
+                        .spacing([widgets::S3, widgets::S3])
+                        .show(ui, |ui| {
+                            widgets::field_label(ui, look, "Time");
+                            let mut pct = p.time * 100.0;
+                            let r = ui.add(
+                                egui::Slider::new(&mut pct, 0.0..=100.0)
+                                    .suffix(" %")
+                                    .fixed_decimals(0),
+                            );
+                            if r.changed() {
+                                p.time = (pct / 100.0).clamp(0.0, 1.0);
+                                changed = true;
+                            }
+                            ui.end_row();
+                            widgets::field_label(ui, look, "Resolution");
+                            egui::ComboBox::from_id_salt("cam sim resolution")
+                                .selected_text(format!("{} columns", p.resolution))
+                                .width(widgets::FIELD_WIDTH)
+                                .show_ui(ui, |ui| {
+                                    for n in [128u32, 256, 512, 1024] {
+                                        if ui
+                                            .selectable_value(
+                                                &mut p.resolution,
+                                                n,
+                                                format!("{n} columns"),
+                                            )
+                                            .changed()
+                                        {
+                                            changed = true;
+                                        }
+                                    }
+                                });
+                            ui.end_row();
+                            if let Some(r) = &p.result {
+                                let v = |k: &str| r[k].as_f64().unwrap_or(0.0);
+                                widgets::field_label(ui, look, "Removed");
+                                ui.label(units.volume(v("removed_volume")));
+                                ui.end_row();
+                                widgets::field_label(ui, look, "Rest material");
+                                ui.label(units.volume(v("rest_volume")));
+                                ui.end_row();
+                                widgets::field_label(ui, look, "Gouges");
+                                let n = r["gouges"]["cells"].as_u64().unwrap_or(0);
+                                if n == 0 {
+                                    ui.label("none");
+                                } else {
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "{n} columns, deepest {}",
+                                            units.length(
+                                                r["gouges"]["max_depth"].as_f64().unwrap_or(0.0)
+                                            )
+                                        ))
+                                        .color(look.c(|t| t.gouge)),
+                                    );
+                                }
+                                ui.end_row();
+                            }
+                        });
+                });
+                widgets::dialog_footer(ui, look, |ui| {
+                    close |= widgets::secondary_button(ui, look, "Close").clicked();
+                });
+            });
+        if changed {
+            self.resimulate();
+        }
+        if close {
+            self.cam.sim_panel = None;
+            self.run("cam.simulate", json!({ "clear": true }));
         }
     }
 
