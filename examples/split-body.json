@@ -1,0 +1,15 @@
+[
+  { "command": "sketch.create", "params": { "plane": "xy" } },
+  { "command": "sketch.rectangle", "params": { "x1": 0, "y1": 0, "x2": 50, "y2": 30 } },
+  { "command": "sketch.finish", "params": {} },
+  {
+    "command": "solid.extrude",
+    "params": { "sketch": 1, "profiles": [{ "x": 25, "y": 15 }], "distance": 10 }
+  },
+  { "command": "construct.plane_offset", "params": { "base": "yz", "distance": 20 }, "as": "plane" },
+  {
+    "command": "solid.split_body",
+    "params": { "bodies": ["Extrude1"], "plane": "$plane.feature" }
+  },
+  { "command": "solid.move", "params": { "bodies": ["SplitBody1"], "dx": 12 } }
+]

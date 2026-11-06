@@ -108,7 +108,7 @@ fn face_extent(body: &Body, face: FaceId) -> Option<Aabb> {
     Aabb::from_points(points.into_iter().filter(|p| p.is_valid()))
 }
 
-fn plane_of(
+pub(crate) fn plane_of(
     made: &Made,
     built: &BTreeMap<u32, Constructed>,
     r: &PlaneRef,

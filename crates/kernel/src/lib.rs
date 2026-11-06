@@ -49,6 +49,9 @@
 //!
 //! Rung K12 (first part) is here: [`shell`] hollows a solid of planes, cylinders and
 //! cones into walls of a thickness, with chosen faces open (an inward offset subtracted).
+//!
+//! Body tools are here: [`split_body`] cuts a solid by a plane, [`split_faces`] imprints a
+//! plane on flat faces, and [`thicken`] gives a flat or cylindrical face a thickness.
 
 mod face_edit;
 pub use face_edit::{delete_faces, move_faces, offset_faces};
@@ -62,6 +65,7 @@ mod intersect;
 mod loft;
 mod mass;
 mod planar;
+mod plane_split;
 mod profile;
 mod sheet;
 mod shell;
@@ -91,6 +95,7 @@ pub use intersect::{
 pub use loft::{LOFT_PARALLEL_TOLERANCE, MAX_LOFT_SECTIONS, loft};
 pub use mass::{MASS_QUADRATURE_TOLERANCE, MAX_DENSITY, MassProperties};
 pub use planar::{Arc2, Circle2, Line2, Segment2};
+pub use plane_split::{split_body, split_faces, thicken};
 pub use profile::{PROFILE_JOIN_TOLERANCE, Profile, ProfileEdge, polygon_edges};
 pub use sheet::{
     BendPosition, BendReport, FlangeSpec, FlatEdge, MAX_FLANGES, Relief, ReliefKind, Sheet,

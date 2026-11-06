@@ -514,6 +514,11 @@ pub enum FeatureKind {
     DeleteFace(crate::face_edit::DeleteFace),
     /// Planar faces moved or turned (direct edit).
     MoveFace(crate::face_edit::MoveFace),
+    Combine(crate::body_tools::Combine),
+    SplitBody(crate::body_tools::SplitBody),
+    SplitFace(crate::body_tools::SplitFace),
+    Thicken(crate::body_tools::Thicken),
+    Remove(crate::body_tools::RemoveBodies),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -539,7 +544,15 @@ impl FeatureKind {
             FeatureKind::Hole(h) => h.sketch,
             FeatureKind::SheetBase(b) => Some(b.sketch),
             FeatureKind::SheetFlange(_) | FeatureKind::SheetUnfold(_) => None,
-            FeatureKind::Pattern(_)
+            FeatureKind::SplitFace(s) => match s.tool {
+                crate::body_tools::SplitFaceTool::SketchLine { sketch, .. } => Some(sketch),
+                crate::body_tools::SplitFaceTool::Plane { .. } => None,
+            },
+            FeatureKind::Combine(_)
+            | FeatureKind::SplitBody(_)
+            | FeatureKind::Thicken(_)
+            | FeatureKind::Remove(_)
+            | FeatureKind::Pattern(_)
             | FeatureKind::Construct(_)
             | FeatureKind::Blend(_)
             | FeatureKind::Shell(_)
@@ -576,6 +589,11 @@ impl FeatureKind {
             FeatureKind::SheetBase(_)
             | FeatureKind::SheetFlange(_)
             | FeatureKind::SheetUnfold(_) => Operation::NewBody,
+            FeatureKind::Combine(c) => c.operation,
+            FeatureKind::Thicken(t) => t.operation,
+            FeatureKind::SplitBody(_) | FeatureKind::SplitFace(_) | FeatureKind::Remove(_) => {
+                Operation::NewBody
+            }
             FeatureKind::Pattern(_)
             | FeatureKind::Construct(_)
             | FeatureKind::Blend(_)
@@ -603,6 +621,11 @@ impl FeatureKind {
             | FeatureKind::Shell(_)
             | FeatureKind::Mirror(_)
             | FeatureKind::Move(_)
+            | FeatureKind::Combine(_)
+            | FeatureKind::SplitBody(_)
+            | FeatureKind::SplitFace(_)
+            | FeatureKind::Thicken(_)
+            | FeatureKind::Remove(_)
             | FeatureKind::Loft(_)
             | FeatureKind::OffsetFace(_)
             | FeatureKind::DeleteFace(_)
@@ -638,6 +661,11 @@ impl FeatureKind {
             FeatureKind::OffsetFace(_) => "Offset Face",
             FeatureKind::DeleteFace(_) => "Delete Face",
             FeatureKind::MoveFace(_) => "Move Face",
+            FeatureKind::Combine(_) => "Combine",
+            FeatureKind::SplitBody(_) => "SplitBody",
+            FeatureKind::SplitFace(_) => "SplitFace",
+            FeatureKind::Thicken(_) => "Thicken",
+            FeatureKind::Remove(_) => "Remove",
         }
     }
 
@@ -687,6 +715,11 @@ impl FeatureKind {
             FeatureKind::MoveFace(m) => std::iter::once(m.distance.as_str())
                 .chain(m.turn.as_ref().map(|t| t.angle.as_str()))
                 .collect(),
+            FeatureKind::Thicken(t) => vec![t.thickness.as_str()],
+            FeatureKind::Combine(_)
+            | FeatureKind::SplitBody(_)
+            | FeatureKind::SplitFace(_)
+            | FeatureKind::Remove(_) => Vec::new(),
             FeatureKind::Pattern(p) => match &p.layout {
                 PatternLayout::Linear { spacing, .. } => vec![p.count.as_str(), spacing.as_str()],
                 PatternLayout::Circular { angle, .. } => vec![p.count.as_str(), angle.as_str()],
@@ -727,6 +760,9 @@ impl Document {
             FeatureKind::DeleteFace(d) => return self.check_delete_face(d),
             FeatureKind::MoveFace(m) => return self.check_move_face(m),
             _ => {}
+        }
+        if kind.is_body_tool() {
+            return self.check_body_tool(kind);
         }
         if let FeatureKind::Blend(b) = kind {
             if b.edges.is_empty() || b.edges.len() > MAX_BLEND_EDGES {
@@ -796,6 +832,11 @@ impl Document {
             | FeatureKind::Shell(_)
             | FeatureKind::Mirror(_)
             | FeatureKind::Move(_)
+            | FeatureKind::Combine(_)
+            | FeatureKind::SplitBody(_)
+            | FeatureKind::SplitFace(_)
+            | FeatureKind::Thicken(_)
+            | FeatureKind::Remove(_)
             | FeatureKind::Loft(_)
             | FeatureKind::OffsetFace(_)
             | FeatureKind::DeleteFace(_)
@@ -1330,6 +1371,10 @@ impl Document {
                     crate::sheet::referenced_features(&f.edge).contains(&feature)
                 }
                 FeatureKind::SheetUnfold(u) => u.base == feature,
+                FeatureKind::SplitBody(_) | FeatureKind::SplitFace(_) => {
+                    f.kind.body_tool_features().contains(&feature)
+                }
+                FeatureKind::Combine(_) | FeatureKind::Thicken(_) | FeatureKind::Remove(_) => false,
                 FeatureKind::SheetBase(_)
                 | FeatureKind::Blend(_)
                 | FeatureKind::Shell(_)

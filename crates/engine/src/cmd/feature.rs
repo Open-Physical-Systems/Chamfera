@@ -34,12 +34,15 @@ pub static COMMANDS: &[CommandSpec] = &[
                  plane: string or object (optional) - a mirror's new plane, as in solid.mirror\n\
                  dx, dy, dz, angle, axis, origin, from, to (optional) - a move's new transform\n\
                  copy: boolean (optional) - whether a move keeps the originals\n\
-                 thickness: string or number (optional) - new shell wall thickness\n\
-                 faces: list of strings (optional) - new open faces of a shell\n\
+                 thickness: string or number (optional) - new shell wall or thicken thickness\n\
                  height, angle, position, side, offset_start, offset_end, edge (optional) - a flange's new values, as for sheet.flange\n\
                  rule: string, reversed: boolean (optional) - a base flange's new rule and direction\n\
-                 faces: list of strings (optional) - new open faces of a shell, or faces of a face edit\n\
+                 faces: list of strings (optional) - new open faces of a shell, faces of a face edit, thicken or split face\n\
                  distance, angle (optional) - a face edit's new distance (offset, move) and turn angle\n\
+                 target, tools, keep_tools (optional) - a combine's bodies and keep flag\n\
+                 bodies: list of strings (optional) - new bodies of a split body or remove\n\
+                 plane, sketch, line (optional) - a split's new plane or sketch line\n\
+                 sides: string (optional) - a thicken's one_side, symmetric or both_sides\n\
                  suppressed: boolean (optional)",
         mutates: true,
         run: edit,
@@ -793,6 +796,11 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
             FeatureKind::OffsetFace(_) | FeatureKind::DeleteFace(_) | FeatureKind::MoveFace(_) => {
                 return Err(bad("a face edit has no operation"));
             }
+            FeatureKind::Combine(c) => c.operation = o,
+            FeatureKind::Thicken(t) => t.operation = o,
+            FeatureKind::SplitBody(_) | FeatureKind::SplitFace(_) | FeatureKind::Remove(_) => {
+                return Err(bad("a split or remove has no operation"));
+            }
         }
     }
     super::sheet::edit(s, &mut kind, p)?;
@@ -805,6 +813,7 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
         return Err(bad("points, kind and the hole sizes belong to holes"));
     }
     super::transform::edit_transform(&mut kind, p)?;
+    super::body_tools::edit_body_tool(&mut kind, p)?;
     let new_size = expression(p, "size", "mm")?;
     if let Some(size) = new_size {
         let FeatureKind::Blend(b) = &mut kind else {
@@ -818,14 +827,33 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
         Some(_) => Some(shell_faces(s, &json!({ "faces": p.get("faces") }))?),
     };
     if new_thickness.is_some() || new_faces.is_some() {
-        let FeatureKind::Shell(sh) = &mut kind else {
-            return Err(bad("thickness and faces belong to shells"));
-        };
-        if let Some(t) = new_thickness {
-            sh.thickness = t;
-        }
-        if let Some(f) = new_faces {
-            sh.faces = f;
+        match &mut kind {
+            FeatureKind::Shell(sh) => {
+                if let Some(t) = new_thickness {
+                    sh.thickness = t;
+                }
+                if let Some(f) = new_faces {
+                    sh.faces = f;
+                }
+            }
+            FeatureKind::Thicken(th) => {
+                if let Some(t) = new_thickness {
+                    th.thickness = t;
+                }
+                if let Some(f) = new_faces {
+                    th.faces = f;
+                }
+            }
+            FeatureKind::SplitFace(sf) if new_thickness.is_none() => {
+                if let Some(f) = new_faces {
+                    sf.faces = f;
+                }
+            }
+            _ => {
+                return Err(bad(
+                    "thickness belongs to shells and thickens; faces to shells, thickens and split faces",
+                ));
+            }
         }
     }
     let extrude_keys = EXTRUDE_OPTIONS
