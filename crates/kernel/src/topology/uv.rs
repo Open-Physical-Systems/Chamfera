@@ -54,7 +54,7 @@ pub enum PointOnFace {
 
 /// One edge of a loop image.
 #[derive(Debug, Clone)]
-pub(super) struct EdgeImage {
+pub(crate) struct EdgeImage {
     pub edge: EdgeId,
     pub curve: Curve,
     pub t0: f64,
@@ -69,7 +69,7 @@ pub(super) struct EdgeImage {
 
 /// The image of one loop.
 #[derive(Debug, Clone)]
-pub(super) struct LoopImage {
+pub(crate) struct LoopImage {
     pub edges: Vec<EdgeImage>,
     /// The image ends where it starts.
     pub closed: bool,
@@ -79,7 +79,7 @@ pub(super) struct LoopImage {
 
 /// A step of a loop image along a singular line: from `u0` to `u1` at `v`.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(super) struct PoleStep {
+pub(crate) struct PoleStep {
     pub v: f64,
     pub u0: f64,
     pub u1: f64,
@@ -182,7 +182,7 @@ fn pole_direction(v_before: f64, v_s: f64, orient: f64) -> f64 {
 impl Body {
     /// The image of loop `lp` on `surface`, for a face whose outward normal is
     /// `orient * (S_u × S_v)` (`orient` = ±1).
-    pub(super) fn loop_image(
+    pub(crate) fn loop_image(
         &self,
         lp: LoopId,
         surface: &Surface,
@@ -319,7 +319,7 @@ impl Body {
 
     /// The outward orientation of a face relative to its surface: `+1` when the outward
     /// normal is `S_u × S_v`, else `-1`.
-    pub(super) fn face_orientation(&self, face: FaceId) -> KernelResult<(Surface, f64)> {
+    pub(crate) fn face_orientation(&self, face: FaceId) -> KernelResult<(Surface, f64)> {
         let (surface, same) = self
             .face_surface(face)?
             .ok_or_else(|| KernelError::InvalidInput(format!("{face} has no surface yet")))?;

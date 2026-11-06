@@ -362,6 +362,12 @@ pub enum OverlayStyle {
     Projected,
     Preview,
     Highlight,
+    /// A measure result: the line between two closest points.
+    Measure,
+    /// Construction planes' outlines, axes and points.
+    Construct,
+    /// What the pointer is over, before a click (`theme.hover_highlight`).
+    Hover,
 }
 
 impl OverlayStyle {
@@ -373,8 +379,35 @@ impl OverlayStyle {
             OverlayStyle::Projected => theme.sketch_projected,
             OverlayStyle::Preview => theme.sketch_preview,
             OverlayStyle::Highlight => theme.highlight,
+            OverlayStyle::Measure => theme.measure,
+            OverlayStyle::Construct => theme.construct,
+            OverlayStyle::Hover => theme.hover_highlight,
         }
     }
+}
+
+/// How a fill is coloured.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FillStyle {
+    /// Construction planes, see-through.
+    Construct,
+}
+
+impl FillStyle {
+    pub fn color(self, theme: &Theme) -> Rgba {
+        match self {
+            FillStyle::Construct => theme.construct_fill,
+        }
+    }
+}
+
+/// See-through triangles drawn over the model, hidden by bodies in front and hiding
+/// nothing (construction planes). Display only.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Fill {
+    pub style: FillStyle,
+    pub triangles: Vec<[Point3; 3]>,
 }
 
 /// Lines and points drawn over the model: sketches, previews and highlights. Display
@@ -403,10 +436,22 @@ pub const MAX_BODIES: usize = 10_000;
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct Scene {
     pub bodies: Vec<SceneBody>,
+    /// The last pick: where the pointer hit a selected body.
     pub selection: Option<Hit>,
+    /// Every selected body, each once, in the order they were selected. The picked body
+    /// (`selection`) is one of them.
+    #[serde(default)]
+    pub selected: Vec<u32>,
     /// Drawn over everything, in order.
     #[serde(default)]
     pub overlays: Vec<Overlay>,
+    /// Shapes a tool would make (the extrude preview), drawn translucent in the theme's
+    /// `preview_body` colour over the bodies. Not picked; display only.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub previews: Vec<TriMesh>,
+    /// See-through fills (construction planes), drawn before the overlays.
+    #[serde(default)]
+    pub fills: Vec<Fill>,
     next_id: u32,
 }
 
@@ -435,7 +480,7 @@ impl Scene {
         self.bodies.iter_mut().find(|b| b.id == id)
     }
 
-    /// Bounds of the visible bodies and the overlays.
+    /// Bounds of the visible bodies, the previews and the overlays.
     pub fn bounds(&self) -> Option<Aabb> {
         let overlay_points = self
             .overlays
@@ -448,8 +493,39 @@ impl Scene {
             .iter()
             .filter(|b| b.visible)
             .filter_map(|b| b.mesh.bounds())
+            .chain(self.previews.iter().filter_map(TriMesh::bounds))
             .chain(overlays)
             .reduce(Aabb::union)
+    }
+
+    /// Whether a body is selected (in the set, or the last pick).
+    pub fn is_selected(&self, id: u32) -> bool {
+        self.selected.contains(&id) || self.selection.is_some_and(|h| h.body == id)
+    }
+
+    /// Every selected body: the set, plus the picked body if it is missing from it.
+    pub fn selected_bodies(&self) -> Vec<u32> {
+        let mut ids = self.selected.clone();
+        if let Some(h) = self.selection
+            && !ids.contains(&h.body)
+        {
+            ids.push(h.body);
+        }
+        ids
+    }
+
+    /// Drops the bodies for which `gone` is true from the selection.
+    pub fn deselect(&mut self, gone: impl Fn(u32) -> bool) {
+        self.selected.retain(|id| !gone(*id));
+        if self.selection.is_some_and(|h| gone(h.body)) {
+            self.selection = None;
+        }
+    }
+
+    /// Selects nothing.
+    pub fn clear_selection(&mut self) {
+        self.selected.clear();
+        self.selection = None;
     }
 
     /// The nearest visible body the ray hits.

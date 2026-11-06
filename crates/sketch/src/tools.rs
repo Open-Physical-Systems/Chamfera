@@ -631,7 +631,7 @@ impl Sketch {
     }
 
     /// The geometry of a curve.
-    fn shape_of(&self, curve: &Curve) -> Option<Shape> {
+    pub(crate) fn shape_of(&self, curve: &Curve) -> Option<Shape> {
         match curve {
             Curve::Line { start, end, .. } => Some(Shape::Segment {
                 a: self.point(*start)?,
