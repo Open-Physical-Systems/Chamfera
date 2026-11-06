@@ -1,0 +1,45 @@
+{
+  "id": "first-part",
+  "title": "Your first part",
+  "summary": "Sketch a rectangle, extrude it into a block, round an edge and drill a hole.",
+  "workspace": "design",
+  "steps": [
+    {
+      "title": "Start a sketch",
+      "text": "Click Create Sketch and choose Top plane (XY). The view turns to look straight down on the plane.",
+      "tool": "sketch.create",
+      "commands": ["sketch.create"]
+    },
+    {
+      "title": "Draw a rectangle",
+      "text": "Pick the Rectangle tool (or press R), then click one corner and the opposite corner in the viewport. Any size will do.",
+      "tool": "sketch.tool.rectangle",
+      "commands": ["sketch.rectangle", "sketch.rectangle.centre"]
+    },
+    {
+      "title": "Finish the sketch",
+      "text": "Click Finish Sketch to go back to the solid tools. The rectangle stays as a closed profile.",
+      "tool": "sketch.finish",
+      "commands": ["sketch.finish"]
+    },
+    {
+      "title": "Extrude the profile",
+      "text": "Click Extrude (E), click inside the rectangle, type a distance such as 10 and press OK.",
+      "tool": "solid.extrude",
+      "commands": ["solid.extrude"]
+    },
+    {
+      "title": "Round an edge",
+      "text": "Click Fillet, click one or more edges of the block, set a radius smaller than the block and press OK.",
+      "tool": "solid.fillet",
+      "commands": ["solid.fillet"]
+    },
+    {
+      "title": "Drill a hole",
+      "text": "Click Hole, click a point on the top face of the block, check the diameter and depth and press OK.",
+      "tool": "solid.hole",
+      "commands": ["solid.hole"]
+    }
+  ],
+  "finish": "Your part has four features in the timeline at the bottom. Double-click one to change it, and the part rebuilds."
+}

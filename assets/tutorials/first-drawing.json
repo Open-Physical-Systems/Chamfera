@@ -1,0 +1,34 @@
+{
+  "id": "first-drawing",
+  "title": "Your first drawing",
+  "summary": "Put views of a part on a sheet and add a dimension. An empty design gets the sample hole plate first.",
+  "workspace": "drawing",
+  "sample": "hole-plate",
+  "steps": [
+    {
+      "title": "Start a sheet",
+      "text": "You are in the Drawing workspace. Click New Sheet to start an A3 sheet.",
+      "tool": "drawing.new_sheet",
+      "commands": ["drawing.new_sheet"]
+    },
+    {
+      "title": "Place the front view",
+      "text": "Click Front, then click on the sheet where the view should go.",
+      "tool": "drawing.view.front",
+      "commands": ["drawing.add_view"]
+    },
+    {
+      "title": "Place the top view",
+      "text": "Click Top, then click above or below the front view. It lines up with the front view.",
+      "tool": "drawing.view.top",
+      "commands": ["drawing.add_view"]
+    },
+    {
+      "title": "Dimension the width",
+      "text": "Click Horizontal, then click the left and the right edge of a view. The dimension follows the model if it changes.",
+      "tool": "drawing.dim.horizontal",
+      "commands": ["drawing.add_dimension"]
+    }
+  ],
+  "finish": "Export the sheet with PDF, SVG or DXF in the EXPORT group. Change the part and the views and dimensions follow."
+}

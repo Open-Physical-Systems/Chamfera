@@ -62,9 +62,11 @@ mod surface_ui;
 mod sweep_ui;
 mod timeline;
 mod transform_ui;
+mod tutorial_ui;
 mod viewcube;
 #[cfg(target_arch = "wasm32")]
 mod web;
+mod welcome_ui;
 mod widgets;
 
 use widgets::Look;
@@ -139,6 +141,8 @@ pub struct Options {
     /// Open the Render window and start a render of this width, height and sample count
     /// (the screenshot waits for it to finish).
     pub render_window: Option<[u32; 3]>,
+    /// Start this guided tour (`tutorial_ui`, such as `first-part`).
+    pub tutorial: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -259,6 +263,10 @@ pub struct ChamferaApp {
     history: history_ui::HistoryUi,
     /// Autosave and the recovery question (`recovery_ui`).
     recovery: recovery_ui::RecoveryUi,
+    /// The welcome panel and its sample gallery (`welcome_ui`).
+    welcome: welcome_ui::WelcomeUi,
+    /// The guided tour in progress (`tutorial_ui`).
+    tutorial: tutorial_ui::TutorialUi,
     /// Help > About Chamfera (`about_ui`).
     about: about_ui::AboutUi,
     /// The thread toolpaths are made on after a rebuild (`cam_worker`), desktop only.
@@ -285,8 +293,17 @@ impl ChamferaApp {
             renderer: chamfera_gpu::ViewRenderer::new(&rs.device),
             texture: None,
         });
-        let mut app = ChamferaApp::with_gpu(gpu, &options, prefs::load());
-        app.prefs_store = true;
+        // Screenshots neither read nor write the user's preferences or Assistant key, so
+        // they show no recent files or key and look the same on every machine.
+        let shot = options.screenshot.is_some();
+        let prefs = if shot {
+            prefs::Preferences::default()
+        } else {
+            prefs::load()
+        };
+        let mut app = ChamferaApp::with_gpu(gpu, &options, prefs);
+        app.prefs_store = !shot;
+        app.welcome.open = welcome_ui::shows_at_start(&options, app.prefs.show_welcome);
         // Autosave and the recovery question, except in screenshots, which must neither
         // write recovery files nor show another run's work.
         #[cfg(not(target_arch = "wasm32"))]
@@ -305,7 +322,7 @@ impl ChamferaApp {
                 app.session.set_cam_background(true);
             }
         }
-        if app.assistant.transport.is_none() {
+        if app.assistant.transport.is_none() && !shot {
             app.assistant.load_key();
         }
         // After the key is loaded: this request goes over the real HTTPS path.
@@ -388,6 +405,8 @@ impl ChamferaApp {
             assistant: assistant_ui::AssistantUi::default(),
             history: history_ui::HistoryUi::default(),
             recovery: recovery_ui::RecoveryUi::default(),
+            welcome: welcome_ui::WelcomeUi::default(),
+            tutorial: tutorial_ui::TutorialUi::default(),
             about: about_ui::AboutUi::default(),
             #[cfg(not(target_arch = "wasm32"))]
             cam_worker: None,
@@ -509,13 +528,19 @@ impl ChamferaApp {
                 .find(|g| g.caption.eq_ignore_ascii_case(caption))
                 .map(|g| ribbon::MenuRequest::Group(g.caption));
         }
+        if let Some(id) = &options.tutorial {
+            app.start_tutorial(id);
+        }
         app
     }
 
     /// Runs a command and shows its error, if any, in the status bar.
     fn run(&mut self, id: &str, params: Value) -> Option<Value> {
         match self.session.execute(id, &params) {
-            Ok(v) => Some(v),
+            Ok(v) => {
+                self.tutorial_saw(id);
+                Some(v)
+            }
             Err(e) => {
                 self.message = Some((format!("{}: {e}", label(id)), true));
                 None
@@ -934,7 +959,9 @@ impl ChamferaApp {
         self.press_pull_labels(ui, rect);
         self.paint_box(ui, rect);
         self.view_cube(ui, rect);
-        self.viewport_hint(ui, rect);
+        if !self.welcome.open {
+            self.viewport_hint(ui, rect);
+        }
         #[cfg(not(target_arch = "wasm32"))]
         self.cam_badge(ui, rect);
         self.selection_filter_bar(ui.ctx(), rect);
@@ -975,7 +1002,8 @@ impl ChamferaApp {
         if (self.assistant.running()
             || rendering
             || self.session.cam_regenerating()
-            || self.history.thumbnails_pending(self.gpu.is_some()))
+            || self.history.thumbnails_pending(self.gpu.is_some())
+            || self.welcome.thumbnails_pending(self.gpu.is_some()))
             && matches!(state, Shot::Waiting(_))
         {
             *state = Shot::Waiting(6);
@@ -1165,6 +1193,8 @@ impl eframe::App for ChamferaApp {
             self.appearance_window(&ctx);
             self.history_windows(&ctx);
             self.render_windows(&ctx);
+            self.welcome_panel(&ctx);
+            self.tutorial_overlay(&ctx);
         }
         if self.frames >= 2 {
             self.preferences_window(&ctx);

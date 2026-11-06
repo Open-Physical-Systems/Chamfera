@@ -920,6 +920,7 @@ impl ChamferaApp {
             ui.close();
             self.run_action(a);
         }
+        self.help_menu_welcome(ui);
     }
 
     /// Help > Keyboard Shortcuts: every shortcut, its action and where it works.
