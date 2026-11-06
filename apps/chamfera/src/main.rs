@@ -6,7 +6,7 @@
 //!          [--render] [--render-window WxH,SAMPLES]
 //!          [--hole] [--box X1,Y1,X2,Y2] [--search QUERY] [--context-menu X,Y]
 //!          [--press-pull X,Y,D] [--ribbon-menu GROUP] [--assistant-demo] [--size WxH]
-//!          [--history] [--recovery-demo]
+//!          [--history] [--recovery-demo] [--tutorial ID]
 //!          [--zoom F] [--screenshot shot.png]
 //!          [--sketch-input "tool line; click 0,0; hover 30,12; type 25"]
 //! ```
@@ -20,7 +20,7 @@ const USAGE: &str = "usage: chamfera [part.stl ...] [--sample] [--theme light|da
 [--script steps.json] [--parameters] [--configurations] [--preferences PAGE] [--drawing] [--extrude] \
 [--extrude-with JSON] [--hole] \
 [--box X1,Y1,X2,Y2] [--search QUERY] [--context-menu X,Y] [--press-pull X,Y,D] \
-[--ribbon-menu GROUP] [--assistant-demo] [--history] [--recovery-demo] [--render] [--render-window WxH,SAMPLES] [--size WxH] \
+[--ribbon-menu GROUP] [--assistant-demo] [--history] [--recovery-demo] [--tutorial ID] [--render] [--render-window WxH,SAMPLES] [--size WxH] \
 [--zoom F] \
 [--screenshot shot.png] \
 [--sketch-input \"tool line; click X,Y; hover X,Y; shift; type 25; tab\"]";
@@ -64,6 +64,14 @@ fn main() -> ExitCode {
                 }
             },
             "--assistant-demo" => options.assistant_demo = true,
+            "--tutorial" => match args.next() {
+                Some(id) => options.tutorial = Some(id),
+                None => {
+                    return fail(
+                        "--tutorial takes a tour: first-part, parametric-plate or first-drawing",
+                    );
+                }
+            },
             "--history" => options.history = true,
             "--recovery-demo" => options.recovery_demo = true,
             "--extrude" => options.extrude = true,

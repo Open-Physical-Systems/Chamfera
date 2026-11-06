@@ -71,7 +71,7 @@ token in `crates/render/src/theme.rs`; every measurement below is a constant in
   has the `selected` fill and an accent bar on its left; a hidden body is muted. Bodies have
   an eye toggle on the right. Double-click a plane to sketch on it, a sketch to edit it.
 - **Viewport**: the model. The view cube sits 78 points from the right edge; Home and Fit are
-  a small pill under it. An empty design shows one quiet hint card near the top.
+  a small pill under it. An empty design shows one quiet hint card near the top. On a start with nothing to open, the welcome panel (a dialog-framed card centred on the viewport: start, recent, learn, and a gallery of sample thumbnails) covers it until a sample, a design or the first sketch replaces the empty design. A guided tour shows a card at the viewport's bottom-left and outlines the tool to use in `accent`.
 - **Timeline** (`chrome`): one 30-point tile per sketch and feature, in build order, joined
   by short hairlines, ending in an orange marker. Suppressed features are faded with a
   slash; a failed feature has a red outline and a red badge, a feature built but not shown

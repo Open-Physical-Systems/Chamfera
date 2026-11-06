@@ -2124,6 +2124,7 @@ impl ChamferaApp {
                     t.has_menu(),
                 )
                 .on_hover_text(st.tip);
+                crate::tutorial_ui::note_tool_rect(ui.ctx(), t, r.rect);
                 if t.has_menu() {
                     menu_buttons.push((r, t));
                 } else if r.clicked() {
@@ -2140,12 +2141,12 @@ impl ChamferaApp {
                             ui.spacing_mut().item_spacing.x = S1;
                             for t in row {
                                 let st = state(t);
-                                if widgets::icon_button(
+                                let r = widgets::icon_button(
                                     ui, look, t.icon, GRID_CELL, 18.0, st.enabled, st.active,
                                 )
-                                .on_hover_text(st.tip)
-                                .clicked()
-                                {
+                                .on_hover_text(st.tip);
+                                crate::tutorial_ui::note_tool_rect(ui.ctx(), t, r.rect);
+                                if r.clicked() {
                                     clicked = Some(Clicked::Tool(t.action));
                                 }
                             }

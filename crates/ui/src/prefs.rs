@@ -56,6 +56,8 @@ pub struct Preferences {
     pub history_count: usize,
     /// Megabytes of snapshots each design's history keeps (at least 1).
     pub history_mb: u64,
+    /// Show the welcome panel when the app starts with nothing to open.
+    pub show_welcome: bool,
 }
 
 /// The Assistant's settings.
@@ -98,6 +100,7 @@ impl Default for Preferences {
             autosave_secs: 60,
             history_count: 50,
             history_mb: 500,
+            show_welcome: true,
         }
     }
 }
@@ -168,6 +171,7 @@ impl Preferences {
             "history_count": self.history_count,
             "history_mb": self.history_mb,
             "snap_to_grid": self.snap_to_grid,
+            "show_welcome": self.show_welcome,
             "assistant": {
                 "model": self.assistant.model.id(),
                 "effort": self.assistant.effort.key(),
@@ -232,6 +236,9 @@ impl Preferences {
         p.grid_spacing = number(&m, "grid_spacing", MIN_GRID, MAX_GRID);
         if let Some(b) = boolean(&m, "snap_to_grid") {
             p.snap_to_grid = b;
+        }
+        if let Some(b) = boolean(&m, "show_welcome") {
+            p.show_welcome = b;
         }
         if let Some(a) = number(&m, "autosave_secs", 0.0, f64::from(MAX_AUTOSAVE_SECS))
             .filter(|a| *a == 0.0 || *a >= f64::from(MIN_AUTOSAVE_SECS))
@@ -390,6 +397,7 @@ mod tests {
             autosave_secs: 30,
             history_count: 7,
             history_mb: 12,
+            show_welcome: false,
         }
     }
 
