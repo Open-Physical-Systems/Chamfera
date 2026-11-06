@@ -10,6 +10,7 @@ mod hole;
 mod inspect;
 mod param;
 mod select;
+mod sheet;
 mod sketch;
 mod transform;
 mod view;
@@ -44,6 +45,7 @@ pub fn registry() -> Vec<&'static CommandSpec> {
         inspect::COMMANDS,
         param::COMMANDS,
         select::COMMANDS,
+        sheet::COMMANDS,
         sketch::COMMANDS,
         transform::COMMANDS,
         view::COMMANDS,

@@ -4,6 +4,7 @@ pub mod construct;
 pub mod expr;
 pub mod feature;
 pub mod imported;
+pub mod sheet;
 
 pub use construct::{
     AxisRef, ConstructKind, Construction, EdgeRef, OriginAxis, OriginPlane, PlaneRef, PointRef,
@@ -14,6 +15,10 @@ pub use feature::{
     Pattern, PatternLayout, Revolve, Shell,
 };
 pub use imported::ImportedBody;
+pub use sheet::{
+    FlangePosition, FlangeSide, FlangeValues, ReliefShape, SheetBase, SheetFlange, SheetRule,
+    SheetUnfold,
+};
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -41,7 +46,12 @@ use thiserror::Error;
 ///   distance from the sketch plane without a taper.
 /// - 14: mirror and move/copy of bodies and features.
 /// - 19: projected (linked) sketch curves and ellipses.
-pub const FORMAT_VERSION: u32 = 19;
+/// - 20, 21 and 22 are taken by work in progress on other branches (CAM, appearances,
+///   face editing).
+/// - 23: sheet metal: named rules (`sheet_rules`: thickness, bend radius, K-factor,
+///   relief) and the `sheet_base`, `sheet_flange` and `sheet_unfold` features. Older
+///   files open with no rules.
+pub const FORMAT_VERSION: u32 = 23;
 /// The tag every design file starts with, so other JSON is not mistaken for a design.
 pub const FORMAT_TAG: &str = "chamfera";
 /// Longest parameter name.
@@ -207,6 +217,9 @@ pub struct Document {
     /// Solid bodies imported from other CAD files (STEP), kept as exact B-rep bodies.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub imported: Vec<ImportedBody>,
+    /// Sheet metal rules, by name (format 23).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sheet_rules: Vec<SheetRule>,
 }
 
 impl Default for Document {
@@ -219,6 +232,7 @@ impl Default for Document {
             features: Vec::new(),
             last_feature_id: 0,
             imported: Vec::new(),
+            sheet_rules: Vec::new(),
         }
     }
 }
@@ -614,6 +628,8 @@ impl Document {
         checked.features = doc.features;
         imported::check(&doc.imported, &mut seen, checked.last_feature_id)?;
         checked.imported = doc.imported;
+        Document::check_sheet_rules(&doc.sheet_rules)?;
+        checked.sheet_rules = doc.sheet_rules;
         // Values in the file must agree with their expressions.
         checked.evaluate()?;
         Ok(checked)

@@ -77,6 +77,11 @@ impl ChamferaApp {
             .collect();
         items.extend(doc.features.iter().map(|f| {
             let (icon, details) = match &f.kind {
+                k @ (FeatureKind::SheetBase(_)
+                | FeatureKind::SheetFlange(_)
+                | FeatureKind::SheetUnfold(_)) => {
+                    crate::sheet_ui::feature_summary(k).unwrap_or((Icon::Body, String::new()))
+                }
                 FeatureKind::Extrude(e) => (
                     Icon::Extrude,
                     format!(
@@ -362,6 +367,10 @@ impl ChamferaApp {
             self.solid.hole = Some(crate::hole_ui::HoleTool::editing(id, h));
             return;
         }
+        if crate::sheet_ui::feature_summary(&f.kind).is_some() {
+            self.edit_sheet_feature(id);
+            return;
+        }
         let (distance, extrude) = match &f.kind {
             FeatureKind::Extrude(e) => (e.distance.clone(), Some(ExtrudeForm::from_extrude(e))),
             FeatureKind::Revolve(r) => (r.angle.clone(), None),
@@ -372,6 +381,9 @@ impl ChamferaApp {
             FeatureKind::Mirror(m) => (crate::transform_ui::mirror_details(m), None),
             FeatureKind::Move(m) => (crate::transform_ui::move_details(m), None),
             FeatureKind::Shell(sh) => (sh.thickness.clone(), None),
+            FeatureKind::SheetBase(_)
+            | FeatureKind::SheetFlange(_)
+            | FeatureKind::SheetUnfold(_) => return,
         };
         self.timeline.editing = Some(FeatureEdit {
             feature: id,

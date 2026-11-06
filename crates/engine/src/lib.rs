@@ -13,6 +13,7 @@ mod params;
 pub mod pick_filter;
 pub mod projection;
 pub mod script;
+pub mod sheet;
 pub mod sketching;
 pub mod solids;
 

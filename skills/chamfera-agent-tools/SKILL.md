@@ -38,6 +38,9 @@ It uses the GPU if there is one, else a software Vulkan driver (lavapipe, `mesa-
 - `construct.pick {x, y, width, height}` names the face, nearest edge and vertex under a pixel in the form these commands take.
 - `sketch.create {"plane": <plane id>}` sketches on a construction plane and follows it; `solid.revolve` and `solid.pattern_circular` take `axis_feature` (`examples/construction-planes.json`).
 
+## Sheet metal
+- `sheet.rule {name, thickness, bend_radius, k_factor, relief, relief_width, relief_depth}` makes or changes a named rule; `sheet.base {sketch, profile: {x, y}, rule}` thickens a closed profile; `sheet.flange {edge, height, angle, position, side, offset_start, offset_end}` bends a wall up from a straight edge (names from `solid.edges`); `sheet.flat_pattern` unfolds it (replies with `length`, `width`, `area` and each bend's `allowance`) and `sheet.export_flat {path}` writes the outline as DXF. `examples/sheet-bracket.json` builds a bracket and its flat pattern.
+
 ## Commands and scripts
 - `chamfera-cli commands` lists every command; `chamfera-cli exec <id> '<json>'` runs one.
 - `chamfera-cli run script.json` runs a list of `{"command", "params"}` steps and prints one reply per line (`examples/parameters.json`).

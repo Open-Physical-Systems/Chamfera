@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+  <!-- Chamfera interface icon: flat pattern (a sheet laid flat, bend lines dashed). Original artwork, MIT OR Apache-2.0. -->
+  <path stroke="#2B313B" d="M3.5 13.5h17v5h-17z"/>
+  <path stroke="#2B313B" stroke-dasharray="1.5 2" d="M9 13.5v5M15 13.5v5"/>
+  <path stroke="#E8770E" d="M5.5 9.5a6.5 5 0 0 1 13 0"/>
+  <path stroke="#E8770E" d="M16 8.25l2.5 1.25 1.25-2.5"/>
+</svg>

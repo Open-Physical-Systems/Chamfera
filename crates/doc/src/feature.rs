@@ -466,6 +466,10 @@ pub enum FeatureKind {
     Mirror(Mirror),
     Move(Move),
     Shell(Shell),
+    /// Sheet metal: a base flange, a flange on an edge, a flat pattern.
+    SheetBase(crate::SheetBase),
+    SheetFlange(crate::SheetFlange),
+    SheetUnfold(crate::SheetUnfold),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -486,6 +490,8 @@ impl FeatureKind {
             FeatureKind::Extrude(e) => Some(e.sketch),
             FeatureKind::Revolve(r) => Some(r.sketch),
             FeatureKind::Hole(h) => h.sketch,
+            FeatureKind::SheetBase(b) => Some(b.sketch),
+            FeatureKind::SheetFlange(_) | FeatureKind::SheetUnfold(_) => None,
             FeatureKind::Pattern(_)
             | FeatureKind::Construct(_)
             | FeatureKind::Blend(_)
@@ -502,6 +508,9 @@ impl FeatureKind {
             FeatureKind::Revolve(r) => r.operation,
             FeatureKind::Hole(_) => Operation::Cut,
             FeatureKind::Mirror(m) => m.operation,
+            FeatureKind::SheetBase(_)
+            | FeatureKind::SheetFlange(_)
+            | FeatureKind::SheetUnfold(_) => Operation::NewBody,
             FeatureKind::Pattern(_)
             | FeatureKind::Construct(_)
             | FeatureKind::Blend(_)
@@ -514,6 +523,8 @@ impl FeatureKind {
         match self {
             FeatureKind::Extrude(e) => &e.profiles,
             FeatureKind::Revolve(r) => &r.profiles,
+            FeatureKind::SheetBase(b) => &b.profiles,
+            FeatureKind::SheetFlange(_) | FeatureKind::SheetUnfold(_) => &[],
             FeatureKind::Pattern(_)
             | FeatureKind::Hole(_)
             | FeatureKind::Construct(_)
@@ -544,6 +555,9 @@ impl FeatureKind {
                 }
             }
             FeatureKind::Shell(_) => "Shell",
+            FeatureKind::SheetBase(_) => "BaseFlange",
+            FeatureKind::SheetFlange(_) => "Flange",
+            FeatureKind::SheetUnfold(_) => "FlatPattern",
         }
     }
 
@@ -581,6 +595,12 @@ impl FeatureKind {
                 MoveTransform::PointToPoint { .. } => Vec::new(),
             },
             FeatureKind::Shell(s) => vec![s.thickness.as_str()],
+            FeatureKind::SheetFlange(f) => std::iter::once(&f.height)
+                .chain(std::iter::once(&f.angle))
+                .chain([&f.offset_start, &f.offset_end].into_iter().flatten())
+                .map(String::as_str)
+                .collect(),
+            FeatureKind::SheetBase(_) | FeatureKind::SheetUnfold(_) => Vec::new(),
             FeatureKind::Pattern(p) => match &p.layout {
                 PatternLayout::Linear { spacing, .. } => vec![p.count.as_str(), spacing.as_str()],
                 PatternLayout::Circular { angle, .. } => vec![p.count.as_str(), angle.as_str()],
@@ -609,6 +629,12 @@ impl Document {
         }
         if let FeatureKind::Construct(c) = kind {
             return self.check_construction(c);
+        }
+        if let FeatureKind::SheetFlange(f) = kind {
+            return self.check_sheet_flange(f);
+        }
+        if let FeatureKind::SheetUnfold(u) = kind {
+            return self.check_sheet_unfold(u);
         }
         if let FeatureKind::Blend(b) = kind {
             if b.edges.is_empty() || b.edges.len() > MAX_BLEND_EDGES {
@@ -666,6 +692,8 @@ impl Document {
         }
         match kind {
             FeatureKind::Extrude(e) => self.check_extrude(e)?,
+            FeatureKind::SheetBase(b) => self.check_sheet_base(b)?,
+            FeatureKind::SheetFlange(_) | FeatureKind::SheetUnfold(_) => {}
             FeatureKind::Pattern(_)
             | FeatureKind::Hole(_)
             | FeatureKind::Construct(_)
@@ -1138,7 +1166,14 @@ impl Document {
                 FeatureKind::Extrude(e) => {
                     matches!(&e.to, Some(ExtrudeTo::Face(r)) if r.feature == feature)
                 }
-                FeatureKind::Blend(_) | FeatureKind::Shell(_) | FeatureKind::Move(_) => false,
+                FeatureKind::SheetFlange(f) => {
+                    crate::sheet::referenced_features(&f.edge).contains(&feature)
+                }
+                FeatureKind::SheetUnfold(u) => u.base == feature,
+                FeatureKind::SheetBase(_)
+                | FeatureKind::Blend(_)
+                | FeatureKind::Shell(_)
+                | FeatureKind::Move(_) => false,
             })
             .map(|f| f.name.clone());
         sketches.chain(features).collect()

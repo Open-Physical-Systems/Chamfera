@@ -228,6 +228,8 @@ pub struct Built {
     pub display_errors: BTreeMap<u32, String>,
     /// Construction planes, axes and points, by feature id.
     pub constructs: BTreeMap<u32, crate::construct::Constructed>,
+    /// Sheet metal parts and flat patterns.
+    pub sheet: crate::sheet::SheetState,
 }
 
 /// A sketch loop as exact kernel profile edges: lines stay lines, arcs and circles stay
@@ -278,7 +280,7 @@ fn region_profile(sketch: &Sketch, r: &Region) -> Result<Profile, String> {
 }
 
 /// The profiles a feature uses, found from its seed points.
-fn feature_profiles(
+pub(crate) fn feature_profiles(
     f: &chamfera_doc::SketchFeature,
     seeds: &[Point2],
 ) -> Result<Vec<Profile>, String> {
@@ -984,6 +986,16 @@ impl Session {
                 }
                 continue;
             }
+            if crate::sheet::is_sheet_feature(&feature.kind) {
+                let mut next = made.clone();
+                match crate::sheet::build_feature(&self.doc, feature, &mut next, &mut built.sheet) {
+                    Ok(()) => made = next,
+                    Err(e) => {
+                        built.errors.insert(feature.id, e);
+                    }
+                }
+                continue;
+            }
             let result = match &feature.kind {
                 FeatureKind::Extrude(e) => {
                     let bodies: Vec<&Body> = made.iter().map(|m| &m.2).collect();
@@ -996,7 +1008,10 @@ impl Session {
                 | FeatureKind::Shell(_)
                 | FeatureKind::Mirror(_)
                 | FeatureKind::Move(_)
-                | FeatureKind::Hole(_) => continue,
+                | FeatureKind::Hole(_)
+                | FeatureKind::SheetBase(_)
+                | FeatureKind::SheetFlange(_)
+                | FeatureKind::SheetUnfold(_) => continue,
             };
             let operation = feature.kind.operation();
             let result = result.map(|bodies| {

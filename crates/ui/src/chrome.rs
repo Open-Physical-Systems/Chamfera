@@ -166,12 +166,25 @@ impl ChamferaApp {
         ui.add_space(2.0);
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = S2;
-            self.tab(ui, "SOLID", !sketching, !sketching)
+            let sheet = self.sheet_metal.active && !sketching;
+            if self
+                .tab(ui, "SOLID", !sketching && !sheet, !sketching)
                 .on_hover_text(if sketching {
                     "Finish the sketch to use the solid tools"
                 } else {
                     "Solid modelling: sketches, extrudes and revolves"
-                });
+                })
+                .clicked()
+            {
+                self.sheet_metal.active = false;
+            }
+            if self
+                .tab(ui, "SHEET METAL", sheet, !sketching)
+                .on_hover_text("Sheet metal: base flanges, flanges, flat patterns and rules")
+                .clicked()
+            {
+                self.sheet_metal.active = true;
+            }
             if sketching {
                 self.tab(ui, "SKETCH", true, true)
                     .on_hover_text("Editing a sketch: draw, constrain and dimension");
@@ -193,6 +206,8 @@ impl ChamferaApp {
                     ui.spacing_mut().item_spacing.x = 0.0;
                     if sketching {
                         self.sketch_toolbar(ui);
+                    } else if self.sheet_metal.active {
+                        self.sheet_toolbar(ui);
                     } else {
                         self.solid_toolbar(ui);
                     }

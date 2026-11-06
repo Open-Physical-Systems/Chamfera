@@ -28,6 +28,7 @@ pub const PATH_COMMANDS: &[(&str, Access)] = &[
     ("design.export_step", Access::Write),
     ("design.export_stl", Access::Write),
     ("design.save", Access::Write),
+    ("sheet.export_flat", Access::Write),
 ];
 
 /// Longest path accepted (bytes).

@@ -30,6 +30,7 @@ static SHOT_FAILED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBoo
 mod icons;
 mod params_ui;
 mod search;
+mod sheet_ui;
 mod shell_ui;
 mod shortcuts;
 mod sketch_select;
@@ -143,6 +144,8 @@ pub struct ChamferaApp {
     sketch: sketch_ui::SketchUi,
     params: params_ui::ParamsUi,
     solid: solid_ui::SolidUi,
+    /// The SHEET METAL workspace (`sheet_ui`).
+    sheet_metal: sheet_ui::SheetUi,
     construct: construct_ui::ConstructUi,
     file: file_ui::FileUi,
     browser: browser::BrowserUi,
@@ -225,6 +228,7 @@ impl ChamferaApp {
             sketch: sketch_ui::SketchUi::default(),
             params: params_ui::ParamsUi::default(),
             solid: solid_ui::SolidUi::default(),
+            sheet_metal: sheet_ui::SheetUi::default(),
             construct: construct_ui::ConstructUi::default(),
             file: file_ui::FileUi::default(),
             browser: browser::BrowserUi::default(),
@@ -247,7 +251,10 @@ impl ChamferaApp {
         }
         if !options.script.is_empty() {
             match chamfera_engine::script::run_steps(&mut app.session, &options.script) {
-                Ok(replies) => app.inspect_from_script(&options.script, &replies),
+                Ok(replies) => {
+                    app.inspect_from_script(&options.script, &replies);
+                    app.sheet_from_script(&options.script, &replies);
+                }
                 Err(e) => app.message = Some((e.to_string(), true)),
             }
         }
@@ -478,6 +485,16 @@ impl ChamferaApp {
             self.shell_click(x, y, w, h);
             return;
         }
+        if self.sheet_tool_open() {
+            let clicked = response
+                .clicked()
+                .then(|| response.interact_pointer_pos().map(local))
+                .flatten();
+            let at = clicked.or_else(|| response.hover_pos().map(local));
+            if self.sheet_input(at, clicked.is_some(), w, h) {
+                return;
+            }
+        }
         if self.solid.extrude.is_some()
             && response.clicked()
             && let Some(pos) = response.interact_pointer_pos()
@@ -560,6 +577,8 @@ impl ChamferaApp {
         }
         let blends = self.blend_overlays();
         self.session.scene.overlays.extend(blends);
+        let sheet = self.sheet_overlays();
+        self.session.scene.overlays.extend(sheet);
         let holes = self.hole_overlays();
         self.session.scene.overlays.extend(holes);
         self.inspect_overlays();
@@ -801,6 +820,7 @@ impl eframe::App for ChamferaApp {
             self.transform_dialog(&ctx);
             self.inspect_dialog(&ctx);
             self.shell_dialog(&ctx);
+            self.sheet_dialogs(&ctx);
             self.feature_dialog(&ctx);
             self.construct_dialog(&ctx);
             self.rename_dialog(&ctx);

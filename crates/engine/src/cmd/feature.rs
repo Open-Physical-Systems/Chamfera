@@ -34,6 +34,8 @@ pub static COMMANDS: &[CommandSpec] = &[
                  copy: boolean (optional) - whether a move keeps the originals\n\
                  thickness: string or number (optional) - new shell wall thickness\n\
                  faces: list of strings (optional) - new open faces of a shell\n\
+                 height, angle, position, side, offset_start, offset_end, edge (optional) - a flange's new values, as for sheet.flange\n\
+                 rule: string, reversed: boolean (optional) - a base flange's new rule and direction\n\
                  suppressed: boolean (optional)",
         mutates: true,
         run: edit,
@@ -675,8 +677,14 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
             FeatureKind::Shell(_) => {
                 return Err(bad("a shell has no operation"));
             }
+            FeatureKind::SheetBase(_)
+            | FeatureKind::SheetFlange(_)
+            | FeatureKind::SheetUnfold(_) => {
+                return Err(bad("sheet metal features have no operation"));
+            }
         }
     }
+    super::sheet::edit(s, &mut kind, p)?;
     let hole_keys = super::hole::EDIT_KEYS
         .iter()
         .any(|k| p.get(*k).is_some_and(|v| !v.is_null()));
@@ -737,8 +745,8 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
                 *angle = a;
             }
         }
-        // A move's angle was applied by edit_transform above.
-        FeatureKind::Move(_) => {}
+        // A move's angle was applied by edit_transform above, a flange's by sheet::edit.
+        FeatureKind::Move(_) | FeatureKind::SheetFlange(_) => {}
         _ if new_angle.is_some() => {
             return Err(bad("angle belongs to planes at an angle"));
         }
