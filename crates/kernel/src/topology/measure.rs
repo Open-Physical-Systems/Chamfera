@@ -137,6 +137,13 @@ fn horizontal_term(m: &Meridian, kind: Integrand, v: f64, u0: f64, u1: f64) -> f
     }
 }
 
+/// The refusal of a volume for an open (surface) body.
+pub(crate) fn open_volume() -> KernelError {
+    KernelError::InvalidInput(
+        "the body is a surface (an open shell with boundary edges), so it encloses no volume; stitch it closed or thicken it first".into(),
+    )
+}
+
 /// `F(u, v)` itself.
 fn potential(m: &Meridian, kind: Integrand, u: f64, v: f64) -> f64 {
     match kind {
@@ -291,8 +298,12 @@ impl Body {
         Ok(self.curved_integral(face, Integrand::Volume(local))?.0)
     }
 
-    /// The volume enclosed by one closed shell.
+    /// The volume enclosed by one closed shell. An open shell (of a surface body) encloses
+    /// none and is refused.
     pub fn shell_volume(&self, shell: ShellId) -> KernelResult<f64> {
+        if self.shell_is_open(shell)? {
+            return Err(open_volume());
+        }
         let faces = self.shell_faces(shell)?;
         let Some(first) = faces.first() else {
             return Ok(0.0);
@@ -311,8 +322,11 @@ impl Body {
         Ok(v / 3.0)
     }
 
-    /// The volume of the body: the sum over its shells.
+    /// The volume of the body: the sum over its shells. Refused for a surface body.
     pub fn volume(&self) -> KernelResult<f64> {
+        if self.is_open() {
+            return Err(open_volume());
+        }
         self.shells()
             .into_iter()
             .map(|s| self.shell_volume(s))

@@ -92,6 +92,27 @@ pub enum TopologyError {
     NotOutward(ShellId),
     #[error("{0} is a void (its faces point inward) that does not lie inside a lump of the body")]
     VoidOutside(ShellId),
+    #[error(
+        "{0} is open (it has boundary edges): this is a surface body, not a closed solid; stitch or patch it closed, or thicken it"
+    )]
+    OpenShell(ShellId),
+    #[error("{0} has an opening on both sides (an edge of no face)")]
+    BareEdge(EdgeId),
+    #[error("{0} is only openings: a shell needs at least one face")]
+    OnlyOpenings(ShellId),
+    #[error("{0} is an opening of an open shell but carries a surface or rings")]
+    BadOpening(FaceId),
+}
+
+/// What [`Body::validate_as`] checks the body as.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Validation {
+    /// A closed solid: every shell closed, enclosing volume (as [`Body::validate`]).
+    #[default]
+    Solid,
+    /// A surface body: shells may be open (boundary edges with one face); every face is
+    /// checked as for a solid, but no shell needs to enclose volume.
+    Surface,
 }
 
 impl From<TopologyError> for crate::KernelError {
@@ -190,6 +211,19 @@ impl Body {
                 .is_some_and(|n| n.len() > MAX_NAME_LENGTH)
             {
                 return Err(TopologyError::NameTooLong(f.to_string()));
+            }
+            if face.boundary && (face.surface.is_some() || !face.inner.is_empty()) {
+                return Err(TopologyError::BadOpening(f));
+            }
+        }
+        for (si, shell) in self.shells.live() {
+            let all_open = shell.faces.iter().all(|f| {
+                self.faces
+                    .get(f.index())
+                    .is_some_and(|face| face.boundary)
+            });
+            if all_open {
+                return Err(TopologyError::OnlyOpenings(ShellId::from_index(si)));
             }
         }
 
@@ -300,6 +334,15 @@ impl Body {
                 && self.curves.get(c.curve.index()).is_none()
             {
                 return Err(dangling(e, c.curve));
+            }
+            let opening = |h: &super::HalfEdge| {
+                self.loops
+                    .get(h.lp.index())
+                    .and_then(|l| self.faces.get(l.face.index()))
+                    .is_some_and(|f| f.boundary)
+            };
+            if opening(ha) && opening(hb) {
+                return Err(TopologyError::BareEdge(e));
             }
             if edge
                 .name
@@ -466,7 +509,24 @@ impl Body {
     /// non-zero volume, positive for a lump and negative for a void inside a lump (which also
     /// catches a face whose orientation flag is wrong; see `check_shell_volumes`).
     pub fn validate(&self) -> Result<TopologyReport, TopologyError> {
+        self.validate_as(Validation::Solid)
+    }
+
+    /// [`Body::validate`] for a solid; for a surface body ([`Validation::Surface`]) the
+    /// same checks except that shells may be open and need not enclose volume (the
+    /// orientation of neighbouring faces is still consistent: every edge's two uses run in
+    /// opposite directions, an opening's included). [`Validation::Solid`] fails with
+    /// [`TopologyError::OpenShell`] on an open shell.
+    pub fn validate_as(&self, mode: Validation) -> Result<TopologyReport, TopologyError> {
         let report = self.validate_loaded()?;
+        if mode == Validation::Solid {
+            for (si, _) in self.shells.live() {
+                let s = ShellId::from_index(si);
+                if self.shell_is_open(s).unwrap_or(true) {
+                    return Err(TopologyError::OpenShell(s));
+                }
+            }
+        }
         for (ei, edge) in self.edges.live() {
             let e = EdgeId::from_index(ei);
             let Some((c, t0, t1)) = self.edge_curve(e).ok().flatten() else {
@@ -494,8 +554,7 @@ impl Body {
                 return Err(TopologyError::WireEdge(e));
             }
         }
-        for (fi, _) in self.faces.live() {
-            let f = FaceId::from_index(fi);
+        for f in self.faces() {
             let Some((surface, same_sense)) = self.face_surface(f).ok().flatten() else {
                 return Err(TopologyError::MissingSurface(f));
             };
@@ -504,7 +563,9 @@ impl Body {
                 _ => self.check_curved_face(f, &surface, same_sense)?,
             }
         }
-        self.check_shell_volumes()?;
+        if mode == Validation::Solid {
+            self.check_shell_volumes()?;
+        }
         Ok(report)
     }
 

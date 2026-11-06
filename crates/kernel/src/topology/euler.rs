@@ -194,6 +194,7 @@ impl Body {
             surface: None,
             same_sense: true,
             name: None,
+            boundary: false,
         });
         self.shells.push(Shell { faces: vec![face] });
         Ok(Mvfs {
@@ -352,6 +353,7 @@ impl Body {
             surface: None,
             same_sense: true,
             name: None,
+            boundary: false,
         });
         if let Some(s) = self.shells.get_mut(shell.index()) {
             s.faces.push(new_face);
@@ -575,6 +577,7 @@ impl Body {
             surface: None,
             same_sense: true,
             name: None,
+            boundary: false,
         }));
         if let Some(l) = self.loops.get_mut(ring.index()) {
             l.face = new_face;

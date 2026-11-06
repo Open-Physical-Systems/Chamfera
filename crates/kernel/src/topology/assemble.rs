@@ -73,6 +73,29 @@ impl Body {
         edges: &[ListEdge],
         faces: &[ListFace],
     ) -> KernelResult<Body> {
+        Body::assemble(vertices, edges, faces, false)
+    }
+
+    /// [`Body::from_face_list`] for a surface body: an edge may also be used once, by one
+    /// face. Each missing use becomes a half-edge of a boundary face (an opening, see the
+    /// module documentation of `topology`): the missing uses chain head to tail into the
+    /// loops of the openings, one opening per loop. Where two missing uses start at one
+    /// vertex (sheets touching at a point) the list is refused. A list where every edge is
+    /// used twice gives the same closed body as [`Body::from_face_list`].
+    pub(crate) fn from_face_list_open(
+        vertices: &[ListVertex],
+        edges: &[ListEdge],
+        faces: &[ListFace],
+    ) -> KernelResult<Body> {
+        Body::assemble(vertices, edges, faces, true)
+    }
+
+    fn assemble(
+        vertices: &[ListVertex],
+        edges: &[ListEdge],
+        faces: &[ListFace],
+        open: bool,
+    ) -> KernelResult<Body> {
         let loops_total: usize = faces.iter().map(|f| f.loops.len()).sum();
         let uses_total: usize = faces.iter().flat_map(|f| &f.loops).map(Vec::len).sum();
         if [
@@ -139,6 +162,64 @@ impl Body {
                 }
             }
         }
+        // Openings: each missing use, chained head to tail into loops.
+        let mut openings: Vec<Vec<(usize, bool)>> = Vec::new();
+        if open {
+            let mut missing: Vec<(usize, bool)> = Vec::new();
+            let mut starting: std::collections::HashMap<usize, usize> =
+                std::collections::HashMap::new();
+            for (e, edge) in edges.iter().enumerate() {
+                if halves[e].iter().all(Option::is_none) {
+                    return Err(bad(format!("edge {e} is used by no face")));
+                }
+                for (slot, fwd) in [(0usize, true), (1, false)] {
+                    if halves[e][slot].is_none() {
+                        let origin = edge.vertices[usize::from(!fwd)];
+                        if starting.insert(origin, missing.len()).is_some() {
+                            return Err(bad(format!(
+                                "the surface's rim passes vertex {origin} more than once (sheets touching at a point)"
+                            )));
+                        }
+                        missing.push((e, fwd));
+                    }
+                }
+            }
+            let mut done = vec![false; missing.len()];
+            for start in 0..missing.len() {
+                if done[start] {
+                    continue;
+                }
+                let mut cycle = Vec::new();
+                let mut k = start;
+                for _ in 0..=missing.len() {
+                    if done[k] {
+                        break;
+                    }
+                    done[k] = true;
+                    let (e, fwd) = missing[k];
+                    cycle.push((e, fwd));
+                    let end = edges[e].vertices[usize::from(fwd)];
+                    k = *starting.get(&end).ok_or_else(|| {
+                        bad(format!("the rim does not close at vertex {end}"))
+                    })?;
+                }
+                if k != start {
+                    return Err(bad("the rim of the surface does not close into loops"));
+                }
+                // Number the opening's half-edges after every face's.
+                for &(e, fwd) in &cycle {
+                    halves[e][usize::from(!fwd)] = Some(h);
+                    h += 1;
+                }
+                // The opening joins the shell of the face across its first edge.
+                parent.push(parent.len());
+                if let Some(f) = cycle.first().and_then(|(e, _)| edge_face[*e]) {
+                    let (a, b) = (root(&mut parent, f), parent.len() - 1);
+                    parent[b] = a;
+                }
+                openings.push(cycle);
+            }
+        }
         for (e, edge) in edges.iter().enumerate() {
             if halves[e].iter().any(Option::is_none) {
                 return Err(bad(format!(
@@ -157,9 +238,10 @@ impl Body {
 
         let mut body = Body::new();
         // Shells: one per connected component, in order of their first face.
-        let mut shell_of_root: Vec<Option<usize>> = vec![None; faces.len()];
-        let mut face_shell = Vec::with_capacity(faces.len());
-        for fi in 0..faces.len() {
+        let all_faces = faces.len() + openings.len();
+        let mut shell_of_root: Vec<Option<usize>> = vec![None; all_faces];
+        let mut face_shell = Vec::with_capacity(all_faces);
+        for fi in 0..all_faces {
             let r = root(&mut parent, fi);
             let s = match shell_of_root[r] {
                 Some(s) => s,
@@ -238,7 +320,43 @@ impl Body {
                 surface: Some(SurfaceId::from_index(s)),
                 same_sense: f.same_sense,
                 name: f.name.clone(),
+                boundary: false,
             });
+            if let Some(sh) = body.shells.get_mut(shell) {
+                sh.faces.push(FaceId::from_index(fi));
+            }
+        }
+        for (j, cycle) in openings.iter().enumerate() {
+            let fi = faces.len() + j;
+            let first = h;
+            let n = cycle.len();
+            for (k, &(e, fwd)) in cycle.iter().enumerate() {
+                let origin = edges[e].vertices[usize::from(!fwd)];
+                vertex_half[origin].get_or_insert(h);
+                body.half_edges.push(HalfEdge {
+                    lp: LoopId::from_index(lp_index),
+                    edge: Some(EdgeId::from_index(e)),
+                    origin: VertexId::from_index(origin),
+                    next: HalfEdgeId::from_index(first + (k + 1) % n),
+                    prev: HalfEdgeId::from_index(first + (k + n - 1) % n),
+                });
+                h += 1;
+            }
+            body.loops.push(Loop {
+                face: FaceId::from_index(fi),
+                first: HalfEdgeId::from_index(first),
+            });
+            let shell = face_shell[fi];
+            body.faces.push(Face {
+                shell: ShellId::from_index(shell),
+                outer: LoopId::from_index(lp_index),
+                inner: Vec::new(),
+                surface: None,
+                same_sense: true,
+                name: None,
+                boundary: true,
+            });
+            lp_index += 1;
             if let Some(sh) = body.shells.get_mut(shell) {
                 sh.faces.push(FaceId::from_index(fi));
             }

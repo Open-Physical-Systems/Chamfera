@@ -20,6 +20,19 @@
 //!   one-vertex loop (made by [`Body::mvfs`]).
 //! - A vertex knows one half-edge starting at it and its point.
 //!
+//! # Surface bodies (open shells)
+//! A body may also be a *surface body*: one or more open shells, sheets of faces with
+//! boundary edges that have a face on one side only. The half-edge structure keeps every
+//! edge two-sided by closing each hole of an open shell with a *boundary face*: a face
+//! flagged as an opening, with no surface, that is not part of the model (the "boundary
+//! half-edges" of Botsch et al., *Polygon Mesh Processing*, 2010, section 2.5, grouped
+//! into loops of a face as in Mantyla's lamina). Euler operators, links and
+//! Euler-Poincare work unchanged on the closed structure. The public queries hide the
+//! boundary faces: [`Body::faces`], [`Body::shell_faces`] and [`Body::summary`] list the
+//! real faces only, [`Body::boundary_edges`] the edges on the rim, and [`Body::is_open`]
+//! tells a surface body from a solid. [`Body::validate`] refuses open shells;
+//! [`Body::validate_as`] with [`Validation::Surface`] accepts them.
+//!
 //! Orientation: seen from outside the solid (against the outward normal), a face's outer
 //! loop runs counter-clockwise and its inner loops clockwise, so the face is always on the
 //! left of its half-edges.
@@ -43,6 +56,7 @@ mod euler;
 mod geometry;
 mod import;
 mod measure;
+mod open;
 mod spline;
 mod transform;
 mod uv;
@@ -57,9 +71,10 @@ pub use build::MAX_PROFILE_VERTICES;
 pub use euler::Mvfs;
 pub use geometry::Curve;
 pub use measure::SURFACE_QUADRATURE_TOLERANCE;
+pub(crate) use measure::open_volume;
 pub use uv::PointOnFace;
 pub(crate) use uv::{EdgeImage, LoopImage};
-pub use validate::{ShellReport, TopologyError, TopologyReport};
+pub use validate::{ShellReport, TopologyError, TopologyReport, Validation};
 
 use crate::{KernelError, KernelResult, Segment3};
 use chamfera_geom::{Aabb, Frame, LINEAR_TOLERANCE, Point3, Vec3};
@@ -196,6 +211,14 @@ struct Face {
     /// True when the face's outward normal is the surface normal.
     same_sense: bool,
     name: Option<String>,
+    /// True for a boundary face: an opening of an open shell, not part of the model (see
+    /// the module documentation). It has no surface.
+    #[serde(default, skip_serializing_if = "is_false")]
+    boundary: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -416,10 +439,17 @@ impl Body {
         Body::default()
     }
 
-    /// Entity counts.
+    /// Entity counts. Boundary faces (the openings of a surface body) and their loops are
+    /// not counted, so for an open shell `V - E + F` is the Euler characteristic of the
+    /// surface itself, `2 - 2g - b` with `b` holes.
     pub fn summary(&self) -> TopologySummary {
-        let faces = self.faces.count();
-        let loops = self.loops.count();
+        let faces = self.faces.live().filter(|(_, f)| !f.boundary).count();
+        let loops = self
+            .faces
+            .live()
+            .filter(|(_, f)| !f.boundary)
+            .map(|(_, f)| 1 + f.inner.len())
+            .sum();
         TopologySummary {
             shells: self.shells.count(),
             faces,
@@ -437,12 +467,53 @@ impl Body {
             .map(|(i, _)| ShellId::from_index(i))
             .collect()
     }
-    /// Every face of the body, in id order.
+    /// Every face of the body, in id order (not the boundary faces of an open shell).
     pub fn faces(&self) -> Vec<FaceId> {
         self.faces
             .live()
+            .filter(|(_, f)| !f.boundary)
             .map(|(i, _)| FaceId::from_index(i))
             .collect()
+    }
+    /// The boundary faces: the openings of open shells (none for a solid).
+    pub fn boundary_faces(&self) -> Vec<FaceId> {
+        self.faces
+            .live()
+            .filter(|(_, f)| f.boundary)
+            .map(|(i, _)| FaceId::from_index(i))
+            .collect()
+    }
+    /// True for a surface body: some shell is open (has boundary edges).
+    pub fn is_open(&self) -> bool {
+        self.faces.live().any(|(_, f)| f.boundary)
+    }
+    /// True when `face` is a boundary face (an opening, not part of the model).
+    pub fn face_is_boundary(&self, face: FaceId) -> KernelResult<bool> {
+        Ok(self.face(face)?.boundary)
+    }
+    /// True when `e` lies on the rim of an open shell: one of its sides is an opening.
+    pub fn edge_is_boundary(&self, e: EdgeId) -> KernelResult<bool> {
+        let [a, b] = self.edge_faces(e)?;
+        Ok(self.face(a)?.boundary || self.face(b)?.boundary)
+    }
+    /// The edges on the rims of open shells, in id order.
+    pub fn boundary_edges(&self) -> Vec<EdgeId> {
+        self.edges()
+            .into_iter()
+            .filter(|e| self.edge_is_boundary(*e).unwrap_or(false))
+            .collect()
+    }
+    /// The face on the model side of a boundary edge (`None` for an edge that is not on a
+    /// rim) and the half-edge it uses.
+    pub fn boundary_edge_face(&self, e: EdgeId) -> KernelResult<Option<(FaceId, HalfEdgeId)>> {
+        let halves = self.edge(e)?.halves;
+        let faces = self.edge_faces(e)?;
+        let open = [self.face(faces[0])?.boundary, self.face(faces[1])?.boundary];
+        Ok(match open {
+            [false, true] => Some((faces[0], halves[0])),
+            [true, false] => Some((faces[1], halves[1])),
+            _ => None,
+        })
     }
     pub fn edges(&self) -> Vec<EdgeId> {
         self.edges
@@ -457,8 +528,24 @@ impl Body {
             .collect()
     }
 
+    /// The faces of a shell (not its boundary faces).
     pub fn shell_faces(&self, shell: ShellId) -> KernelResult<Vec<FaceId>> {
-        Ok(self.shell(shell)?.faces.clone())
+        let mut out = Vec::new();
+        for f in &self.shell(shell)?.faces {
+            if !self.face(*f)?.boundary {
+                out.push(*f);
+            }
+        }
+        Ok(out)
+    }
+    /// True when a shell is open (it has boundary faces).
+    pub fn shell_is_open(&self, shell: ShellId) -> KernelResult<bool> {
+        for f in &self.shell(shell)?.faces {
+            if self.face(*f)?.boundary {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
     pub fn face_shell(&self, face: FaceId) -> KernelResult<ShellId> {
         Ok(self.face(face)?.shell)
