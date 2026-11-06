@@ -15,8 +15,8 @@
 //!    counter-clockwise there. The polygon with holes is triangulated by hole bridging
 //!    and ear clipping with exact predicates ([`triangulate`]), then improved by
 //!    Delaunay flips that never touch the boundary ([`delaunay`]). Curved faces are
-//!    refined inside until the triangles are within tolerance of the surface; planes
-//!    need none.
+//!    refined inside until the triangles are within tolerance of the surface, then
+//!    improved by smoothing and flips judged in space; planes need none.
 //! 3. **Orientation.** Triangles wind counter-clockwise about the face's outward normal
 //!    (the surface normal, reversed when the face's `same_sense` is false), so the whole
 //!    mesh is consistently oriented and its signed volume is the body's volume.
@@ -25,25 +25,30 @@
 //! before anything large is allocated (per edge, then per face), and every loop is
 //! bounded. Nothing panics on any body.
 //!
-//! # What K3 plugs in for curved surfaces
-//! Planes are tessellated through the same (u, v) path that curved faces will use. To
-//! tessellate a new [`Surface`] variant (cylinder, cone, sphere, torus):
-//! 1. implement [`domain::SurfaceDomain`] for it in `domain.rs`: `surface_point(u, v)`,
-//!    its inverse `surface_uv(point)`, `surface_normal(u, v)`, and `u_period` /
-//!    `v_period` for closed directions (e.g. `2πr` for `u = r · angle` on a cylinder).
-//!    Keep (u, v) roughly isometric and `∂S/∂u × ∂S/∂v` along the surface normal; leave
-//!    `is_flat` false so faces are refined;
-//! 2. add its arm to [`domain::domain_for`] (the catch-all arm refuses it as
-//!    [`KernelError::Unsupported`] until then).
+//! # Curved faces
+//! Every [`Surface`] has a [`domain::SurfaceDomain`] (`domain.rs`): the plane its frame's
+//! coordinates; the cylinder, cone, sphere and torus their kernel parameters scaled to
+//! lengths, `(s_u θ, s_v w)`, with `u` periodic (and `v` on a torus).
 //!
-//! That is all: loops crossing a seam edge are unwrapped by the periods
-//! ([`domain::unwrap_loop`]), and the refinement inserts interior points until each
-//! triangle's centroid and interior edge midpoints are within `chord_tolerance` of the
-//! surface and its normal within `angle_tolerance`. A face whose loop winds around a
-//! periodic surface without a seam edge (e.g. a cylinder band bounded by two circles
-//! only) is refused; the K2 builders always give a lateral face a seam. Faces on surfaces
-//! with poles (sphere, cone apex) need the pole to be a vertex of the face's loops, or
-//! a parameterisation that avoids it.
+//! - **Seams.** A seam edge is used twice by its face; its points get two (u, v)
+//!   positions a period apart, because the loop is unwrapped point by point to the
+//!   representative nearest the previous one. A face whose loop winds around a
+//!   periodic surface without a seam edge (a cylinder band bounded by two circles only)
+//!   is refused; the K2 and K4 builders always give a lateral face a seam.
+//! - **Poles and apexes.** A loop vertex on the surface's axis (a sphere's pole, a cone's
+//!   apex, a spindle torus's tip, where `θ` is undefined) is replaced in (u, v) by a run
+//!   of copies along its singular line, from the u the loop arrives with to the u it
+//!   leaves with: toward -u at a pole above the face, +u below it, by up to a full
+//!   period (see `loop_uv`). The copies are one mesh vertex, so the triangles fanning
+//!   into them share the pole bit for bit; the triangles between two copies are segments
+//!   in space and are dropped, which leaves the fan closed. A pole that is not a vertex
+//!   of the face's loops cannot be tessellated by this chart (sweeps never make one).
+//! - **Refinement** inserts side midpoints or centroids until every triangle's centroid
+//!   and interior side midpoints are within `chord_tolerance` of the surface, the
+//!   normal turns by at most twice `angle_tolerance` along each interior side, and no
+//!   interior side spans more than a quarter turn (near a pole the other tests allow
+//!   wider triangles, which would fold over); smoothing and flips in space then improve
+//!   the triangles' fit without breaking those tests ([`delaunay`]).
 
 mod delaunay;
 mod domain;
@@ -58,6 +63,7 @@ use chamfera_geom::{
     ANGULAR_TOLERANCE, LINEAR_TOLERANCE, MAX_COORDINATE, MAX_TRIANGLES, PREDICATE_MIN_MAGNITUDE,
     Point2, Point3, TriMesh,
 };
+use domain::SurfaceDomain;
 use std::collections::HashMap;
 use std::f64::consts::PI;
 
@@ -67,8 +73,9 @@ pub struct TessOptions {
     /// Largest distance between a curve or surface and its chords or triangles (mm).
     /// At least [`LINEAR_TOLERANCE`].
     pub chord_tolerance: f64,
-    /// Largest turn of a curve's tangent per segment, and largest angle between a
-    /// triangle and its surface's normal (radians), in `(ANGULAR_TOLERANCE, π]`.
+    /// Largest turn of a curve's tangent per segment, and about the largest angle
+    /// between a triangle and its surface's normal (radians; the surface normal turns
+    /// by at most twice this along a triangle's side), in `(ANGULAR_TOLERANCE, π]`.
     pub angle_tolerance: f64,
     /// Most triangles the whole mesh may have, at most [`MAX_TRIANGLES`]. A body that
     /// would need more is refused rather than truncated.
@@ -125,8 +132,7 @@ pub struct BodyMesh {
 
 /// Tessellates every face of `body`. Fails, without a partial mesh, when the options are
 /// out of range, the body lacks geometry (an edge without a curve, a face without a
-/// surface: [`KernelError::Unsupported`] for faces whose surface cannot be tessellated
-/// yet), or the mesh would exceed `max_triangles`.
+/// surface: [`KernelError::Unsupported`]), or the mesh would exceed `max_triangles`.
 pub fn tessellate(body: &Body, options: &TessOptions) -> KernelResult<BodyMesh> {
     options.check()?;
     body.validate_topology()?;
@@ -242,16 +248,11 @@ fn tessellate_face(
 ) -> KernelResult<Vec<[u32; 3]>> {
     let (surface, same_sense): (Surface, bool) = body.face_surface(face)?.ok_or_else(|| {
         KernelError::Unsupported(format!(
-            "{face} has no surface yet (curved surfaces arrive with K3), so it cannot be tessellated"
+            "{face} has no surface, so it cannot be tessellated"
         ))
     })?;
-    let domain = domain::domain_for(&surface)?;
-
-    // Each loop as a ring of local points (one per use of a mesh vertex, so a seam used
-    // twice gets two (u, v) positions).
-    let mut global: Vec<u32> = Vec::new();
-    let mut uv: Vec<Point2> = Vec::new();
-    let mut rings: Vec<Vec<u32>> = Vec::new();
+    // Each loop as the ring of mesh vertices along its half-edges.
+    let mut loops: Vec<Vec<u32>> = Vec::new();
     for lp in body.face_loops(face)? {
         let mut ring_global = Vec::new();
         for h in body.loop_half_edges(lp)? {
@@ -269,20 +270,36 @@ fn tessellate_face(
                 ring_global.extend(ids.get(1..).unwrap_or(&[]).iter().rev());
             }
         }
-        let mut ring_uv: Vec<Point2> = ring_global
-            .iter()
-            .map(|&g| {
-                let p = positions.get(g as usize).copied().unwrap_or(Point3::ORIGIN);
-                let q = domain.surface_uv(p);
-                Point2::new(snap(q.x), snap(q.y))
-            })
-            .collect();
-        domain::unwrap_loop(&mut ring_uv, domain.u_period(), domain.v_period())?;
         if !same_sense {
             // The outward normal is against the surface's: run the loops the other way
             // in (u, v) and turn the triangles back at the end.
             ring_global.reverse();
-            ring_uv.reverse();
+        }
+        loops.push(ring_global);
+    }
+    let at = |g: u32| positions.get(g as usize).copied().unwrap_or(Point3::ORIGIN);
+    let boundary: Vec<Point3> = loops.iter().flatten().map(|&g| at(g)).collect();
+    let domain = domain::domain_for(&surface, &boundary)?;
+
+    // Each loop as a ring of local points in (u, v): one per use of a mesh vertex, so a
+    // seam used twice gets two positions and a pole a run of them.
+    let mut global: Vec<u32> = Vec::new();
+    let mut uv: Vec<Point2> = Vec::new();
+    let mut rings: Vec<Vec<u32>> = Vec::new();
+    for ring_global in loops {
+        let (ring_global, ring_uv) = loop_uv(
+            domain.as_ref(),
+            positions,
+            &ring_global,
+            options.angle_tolerance,
+            budget,
+        )
+        .map_err(|e| match e {
+            KernelError::InvalidInput(m) => KernelError::InvalidInput(format!("{face}: {m}")),
+            other => other,
+        })?;
+        if ring_uv.len() > budget.saturating_add(2) {
+            return Err(over_budget(options));
         }
         let start = uv.len();
         let ring: Vec<u32> = (start..start + ring_uv.len())
@@ -336,11 +353,114 @@ fn tessellate_face(
             .copied()
             .ok_or_else(|| KernelError::InvalidResult("a triangle lost its vertex".into()))
     };
-    mesh.triangles
+    let mut out = Vec::with_capacity(mesh.triangles.len());
+    for &[a, b, c] in &mesh.triangles {
+        let (a, b, c) = (map(a)?, map(b)?, map(c)?);
+        // A triangle on two copies of a pole is a segment in space; its two sides there
+        // run both ways between the same vertices, so leaving it out keeps the mesh
+        // closed (each of those sides is matched by a neighbour's).
+        if a == b || b == c || c == a {
+            continue;
+        }
+        out.push(if same_sense { [a, b, c] } else { [a, c, b] });
+    }
+    Ok(out)
+}
+
+/// A loop's ring of mesh vertices (already in the order that puts the face on its left
+/// in (u, v)) as local points: the mesh vertex of each and its (u, v), unwrapped across
+/// seams, with every singular point (pole, apex) replaced by a run of copies along its
+/// singular line.
+///
+/// At a singular point u is undefined; the loop arrives along one meridian and leaves
+/// along another, and in (u, v) it must walk along the singular line between them. With
+/// the face on the left, a pole above the face (the loop arrives from smaller v) is
+/// walked toward -u and one below it toward +u (as the top and bottom of a
+/// counter-clockwise rectangle are), by more than zero and at most one period: the
+/// full period when the loop arrives and leaves along the same seam (a whole sphere or
+/// cone), less at the corner of a partial revolve. The run has a copy at least every
+/// half [`SurfaceDomain::max_span`], so the triangles fanning into the pole stay narrow;
+/// triangles between two copies are segments in space and are dropped afterwards.
+fn loop_uv(
+    domain: &dyn SurfaceDomain,
+    positions: &[Point3],
+    ring: &[u32],
+    angle_tolerance: f64,
+    max_points: usize,
+) -> KernelResult<(Vec<u32>, Vec<Point2>)> {
+    let pts: Vec<(u32, Point2, bool)> = ring
         .iter()
-        .map(|&[a, b, c]| {
-            let (a, b, c) = (map(a)?, map(b)?, map(c)?);
-            Ok(if same_sense { [a, b, c] } else { [a, c, b] })
+        .map(|&g| {
+            let p = positions.get(g as usize).copied().unwrap_or(Point3::ORIGIN);
+            let q = domain.surface_uv(p);
+            (g, Point2::new(snap(q.x), snap(q.y)), domain.is_singular(p))
         })
-        .collect()
+        .collect();
+    let n = pts.len();
+    // Start at a regular point, so every singular run has regular points on both sides.
+    let Some(start) = pts.iter().position(|q| !q.2) else {
+        return Err(KernelError::InvalidInput(
+            "a face loop lies entirely on its surface's axis".into(),
+        ));
+    };
+    let at = |k: usize| pts.get((start + k) % n).copied();
+    let (pu, pv) = (domain.u_period(), domain.v_period());
+    // A copy at least every angle tolerance around the axis (and half the fold span).
+    let spacing = match pu {
+        Some(p) => (p * angle_tolerance / std::f64::consts::TAU).min(0.5 * domain.max_span().0),
+        None => f64::INFINITY,
+    };
+    let mut out_g: Vec<u32> = Vec::with_capacity(n);
+    let mut out_uv: Vec<Point2> = Vec::with_capacity(n);
+    let mut last_regular_v = 0.0;
+    for k in 0..n {
+        let Some((g, q, singular)) = at(k) else {
+            continue;
+        };
+        let Some(last) = out_uv.last().copied() else {
+            out_g.push(g);
+            out_uv.push(q);
+            last_regular_v = q.y;
+            continue;
+        };
+        let v = domain::nearest(last.y, q.y, pv);
+        if !singular {
+            out_g.push(g);
+            out_uv.push(Point2::new(domain::nearest(last.x, q.x, pu), v));
+            last_regular_v = v;
+            continue;
+        }
+        let next = (1..n).filter_map(|j| at(k + j)).find(|q| !q.2);
+        let next_is_singular = at(k + 1).is_some_and(|q| q.2);
+        let dir = if v > last_regular_v {
+            -1.0
+        } else if v < last_regular_v {
+            1.0
+        } else {
+            0.0
+        };
+        let (Some(p), Some((_, next_q, _)), false, true) = (pu, next, next_is_singular, dir != 0.0)
+        else {
+            // Within a run of singular points (only on faces near the tolerance), or with
+            // nothing to walk: keep u.
+            out_g.push(g);
+            out_uv.push(Point2::new(last.x, v));
+            continue;
+        };
+        let step = domain::directed_step(next_q.x - last.x, dir, p, p * 1e-12);
+        let copies = (step.abs() / spacing).ceil();
+        if !(copies.is_finite() && copies <= max_points as f64) {
+            return Err(KernelError::InvalidInput(
+                "a pole would need more points than `max_triangles` at this angle tolerance".into(),
+            ));
+        }
+        // `copies` is a whole number no larger than `max_points`, so it fits.
+        let m = (copies as usize).max(1);
+        for i in 0..=m {
+            out_g.push(g);
+            out_uv.push(Point2::new(last.x + step * (i as f64 / m as f64), v));
+        }
+    }
+    domain::check_closed(&out_uv, pu, pv)?;
+    Ok((out_g, out_uv))
 }

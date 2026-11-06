@@ -1031,3 +1031,14 @@ fn clicking_a_face_creates_a_sketch_on_it() {
         .is_err()
     );
 }
+
+#[test]
+fn a_sketch_used_by_a_feature_is_hidden_until_it_is_edited() {
+    let mut s = Session::new();
+    extruded_plate(&mut s, json!(10));
+    assert!(s.scene.overlays.is_empty(), "the consumed sketch is hidden");
+    s.execute("sketch.edit", &json!({"sketch": 1})).unwrap();
+    assert!(!s.scene.overlays.is_empty(), "editing shows it");
+    s.execute("sketch.finish", &json!({})).unwrap();
+    assert!(s.scene.overlays.is_empty());
+}
