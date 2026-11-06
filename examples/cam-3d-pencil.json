@@ -1,0 +1,18 @@
+[
+  { "command": "sketch.create", "params": { "plane": "xy" }, "as": "s" },
+  { "command": "sketch.rectangle", "params": { "x1": 0, "y1": 0, "x2": 60, "y2": 40 } },
+  { "command": "sketch.finish" },
+  { "command": "solid.extrude", "params": { "sketch": "$s.sketch", "profiles": [{ "x": 5, "y": 5 }], "distance": 20 }, "as": "block" },
+  { "command": "sketch.create_on_face", "params": { "feature": "$block.feature", "face": "top" }, "as": "p" },
+  { "command": "sketch.rectangle", "params": { "x1": 15, "y1": 10, "x2": 45, "y2": 30 } },
+  { "command": "sketch.finish" },
+  { "command": "solid.extrude", "params": { "sketch": "$p.sketch", "profiles": [{ "x": 30, "y": 20 }], "distance": 10, "direction": "reversed", "operation": "cut" } },
+  { "command": "solid.fillet", "params": { "edges": ["4:top 0", "4:top 1", "4:top 2", "4:top 3"], "radius": 2 } },
+  { "command": "cam.setup", "params": { "stock": { "kind": "from_model", "side": 3, "top": 1, "bottom": 0 } } },
+  { "command": "cam.tool_add", "params": { "kind": "ball_end_mill", "diameter": 8, "feed": 1200 }, "as": "ball" },
+  { "command": "cam.op_add", "params": { "kind": "pencil", "tool": "$ball.tool", "tolerance": 0.01, "min_angle": 10 } },
+  { "command": "cam.generate" },
+  { "command": "view.home", "params": { "width": 1100, "height": 760 } },
+  { "command": "view.orbit", "params": { "yaw": 0.3, "pitch": 0.45 } },
+  { "command": "view.zoom", "params": { "factor": 0.6 } }
+]

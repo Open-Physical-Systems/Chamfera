@@ -14,11 +14,14 @@ use egui::{Color32, PointerButton, Rect, Sense, Vec2};
 use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
 
+mod about_ui;
 mod assembly_ui;
 mod assistant_ui;
 mod blend_ui;
 mod browser;
 mod cam_ui;
+#[cfg(not(target_arch = "wasm32"))]
+mod cam_worker;
 mod chrome;
 mod config_ui;
 mod construct_ui;
@@ -85,6 +88,8 @@ pub struct Options {
     pub parameters: bool,
     /// Open the Configurations window at start.
     pub configurations: bool,
+    /// Open the MANUFACTURE workspace's Tool Library panel at start.
+    pub tool_library: bool,
     /// Open the DRAWING workspace at start.
     pub drawing: bool,
     /// Open the Extrude tool at start and pick the profile under the viewport's centre,
@@ -128,6 +133,11 @@ pub struct Options {
     pub recovery_demo: bool,
     /// Open the RENDER workspace at start.
     pub render: bool,
+    /// Open Help > About Chamfera at start.
+    pub about: bool,
+    /// Open the Assistant and send this request with the user's key at start (checks the
+    /// real HTTPS path; the screenshot waits for the reply or the error).
+    pub assistant_ask: Option<String>,
     /// Open the Render window and start a render of this width, height and sample count
     /// (the screenshot waits for it to finish).
     pub render_window: Option<[u32; 3]>,
@@ -257,6 +267,11 @@ pub struct ChamferaApp {
     welcome: welcome_ui::WelcomeUi,
     /// The guided tour in progress (`tutorial_ui`).
     tutorial: tutorial_ui::TutorialUi,
+    /// Help > About Chamfera (`about_ui`).
+    about: about_ui::AboutUi,
+    /// The thread toolpaths are made on after a rebuild (`cam_worker`), desktop only.
+    #[cfg(not(target_arch = "wasm32"))]
+    cam_worker: Option<cam_worker::CamWorker>,
 }
 
 /// A command's label, so menus show the same words as the command list.
@@ -298,8 +313,23 @@ impl ChamferaApp {
             app.recovery.dir = recovery_ui::default_dir();
             app.recovery_scan();
         }
+        // The window makes toolpaths on a worker after each rebuild, so an edit to a
+        // machined part does not wait for them (scripts and tests stay synchronous).
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            app.cam_worker = cam_worker::CamWorker::spawn();
+            if app.cam_worker.is_some() {
+                app.session.set_cam_background(true);
+            }
+        }
         if app.assistant.transport.is_none() && !shot {
             app.assistant.load_key();
+        }
+        // After the key is loaded: this request goes over the real HTTPS path.
+        if let Some(q) = &options.assistant_ask {
+            app.assistant.open = true;
+            app.assistant.input = q.chars().take(2000).collect();
+            app.assistant_send();
         }
         if app.gpu.is_none() {
             app.message = Some(("No GPU device: the viewport cannot draw.".into(), true));
@@ -377,6 +407,9 @@ impl ChamferaApp {
             recovery: recovery_ui::RecoveryUi::default(),
             welcome: welcome_ui::WelcomeUi::default(),
             tutorial: tutorial_ui::TutorialUi::default(),
+            about: about_ui::AboutUi::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            cam_worker: None,
         };
         app.session.history.limits = app.prefs.history_limits();
         if app.prefs.default_length != chamfera_doc::LengthUnit::Mm {
@@ -415,6 +448,9 @@ impl ChamferaApp {
                     "rest_volume": r.rest_volume,
                     "gouges": {"cells": r.gouge_cells, "volume": r.gouge_volume,
                                "max_depth": r.max_gouge},
+                    "holder": {"checked": sim.holder.checked, "moves": sim.holder.moves,
+                               "cells": sim.holder.cells, "max_depth": sim.holder.max_depth,
+                               "incomplete": sim.holder.incomplete},
                 })),
             });
         }
@@ -424,6 +460,10 @@ impl ChamferaApp {
         }
         app.params.open = options.parameters;
         app.configs.open = options.configurations;
+        if options.tool_library {
+            app.cam.active = true;
+            app.cam.library_open = true;
+        }
         app.drawing.active = options.drawing;
         if options.extrude {
             let mut tool = solid_ui::ExtrudeTool::default();
@@ -463,6 +503,9 @@ impl ChamferaApp {
         }
         if options.assistant_demo {
             app.assistant_demo();
+        }
+        if options.about {
+            app.about.open_with_notices();
         }
         if options.history {
             app.open_history();
@@ -919,6 +962,8 @@ impl ChamferaApp {
         if !self.welcome.open {
             self.viewport_hint(ui, rect);
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        self.cam_badge(ui, rect);
         self.selection_filter_bar(ui.ctx(), rect);
         self.display_bar(ui.ctx(), rect);
         if self.frames >= 2
@@ -952,10 +997,11 @@ impl ChamferaApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             return;
         }
-        // A request of the Assistant, a render, or a version thumbnail being drawn is part
-        // of the picture to wait for.
+        // A request of the Assistant, a render, a version thumbnail being drawn, or
+        // toolpaths still being made on the worker are part of the picture to wait for.
         if (self.assistant.running()
             || rendering
+            || self.session.cam_regenerating()
             || self.history.thumbnails_pending(self.gpu.is_some())
             || self.welcome.thumbnails_pending(self.gpu.is_some()))
             && matches!(state, Shot::Waiting(_))
@@ -1095,6 +1141,8 @@ impl eframe::App for ChamferaApp {
                 }
             });
         self.assistant_poll(&ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        self.cam_poll(&ctx);
         if self.assistant.open {
             egui::Panel::right("assistant")
                 .frame(
@@ -1160,6 +1208,7 @@ impl eframe::App for ChamferaApp {
         }
         self.autosave_frame(&ctx);
         self.shortcuts_window(&ctx);
+        self.about_window(&ctx);
         self.search_window(&ctx);
         self.file_shortcuts(&ctx);
         #[cfg(target_arch = "wasm32")]

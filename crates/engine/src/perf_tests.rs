@@ -113,10 +113,12 @@ impl Twins {
             format!("{:?}", b.scene.bodies),
             "{what}: scene"
         );
+        // The toolpath cache must never change a toolpath (nor a simulation).
+        assert_eq!(a.cam.paths, b.cam.paths, "{what}: toolpaths");
         assert_eq!(
-            format!("{:?}", a.cam),
-            format!("{:?}", b.cam),
-            "{what}: toolpaths"
+            format!("{:?}", a.cam.sim),
+            format!("{:?}", b.cam.sim),
+            "{what}: simulation"
         );
     }
 }

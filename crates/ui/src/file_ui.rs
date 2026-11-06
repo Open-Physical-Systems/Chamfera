@@ -635,6 +635,7 @@ impl ChamferaApp {
             return;
         };
         let mut answer: Option<&str> = None;
+        let mut buttons = [egui::Rect::NOTHING; 3];
         let look = self.look();
         let name = self.design_name();
         let what = match action {
@@ -656,17 +657,28 @@ impl ChamferaApp {
                     ));
                 });
                 widgets::dialog_footer(ui, look, |ui| {
-                    if widgets::primary_button(ui, look, "Save", true).clicked() {
+                    let save = widgets::primary_button(ui, look, "Save", true);
+                    let cancel = widgets::secondary_button(ui, look, "Cancel");
+                    let discard = widgets::secondary_button(ui, look, "Don't Save");
+                    if save.clicked() {
                         answer = Some("save");
                     }
-                    if widgets::secondary_button(ui, look, "Cancel").clicked() {
+                    if cancel.clicked() {
                         answer = Some("cancel");
                     }
-                    if widgets::secondary_button(ui, look, "Don't Save").clicked() {
+                    if discard.clicked() {
                         answer = Some("discard");
                     }
+                    buttons = [save.rect, cancel.rect, discard.rect];
                 });
             });
+        // The buttons by text, for the browser checks (`web.rs`).
+        #[cfg(target_arch = "wasm32")]
+        for (text, rect) in ["Save", "Cancel", "Don't Save"].into_iter().zip(buttons) {
+            self.web.target(text, rect);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        let _ = buttons;
         if modal.should_close() && answer.is_none() {
             answer = Some("cancel");
         }

@@ -378,6 +378,53 @@ pub(crate) fn golden(mut a: f64, mut b: f64, f: &dyn Fn(f64) -> f64) -> (f64, f6
     if f1 >= f2 { (x1, f1) } else { (x2, f2) }
 }
 
+/// How a face holds a tool and a box that holds every point of it: its edges' box, grown
+/// by the surface's size (every point of a face on a sphere, cylinder, cone or torus is
+/// within that of its boundary) and cut to the surface's own box where it has one. A
+/// cone's face may bulge past its edges only toward its widest edge, which is an edge:
+/// its box is its edges'. `None` for a face with no edges and no bounded surface.
+fn face_shape_and_box(body: &Body, f: FaceId) -> Result<Option<(Shape, Aabb)>, CamError> {
+    let Some((surface, same)) = body.face_surface(f).map_err(kernel)? else {
+        return Err(CamError::Refused(
+            "a face of the model has no surface".into(),
+        ));
+    };
+    let sign = if same { 1.0 } else { -1.0 };
+    let mut eb: Option<Aabb> = None;
+    for e in body.face_edges(f).map_err(kernel)? {
+        if let Some((c, t0, t1)) = body.edge_curve(e).map_err(kernel)? {
+            let b = c.bounding_box_on(t0, t1).map_err(kernel)?;
+            eb = Some(eb.map_or(b, |o| o.union(b)));
+        }
+    }
+    let shape = shape_of(&surface, sign)?;
+    let (size, own): (f64, Option<Aabb>) = match shape {
+        Shape::Skip | Shape::Plane { .. } => (0.0, None),
+        Shape::Sphere { c, s, .. } => (2.0 * s, Some(grow(Aabb { min: c, max: c }, s))),
+        Shape::Cylinder { rc, .. } => (2.0 * rc, None),
+        Shape::Cone { .. } => (0.0, None),
+        Shape::Torus {
+            frame, big, small, ..
+        } => {
+            let o = frame.origin();
+            let reach = big.abs() + small;
+            (2.0 * reach, Some(grow(Aabb { min: o, max: o }, reach)))
+        }
+    };
+    Ok(match (eb, own) {
+        (Some(e), Some(o)) => Some((shape, meet(grow(e, size), o))),
+        (Some(e), None) => Some((shape, grow(e, size))),
+        (None, Some(o)) => Some((shape, o)),
+        (None, None) => None,
+    })
+}
+
+/// A box holding every point of the face (see [`DropModel`]), or `None` when it has no
+/// edges and no bounded surface.
+pub fn face_box(body: &Body, f: FaceId) -> Result<Option<Aabb>, CamError> {
+    Ok(face_shape_and_box(body, f)?.map(|x| x.1))
+}
+
 impl DropModel {
     /// Reads every face, edge and vertex of `bodies`. Refuses what the drop-cutter cannot
     /// cut exactly: a face without a surface, a sloping spline extrusion.
@@ -420,44 +467,9 @@ impl DropModel {
                 });
             }
             for f in body.faces() {
-                let Some((surface, same)) = body.face_surface(f).map_err(kernel)? else {
-                    return Err(CamError::Refused(
-                        "a face of the model has no surface".into(),
-                    ));
+                let Some((shape, b)) = face_shape_and_box(body, f)? else {
+                    continue;
                 };
-                let sign = if same { 1.0 } else { -1.0 };
-                // The face's box: its edges', grown by the surface's size (every point of
-                // a face on a sphere, cylinder, cone or torus is within that of its
-                // boundary) and cut to the surface's own box where it has one.
-                let mut eb: Option<Aabb> = None;
-                for e in body.face_edges(f).map_err(kernel)? {
-                    if let Some((c, t0, t1)) = body.edge_curve(e).map_err(kernel)? {
-                        let b = c.bounding_box_on(t0, t1).map_err(kernel)?;
-                        eb = Some(eb.map_or(b, |o| o.union(b)));
-                    }
-                }
-                let shape = shape_of(&surface, sign)?;
-                let (size, own): (f64, Option<Aabb>) = match shape {
-                    Shape::Skip | Shape::Plane { .. } => (0.0, None),
-                    Shape::Sphere { c, s, .. } => (2.0 * s, Some(grow(Aabb { min: c, max: c }, s))),
-                    Shape::Cylinder { rc, .. } => (2.0 * rc, None),
-                    Shape::Cone { .. } => (0.0, None),
-                    Shape::Torus {
-                        frame, big, small, ..
-                    } => {
-                        let o = frame.origin();
-                        let reach = big.abs() + small;
-                        (2.0 * reach, Some(grow(Aabb { min: o, max: o }, reach)))
-                    }
-                };
-                let b = match (eb, own) {
-                    (Some(e), Some(o)) => meet(grow(e, size), o),
-                    (Some(e), None) => grow(e, size),
-                    (None, Some(o)) => o,
-                    (None, None) => continue,
-                };
-                // A cone's face may bulge past its edges only toward its widest edge,
-                // which is an edge: its box is its edges'.
                 boxes_f.push(xy_box(&b));
                 faces.push(FaceItem {
                     body: bi,

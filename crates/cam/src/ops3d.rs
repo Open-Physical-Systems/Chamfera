@@ -17,11 +17,13 @@
 //! caps are refused, not truncated.
 
 use crate::CamError;
+use crate::cancel;
 use crate::drop::{DropModel, ToolShape};
 use crate::grid::{self, Grid};
+use crate::holder::PartCheck;
 use crate::ops::{Cutter, FEED_HEIGHT, depths};
 use crate::toolpath::{Move, Toolpath};
-use chamfera_doc::cam::{Tool, ToolKind};
+use chamfera_doc::cam::{HolderCheck, Tool, ToolKind};
 use chamfera_geom::{Point2, Point3, Vec2};
 use std::f64::consts::{PI, TAU};
 
@@ -111,7 +113,66 @@ pub struct Area {
     pub max: Point2,
 }
 
-fn check_tol(t: f64) -> Result<f64, CamError> {
+/// The holder check of a 3D operation: the part check and what to do on a collision.
+#[derive(Debug, Clone, Copy)]
+pub struct HolderUse<'a> {
+    pub check: &'a PartCheck,
+    pub mode: HolderCheck,
+}
+
+/// Spends `k` drop-cutter evaluations of the budget.
+pub(crate) fn spend(budget: &mut usize, k: usize) -> Result<(), CamError> {
+    *budget = budget.checked_sub(k).ok_or_else(|| {
+        CamError::TooComplex(format!(
+            "the operation would need more than {MAX_DROPS} drop-cutter points: use a \
+             larger stepover or tolerance"
+        ))
+    })?;
+    Ok(())
+}
+
+/// The holder check along sampled points: with `Lift` each point is raised to where the
+/// holder clears the part; with `Refuse` the points where it does not are dropped and the
+/// run is split there (the tool lifts over them). Returns the runs to cut.
+fn holder_runs(
+    cl: &Cl,
+    holder: Option<HolderUse>,
+    pts: Vec<Point3>,
+    budget: &mut usize,
+) -> Result<Vec<Vec<Point3>>, CamError> {
+    let Some(h) = holder.filter(|h| h.mode != HolderCheck::Ignore) else {
+        return Ok(vec![pts]);
+    };
+    let mut runs = Vec::new();
+    let mut run = Vec::new();
+    for (i, mut p) in pts.into_iter().enumerate() {
+        if i.is_multiple_of(256) {
+            cancel::check()?;
+        }
+        spend(budget, 1)?;
+        let need = h.check.required(cl.model, p.x, p.y);
+        if need > p.z + 1e-9 {
+            match h.mode {
+                HolderCheck::Lift | HolderCheck::Ignore => p.z = need,
+                HolderCheck::Refuse => {
+                    if run.len() >= 2 {
+                        runs.push(std::mem::take(&mut run));
+                    } else {
+                        run.clear();
+                    }
+                    continue;
+                }
+            }
+        }
+        run.push(p);
+    }
+    if run.len() >= 2 {
+        runs.push(run);
+    }
+    Ok(runs)
+}
+
+pub(crate) fn check_tol(t: f64) -> Result<f64, CamError> {
     if !(t.is_finite() && (MIN_TOLERANCE..=10.0).contains(&t)) {
         return Err(CamError::Invalid(format!(
             "the tolerance must be from {MIN_TOLERANCE} to 10 mm"
@@ -132,20 +193,12 @@ fn sample_line(
     budget: &mut usize,
     out: &mut Vec<Point3>,
 ) -> Result<(), CamError> {
+    cancel::check()?;
     let len = a.distance(b);
     let n = ((len / spacing).ceil() as usize).max(1);
     let p = |t: f64| a + (b - a) * t;
-    let mut spend = |k: usize| -> Result<(), CamError> {
-        *budget = budget.checked_sub(k).ok_or_else(|| {
-            CamError::TooComplex(format!(
-                "the operation would need more than {MAX_DROPS} drop-cutter points: \
-                 use a larger stepover or tolerance"
-            ))
-        })?;
-        Ok(())
-    };
     let mut z_of = |t: f64| -> Result<Point3, CamError> {
-        spend(1)?;
+        spend(budget, 1)?;
         let q = p(t);
         Ok(Point3::new(q.x, q.y, cl.at(q.x, q.y)))
     };
@@ -178,7 +231,7 @@ fn sample_line(
 }
 
 /// Drops points that lie on the line through their neighbours (within 1e-6 mm).
-fn simplify(points: Vec<Point3>) -> Vec<Point3> {
+pub(crate) fn simplify(points: Vec<Point3>) -> Vec<Point3> {
     let mut out: Vec<Point3> = Vec::with_capacity(points.len());
     for p in points {
         if out.len() >= 2 {
@@ -197,7 +250,7 @@ fn simplify(points: Vec<Point3>) -> Vec<Point3> {
 }
 
 /// Feed moves along `pts`, entered from the clearance height and left back up to it.
-fn emit(pts: &[Point3], cutter: &Cutter, clearance: f64, m: &mut Vec<Move>) {
+pub(crate) fn emit(pts: &[Point3], cutter: &Cutter, clearance: f64, m: &mut Vec<Move>) {
     let Some(first) = pts.first() else { return };
     m.push(Move::Rapid {
         to: Point3::new(first.x, first.y, clearance),
@@ -234,6 +287,22 @@ pub fn parallel(
     angle: f64,
     tol: f64,
     clearance: f64,
+) -> Result<Toolpath, CamError> {
+    parallel_with(cl, cutter, area, stepover, angle, tol, clearance, None)
+}
+
+/// [`parallel`] with a holder check: where the holder or shank would hit the part the
+/// tool is lifted until it clears, or the pass is broken there ([`HolderCheck`]).
+#[allow(clippy::too_many_arguments)]
+pub fn parallel_with(
+    cl: &Cl,
+    cutter: &Cutter,
+    area: Area,
+    stepover: f64,
+    angle: f64,
+    tol: f64,
+    clearance: f64,
+    holder: Option<HolderUse>,
 ) -> Result<Toolpath, CamError> {
     let tol = check_tol(tol)?;
     if !(stepover.is_finite() && stepover > 0.0) {
@@ -302,11 +371,13 @@ pub fn parallel(
         sample_line(cl, at(a, t), at(b, t), spacing, tol, &mut budget, &mut pts)?;
     }
     let mut m = Vec::new();
-    emit(&simplify(pts), cutter, clearance, &mut m);
+    for run in holder_runs(cl, holder, pts, &mut budget)? {
+        emit(&simplify(run), cutter, clearance, &mut m);
+    }
     cutter_path(cutter, m)
 }
 
-fn cutter_path(c: &Cutter, moves: Vec<Move>) -> Result<Toolpath, CamError> {
+pub(crate) fn cutter_path(c: &Cutter, moves: Vec<Move>) -> Result<Toolpath, CamError> {
     if moves.len() > crate::ops::MAX_MOVES {
         return Err(CamError::TooComplex(format!(
             "the toolpath would have more than {} moves",
@@ -322,12 +393,13 @@ fn cutter_path(c: &Cutter, moves: Vec<Move>) -> Result<Toolpath, CamError> {
 }
 
 /// The cutter-location heights over `g`.
-fn cl_grid(cl: &Cl, g: &Grid) -> Result<Vec<f64>, CamError> {
+pub(crate) fn cl_grid(cl: &Cl, g: &Grid) -> Result<Vec<f64>, CamError> {
     if g.len() > MAX_DROPS {
         return Err(CamError::TooComplex("the grid is too fine".into()));
     }
     let mut out = Vec::with_capacity(g.len());
     for j in 0..g.ny {
+        cancel::check()?;
         for i in 0..g.nx {
             let p = g.at(i, j);
             out.push(cl.at(p.x, p.y));
@@ -370,6 +442,7 @@ pub fn waterline(
     let mut budget = MAX_DROPS.saturating_sub(g.len());
     let mut m = Vec::new();
     for z in levels {
+        cancel::check()?;
         // Just above the floor there is nothing to follow.
         if z <= cl.floor + 1e-9 {
             continue;
@@ -553,6 +626,18 @@ fn any_material(g: &Grid, material: &[bool], c: Point2, radius: f64) -> bool {
 /// is kept clear exactly at the grid's nodes and, near the part, at every emitted point
 /// (checked with the exact drop-cutter).
 pub fn adaptive(cl: &Cl, cutter: &Cutter, p: AdaptiveParams) -> Result<AdaptiveResult, CamError> {
+    adaptive_with(cl, cutter, p, None)
+}
+
+/// [`adaptive`] with a holder check: a node where the holder or shank would hit the part
+/// at a level is not entered at that level (`Lift` and `Refuse` both leave it uncut
+/// there). Checked at the planning grid's nodes against the part, not the stock.
+pub fn adaptive_with(
+    cl: &Cl,
+    cutter: &Cutter,
+    p: AdaptiveParams,
+    holder: Option<HolderUse>,
+) -> Result<AdaptiveResult, CamError> {
     let r = cl.tool.radius;
     if !(p.max_engagement.is_finite() && p.max_engagement > 0.05 && p.max_engagement <= PI) {
         return Err(CamError::Invalid(
@@ -573,6 +658,21 @@ pub fn adaptive(cl: &Cl, cutter: &Cutter, p: AdaptiveParams) -> Result<AdaptiveR
             cl.model.drop(&pin, q.x, q.y).unwrap_or(f64::NEG_INFINITY)
         })
         .collect();
+    // The lowest tip height at each node at which the holder clears the part.
+    let holder_need: Option<Vec<f64>> = match holder.filter(|h| h.mode != HolderCheck::Ignore) {
+        None => None,
+        Some(h) => {
+            let mut v = Vec::with_capacity(g.len());
+            for k in 0..g.len() {
+                if k.is_multiple_of(g.nx.max(1)) {
+                    cancel::check()?;
+                }
+                let q = g.at(k % g.nx, k / g.nx);
+                v.push(h.check.required(cl.model, q.x, q.y));
+            }
+            Some(v)
+        }
+    };
     let in_stock = |q: Point2| {
         q.x >= p.stock_min.x && q.x <= p.stock_max.x && q.y >= p.stock_min.y && q.y <= p.stock_max.y
     };
@@ -589,7 +689,17 @@ pub fn adaptive(cl: &Cl, cutter: &Cutter, p: AdaptiveParams) -> Result<AdaptiveR
     let mut budget = MAX_DROPS.saturating_sub(2 * g.len());
     let mut prev_z = p.stock_top;
     for z in levels {
-        let allowed: Vec<bool> = field.iter().map(|c| *c <= z + 1e-9).collect();
+        cancel::check()?;
+        let allowed: Vec<bool> = field
+            .iter()
+            .enumerate()
+            .map(|(k, c)| {
+                *c <= z + 1e-9
+                    && holder_need
+                        .as_ref()
+                        .is_none_or(|h| h.get(k).is_none_or(|need| *need <= z + 1e-9))
+            })
+            .collect();
         let mut material: Vec<bool> = (0..g.len())
             .map(|k| {
                 let q = g.at(k % g.nx, k / g.nx);
@@ -945,6 +1055,7 @@ impl Walk<'_, '_> {
     }
 
     fn follow(&mut self, route: &[Point2]) -> Result<(), CamError> {
+        cancel::check()?;
         if self.m.len() > crate::ops::MAX_MOVES {
             return Err(CamError::TooComplex(
                 "the toolpath has too many moves".into(),

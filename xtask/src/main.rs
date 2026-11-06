@@ -1,11 +1,13 @@
 //! Repository checks. `cargo xtask ci` runs them all; each rule in AGENTS.md names the check
 //! that enforces it.
 
+mod notices;
+
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
-const USAGE: &str = "usage: cargo xtask <ci|layers|skills|licences|wasm>";
+const USAGE: &str = "usage: cargo xtask <ci|layers|skills|licences|notices [--out FILE]|wasm>";
 
 /// The layer of every crate. A crate may depend only on crates in a lower layer.
 /// Keep in step with docs/architecture.md.
@@ -51,7 +53,7 @@ const WASM_CRATES: &[&str] = &[
 ];
 
 /// Subcommands, so `cargo xtask skills` can check that docs name only real ones.
-const SUBCOMMANDS: &[&str] = &["ci", "layers", "skills", "licences", "wasm"];
+const SUBCOMMANDS: &[&str] = &["ci", "layers", "skills", "licences", "notices", "wasm"];
 
 type CheckResult = Result<(), String>;
 
@@ -69,6 +71,14 @@ fn main() -> ExitCode {
         Some("layers") => layers(&root),
         Some("skills") => skills(&root),
         Some("licences") => licences(&root),
+        Some("notices") => {
+            let args: Vec<String> = std::env::args().skip(2).collect();
+            match args.as_slice() {
+                [] => notices::notices(&root, None),
+                [flag, path] if flag == "--out" => notices::notices(&root, Some(path)),
+                _ => Err(USAGE.to_owned()),
+            }
+        }
         Some("wasm") => wasm(&root),
         _ => Err(USAGE.to_owned()),
     };
@@ -123,6 +133,8 @@ fn ci(root: &Path) -> CheckResult {
     println!("==> skills");
     skills(root)?;
     licences(root)?;
+    // Every shipped crate has its licence text (target/THIRD-PARTY-LICENSES.txt).
+    notices::notices(root, None)?;
     wasm(root)?;
     println!("ci: all checks passed");
     Ok(())

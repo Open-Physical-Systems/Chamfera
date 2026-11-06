@@ -36,8 +36,13 @@ impl ChamferaApp {
             let _file = ui.menu_button("File", |ui| self.file_menu(ui));
             #[cfg(target_arch = "wasm32")]
             self.web.target("File", _file.response.rect);
-            ui.menu_button("View", |ui| self.view_menu(ui));
-            ui.menu_button("Help", |ui| self.help_menu(ui));
+            let _view = ui.menu_button("View", |ui| self.view_menu(ui));
+            let _help = ui.menu_button("Help", |ui| self.help_menu(ui));
+            #[cfg(target_arch = "wasm32")]
+            {
+                self.web.target("View", _view.response.rect);
+                self.web.target("Help", _help.response.rect);
+            }
             widgets::bar_divider(ui, self.look(), 20.0);
             let look = self.look();
             if widgets::icon_button(ui, look, Icon::Save, 30.0, 20.0, true, false)

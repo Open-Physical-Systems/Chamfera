@@ -12,9 +12,17 @@
 //! The part's own height over each column (a pin-point drop on the exact model) gives the
 //! rest material (stock left above the part) and gouges (stock cut below the part by more
 //! than a tolerance).
+//!
+//! With a holder ([`crate::holder`]), every move is first checked for the shank and
+//! holder touching the stock or the part: at points along it at most a cell apart, each
+//! column under the holder taller than the tip plus the holder's lowest surface over it
+//! (by more than the tolerance) is a holder collision. The move is checked against the
+//! stock as it is before that move cuts, so the flutes cutting below the shank do not
+//! clear its way: a tool plunged deeper than its flutes collides with its shank.
 
 use crate::CamError;
 use crate::drop::{DropModel, ToolShape, golden};
+use crate::holder::NonCutting;
 use crate::toolpath::{Move, Toolpath};
 use chamfera_geom::{Point2, Point3, TriMesh};
 
@@ -22,6 +30,38 @@ use chamfera_geom::{Point2, Point3, TriMesh};
 pub const MAX_SIM_RESOLUTION: usize = 1024;
 /// How far an arc's chords may stray from it (mm).
 const ARC_CHORD: f64 = 0.01;
+/// Most column checks the holder check makes in one simulation; past it the check stops
+/// and says it is incomplete.
+pub const MAX_HOLDER_WORK: usize = 400_000_000;
+
+/// Where the holder or shank hit the stock or the part in a simulation.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct HolderHits {
+    /// Per column: touched by the holder or shank.
+    pub hit: Vec<bool>,
+    /// Moves (straight pieces) that collided.
+    pub moves: usize,
+    /// Deepest a column reached into the holder (mm).
+    pub max_depth: f64,
+    /// Column checks made so far.
+    pub work: usize,
+    /// The work limit was reached before every move was checked.
+    pub incomplete: bool,
+}
+
+impl HolderHits {
+    pub fn new(d: &Dexels) -> HolderHits {
+        HolderHits {
+            hit: vec![false; d.nx * d.ny],
+            ..HolderHits::default()
+        }
+    }
+
+    /// Columns touched.
+    pub fn cells(&self) -> usize {
+        self.hit.iter().filter(|h| **h).count()
+    }
+}
 
 /// The stock as columns: `nx` by `ny` square cells of `cell`, the column of cell
 /// `(i, j)` centred at `min + (i + ½, j + ½) cell`.
@@ -148,22 +188,111 @@ impl Dexels {
         rapid_rate: f64,
         fraction: f64,
     ) {
+        self.cut_toolpath_checked(tool, None, tp, rapid_rate, fraction);
+    }
+
+    /// [`Dexels::cut_toolpath`], checking each move for holder collisions first when a
+    /// holder is given: `(holder, part heights, tolerance, hits)`.
+    pub fn cut_toolpath_checked(
+        &mut self,
+        tool: &ToolShape,
+        mut holder: Option<(&NonCutting, &[Option<f64>], f64, &mut HolderHits)>,
+        tp: &Toolpath,
+        rapid_rate: f64,
+        fraction: f64,
+    ) {
         let segs = segments(tp);
         let total: f64 = segs.iter().map(|s| s.minutes(rapid_rate)).sum();
         let mut budget = total * fraction.clamp(0.0, 1.0);
+        let part_max = holder.as_ref().map_or(f64::NEG_INFINITY, |h| {
+            h.1.iter()
+                .flatten()
+                .fold(f64::NEG_INFINITY, |a, b| a.max(*b))
+        });
         for s in &segs {
             let t = s.minutes(rapid_rate);
-            if t <= budget || fraction >= 1.0 {
-                self.cut_line(tool, s.a, s.b);
+            let (a, b, last) = if t <= budget || fraction >= 1.0 {
                 budget -= t;
+                (s.a, s.b, false)
+            } else if t > 0.0 && budget > 0.0 {
+                (s.a, s.a + (s.b - s.a) * (budget / t), true)
             } else {
-                if t > 0.0 && budget > 0.0 {
-                    let f = budget / t;
-                    let mid = s.a + (s.b - s.a) * f;
-                    self.cut_line(tool, s.a, mid);
-                }
+                break;
+            };
+            if let Some((nc, part, tol, hits)) = holder.as_mut() {
+                self.check_holder(nc, part, part_max, *tol, a, b, hits);
+            }
+            self.cut_line(tool, a, b);
+            if last {
                 break;
             }
+        }
+    }
+
+    /// Marks the columns the holder or shank touches along `a`–`b`.
+    #[allow(clippy::too_many_arguments)]
+    fn check_holder(
+        &self,
+        nc: &NonCutting,
+        part: &[Option<f64>],
+        part_max: f64,
+        tol: f64,
+        a: Point3,
+        b: Point3,
+        hits: &mut HolderHits,
+    ) {
+        if hits.incomplete {
+            return;
+        }
+        let lowest = nc.lowest();
+        let top = self.top.max(part_max);
+        if a.z.min(b.z) + lowest >= top - tol {
+            return;
+        }
+        let rr = nc.max_radius();
+        let len = (b - a).length();
+        let n = ((len / self.cell).ceil() as usize).clamp(1, 100_000);
+        let mut collided = false;
+        for s in 0..=n {
+            let p = a + (b - a) * (s as f64 / n as f64);
+            if p.z + lowest >= top - tol {
+                continue;
+            }
+            let i0 = (((p.x - rr - self.min.x) / self.cell).floor().max(0.0)) as usize;
+            let j0 = (((p.y - rr - self.min.y) / self.cell).floor().max(0.0)) as usize;
+            let i1 = (((p.x + rr - self.min.x) / self.cell).ceil().max(0.0) as usize).min(self.nx);
+            let j1 = (((p.y + rr - self.min.y) / self.cell).ceil().max(0.0) as usize).min(self.ny);
+            let window = i1.saturating_sub(i0).saturating_mul(j1.saturating_sub(j0));
+            hits.work = hits.work.saturating_add(window);
+            if hits.work > MAX_HOLDER_WORK {
+                hits.incomplete = true;
+                break;
+            }
+            for j in j0..j1 {
+                for i in i0..i1 {
+                    let c = self.centre(i, j);
+                    let rho = (c.x - p.x).hypot(c.y - p.y);
+                    let Some(low) = nc.low(rho) else { continue };
+                    let k = j * self.nx + i;
+                    let stock = self.z.get(k).copied().unwrap_or(self.bottom);
+                    let solid = part
+                        .get(k)
+                        .copied()
+                        .flatten()
+                        .map_or(stock, |h| h.max(stock));
+                    let depth = solid - (p.z + low);
+                    if depth > tol {
+                        collided = true;
+                        hits.max_depth = hits.max_depth.max(depth);
+                        if let Some(h) = hits.hit.get_mut(k) {
+                            *h = true;
+                        }
+                    }
+                }
+            }
+        }
+        if collided {
+            hits.moves += 1;
         }
     }
 }
@@ -319,11 +448,25 @@ pub fn meshes(
     tolerance: f64,
     max_side: usize,
 ) -> (TriMesh, TriMesh) {
+    let (stock, bad, _) = meshes_with(d, part, tolerance, max_side, &[]);
+    (stock, bad)
+}
+
+/// [`meshes`], and the tops of the columns the holder touched (`holder_hit`, per column)
+/// apart again: `(stock, gouges, holder collisions)`.
+pub fn meshes_with(
+    d: &Dexels,
+    part: &[Option<f64>],
+    tolerance: f64,
+    max_side: usize,
+    holder_hit: &[bool],
+) -> (TriMesh, TriMesh, TriMesh) {
     let k = d.nx.max(d.ny).div_ceil(max_side.max(1)).max(1);
     let bx = d.nx.div_ceil(k);
     let by = d.ny.div_ceil(k);
     let mut hz = vec![d.top; bx * by];
     let mut gouge = vec![false; bx * by];
+    let mut held = vec![false; bx * by];
     for j in 0..d.ny {
         for i in 0..d.nx {
             let b = (j / k) * bx + i / k;
@@ -337,6 +480,11 @@ pub fn meshes(
             {
                 *g = true;
             }
+            if holder_hit.get(j * d.nx + i).copied().unwrap_or(false)
+                && let Some(g) = held.get_mut(b)
+            {
+                *g = true;
+            }
         }
     }
     let cs = d.cell * k as f64;
@@ -344,6 +492,7 @@ pub fn meshes(
     let y = |j: usize| (d.min.y + j as f64 * cs).min(d.min.y + d.ny as f64 * d.cell);
     let mut stock = TriMesh::default();
     let mut bad = TriMesh::default();
+    let mut hold = TriMesh::default();
     let quad = |m: &mut TriMesh, p: [Point3; 4]| {
         let n = m.positions.len() as u32;
         m.positions.extend(p);
@@ -360,7 +509,9 @@ pub fn meshes(
                 Point3::new(x(i + 1), y(j + 1), z),
                 Point3::new(x(i), y(j + 1), z),
             ];
-            if gouge[j * bx + i] {
+            if held[j * bx + i] {
+                quad(&mut hold, top);
+            } else if gouge[j * bx + i] {
                 quad(&mut bad, top);
             } else {
                 quad(&mut stock, top);
@@ -427,5 +578,5 @@ pub fn meshes(
             Point3::new(x(bx), y(0), b),
         ],
     );
-    (stock, bad)
+    (stock, bad, hold)
 }

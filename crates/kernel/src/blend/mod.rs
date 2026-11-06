@@ -30,20 +30,54 @@
 //! The rim of a circular edge between a plane and a cylinder whose axis is perpendicular
 //! to it (the rim of a hole or of a boss, its one vertex on the cylinder's seam) gets an
 //! exact [`Torus`](crate::Torus) (fillet) or [`Cone`](crate::Cone) (chamfer), with a
-//! meridian seam edge so the band can be measured and tessellated.
+//! meridian seam edge so the band can be measured and tessellated. An *arc* of such a rim
+//! (the rounded end of an extruded slot or rounded rectangle) gets a piece of the same
+//! torus or cone, ending in its meridian section (`rim.rs`).
+//!
+//! A straight edge whose faces are ruled along it (planes, cylinders whose axis runs
+//! along the edge, extruded splines extruded along it) is blended in its cross-section:
+//! the 2D fillet of the two section curves is a circular arc, so the fillet is an exact
+//! [`Cylinder`](crate::Cylinder) about a spine parallel to the edge, and the chamfer a
+//! plane through two rulings (`ruled.rs`; the ball's contact points are solved by Newton
+//! when a section is curved, then checked against the surfaces).
+//!
+//! Where two blended edges continue each other tangentially (a profile's line meeting
+//! its arc, both on a planar top face, their side faces tangent), both blends have the
+//! same section there: the ball's circle in the plane normal to the common tangent. That
+//! quarter circle (or a segment, for chamfers) is their common end edge, and the tangent
+//! edge between the side faces is cut short at the common contact point.
+//!
+//! A variable-radius fillet ([`fillet_variable`]) along a straight edge between planes,
+//! with the radius linear from `r0` to `r1`, is the envelope of balls whose centres run
+//! on a straight spine: an exact [`Cone`](crate::Cone) with `sin α = (r1 - r0) / |spine|`,
+//! touching each face along a line through the apex on the edge's line; its ends are the
+//! cone's elliptical sections by the end faces (the variable-radius rolling ball of Vida, Martin
+//! and Varady, 1994).
 //!
 //! # Supported and refused
-//! Supported: straight edges between two planar faces, convex or concave, singly, in
-//! chains and at three-face corners, where every face at an end vertex is planar, every
-//! edge there is straight and the vertex has exactly three edges; and the plane-cylinder
-//! rims above. Refused with [`KernelError::Unsupported`]: edges on other surfaces, vertices
-//! with more than three edges or with curved neighbours, corners mixing convex and concave
-//! blended edges, two blends at a corner whose setbacks on the unblended edge differ
-//! (faces meeting at unequal angles). Refused with [`KernelError::InvalidInput`]: a size
-//! that is not a finite length above [`LINEAR_TOLERANCE`], no edges, unknown edges, and
-//! a blend that would consume a face or edge (a setback reaching another edge) or make a
-//! face cross itself. Every result passes [`Body::validate`]; nothing half-built is ever
-//! returned. Not detected yet: a blend surface passing through a distant, unrelated face.
+//!
+//! | Edge | Faces | Fillet | Chamfer | Ends |
+//! |---|---|---|---|---|
+//! | straight | two planes, convex or concave | exact cylinder | plane | end faces (planar), two-blend corners, three-blend sphere or triangle corners |
+//! | straight, along the rulings | plane or cylinder or extruded spline, any pair | exact cylinder | plane | planar end faces, tangent joins |
+//! | straight, variable radius | two planes | exact cone | - | planar end faces only |
+//! | circle, closed | plane and perpendicular cylinder | exact torus | cone | its seam vertex |
+//! | arc | plane and perpendicular cylinder | exact torus piece | cone piece | tangent joins, planar end faces through the axis |
+//! | ellipse or spline where a plane meets a cylinder or extrusion obliquely | | refused: the rolling-ball surface is free-form and needs NURBS blend surfaces | | |
+//! | curve between two curved faces (pipes in a T) | | refused: no exact surface (needs NURBS blend surfaces); equal pipes also touch at two points where the blend would pinch | | |
+//!
+//! Nothing is approximated: every blend surface above is exact. Refused with
+//! [`KernelError::Unsupported`]: the rows marked refused, seams, vertices with more than
+//! three edges, a blend ending on a curved face (rather than continuing tangentially),
+//! corners of several blends other than between planes or at tangent joins, corners
+//! mixing convex and concave blended edges, two blends at a corner whose setbacks on the
+//! unblended edge differ (faces meeting at unequal angles), variable radii on anything
+//! but a single straight edge between planes. Refused with [`KernelError::InvalidInput`]:
+//! a size that is not a finite length above [`LINEAR_TOLERANCE`], no edges, unknown
+//! edges, a ball that cannot touch both faces, and a blend that would consume a face or
+//! edge (a setback reaching another edge) or make a face cross itself. Every result
+//! passes [`Body::validate`]; nothing half-built is ever returned. Not detected yet: a
+//! blend surface passing through a distant, unrelated face.
 //!
 //! # Names (the start of persistent naming)
 //! Every face, edge and vertex the blend keeps keeps its name, so a sketch attached to
@@ -63,6 +97,7 @@
 
 mod build;
 mod rim;
+mod ruled;
 #[cfg(test)]
 mod tests;
 
@@ -94,22 +129,35 @@ impl Kind {
 /// lines at `distance` from the edge on each of its faces. See the module documentation
 /// for what is supported and how faces are named.
 pub fn chamfer(body: &Body, edges: &[EdgeId], distance: f64) -> KernelResult<Body> {
-    blend(body, edges, distance, Kind::Chamfer)
+    blend(body, edges, distance, Kind::Chamfer, None)
 }
 
 /// `body` with each of `edges` rounded by a constant-radius fillet of `radius`
 /// (cylinders, spherical corners, tori on rims). See the module documentation for what is
 /// supported and how faces are named.
 pub fn fillet(body: &Body, edges: &[EdgeId], radius: f64) -> KernelResult<Body> {
-    blend(body, edges, radius, Kind::Fillet)
+    blend(body, edges, radius, Kind::Fillet, None)
 }
 
-fn blend(body: &Body, edges: &[EdgeId], size: f64, kind: Kind) -> KernelResult<Body> {
-    if body.has_spline_geometry() {
-        return Err(KernelError::Unsupported(
-            "fillets and chamfers on solids with spline faces".into(),
-        ));
+/// `body` with the straight `edge` between two planar faces rounded by a fillet whose
+/// radius changes linearly from `start` at the edge's first vertex
+/// (`body.edge_vertices(edge)[0]`) to `end` at its second: an exact cone. Both ends must
+/// meet plain planar end faces (no other blended edge). Equal radii give the
+/// constant-radius fillet.
+pub fn fillet_variable(body: &Body, edge: EdgeId, start: f64, end: f64) -> KernelResult<Body> {
+    for r in [start, end] {
+        check_size(r, Kind::Fillet)?;
     }
+    blend(
+        body,
+        &[edge],
+        start.max(end),
+        Kind::Fillet,
+        Some([start, end]),
+    )
+}
+
+fn check_size(size: f64, kind: Kind) -> KernelResult<()> {
     let what = match kind {
         Kind::Chamfer => "distance",
         Kind::Fillet => "radius",
@@ -120,6 +168,17 @@ fn blend(body: &Body, edges: &[EdgeId], size: f64, kind: Kind) -> KernelResult<B
             kind.word()
         )));
     }
+    Ok(())
+}
+
+fn blend(
+    body: &Body,
+    edges: &[EdgeId],
+    size: f64,
+    kind: Kind,
+    variable: Option<[f64; 2]>,
+) -> KernelResult<Body> {
+    check_size(size, kind)?;
     if edges.is_empty() {
         return Err(KernelError::InvalidInput(format!(
             "a {} needs at least one edge",
@@ -139,7 +198,9 @@ fn blend(body: &Body, edges: &[EdgeId], size: f64, kind: Kind) -> KernelResult<B
     body.validate().map_err(|e| {
         KernelError::InvalidInput(format!("the body to blend is not a valid solid: {e}"))
     })?;
-    build::Blend::new(body, &selected, size, kind)?.run()
+    // Equal radii are a constant-radius fillet.
+    let variable = variable.filter(|[a, b]| (a - b).abs() > LINEAR_TOLERANCE);
+    build::Blend::new(body, &selected, size, kind, variable)?.run()
 }
 
 /// `name` cut to at most [`MAX_NAME_LENGTH`] bytes on a character boundary.

@@ -1,13 +1,14 @@
 [
   { "choose": ["wedge.stl"] },
   { "clickText": "File" },
-  { "clickText": "Insert Mesh (STL)…" },
+  { "clickText": "Insert Mesh (STL, OBJ, 3MF)…" },
   { "expect": "document.body.dataset.message === 'Inserted wedge (4 triangles)'", "what": "the STL inserted from the file picker" },
   { "expect": "document.body.dataset.bodies === '2'", "what": "the sample and the wedge" },
 
   { "choose": ["boss-on-plate.chamfera"] },
   { "clickText": "File" },
   { "clickText": "Open…" },
+  { "clickText": "Don't Save" },
   { "expect": "document.body.dataset.message === 'Opened boss-on-plate.chamfera'", "what": "the design opened from the file picker" },
   { "expect": "document.title === 'boss-on-plate.chamfera — Chamfera'", "what": "the title names the file" },
 

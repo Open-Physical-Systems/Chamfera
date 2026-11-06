@@ -57,12 +57,16 @@ jobs:
         working-directory: apps/chamfera-web
         run: |
           trunk build --release
+          # The licence texts of the bundled crates (Help > About links to them).
+          cargo xtask notices --out dist/THIRD-PARTY-LICENSES.txt
           ls -l dist
           echo "wasm: $(stat -c %s dist/*.wasm) bytes, gzip $(gzip -9 -c dist/*.wasm | wc -c) bytes"
       - name: Smoke test in headless Chrome (WebGL 2)
         run: node tools/web-smoke.mjs --no-webgpu --out web-webgl2.png
       - name: Files in the browser (open, insert, save, export, local storage)
         run: node tools/web-smoke.mjs --no-webgpu --steps tools/web-checks/files.json
+      - name: Workspaces, the Assistant's browser note and About (with the licence texts)
+        run: node tools/web-smoke.mjs --no-webgpu --steps tools/web-checks/workspaces.json
       - name: Smoke test with WebGPU (SwiftShader; informative only)
         continue-on-error: true
         run: node tools/web-smoke.mjs --renderer webgpu --out web-webgpu.png
@@ -70,7 +74,9 @@ jobs:
         if: always()
         with:
           name: chamfera-web-screenshots
-          path: "*.png"
+          path: |
+            *.png
+            target/web-checks-*.png
           if-no-files-found: ignore
       - uses: actions/upload-pages-artifact@v3
         if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
@@ -115,6 +121,10 @@ jobs:
           APP=$(ls target/appimage/Chamfera-*-x86_64.AppImage)
           APPIMAGE_EXTRACT_AND_RUN=1 "$APP" cli --version
           APPIMAGE_EXTRACT_AND_RUN=1 "$APP" cli exec body.sample
+          "$APP" --appimage-extract > /dev/null
+          for f in LICENSE-MIT LICENSE-APACHE ATTRIBUTION.md THIRD-PARTY-LICENSES.txt; do
+            test -s "squashfs-root/usr/$f" || { echo "$f missing from the AppImage"; exit 1; }
+          done
       - uses: actions/upload-artifact@v4
         with:
           name: chamfera-appimage
@@ -150,7 +160,7 @@ jobs:
           Expand-Archive $zip.FullName -DestinationPath "$env:RUNNER_TEMP/zip"
           $dir = (Get-ChildItem "$env:RUNNER_TEMP/zip" -Directory | Select-Object -First 1).FullName
           Get-ChildItem $dir | Format-Table Name, Length
-          foreach ($f in "chamfera.exe", "chamfera-cli.exe", "LICENSE-MIT", "LICENSE-APACHE", "ATTRIBUTION.md") {
+          foreach ($f in "chamfera.exe", "chamfera-cli.exe", "LICENSE-MIT", "LICENSE-APACHE", "ATTRIBUTION.md", "THIRD-PARTY-LICENSES.txt") {
             if (-not (Test-Path "$dir/$f")) { throw "$f missing from the zip" }
           }
           & "$dir/chamfera-cli.exe" --version; if ($LASTEXITCODE -ne 0) { throw "cli --version failed" }
@@ -199,6 +209,7 @@ jobs:
           MNT="$RUNNER_TEMP/dmg"
           hdiutil attach -nobrowse -readonly -mountpoint "$MNT" "$DMG"
           ls -la "$MNT" "$MNT/Chamfera.app/Contents/MacOS" "$MNT/Chamfera.app/Contents/Resources"
+          test -s "$MNT/Chamfera.app/Contents/Resources/THIRD-PARTY-LICENSES.txt"
           for bin in chamfera chamfera-cli; do
             archs=$(lipo -archs "$MNT/Chamfera.app/Contents/MacOS/$bin")
             echo "$bin: $archs"

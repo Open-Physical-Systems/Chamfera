@@ -378,6 +378,14 @@ fn hostile_params_never_panic() {
         json!({"body": 1, "metallic": 2, "roughness": f64::NAN, "transmission": -1, "ior": 0}),
         json!({"body": 1, "metallic": "1", "roughness": [0], "transmission": null, "ior": 1e300}),
         json!({"body": 1, "metallic": 1, "roughness": 0, "transmission": 1, "ior": 3, "preset": "chrome"}),
+        // Tools with holders, the holder check, pencil and scallop, tool libraries.
+        json!({"kind": "flat_end_mill", "diameter": 6, "holder": {"stickout": 1e300, "segments": [{"diameter": -1, "length": f64::MAX}]}}),
+        json!({"kind": "ball_end_mill", "diameter": 6, "holder": {"stickout": 2, "shank_diameter": "1e9 mm", "segments": vec![json!({"diameter": 1, "length": 1}); 33]}}),
+        json!({"kind": "bull_nose", "diameter": 6, "corner_radius": 1, "holder": {"segments": "x"}, "tool": 1}),
+        json!({"tool": 1, "holder": [1], "kind": "pencil", "min_angle": 1e300, "max_slope": -5, "holder_check": "maybe"}),
+        json!({"tool": 1, "kind": "scallop", "stepover": 1e-300, "max_slope": "89 deg", "holder_check": 5}),
+        json!({"tool": 4294967296u64, "kind": "parallel", "holder_check": "refuse", "path": "/dev/zero", "tools": [1, 99]}),
+        json!({"path": "/nonexistent/dir/tools.json", "replace": "yes", "tools": "all"}),
     ];
     for c in registry() {
         for p in &hostile {
@@ -1843,6 +1851,112 @@ fn a_blend_of_a_missing_or_too_large_edge_is_refused_and_changes_nothing() {
     );
     assert_eq!(s.doc.features.len(), before);
     assert!((s.solids()[0].body.volume().unwrap() - 15_000.0).abs() < 1e-6);
+}
+
+#[test]
+fn a_fillet_rounds_the_strut_of_an_extruded_spline_and_refuses_its_spline_rim() {
+    // The arch y(x) = x (20 - x) / 10 (h = 10) extruded by 6. The strut at (20, 0) runs
+    // along z between the base y = 0 and the parabola, which descends there with slope
+    // y'(20) = -2. Filleting it with r extrudes the 2D fillet: the ball centre is r above
+    // the base and r below the parabola, at c = (x, y(x)) + r (y', -1)/√(1 + y'²) with
+    // c_y = r (bisection on the foot x). The removed area is ½ ∮ (x dy - y dx) around the
+    // base from T_l = (c_x, 0) to (20, 0), the parabola back to the foot (Simpson) and
+    // the fillet arc to T_l (closed form).
+    let mut s = Session::new();
+    spline_arch(&mut s, 10.0);
+    s.execute("sketch.finish", &json!({})).unwrap();
+    let h = 6.0;
+    s.execute(
+        "solid.extrude",
+        &json!({"sketch": 1, "profiles": [{"x": 10, "y": 5}], "distance": h}),
+    )
+    .unwrap();
+    let v0 = 400.0 / 3.0 * h;
+    let y = |x: f64| x * (20.0 - x) / 10.0;
+    let dy = |x: f64| (20.0 - 2.0 * x) / 10.0;
+    let r = 1.5;
+    let centre = |x: f64| {
+        let n = (1.0 + dy(x) * dy(x)).sqrt();
+        (x + r * dy(x) / n, y(x) - r / n)
+    };
+    let (mut lo, mut hi) = (10.0, 20.0);
+    for _ in 0..200 {
+        let m = 0.5 * (lo + hi);
+        if centre(m).1 > r {
+            lo = m;
+        } else {
+            hi = m;
+        }
+    }
+    let xs = 0.5 * (lo + hi);
+    let (cx, cy) = centre(xs);
+    let mut twice = 0.0 * cx * cy;
+    // Base T_l -> P: y = 0, no contribution. Parabola from x = 20 to xs: x y' - y.
+    let n = 2000;
+    let f = |x: f64| x * dy(x) - y(x);
+    let step = (xs - 20.0) / n as f64;
+    let mut simpson = f(20.0) + f(xs);
+    for i in 1..n {
+        let x = 20.0 + step * i as f64;
+        simpson += f(x) * if i % 2 == 1 { 4.0 } else { 2.0 };
+    }
+    twice += simpson * step / 3.0;
+    // Arc from the foot to T_l about (cx, cy): ∫ r² + r (cx cos θ + cy sin θ) dθ.
+    let ts = (y(xs) - cy).atan2(xs - cx);
+    let tl = -std::f64::consts::FRAC_PI_2;
+    let mut dt = tl - ts;
+    while dt > std::f64::consts::PI {
+        dt -= std::f64::consts::TAU;
+    }
+    while dt < -std::f64::consts::PI {
+        dt += std::f64::consts::TAU;
+    }
+    let te = ts + dt;
+    twice += r * r * dt + r * (cx * (te.sin() - ts.sin()) - cy * (te.cos() - ts.cos()));
+    let area = 0.5 * twice.abs();
+    assert!(area > 0.0 && area < r * r, "{area}");
+    let strut = edge_between(&mut s, [20.0, 0.0, 0.0], [20.0, 0.0, h]);
+    let res = s
+        .execute("solid.fillet", &json!({"edges": [strut], "radius": r}))
+        .unwrap();
+    let v = exact_volume(&res);
+    assert!(
+        (v - (v0 - area * h)).abs() < 1e-6,
+        "{v} vs {}",
+        v0 - area * h
+    );
+    s.execute("edit.undo", &json!({})).unwrap();
+
+    // The top rim has two edges from (0, 0, h) to (20, 0, h): the spline's (refused: its
+    // blend is free-form) and the base's (refused: it would end on the curved spline side).
+    let listed = s.execute("solid.edges", &json!({})).unwrap();
+    let names: Vec<String> = listed["solids"][0]["edges"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| {
+            let at = |v: &serde_json::Value, x: f64| {
+                (v[0].as_f64().unwrap() - x).abs() < 1e-9
+                    && v[1].as_f64().unwrap().abs() < 1e-9
+                    && (v[2].as_f64().unwrap() - h).abs() < 1e-9
+            };
+            (at(&e["from"], 0.0) && at(&e["to"], 20.0))
+                || (at(&e["from"], 20.0) && at(&e["to"], 0.0))
+        })
+        .map(|e| e["edge"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(names.len(), 2, "{listed}");
+    let before = s.doc.features.len();
+    let mut nurbs = 0;
+    for name in &names {
+        let e = s
+            .execute("solid.fillet", &json!({"edges": [name], "radius": 1}))
+            .unwrap_err();
+        nurbs += usize::from(e.to_string().contains("NURBS"));
+        assert_eq!(s.doc.features.len(), before);
+        assert!((s.solids()[0].body.volume().unwrap() - v0).abs() < 1e-6);
+    }
+    assert_eq!(nurbs, 1);
 }
 
 #[test]
