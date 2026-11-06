@@ -102,9 +102,20 @@ fn check_radius(what: &'static str, value: f64) -> Result<(), SketchError> {
 /// Checks a dimension value for the given constraint kind.
 fn check_dimension_value(c: &Constraint, value: f64) -> Result<(), SketchError> {
     match c {
-        Constraint::Distance { .. }
-        | Constraint::PointLineDistance { .. }
-        | Constraint::Length { .. } => {
+        // A line's length must be positive: a zero-length line collapses to a point. A
+        // distance of 0 is fine (the points meet, or the point lies on the line).
+        Constraint::Length { .. } => {
+            if value.is_finite() && value > LINEAR_TOLERANCE && value <= MAX_COORDINATE {
+                Ok(())
+            } else {
+                Err(SketchError::BadValue {
+                    what: "value",
+                    allowed: "a finite length above 0 and at most 1e6 mm",
+                    value,
+                })
+            }
+        }
+        Constraint::Distance { .. } | Constraint::PointLineDistance { .. } => {
             if value.is_finite() && (0.0..=MAX_COORDINATE).contains(&value) {
                 Ok(())
             } else {
