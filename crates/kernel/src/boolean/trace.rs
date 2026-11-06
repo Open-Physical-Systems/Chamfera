@@ -44,6 +44,8 @@ const TIE: f64 = 1e-9;
 const CHORD: f64 = 1e-3;
 /// Two image coordinates closer than this are the same (as in `topology/uv.rs`).
 const IMAGE_TOLERANCE: f64 = 1e-9;
+/// Samples per knot span of a spline edge's image.
+const SPLINE_SAMPLES_PER_SPAN: usize = 32;
 
 /// A face's surface and how its outward normal relates to it.
 #[derive(Debug, Clone, PartialEq)]
@@ -82,7 +84,7 @@ pub(super) fn use_point(reg: &Registry, u: Use, s: f64) -> KernelResult<Point3> 
 }
 
 fn start_tangent(reg: &Registry, u: Use) -> KernelResult<Vec3> {
-    let s = reg.edge(u.0)?.span;
+    let s = &reg.edge(u.0)?.span;
     Ok(if u.1 {
         s.carrier.d1(s.t0)
     } else {
@@ -91,7 +93,7 @@ fn start_tangent(reg: &Registry, u: Use) -> KernelResult<Vec3> {
 }
 
 fn end_tangent(reg: &Registry, u: Use) -> KernelResult<Vec3> {
-    let s = reg.edge(u.0)?.span;
+    let s = &reg.edge(u.0)?.span;
     Ok(if u.1 {
         s.carrier.d1(s.t1)
     } else {
@@ -303,7 +305,19 @@ impl Image {
 }
 
 fn samples_for(reg: &Registry, u: Use) -> KernelResult<usize> {
-    let s = reg.edge(u.0)?.span;
+    let s = &reg.edge(u.0)?.span;
+    if let super::span::Carrier::Spline(c) = &s.carrier {
+        // A spline bends within each knot span: a fixed number of samples per span.
+        let (lo, hi) = (s.t0.min(s.t1), s.t0.max(s.t1));
+        let spans = c
+            .spline
+            .breaks()
+            .windows(2)
+            .filter(|w| w[1] > lo && w[0] < hi)
+            .count()
+            .max(1);
+        return Ok((spans * SPLINE_SAMPLES_PER_SPAN).clamp(16, 2048));
+    }
     if !s.carrier.periodic() {
         return Ok(1);
     }

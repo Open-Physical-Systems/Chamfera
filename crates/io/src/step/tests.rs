@@ -1073,6 +1073,35 @@ mod splines {
         let s = summarize(&ex).unwrap();
         assert_eq!(s.solids.len(), 1);
     }
+
+    #[test]
+    fn spline_solids_cut_by_booleans_export_their_new_edges() {
+        // The arch cut at half height by a box: the same topology as the arch (4 faces,
+        // 6 edges, 4 vertices), its top a piece of the box's bottom plane and its upper
+        // spline edge the section of the extrusion at z = 2.5.
+        let block = extrude(
+            &Frame::XY
+                .with_origin(chamfera_geom::Point3::new(0.0, 0.0, 2.5))
+                .unwrap(),
+            &Profile::polygon(&[
+                Point2::new(-5.0, -5.0),
+                Point2::new(25.0, -5.0),
+                Point2::new(25.0, 15.0),
+                Point2::new(-5.0, 15.0),
+            ]),
+            10.0,
+        )
+        .unwrap();
+        let half = chamfera_kernel::subtract(&arch(), &block).unwrap();
+        let (_, ex) = export(&[("half", &half)]);
+        let s = summarize(&ex).unwrap();
+        let [solid] = s.solids.as_slice() else {
+            panic!("one solid expected");
+        };
+        assert_eq!((solid.faces, solid.edges, solid.vertices), (4, 6, 4));
+        assert_eq!(ex.count("SURFACE_OF_LINEAR_EXTRUSION"), 1);
+        assert_eq!(ex.count("B_SPLINE_CURVE_WITH_KNOTS"), 3);
+    }
 }
 
 #[test]

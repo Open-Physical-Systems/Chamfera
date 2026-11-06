@@ -14,6 +14,11 @@ use chamfera_geom::{ANGULAR_TOLERANCE, LINEAR_TOLERANCE};
 use std::collections::{HashMap, HashSet};
 use std::f64::consts::TAU;
 
+/// Length (mm) of the chord into each face that orders faces tangent along an edge: long
+/// enough that a face bending with radius up to 1e3 mm leaves its tangent plane by
+/// `c² / 2R` = 5e-12, far above rounding, short enough to stay near the edge.
+const PAIR_CHORD: f64 = 1e-4;
+
 /// Where a face piece lies relative to the other solid.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Class {
@@ -155,7 +160,7 @@ fn pair_edges(faces: &mut [OutFace], reg: &mut Registry, open: bool) -> KernelRe
         if n % 2 == 1 || n == 0 {
             return Err(not_closed(e, n));
         }
-        let span = reg.edge(e)?.span;
+        let span = reg.edge(e)?.span.clone();
         let tm = 0.5 * (span.t0 + span.t1);
         let mid = span.carrier.point(tm);
         let t = span
@@ -171,7 +176,19 @@ fn pair_edges(faces: &mut [OutFace], reg: &mut Registry, open: bool) -> KernelRe
             let normal = f.side.normal(mid);
             let along = if *d { t } else { -t };
             let w = normal.cross(along);
-            around.push((*at, *d, w, normal));
+            // Faces tangent along the edge (a spline side touching a plane along a
+            // ruling) leave with the same `w`; a short chord into each face's surface,
+            // which bends away by its curvature, orders them.
+            let chord = match w.normalized() {
+                Some(wu) => {
+                    let q = mid + wu * PAIR_CHORD;
+                    let p = f.side.surface.closest_point(q).map_or(q, |c| c.point);
+                    let c = p - mid;
+                    c - t * c.dot(t)
+                }
+                None => w,
+            };
+            around.push((*at, *d, w, normal, chord));
         }
         let e1 = around
             .first()
@@ -179,8 +196,8 @@ fn pair_edges(faces: &mut [OutFace], reg: &mut Registry, open: bool) -> KernelRe
             .ok_or_else(|| internal("a face meets an edge edge-on"))?;
         let e2 = t.cross(e1);
         around.sort_by(|a, b| {
-            let ta = a.2.dot(e2).atan2(a.2.dot(e1));
-            let tb = b.2.dot(e2).atan2(b.2.dot(e1));
+            let ta = a.4.dot(e2).atan2(a.4.dot(e1));
+            let tb = b.4.dot(e2).atan2(b.4.dot(e1));
             ta.total_cmp(&tb)
         });
         let mut pairs = Vec::new();
@@ -190,8 +207,8 @@ fn pair_edges(faces: &mut [OutFace], reg: &mut Registry, open: bool) -> KernelRe
             if used[i] || used[j] {
                 continue;
             }
-            let (_, di, wi, ni) = around[i];
-            let (_, dj, _, _) = around[j];
+            let (_, di, wi, ni, _) = around[i];
+            let (_, dj, _, _, _) = around[j];
             if t.cross(wi).dot(-ni) > 0.0 && di != dj {
                 used[i] = true;
                 used[j] = true;
@@ -384,22 +401,24 @@ fn try_join(
     }
     let a = if r1.v[0] == v { r1.v[1] } else { r1.v[0] };
     let c = if r2.v[0] == v { r2.v[1] } else { r2.v[0] };
-    let s = r1.span;
+    let s = r1.span.clone();
     let delta = r2.span.t1 - r2.span.t0;
-    let (span, verts) = match s.carrier {
-        Carrier::Line(_) => {
+    let (span, verts) = match &s.carrier {
+        // Open carriers: the far end's parameter by projection (a spline's pieces may
+        // come from different copies of one curve, so their parameters are not shared).
+        Carrier::Line(_) | Carrier::Spline(_) => {
             let (tc, _) = s.carrier.project(reg.point(c)?)?;
             if r1.v[1] == v {
-                (Span::new(s.carrier, s.t0, tc), [a, c])
+                (Span::new(s.carrier.clone(), s.t0, tc), [a, c])
             } else {
-                (Span::new(s.carrier, tc, s.t1), [c, a])
+                (Span::new(s.carrier.clone(), tc, s.t1), [c, a])
             }
         }
         _ => {
             if r1.v[1] == v {
-                (Span::new(s.carrier, s.t0, s.t1 + delta), [a, c])
+                (Span::new(s.carrier.clone(), s.t0, s.t1 + delta), [a, c])
             } else {
-                (Span::new(s.carrier, s.t0 - delta, s.t1), [c, a])
+                (Span::new(s.carrier.clone(), s.t0 - delta, s.t1), [c, a])
             }
         }
     };

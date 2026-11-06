@@ -112,8 +112,11 @@ ready; fixed ones say so and name their tests.
    their exact rational quadratic B-splines (`EllipseArc::to_nurbs`: quarter-turn
    pieces of the unit circle with weights `cos(Δ/2)`, mapped affinely), so their sides are
    extrusion surfaces, which here are elliptic cylinders; a whole ellipse is two halves.
-   Surface sweeps take them the same way. Booleans still refuse spline faces, so an
-   ellipse extrude makes a new body (join and cut are refused as for splines). Tests:
+   Surface sweeps take them the same way. Booleans now take spline sides
+   (`kernel/spline-booleans`): join, cut and intersect with planar solids, cylinders and
+   other extrudes along the same direction, and holes parallel to the extrusion, are
+   exact (`boolean/extrusion_tests.rs`); a cone, sphere or torus reaching a spline side,
+   or a cylinder across it, is refused naming the faces. Tests:
    `an_ellipse_extrudes_into_an_elliptic_cylinder` (a = 10, b = 5, 10 high: 500π),
    `a_half_ellipse_closed_by_its_axis_extrudes_to_half_the_volume` (100π),
    `the_nurbs_of_an_ellipse_lies_on_it_and_encloses_pi_a_b`.

@@ -48,9 +48,7 @@ pub(crate) fn plane_surface(plane: &Frame, other: &Surface) -> KernelResult<Surf
         Surface::Sphere(s) => plane_sphere(plane, s),
         Surface::Cone(c) => plane_cone(plane, c),
         Surface::Torus(t) => plane_torus(plane, t),
-        Surface::Extrusion(_) => Ok(SurfaceIntersection::Unsupported(
-            crate::UnsupportedIntersection::Spline,
-        )),
+        Surface::Extrusion(e) => super::extrusion::plane_extrusion(plane, e),
     }
 }
 

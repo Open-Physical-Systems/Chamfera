@@ -24,6 +24,7 @@
 //! | cylinder / cylinder | coaxial (coincident or empty); parallel axes (0 to 2 lines, tangent line); equal radii with intersecting axes (two ellipses in the planes bisecting the axes); empty (axes farther apart than the radii) | other skew or unequal cases (quartic curves) |
 //! | two coaxial surfaces of revolution (cylinder, cone, sphere, torus; a sphere is coaxial with anything whose axis passes through its centre, and any two spheres are) | circles and points on the axis, crossing or tangent; coincident | |
 //! | other curved pairs | empty when a bounding sphere proves it | the rest |
+//! | surface of linear extrusion (K10) / plane, cylinder along it, extrusion along the same direction | rulings, the curve at a height, an oblique section as an exact B-spline; coincident (`extrusion.rs`) | cones, spheres and tori that reach it, cylinders and extrusions along other directions |
 //!
 //! Coaxial surfaces of revolution are intersected in a meridian half-plane: each surface
 //! meets the half-plane through the axis in its meridian curves (lines for cylinders and
@@ -48,7 +49,8 @@
 //!
 //! # Curve-surface: [`intersect_curve_surface`]
 //! See `curve.rs`: lines, segments, circles, arcs, ellipses and elliptical arcs against
-//! every surface, with parameters, points and tangency.
+//! every surface, with parameters, points and tangency; B-spline curves and every curve
+//! against an extrusion by subdivision and Newton (`extrusion.rs`, `spline.rs`).
 //!
 //! # Point-solid: [`classify_point`]
 //! See `classify.rs`: ray casting with the K3 inside-face test.
@@ -56,9 +58,11 @@
 mod classify;
 mod curve;
 mod cylinders;
+mod extrusion;
 mod plane;
 mod poly;
 mod revolution;
+mod spline;
 #[cfg(test)]
 mod tests;
 
@@ -103,8 +107,9 @@ pub enum UnsupportedIntersection {
     /// Two curved surfaces that are not coaxial (other than the cylinder pairs above),
     /// and no bounding sphere proves them apart.
     NonCoaxial,
-    /// A surface of linear extrusion of a B-spline (K10 surfaces have no intersections
-    /// yet).
+    /// A surface of linear extrusion of a B-spline against a surface that is not a plane,
+    /// a cylinder along the extrusion, an extrusion along the same direction, or a sphere
+    /// or torus clear of it: a space curve that needs surface marching.
     Spline,
 }
 
@@ -127,7 +132,7 @@ impl std::fmt::Display for UnsupportedIntersection {
                 "these curved surfaces are not coaxial; their intersection needs NURBS curves (K10)"
             }
             UnsupportedIntersection::Spline => {
-                "a spline surface's intersections are not supported yet (K10)"
+                "a spline surface (an extruded spline or ellipse) meets this surface in a space curve; only planes, cylinders along the extrusion and extrusions along the same direction are supported"
             }
         })
     }
@@ -194,9 +199,9 @@ impl SurfaceIntersection {
 pub fn intersect_surfaces(a: &Surface, b: &Surface) -> KernelResult<SurfaceIntersection> {
     use Surface as S;
     match (a, b) {
-        (S::Extrusion(_), _) | (_, S::Extrusion(_)) => Ok(SurfaceIntersection::Unsupported(
-            UnsupportedIntersection::Spline,
-        )),
+        (S::Extrusion(e), other) | (other, S::Extrusion(e)) => {
+            extrusion::extrusion_surface(e, other)
+        }
         (S::Plane(p), S::Plane(q)) => plane::plane_plane(p, q),
         (S::Plane(p), other) | (other, S::Plane(p)) => plane::plane_surface(p, other),
         (S::Cylinder(c), S::Cylinder(d)) => cylinders::cylinder_cylinder(c, d),

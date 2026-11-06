@@ -120,7 +120,9 @@ fn face_box(body: &Body, f: FaceId, surface: &Surface) -> KernelResult<Aabb> {
         max: b.max + Vec3::new(d, d, d),
     };
     match surface {
-        // Booleans refuse spline faces before they get here.
+        // A plane lies in the hull of its boundary; a face on an extrusion lies between
+        // its boundary points on each ruling (segments along the extrusion), so in their
+        // box too.
         Surface::Plane(_) | Surface::Extrusion(_) => {}
         Surface::Cylinder(c) => {
             let r = c.radius();
@@ -445,13 +447,17 @@ fn add_cuts(
     name: Option<String>,
 ) -> KernelResult<()> {
     let mut ts: Vec<f64> = extra.to_vec();
+    if let Carrier::Spline(_) = c {
+        // A spline carrier is a whole open curve: its ends bound the pieces too.
+        ts.extend([lo, hi]);
+    }
     for &(w, f) in on {
         ts.extend(boundary_params(pair.op(w), f, c, lo, hi)?);
     }
     let cyclic = c.periodic() && hi - lo >= TAU - 1e-12;
     let ts = sorted_params(c, lo, hi, cyclic, ts);
     for (s0, s1) in intervals(lo, cyclic, &ts) {
-        let span = Span::new(*c, s0, s1);
+        let span = Span::new(c.clone(), s0, s1);
         let full = span.is_full_turn();
         if !full && span.start().coincident(span.end()) {
             continue;
@@ -500,7 +506,7 @@ fn imprint(
     let src = pair.op(from.0);
     for e in src.face_edges(from.1)? {
         let ed = src.edge(e)?;
-        let s = ed.span;
+        let s = ed.span.clone();
         add_cuts(
             pair,
             reg,
@@ -610,7 +616,7 @@ fn split_span(
         if a == b && !(span.is_full_turn() && stops.len() == 2) {
             continue;
         }
-        let piece = Span::new(span.carrier, s0, s1);
+        let piece = Span::new(span.carrier.clone(), s0, s1);
         out.push(reg.edge_piece(piece, a, b, name)?);
     }
     Ok(out)

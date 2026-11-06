@@ -1,20 +1,80 @@
-//! Edge geometry for the boolean: a carrier curve (line, circle, ellipse) and a parameter
-//! span on it, with projection, splitting and curve-curve crossings on a face.
+//! Edge geometry for the boolean: a carrier curve (line, circle, ellipse, planar
+//! B-spline) and a parameter span on it, with projection, splitting and curve-curve
+//! crossings on a face.
 
 use crate::{
-    Circle3, Curve, CurveSurfaceIntersection, Ellipse3, KernelError, KernelResult, Line3, Segment3,
-    Surface, intersect_curve_surface_on,
+    Circle3, Curve, CurveSurfaceIntersection, Ellipse3, Extrusion, KernelError, KernelResult,
+    Line3, Segment3, Surface, intersect_curve_surface_on,
 };
-use chamfera_geom::{Aabb, Frame, LINEAR_TOLERANCE, Point3, Vec3};
+use chamfera_geom::{Aabb, BSplineCurve3, Frame, LINEAR_TOLERANCE, Point3, Vec3};
 use std::f64::consts::TAU;
+use std::sync::Arc;
+
+/// A planar B-spline carrier (rung K10): the curve, its plane, and the curve as a
+/// topology curve (kept so the boolean does not rebuild it).
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct SplineCarrier {
+    pub curve: Curve,
+    pub spline: BSplineCurve3,
+    /// The curve's plane (its z is the plane's normal).
+    pub plane: Frame,
+}
+
+impl SplineCarrier {
+    /// The carrier of a planar spline: its plane from Newell's normal of the control
+    /// polygon (Newell's method, as in Sutherland, Sproull and Schumacker, "A
+    /// characterization of ten hidden-surface algorithms", 1974), checked against every
+    /// control point. A straight spline takes any plane through it.
+    fn new(c: &BSplineCurve3) -> KernelResult<SplineCarrier> {
+        let pts = c.control_points();
+        let n = pts.len().max(1) as f64;
+        let centre = pts
+            .iter()
+            .fold(Vec3::ZERO, |acc, p| acc + (*p - Point3::ORIGIN))
+            * (1.0 / n);
+        let centre = Point3::ORIGIN + centre;
+        let mut normal = Vec3::ZERO;
+        for (i, p) in pts.iter().enumerate() {
+            let q = pts.get((i + 1) % pts.len()).copied().unwrap_or(*p);
+            normal = normal + (*p - centre).cross(q - centre);
+        }
+        let chord = pts
+            .last()
+            .zip(pts.first())
+            .map_or(Vec3::ZERO, |(l, f)| *l - *f);
+        let normal = normal.normalized().or_else(|| {
+            [Vec3::Z, Vec3::X, Vec3::Y]
+                .into_iter()
+                .find_map(|a| chord.cross(a).normalized())
+        });
+        let plane = normal
+            .and_then(|n| Frame::from_normal(centre, n))
+            .ok_or_else(|| internal("a spline edge has no plane"))?;
+        if pts
+            .iter()
+            .any(|p| (*p - centre).dot(plane.z()).abs() > LINEAR_TOLERANCE)
+        {
+            return Err(KernelError::Unsupported(
+                "booleans on solids with non-planar spline edges".into(),
+            ));
+        }
+        Ok(SplineCarrier {
+            curve: Curve::BSpline(c.clone()),
+            spline: c.clone(),
+            plane,
+        })
+    }
+}
 
 /// The full curve an edge piece lies on. Segments become lines (parameter = distance
 /// from the line's origin) and arcs their circles, so pieces of one edge share a carrier.
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// A spline is its own carrier (open: profiles hold no closed spline edge).
+#[derive(Debug, Clone, PartialEq)]
 pub(super) enum Carrier {
     Line(Line3),
     Circle(Circle3),
     Ellipse(Ellipse3),
+    Spline(Arc<SplineCarrier>),
 }
 
 impl Carrier {
@@ -31,11 +91,7 @@ impl Carrier {
             Curve::Arc(a) => (Carrier::Circle(*a.circle()), t0, t1),
             Curve::Ellipse(e) => (Carrier::Ellipse(*e), t0, t1),
             Curve::EllipticalArc(a) => (Carrier::Ellipse(*a.ellipse()), t0, t1),
-            Curve::BSpline(_) => {
-                return Err(KernelError::Unsupported(
-                    "booleans on solids with spline edges (K10 surfaces come later)".into(),
-                ));
-            }
+            Curve::BSpline(c) => (Carrier::Spline(Arc::new(SplineCarrier::new(c)?)), t0, t1),
         })
     }
 
@@ -45,11 +101,12 @@ impl Carrier {
             Carrier::Line(l) => Curve::Line(*l),
             Carrier::Circle(c) => Curve::Circle(*c),
             Carrier::Ellipse(e) => Curve::Ellipse(*e),
+            Carrier::Spline(s) => s.curve.clone(),
         }
     }
 
     pub fn periodic(&self) -> bool {
-        !matches!(self, Carrier::Line(_))
+        matches!(self, Carrier::Circle(_) | Carrier::Ellipse(_))
     }
 
     pub fn point(&self, t: f64) -> Point3 {
@@ -57,6 +114,7 @@ impl Carrier {
             Carrier::Line(l) => l.point_at(t),
             Carrier::Circle(c) => c.point_at(t),
             Carrier::Ellipse(e) => e.point_at(t),
+            Carrier::Spline(s) => s.spline.point_at(t),
         }
     }
 
@@ -65,6 +123,7 @@ impl Carrier {
             Carrier::Line(l) => l.d1(t),
             Carrier::Circle(c) => c.d1(t),
             Carrier::Ellipse(e) => e.d1(t),
+            Carrier::Spline(s) => s.spline.d1(t),
         }
     }
 
@@ -75,22 +134,28 @@ impl Carrier {
             Carrier::Line(l) => l.closest_point(p)?,
             Carrier::Circle(c) => c.closest_point(p)?,
             Carrier::Ellipse(e) => e.closest_point(p)?,
+            Carrier::Spline(s) => {
+                crate::check::point3("point", p)?;
+                let c = s.spline.closest_point(p);
+                return Ok((c.u, c.distance));
+            }
         };
         Ok((c.t, c.distance))
     }
 
-    /// The plane of a circle or ellipse.
+    /// The plane of a circle, ellipse or spline.
     pub fn plane(&self) -> Option<Frame> {
         match self {
             Carrier::Line(_) => None,
             Carrier::Circle(c) => Some(*c.frame()),
             Carrier::Ellipse(e) => Some(*e.frame()),
+            Carrier::Spline(s) => Some(s.plane),
         }
     }
 }
 
 /// A piece of a carrier: `t0 < t1`, at most one turn on a closed carrier.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(super) struct Span {
     pub carrier: Carrier,
     pub t0: f64,
@@ -176,10 +241,14 @@ impl Span {
     /// The edge curve for the topology: a segment between `p0` and `p1` (the vertex
     /// points) on a line, the circle or ellipse itself over the span otherwise.
     pub fn edge_curve(&self, p0: Point3, p1: Point3) -> KernelResult<(Curve, f64, f64)> {
-        Ok(match self.carrier {
+        Ok(match &self.carrier {
             Carrier::Line(_) => (Curve::Segment(Segment3::new(p0, p1)?), 0.0, 1.0),
-            Carrier::Circle(c) => (Curve::Circle(c), self.t0, self.t1),
-            Carrier::Ellipse(e) => (Curve::Ellipse(e), self.t0, self.t1),
+            Carrier::Circle(c) => (Curve::Circle(*c), self.t0, self.t1),
+            Carrier::Ellipse(e) => (Curve::Ellipse(*e), self.t0, self.t1),
+            Carrier::Spline(s) => {
+                let (lo, hi) = s.spline.domain();
+                (s.curve.clone(), self.t0.max(lo), self.t1.min(hi))
+            }
         })
     }
 
@@ -215,7 +284,7 @@ pub(super) fn edge_cutters(
     let mut out = Vec::new();
     let p0 = edge.start();
     if let Surface::Plane(f) = face_surface {
-        match edge.carrier {
+        match &edge.carrier {
             Carrier::Line(l) => {
                 if let Some(n) = f.z().cross(l.direction()).normalized()
                     && let Some(fr) = Frame::from_normal(p0, n)
@@ -229,12 +298,33 @@ pub(super) fn edge_cutters(
                 }
             }
             Carrier::Ellipse(_) => {}
+            // The extrusion of the spline along the face's normal meets the face's plane
+            // exactly in the spline.
+            Carrier::Spline(s) => {
+                if let Ok(c2) = s.spline.to_plane(f)
+                    && let Ok(e) = Extrusion::new(*f, c2)
+                {
+                    out.push(Surface::Extrusion(e));
+                }
+            }
         }
     }
     if let Some(n) = neighbour {
         out.push(n.clone());
     }
-    match edge.carrier {
+    if let (Surface::Extrusion(e), Carrier::Line(l)) = (face_surface, &edge.carrier) {
+        // A ruling: the plane through it across the curve (normal `S_u`) meets the
+        // extrusion transversally there.
+        let q = e.parameters(p0);
+        let (su, _) = e.derivatives(q.u, q.v);
+        if l.direction().cross(e.frame().z()).length() <= chamfera_geom::ANGULAR_TOLERANCE
+            && let Some(n) = su.normalized()
+            && let Some(fr) = Frame::from_normal(p0, n)
+        {
+            out.push(Surface::Plane(fr));
+        }
+    }
+    match &edge.carrier {
         Carrier::Line(l) => {
             if !matches!(face_surface, Surface::Plane(_)) {
                 let axis = face_surface.frame();
@@ -250,7 +340,7 @@ pub(super) fn edge_cutters(
                 }
             }
         }
-        Carrier::Circle(_) | Carrier::Ellipse(_) => {
+        Carrier::Circle(_) | Carrier::Ellipse(_) | Carrier::Spline(_) => {
             if let Some(fr) = edge.carrier.plane() {
                 out.push(Surface::Plane(fr));
             }
@@ -308,6 +398,18 @@ pub(super) fn param_in(c: &Carrier, lo: f64, hi: f64, p: Point3) -> KernelResult
         // Just below `lo` (by rounding): the start.
         if c.point(lo).coincident(p) {
             return Ok(Some(lo));
+        }
+        return Ok(None);
+    }
+    if let Carrier::Spline(_) = c {
+        if t >= lo && t <= hi {
+            return Ok(Some(t));
+        }
+        if c.point(lo).coincident(p) {
+            return Ok(Some(lo));
+        }
+        if c.point(hi).coincident(p) {
+            return Ok(Some(hi));
         }
         return Ok(None);
     }

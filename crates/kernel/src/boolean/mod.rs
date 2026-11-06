@@ -71,11 +71,26 @@
 //! `<face of A> x <face of B>` (an imprinted edge keeps its operand edge's name);
 //! vertices keep operand vertex names.
 //!
+//! # Spline sides (K10)
+//! Faces on surfaces of linear extrusion (extruded splines and ellipses) take part like
+//! any other: their intersections with planes, cylinders along the extrusion and
+//! extrusions along the same direction are exact (rulings, the curve at a height, an
+//! oblique section as an exact B-spline; `ssi/extrusion.rs`), spline edges and cuts are
+//! planar B-spline carriers (`span.rs`) crossed against the extrusion of the spline over
+//! a planar face, the plane of the spline over a curved one and the plane across a
+//! ruling, pieces are traced in the extrusion's `(u, v)` (`u` along the curve, `v` along
+//! the extrusion), and measures stay exact to the quadrature tolerance (oblique sections
+//! are integrated along their own parameter). Faces that touch along an edge (a spline
+//! side tangent to a plane along a ruling) are ordered around it by a short chord into
+//! each surface.
+//!
 //! # What is refused
 //! - Operands that are not valid solids ([`KernelError::InvalidInput`]).
 //! - Face pairs whose surfaces meet in a curve K6 cannot represent yet (skew or unequal
 //!   crossing cylinders, parabolic or hyperbolic cone sections, general torus sections,
-//!   other non-coaxial curved pairs): [`KernelError::Unsupported`], naming both faces.
+//!   other non-coaxial curved pairs; a spline side against a cone, a sphere or torus that
+//!   reaches it, or a cylinder or extrusion along another direction):
+//!   [`KernelError::Unsupported`], naming both faces.
 //! - Configurations whose kept faces cannot be paired into manifold edges or whose pieces
 //!   do not trace consistently ([`KernelError::InvalidResult`]), and pieces that no
 //!   interior point classifies ([`KernelError::NoConvergence`]).
@@ -95,6 +110,8 @@ mod span;
 mod split;
 mod trace;
 
+#[cfg(test)]
+mod extrusion_tests;
 #[cfg(test)]
 mod tests;
 
@@ -164,11 +181,6 @@ pub fn boolean(a: &Body, b: &Body, op: BooleanOp) -> KernelResult<Body> {
         if body.faces().len() > MAX_BOOLEAN_FACES {
             return Err(KernelError::InvalidInput(format!(
                 "the {which} solid has more than {MAX_BOOLEAN_FACES} faces"
-            )));
-        }
-        if body.has_spline_geometry() {
-            return Err(KernelError::Unsupported(format!(
-                "the {which} solid has spline faces; booleans on them need NURBS surface intersection (K10)"
             )));
         }
     }
@@ -241,11 +253,6 @@ pub(crate) fn trim(a: &Body, tool: &Body, keep_inside: bool) -> KernelResult<Bod
         if body.faces().len() > MAX_BOOLEAN_FACES {
             return Err(KernelError::InvalidInput(format!(
                 "the {which} has more than {MAX_BOOLEAN_FACES} faces"
-            )));
-        }
-        if body.has_spline_geometry() {
-            return Err(KernelError::Unsupported(format!(
-                "the {which} has spline faces; trimming them needs NURBS surface intersection (K10)"
             )));
         }
     }

@@ -33,8 +33,9 @@
 //!
 //! Rung K10 (curves) is here: B-spline edges ([`Curve::BSpline`], the curves in
 //! `chamfera_geom::BSplineCurve3`), spline profile edges ([`ProfileEdge::Spline`]) and
-//! surfaces of linear extrusion ([`Extrusion`]) for extruded splines; booleans and blends
-//! refuse spline faces for now.
+//! surfaces of linear extrusion ([`Extrusion`]) for extruded splines, with their
+//! intersections against planes, parallel cylinders and parallel extrusions, so booleans
+//! take spline sides; blends still refuse spline faces.
 //!
 //! Inspect is here: [`Body::mass_properties`] (centre of mass and inertia from the exact
 //! faces, after Mirtich 1996) and [`closest_points`] / [`angle_between`] for measuring.
