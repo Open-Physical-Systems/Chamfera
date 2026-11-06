@@ -360,6 +360,10 @@ pub enum OverlayStyle {
     Construction,
     Preview,
     Highlight,
+    /// A toolpath's cutting moves.
+    ToolpathFeed,
+    /// A toolpath's rapid moves (the engine splits them into dashes).
+    ToolpathRapid,
 }
 
 impl OverlayStyle {
@@ -370,6 +374,8 @@ impl OverlayStyle {
             OverlayStyle::Construction => theme.sketch_construction,
             OverlayStyle::Preview => theme.sketch_preview,
             OverlayStyle::Highlight => theme.highlight,
+            OverlayStyle::ToolpathFeed => theme.toolpath_feed,
+            OverlayStyle::ToolpathRapid => theme.toolpath_rapid,
         }
     }
 }

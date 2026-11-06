@@ -1,5 +1,6 @@
 //! Layer 2: the design document: parameters and sketches now, the feature timeline from M4.
 
+pub mod cam;
 pub mod expr;
 pub mod feature;
 pub mod imported;
@@ -25,7 +26,9 @@ use thiserror::Error;
 /// - 7: linear and circular patterns of features.
 /// - 8: imported solid bodies.
 /// - 9: fillets and chamfers of edges.
-pub const FORMAT_VERSION: u32 = 9;
+/// - 10 to 19: taken by work landing in parallel (the merger renumbers).
+/// - 20: the CAM section: setups, tools and machining operations (`cam`).
+pub const FORMAT_VERSION: u32 = 20;
 /// The tag every design file starts with, so other JSON is not mistaken for a design.
 pub const FORMAT_TAG: &str = "chamfera";
 /// Longest parameter name.
@@ -156,6 +159,9 @@ pub struct Document {
     /// Solid bodies imported from other CAD files (STEP), kept as exact B-rep bodies.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub imported: Vec<ImportedBody>,
+    /// Manufacturing: setups, tools and operations (format 20). Older files have none.
+    #[serde(default, skip_serializing_if = "cam::Cam::is_empty")]
+    pub cam: cam::Cam,
 }
 
 impl Default for Document {
@@ -168,6 +174,7 @@ impl Default for Document {
             features: Vec::new(),
             last_feature_id: 0,
             imported: Vec::new(),
+            cam: cam::Cam::default(),
         }
     }
 }
@@ -543,6 +550,8 @@ impl Document {
         checked.features = doc.features;
         imported::check(&doc.imported, &mut seen, checked.last_feature_id)?;
         checked.imported = doc.imported;
+        doc.cam.validate()?;
+        checked.cam = doc.cam;
         // Values in the file must agree with their expressions.
         checked.evaluate()?;
         Ok(checked)

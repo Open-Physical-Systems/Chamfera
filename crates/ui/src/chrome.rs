@@ -166,12 +166,28 @@ impl ChamferaApp {
         ui.add_space(2.0);
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = S2;
-            self.tab(ui, "SOLID", !sketching, !sketching)
+            let manufacture = self.cam.active && !sketching;
+            if self
+                .tab(ui, "SOLID", !sketching && !manufacture, !sketching)
                 .on_hover_text(if sketching {
                     "Finish the sketch to use the solid tools"
                 } else {
                     "Solid modelling: sketches, extrudes and revolves"
-                });
+                })
+                .clicked()
+                && manufacture
+            {
+                self.set_manufacture(false);
+            }
+            if !sketching
+                && self
+                    .tab(ui, "MANUFACTURE", manufacture, true)
+                    .on_hover_text("Manufacture: setups, 2D milling toolpaths and G-code")
+                    .clicked()
+                && !manufacture
+            {
+                self.set_manufacture(true);
+            }
             if sketching {
                 self.tab(ui, "SKETCH", true, true)
                     .on_hover_text("Editing a sketch: draw, constrain and dimension");
@@ -193,6 +209,8 @@ impl ChamferaApp {
                     ui.spacing_mut().item_spacing.x = 0.0;
                     if sketching {
                         self.sketch_toolbar(ui);
+                    } else if self.cam.active {
+                        self.cam_toolbar(ui);
                     } else {
                         self.solid_toolbar(ui);
                     }

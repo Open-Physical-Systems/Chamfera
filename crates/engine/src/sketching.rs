@@ -157,6 +157,7 @@ impl Session {
             by_style.sort_by_key(|(s, _)| *s == OverlayStyle::Highlight);
             overlays.extend(by_style.into_iter().map(|(_, o)| o));
         }
+        overlays.extend(self.toolpath_overlays());
         self.scene.overlays = overlays;
     }
 

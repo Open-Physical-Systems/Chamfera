@@ -5,7 +5,7 @@
 **Status:** `done` = on `dev`; `branch` = on an unmerged branch (named); `missing` = not started (a note says when groundwork exists).
 **Priority:** P0 = a Fusion user expects it on day one; P1 = important; P2 = later.
 **Size:** S = days; M = one to three weeks; L = a month or more, or a kernel rung.
-**Layer:** the crate(s) touched: `geom`, `sketch`, `kernel`, `render`, `doc`, `io`, `engine`, `gpu`, `ui`, `mcp`, `apps`; plus `cam` (a planned L1 crate).
+**Layer:** the crate(s) touched: `geom`, `sketch`, `kernel`, `render`, `doc`, `io`, `engine`, `gpu`, `ui`, `mcp`, `apps`; plus `cam` (L3).
 
 ## Next 10 to build
 
@@ -348,18 +348,18 @@ Close runners-up: selection filters and box selection (UI and NAV), splines (nee
 
 | Feature | Description | Status | Pri | Size | Layer |
 |---|---|---|---|---|---|
-| Setup: stock, work coordinate system, machine | Define the raw block, part zero and the machine | missing | P2 | M | cam, doc |
-| Tool library | Mills, drills, chamfer and ball tools with feeds and speeds | missing | P2 | M | cam |
-| Facing | Flatten the stock top | missing | P2 | S | cam |
-| 2D contour | Follow a profile, with lead-in/out and tabs | missing | P2 | M | cam |
-| 2D pocket | Clear a closed region | missing | P2 | M | cam |
-| Drilling | Drill, peck, tap cycles at hole positions | missing | P2 | M | cam |
+| Setup: stock, work coordinate system, machine | Define the raw block, part zero and the machine | done (stock, part zero, X axis from an edge; no machine model yet) | P2 | M | cam, doc |
+| Tool library | Mills, drills, chamfer and ball tools with feeds and speeds | done | P2 | M | cam |
+| Facing | Flatten the stock top | done | P2 | S | cam |
+| 2D contour | Follow a profile, with lead-in/out and tabs | done (no tabs yet) | P2 | M | cam |
+| 2D pocket | Clear a closed region | done (vertical walls, islands) | P2 | M | cam |
+| Drilling | Drill, peck, tap cycles at hole positions | done (drill, peck; no tapping) | P2 | M | cam |
 | 2D adaptive clearing | Constant tool engagement roughing | missing | P2 | L | cam |
 | 3D roughing and finishing | Adaptive, parallel, scallop, contour, pencil passes | missing | P2 | L | cam |
 | Multi-axis | 3+2 and simultaneous 4 and 5 axis | missing | P2 | L | cam |
 | Turning | Lathe operations | missing | P2 | L | cam |
 | Simulation | Show the tool removing stock; collision and gouge checks | missing | P2 | L | cam, gpu |
-| Post processors as data | G-code output for Grbl first, then LinuxCNC and others | missing | P2 | M | cam, io |
+| Post processors as data | G-code output for Grbl first, then LinuxCNC and others | done (LinuxCNC and GRBL dialects in code, not data yet) | P2 | M | cam, io |
 | Additive (3D-print) setup | Orient, support and slice | missing | P2 | L | cam |
 
 ## 16. Collaboration and data

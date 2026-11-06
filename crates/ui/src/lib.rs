@@ -16,6 +16,7 @@ use std::sync::{Arc, Mutex};
 
 mod blend_ui;
 mod browser;
+mod cam_ui;
 mod chrome;
 mod file_ui;
 
@@ -119,6 +120,8 @@ pub struct ChamferaApp {
     browser: browser::BrowserUi,
     timeline: timeline::TimelineUi,
     search: search::SearchUi,
+    /// The Manufacture workspace.
+    cam: cam_ui::CamUi,
     /// The browser's file picker, downloads and local storage.
     #[cfg(target_arch = "wasm32")]
     web: web::WebFiles,
@@ -193,6 +196,7 @@ impl ChamferaApp {
             browser: browser::BrowserUi::default(),
             timeline: timeline::TimelineUi::default(),
             search: search::SearchUi::default(),
+            cam: cam_ui::CamUi::default(),
             #[cfg(target_arch = "wasm32")]
             web: web::WebFiles::default(),
             ctx_close: false,
@@ -210,6 +214,8 @@ impl ChamferaApp {
         {
             app.message = Some((e.to_string(), true));
         }
+        // A script that generated toolpaths opens in the Manufacture workspace.
+        app.cam.active = app.session.toolpaths_visible() && app.session.active_sketch.is_none();
         if app.session.active_sketch.is_some() {
             app.sketch.tool = Some(sketch_ui::Tool::Select);
             app.refresh_sketch_status();
@@ -345,6 +351,14 @@ impl ChamferaApp {
                 }
                 self.run("view.zoom", p);
             }
+        }
+        if self.cam_picking()
+            && response.clicked()
+            && let Some(pos) = response.interact_pointer_pos()
+        {
+            let (x, y) = local(pos);
+            self.cam_click(x, y, w, h);
+            return;
         }
         if self.solid.pick_face
             && response.clicked()
@@ -636,7 +650,13 @@ impl eframe::App for ChamferaApp {
             .resizable(true)
             .default_size(248.0)
             .size_range(180.0..=420.0)
-            .show(ui, |ui| self.browser(ui));
+            .show(ui, |ui| {
+                if self.cam.active {
+                    self.cam_tree(ui);
+                } else {
+                    self.browser(ui);
+                }
+            });
         egui::CentralPanel::no_frame().show(ui, |ui| self.viewport(ui, frame));
         if self.frames < 2 {
             self.frames += 1;
@@ -646,6 +666,7 @@ impl eframe::App for ChamferaApp {
             self.extrude_dialog(&ctx);
             self.blend_dialog(&ctx);
             self.feature_dialog(&ctx);
+            self.cam_dialogs(&ctx);
         }
         self.unsaved_dialog(&ctx);
         self.shortcuts_window(&ctx);

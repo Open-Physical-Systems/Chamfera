@@ -52,6 +52,11 @@ pub struct Theme {
     pub sketch_preview: Rgba,
     /// What the pointer is over, or what is picked.
     pub highlight: Rgba,
+    // toolpaths (Manufacture)
+    /// Cutting moves (feeds), drawn solid.
+    pub toolpath_feed: Rgba,
+    /// Rapid moves, drawn dashed.
+    pub toolpath_rapid: Rgba,
     // interface surfaces (see docs/design/ui.md)
     /// The app bar, ribbon, timeline and status bar.
     pub chrome: Rgba,
@@ -105,6 +110,8 @@ impl Theme {
             sketch_construction: Rgba(214, 120, 30, 255),
             sketch_preview: Rgba(30, 100, 220, 140),
             highlight: Rgba(240, 160, 20, 255),
+            toolpath_feed: Rgba(20, 130, 110, 255),
+            toolpath_rapid: Rgba(200, 50, 60, 220),
             chrome: Rgba(252, 252, 253, 255),
             panel: Rgba(246, 247, 249, 255),
             panel_alt: Rgba(236, 239, 243, 255),
@@ -144,6 +151,8 @@ impl Theme {
             sketch_construction: Rgba(240, 150, 60, 255),
             sketch_preview: Rgba(96, 170, 255, 140),
             highlight: Rgba(255, 190, 60, 255),
+            toolpath_feed: Rgba(70, 210, 180, 255),
+            toolpath_rapid: Rgba(255, 110, 110, 220),
             chrome: Rgba(29, 31, 35, 255),
             panel: Rgba(35, 38, 43, 255),
             panel_alt: Rgba(45, 49, 56, 255),

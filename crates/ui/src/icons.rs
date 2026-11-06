@@ -23,6 +23,14 @@ pub enum Icon {
     ArcTangent,
     ArcThreePoint,
     Body,
+    CamContour,
+    CamDrill,
+    CamFacing,
+    CamGenerate,
+    CamPocket,
+    CamPost,
+    CamSetup,
+    CamTool,
     Chamfer,
     ChevronDown,
     ChevronRight,
@@ -83,11 +91,19 @@ pub enum Icon {
 
 impl Icon {
     #[cfg(test)]
-    pub const ALL: [Icon; 60] = [
+    pub const ALL: [Icon; 68] = [
         Icon::Arc,
         Icon::ArcTangent,
         Icon::ArcThreePoint,
         Icon::Body,
+        Icon::CamContour,
+        Icon::CamDrill,
+        Icon::CamFacing,
+        Icon::CamGenerate,
+        Icon::CamPocket,
+        Icon::CamPost,
+        Icon::CamSetup,
+        Icon::CamTool,
         Icon::Chamfer,
         Icon::ChevronDown,
         Icon::ChevronRight,
@@ -213,6 +229,14 @@ impl Icon {
             Icon::Split => master!("split"),
             Icon::Trim => master!("trim"),
             Icon::Warning => master!("warning"),
+            Icon::CamContour => master!("cam_contour"),
+            Icon::CamDrill => master!("cam_drill"),
+            Icon::CamFacing => master!("cam_facing"),
+            Icon::CamGenerate => master!("cam_generate"),
+            Icon::CamPocket => master!("cam_pocket"),
+            Icon::CamPost => master!("cam_post"),
+            Icon::CamSetup => master!("cam_setup"),
+            Icon::CamTool => master!("cam_tool"),
         }
     }
 }

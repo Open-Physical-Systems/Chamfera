@@ -630,6 +630,8 @@ impl Session {
         }
         self.show_imported(&mut built);
         self.built = built;
+        // Toolpaths follow the model.
+        self.regenerate_cam();
     }
 
     /// Moves an attached sketch's plane onto its face, as built so far.
