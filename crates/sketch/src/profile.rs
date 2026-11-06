@@ -1,0 +1,772 @@
+//! Profiles: the closed regions bounded by a sketch's non-construction curves.
+//!
+//! Lines and arcs form a planar graph whose vertices are their endpoints; endpoints are the
+//! same vertex when they are the same point, are joined by a coincident constraint, or lie
+//! within `LINEAR_TOLERANCE` of each other. Circles are closed loops on their own.
+//!
+//! 1. Bridges (edges whose removal disconnects the graph) cannot bound a region, so they
+//!    are dropped; this also drops dangling segments.
+//! 2. Around each vertex the outgoing edges are ordered by tangent angle (ties broken by
+//!    curvature). Following each half-edge with the next edge clockwise from its twin
+//!    traces every face of the graph with the face on the left: bounded faces come out
+//!    counter-clockwise (positive area), the outside of each connected piece clockwise.
+//! 3. Each clockwise outside boundary (and each circle, reversed) becomes a hole of the
+//!    smallest bounded face of another piece that contains it.
+//!
+//! A [`Region`] is one bounded face: a counter-clockwise outer loop, clockwise holes, and
+//! its area (outer area minus holes). A circle inside a rectangle gives two regions: the
+//! rectangle with a circular hole, and the disc.
+//!
+//! **Limits (M2).** Curves are not split where they cross or where one ends in the middle
+//! of another (a T-junction): a junction counts only where curves share an endpoint. Crossing
+//! curves give undefined, though never panicking, results. Arcs are measured exactly; signed
+//! areas use Green's theorem on each line and arc.
+
+use crate::constraint::Constraint;
+use crate::entity::Curve;
+use crate::entity::{CurveId, PointId};
+use crate::sketch::Sketch;
+use chamfera_geom::{LINEAR_TOLERANCE, Point2, Vec2};
+use std::collections::BTreeMap;
+use std::f64::consts::{FRAC_PI_2, PI, TAU};
+
+/// Faces with less area than this (mm²) are slivers between coincident curves, not regions.
+const MIN_AREA: f64 = LINEAR_TOLERANCE;
+/// Outgoing tangents closer than this (radians) are treated as the same direction and
+/// ordered by curvature instead.
+const TANGENT_BUCKET: f64 = 1e-9;
+
+/// One curve of a loop, and whether the loop runs along it backwards (end to start; for a
+/// circle or arc, clockwise).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LoopSegment {
+    pub curve: CurveId,
+    pub reversed: bool,
+}
+
+/// A closed chain of curves.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProfileLoop {
+    pub segments: Vec<LoopSegment>,
+    /// Positive for a counter-clockwise loop (mm²).
+    pub signed_area: f64,
+}
+
+/// A closed region: an outer loop (counter-clockwise) with holes (clockwise).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Region {
+    pub outer: ProfileLoop,
+    pub holes: Vec<ProfileLoop>,
+    /// Outer area minus the holes' areas (mm²).
+    pub area: f64,
+}
+
+/// A line or arc in its forward direction.
+#[derive(Debug, Clone, Copy)]
+enum Geo {
+    Line {
+        a: Point2,
+        b: Point2,
+    },
+    Arc {
+        c: Point2,
+        r: f64,
+        a0: f64,
+        sweep: f64,
+    },
+}
+
+impl Geo {
+    /// ∮ (x dy - y dx) / 2 along the curve, forwards or backwards.
+    ///
+    /// Line: `(a × b) / 2`. Arc `x = cx + r cos t, y = cy + r sin t`, t from a0 to a1:
+    /// `x dy - y dx = (r² + r cx cos t + r cy sin t) dt`, which integrates to
+    /// `r² Δ + r cx (sin a1 - sin a0) - r cy (cos a1 - cos a0)`.
+    fn area(&self, reversed: bool) -> f64 {
+        let fwd = match *self {
+            Geo::Line { a, b } => 0.5 * (a.x * b.y - b.x * a.y),
+            Geo::Arc { c, r, a0, sweep } => {
+                let a1 = a0 + sweep;
+                0.5 * (r * r * sweep + r * c.x * (a1.sin() - a0.sin())
+                    - r * c.y * (a1.cos() - a0.cos()))
+            }
+        };
+        if reversed { -fwd } else { fwd }
+    }
+
+    fn start(&self, reversed: bool) -> Point2 {
+        match *self {
+            Geo::Line { a, b } => {
+                if reversed {
+                    b
+                } else {
+                    a
+                }
+            }
+            Geo::Arc { c, r, a0, sweep } => {
+                let t = if reversed { a0 + sweep } else { a0 };
+                c + Vec2::new(t.cos(), t.sin()) * r
+            }
+        }
+    }
+
+    /// Direction angle and signed curvature leaving the start of the (possibly reversed)
+    /// curve.
+    fn leaving(&self, reversed: bool) -> (f64, f64) {
+        match *self {
+            Geo::Line { a, b } => {
+                let d = if reversed { a - b } else { b - a };
+                (d.angle(), 0.0)
+            }
+            Geo::Arc { r, a0, sweep, .. } => {
+                if reversed {
+                    let t = a0 + sweep;
+                    (Vec2::new(t.sin(), -t.cos()).angle(), -1.0 / r)
+                } else {
+                    (Vec2::new(-a0.sin(), a0.cos()).angle(), 1.0 / r)
+                }
+            }
+        }
+    }
+
+    /// How many times a ray from `p` toward +X crosses the curve (half-open in y, so a
+    /// chain of curves is counted consistently).
+    fn crossings(&self, p: Point2) -> usize {
+        match *self {
+            Geo::Line { a, b } => usize::from(line_crosses(a, b, p)),
+            Geo::Arc { c, r, a0, sweep } => {
+                // Split into pieces monotone in y, at t = π/2 + kπ.
+                let end = a0 + sweep;
+                let mut t0 = a0;
+                let mut count = 0;
+                let mut guard = 0;
+                while t0 < end && guard < 8 {
+                    guard += 1;
+                    let k = ((t0 - FRAC_PI_2) / PI).floor() + 1.0;
+                    let t1 = (FRAC_PI_2 + k * PI).min(end);
+                    let y0 = c.y + r * t0.sin();
+                    let y1 = c.y + r * t1.sin();
+                    if (y0 > p.y) != (y1 > p.y) {
+                        let h = (r * r - (p.y - c.y) * (p.y - c.y)).max(0.0).sqrt();
+                        let mid = 0.5 * (t0 + t1);
+                        let x = if mid.cos() >= 0.0 { c.x + h } else { c.x - h };
+                        if x > p.x {
+                            count += 1;
+                        }
+                    }
+                    t0 = t1;
+                }
+                count
+            }
+        }
+    }
+}
+
+fn line_crosses(a: Point2, b: Point2, p: Point2) -> bool {
+    if (a.y > p.y) == (b.y > p.y) {
+        return false;
+    }
+    let x = a.x + (p.y - a.y) * (b.x - a.x) / (b.y - a.y);
+    x > p.x
+}
+
+struct Edge {
+    curve: CurveId,
+    u: usize,
+    v: usize,
+    geo: Geo,
+}
+
+/// A loop under construction: segments as (geometry, reversed).
+struct Traced {
+    segments: Vec<(CurveId, Geo, bool)>,
+    area: f64,
+    piece: usize,
+}
+
+impl Traced {
+    fn contains(&self, p: Point2) -> bool {
+        let n: usize = self.segments.iter().map(|(_, g, _)| g.crossings(p)).sum();
+        n % 2 == 1
+    }
+
+    fn into_loop(self) -> ProfileLoop {
+        ProfileLoop {
+            segments: self
+                .segments
+                .iter()
+                .map(|(curve, _, reversed)| LoopSegment {
+                    curve: *curve,
+                    reversed: *reversed,
+                })
+                .collect(),
+            signed_area: self.area,
+        }
+    }
+}
+
+fn find(parent: &mut [usize], mut i: usize) -> usize {
+    while let Some(&p) = parent.get(i) {
+        if p == i {
+            break;
+        }
+        let gp = parent.get(p).copied().unwrap_or(p);
+        if let Some(slot) = parent.get_mut(i) {
+            *slot = gp;
+        }
+        i = gp;
+    }
+    i
+}
+
+fn union(parent: &mut [usize], a: usize, b: usize) {
+    let (ra, rb) = (find(parent, a), find(parent, b));
+    if ra != rb
+        && let Some(slot) = parent.get_mut(ra.max(rb))
+    {
+        *slot = ra.min(rb);
+    }
+}
+
+fn arc_geo(c: Point2, s: Point2, e: Point2) -> Option<Geo> {
+    let r = c.distance(s);
+    if !(r.is_finite() && r > LINEAR_TOLERANCE) {
+        return None;
+    }
+    let a0 = (s - c).angle();
+    let mut sweep = (e - c).angle() - a0;
+    if sweep <= 0.0 {
+        sweep += TAU;
+    }
+    Some(Geo::Arc { c, r, a0, sweep })
+}
+
+/// Indices of bridge edges (Tarjan's low-link, iterative so deep graphs cannot overflow the
+/// stack).
+fn bridges(vertex_count: usize, edges: &[Edge]) -> Vec<bool> {
+    let mut adj: Vec<Vec<(usize, usize)>> = vec![Vec::new(); vertex_count];
+    for (k, e) in edges.iter().enumerate() {
+        if let Some(a) = adj.get_mut(e.u) {
+            a.push((e.v, k));
+        }
+        if let Some(a) = adj.get_mut(e.v) {
+            a.push((e.u, k));
+        }
+    }
+    let mut is_bridge = vec![false; edges.len()];
+    let mut disc = vec![usize::MAX; vertex_count];
+    let mut low = vec![0usize; vertex_count];
+    let mut timer = 0usize;
+    for s in 0..vertex_count {
+        if disc.get(s) != Some(&usize::MAX) {
+            continue;
+        }
+        disc[s] = timer;
+        low[s] = timer;
+        timer += 1;
+        // (vertex, edge used to enter it, next adjacency position)
+        let mut stack: Vec<(usize, Option<usize>, usize)> = vec![(s, None, 0)];
+        while let Some(top) = stack.last_mut() {
+            let (v, entered_by, pos) = *top;
+            if let Some(&(w, e)) = adj.get(v).and_then(|a| a.get(pos)) {
+                top.2 += 1;
+                if Some(e) == entered_by {
+                    continue;
+                }
+                if disc[w] == usize::MAX {
+                    disc[w] = timer;
+                    low[w] = timer;
+                    timer += 1;
+                    stack.push((w, Some(e), 0));
+                } else {
+                    low[v] = low[v].min(disc[w]);
+                }
+            } else {
+                stack.pop();
+                if let Some(&(p, _, _)) = stack.last() {
+                    low[p] = low[p].min(low[v]);
+                    if low[v] > disc[p]
+                        && let Some(e) = entered_by
+                        && let Some(slot) = is_bridge.get_mut(e)
+                    {
+                        *slot = true;
+                    }
+                }
+            }
+        }
+    }
+    is_bridge
+}
+
+impl Sketch {
+    /// The closed regions bounded by the non-construction lines, arcs and circles, each with
+    /// a counter-clockwise outer loop and clockwise holes. Dangling curves are ignored.
+    pub fn profiles(&self) -> Vec<Region> {
+        // Vertices: endpoints of non-construction lines and arcs, merged.
+        let mut endpoints: Vec<PointId> = Vec::new();
+        for (_, c) in self.curves() {
+            match c {
+                Curve::Line {
+                    start,
+                    end,
+                    construction: false,
+                }
+                | Curve::Arc {
+                    start,
+                    end,
+                    construction: false,
+                    ..
+                } => endpoints.extend([*start, *end]),
+                _ => {}
+            }
+        }
+        endpoints.sort_unstable();
+        endpoints.dedup();
+        let index: BTreeMap<PointId, usize> =
+            endpoints.iter().enumerate().map(|(i, p)| (*p, i)).collect();
+        let mut parent: Vec<usize> = (0..endpoints.len()).collect();
+        for (_, c) in self.constraints() {
+            if let Constraint::Coincident { a, b } = c
+                && let (Some(&i), Some(&j)) = (index.get(a), index.get(b))
+            {
+                union(&mut parent, i, j);
+            }
+        }
+        let mut by_x: Vec<(usize, Point2)> = endpoints
+            .iter()
+            .enumerate()
+            .filter_map(|(i, id)| self.point(*id).map(|p| (i, p)))
+            .collect();
+        by_x.sort_by(|a, b| a.1.x.total_cmp(&b.1.x));
+        for (k, (i, p)) in by_x.iter().enumerate() {
+            for (j, q) in by_x.iter().skip(k + 1) {
+                if q.x - p.x > LINEAR_TOLERANCE {
+                    break;
+                }
+                if p.coincident(*q) {
+                    union(&mut parent, *i, *j);
+                }
+            }
+        }
+        let vertex = |parent: &mut [usize], id: PointId| index.get(&id).map(|&i| find(parent, i));
+
+        // Edges.
+        let mut edges = Vec::new();
+        let mut circles: Vec<(CurveId, Geo)> = Vec::new();
+        for (id, c) in self.curves() {
+            if c.is_construction() {
+                continue;
+            }
+            match c {
+                Curve::Line { start, end, .. } => {
+                    let (Some(u), Some(v), Some(a), Some(b)) = (
+                        vertex(&mut parent, *start),
+                        vertex(&mut parent, *end),
+                        self.point(*start),
+                        self.point(*end),
+                    ) else {
+                        continue;
+                    };
+                    if u != v {
+                        edges.push(Edge {
+                            curve: id,
+                            u,
+                            v,
+                            geo: Geo::Line { a, b },
+                        });
+                    }
+                }
+                Curve::Arc {
+                    centre, start, end, ..
+                } => {
+                    let (Some(u), Some(v), Some(c), Some(s), Some(e)) = (
+                        vertex(&mut parent, *start),
+                        vertex(&mut parent, *end),
+                        self.point(*centre),
+                        self.point(*start),
+                        self.point(*end),
+                    ) else {
+                        continue;
+                    };
+                    if u != v
+                        && let Some(geo) = arc_geo(c, s, e)
+                    {
+                        edges.push(Edge {
+                            curve: id,
+                            u,
+                            v,
+                            geo,
+                        });
+                    }
+                }
+                Curve::Circle { centre, radius, .. } => {
+                    if let Some(c) = self.point(*centre) {
+                        circles.push((
+                            id,
+                            Geo::Arc {
+                                c,
+                                r: *radius,
+                                a0: 0.0,
+                                sweep: TAU,
+                            },
+                        ));
+                    }
+                }
+            }
+        }
+        let vcount = endpoints.len();
+        let is_bridge = bridges(vcount, &edges);
+        let kept: Vec<&Edge> = edges
+            .iter()
+            .zip(&is_bridge)
+            .filter(|(_, b)| !**b)
+            .map(|(e, _)| e)
+            .collect();
+
+        // Pieces (connected components of what is left).
+        let mut piece_parent: Vec<usize> = (0..vcount).collect();
+        for e in &kept {
+            union(&mut piece_parent, e.u, e.v);
+        }
+
+        // Half-edges 2k (u → v) and 2k + 1 (v → u), sorted around each vertex.
+        let he_count = kept.len() * 2;
+        let from = |h: usize| {
+            kept.get(h / 2)
+                .map(|e| if h.is_multiple_of(2) { e.u } else { e.v })
+        };
+        let mut outgoing: Vec<Vec<(i64, f64, usize)>> = vec![Vec::new(); vcount];
+        for h in 0..he_count {
+            let (Some(e), Some(u)) = (kept.get(h / 2), from(h)) else {
+                continue;
+            };
+            let (angle, curvature) = e.geo.leaving(h % 2 == 1);
+            let bucket = (angle / TANGENT_BUCKET).round() as i64;
+            if let Some(list) = outgoing.get_mut(u) {
+                list.push((bucket, curvature, h));
+            }
+        }
+        let mut position = vec![0usize; he_count];
+        for list in &mut outgoing {
+            list.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)));
+            for (i, item) in list.iter().enumerate() {
+                if let Some(slot) = position.get_mut(item.2) {
+                    *slot = i;
+                }
+            }
+        }
+        // next(h): at h's head, the outgoing half-edge just clockwise of h's twin.
+        let next = |h: usize| -> Option<usize> {
+            let twin = h ^ 1;
+            let head = from(twin)?;
+            let list = outgoing.get(head)?;
+            let i = *position.get(twin)?;
+            let j = if i == 0 {
+                list.len().checked_sub(1)?
+            } else {
+                i - 1
+            };
+            list.get(j).map(|t| t.2)
+        };
+
+        let mut faces: Vec<Traced> = Vec::new();
+        let mut boundaries: Vec<Traced> = Vec::new();
+        let mut visited = vec![false; he_count];
+        for h0 in 0..he_count {
+            if visited.get(h0) != Some(&false) {
+                continue;
+            }
+            let mut segments = Vec::new();
+            let mut h = h0;
+            let mut closed = false;
+            for _ in 0..=he_count {
+                if let Some(v) = visited.get_mut(h) {
+                    *v = true;
+                }
+                let Some(e) = kept.get(h / 2) else { break };
+                segments.push((e.curve, e.geo, h % 2 == 1));
+                match next(h) {
+                    Some(n) if n == h0 => {
+                        closed = true;
+                        break;
+                    }
+                    Some(n) => h = n,
+                    None => break,
+                }
+            }
+            if !closed {
+                continue;
+            }
+            let area: f64 = segments.iter().map(|(_, g, r)| g.area(*r)).sum();
+            let piece = kept
+                .get(h0 / 2)
+                .map(|e| find(&mut piece_parent, e.u))
+                .unwrap_or(0);
+            let t = Traced {
+                segments,
+                area,
+                piece,
+            };
+            if area > MIN_AREA {
+                faces.push(t);
+            } else if area < -MIN_AREA {
+                boundaries.push(t);
+            }
+        }
+        // Each circle is a piece of its own: a face and a boundary.
+        for (k, (id, geo)) in circles.iter().enumerate() {
+            let piece = vcount + k;
+            let area = geo.area(false);
+            if area <= MIN_AREA {
+                continue;
+            }
+            faces.push(Traced {
+                segments: vec![(*id, *geo, false)],
+                area,
+                piece,
+            });
+            boundaries.push(Traced {
+                segments: vec![(*id, *geo, true)],
+                area: -area,
+                piece,
+            });
+        }
+
+        // Holes go to the smallest face of another piece that contains them.
+        let mut holes: Vec<Vec<Traced>> = (0..faces.len()).map(|_| Vec::new()).collect();
+        for b in boundaries {
+            let Some(&(_, geo, reversed)) = b.segments.first() else {
+                continue;
+            };
+            let probe = geo.start(reversed);
+            let owner = faces
+                .iter()
+                .enumerate()
+                .filter(|(_, f)| f.piece != b.piece && f.contains(probe))
+                .min_by(|x, y| x.1.area.total_cmp(&y.1.area))
+                .map(|(i, _)| i);
+            if let Some(list) = owner.and_then(|i| holes.get_mut(i)) {
+                list.push(b);
+            }
+        }
+        faces
+            .into_iter()
+            .zip(holes)
+            .map(|(f, hs)| {
+                let area = f.area + hs.iter().map(|h| h.area).sum::<f64>();
+                Region {
+                    outer: f.into_loop(),
+                    holes: hs.into_iter().map(Traced::into_loop).collect(),
+                    area,
+                }
+            })
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pt(s: &mut Sketch, x: f64, y: f64) -> PointId {
+        s.add_point(Point2::new(x, y)).unwrap()
+    }
+
+    /// A closed polygon through shared points.
+    fn polygon(s: &mut Sketch, corners: &[(f64, f64)]) -> Vec<CurveId> {
+        let ids: Vec<PointId> = corners.iter().map(|(x, y)| pt(s, *x, *y)).collect();
+        (0..ids.len())
+            .map(|i| s.add_line(ids[i], ids[(i + 1) % ids.len()]).unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn a_rectangle_is_one_counter_clockwise_region() {
+        let mut s = Sketch::new();
+        // Drawn clockwise on purpose: the loop still comes out counter-clockwise.
+        polygon(
+            &mut s,
+            &[(0.0, 0.0), (0.0, 30.0), (50.0, 30.0), (50.0, 0.0)],
+        );
+        let regions = s.profiles();
+        assert_eq!(regions.len(), 1);
+        assert!((regions[0].area - 1500.0).abs() < 1e-9);
+        assert!(regions[0].outer.signed_area > 0.0);
+        assert_eq!(regions[0].outer.segments.len(), 4);
+        assert!(regions[0].holes.is_empty());
+    }
+
+    #[test]
+    fn a_circle_in_a_rectangle_is_a_hole_and_a_disc() {
+        let mut s = Sketch::new();
+        polygon(
+            &mut s,
+            &[(0.0, 0.0), (50.0, 0.0), (50.0, 30.0), (0.0, 30.0)],
+        );
+        let c = pt(&mut s, 25.0, 15.0);
+        let circle = s.add_circle(c, 5.0).unwrap();
+        let regions = s.profiles();
+        assert_eq!(regions.len(), 2);
+        let ring = regions.iter().find(|r| !r.holes.is_empty()).unwrap();
+        // 50 × 30 - π 5².
+        assert!((ring.area - (1500.0 - 25.0 * PI)).abs() < 1e-9);
+        assert_eq!(ring.holes.len(), 1);
+        let hole = &ring.holes[0];
+        assert!(
+            (hole.signed_area + 25.0 * PI).abs() < 1e-9,
+            "clockwise hole"
+        );
+        assert_eq!(
+            hole.segments,
+            vec![LoopSegment {
+                curve: circle,
+                reversed: true
+            }]
+        );
+        let disc = regions.iter().find(|r| r.holes.is_empty()).unwrap();
+        assert!((disc.area - 25.0 * PI).abs() < 1e-9);
+    }
+
+    #[test]
+    fn construction_and_dangling_curves_bound_nothing() {
+        let mut s = Sketch::new();
+        let lines = polygon(
+            &mut s,
+            &[(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)],
+        );
+        // A dangling tail from a corner and a free segment.
+        let corner = match s.curve(lines[0]).unwrap() {
+            Curve::Line { end, .. } => *end,
+            _ => unreachable!(),
+        };
+        let tail = pt(&mut s, 20.0, 0.0);
+        s.add_line(corner, tail).unwrap();
+        let a = pt(&mut s, 30.0, 30.0);
+        let b = pt(&mut s, 40.0, 30.0);
+        s.add_line(a, b).unwrap();
+        // A construction circle.
+        let c = pt(&mut s, 5.0, 5.0);
+        let cc = s.add_circle(c, 2.0).unwrap();
+        s.set_construction(cc, true).unwrap();
+        let regions = s.profiles();
+        assert_eq!(regions.len(), 1);
+        assert!((regions[0].area - 100.0).abs() < 1e-9);
+        assert!(regions[0].holes.is_empty());
+        // Making one side construction opens the loop.
+        s.set_construction(lines[2], true).unwrap();
+        assert!(s.profiles().is_empty());
+    }
+
+    #[test]
+    fn two_squares_sharing_an_edge_give_two_regions() {
+        // A T-junction at shared points: (10,0) and (10,10) are shared by three lines.
+        let mut s = Sketch::new();
+        let p: Vec<PointId> = [
+            (0.0, 0.0),
+            (10.0, 0.0),
+            (20.0, 0.0),
+            (20.0, 10.0),
+            (10.0, 10.0),
+            (0.0, 10.0),
+        ]
+        .iter()
+        .map(|(x, y)| pt(&mut s, *x, *y))
+        .collect();
+        for (a, b) in [(0, 1), (1, 2), (2, 3), (3, 4), (4, 5), (5, 0), (1, 4)] {
+            s.add_line(p[a], p[b]).unwrap();
+        }
+        let regions = s.profiles();
+        assert_eq!(regions.len(), 2);
+        for r in &regions {
+            assert!((r.area - 100.0).abs() < 1e-9);
+            assert_eq!(r.outer.segments.len(), 4);
+        }
+    }
+
+    #[test]
+    fn a_slot_of_lines_and_arcs_has_the_exact_area() {
+        // Slot: centres (0,0) and (20,0), radius 5. Area = 20·10 + π·5².
+        let mut s = Sketch::new();
+        let c1 = pt(&mut s, 0.0, 0.0);
+        let c2 = pt(&mut s, 20.0, 0.0);
+        let a = pt(&mut s, 0.0, -5.0);
+        let b = pt(&mut s, 20.0, -5.0);
+        let c = pt(&mut s, 20.0, 5.0);
+        let d = pt(&mut s, 0.0, 5.0);
+        s.add_line(a, b).unwrap();
+        s.add_arc(c2, b, c).unwrap(); // right end, counter-clockwise from bottom to top
+        s.add_line(c, d).unwrap();
+        s.add_arc(c1, d, a).unwrap(); // left end, counter-clockwise from top to bottom
+        let regions = s.profiles();
+        assert_eq!(regions.len(), 1);
+        assert!((regions[0].area - (200.0 + 25.0 * PI)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_lens_of_two_arcs_between_the_same_points() {
+        // Two arcs of radius √2 centred at (0,0) and (2,0)... instead use the classic
+        // half-discs: arcs centred at the origin from (1,0) to (-1,0) and back, closing a
+        // unit circle out of two edges between the same two vertices: area π.
+        let mut s = Sketch::new();
+        let o = pt(&mut s, 0.0, 0.0);
+        let r = pt(&mut s, 1.0, 0.0);
+        let l = pt(&mut s, -1.0, 0.0);
+        s.add_arc(o, r, l).unwrap();
+        s.add_arc(o, l, r).unwrap();
+        let regions = s.profiles();
+        assert_eq!(regions.len(), 1);
+        assert!((regions[0].area - PI).abs() < 1e-12);
+    }
+
+    #[test]
+    fn nested_holes_go_to_the_smallest_container() {
+        let mut s = Sketch::new();
+        polygon(
+            &mut s,
+            &[(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)],
+        );
+        polygon(
+            &mut s,
+            &[(10.0, 10.0), (90.0, 10.0), (90.0, 90.0), (10.0, 90.0)],
+        );
+        let c = pt(&mut s, 50.0, 50.0);
+        s.add_circle(c, 10.0).unwrap();
+        let regions = s.profiles();
+        assert_eq!(regions.len(), 3);
+        let mut areas: Vec<f64> = regions.iter().map(|r| r.area).collect();
+        areas.sort_by(f64::total_cmp);
+        // Disc 100π; inner square minus disc 6400 - 100π; frame 10000 - 6400.
+        assert!((areas[0] - 100.0 * PI).abs() < 1e-9);
+        assert!((areas[1] - 3600.0).abs() < 1e-9);
+        assert!((areas[2] - (6400.0 - 100.0 * PI)).abs() < 1e-9);
+        for r in &regions {
+            assert!(r.holes.len() <= 1);
+            for h in &r.holes {
+                assert!(h.signed_area < 0.0);
+            }
+        }
+    }
+
+    #[test]
+    fn coincident_endpoints_close_a_loop() {
+        let mut s = Sketch::new();
+        let a = pt(&mut s, 0.0, 0.0);
+        let b = pt(&mut s, 10.0, 0.0);
+        let b2 = pt(&mut s, 10.0, 0.0);
+        let c = pt(&mut s, 0.0, 10.0);
+        let c2 = pt(&mut s, 0.5, 10.0); // not at c yet, but constrained coincident
+        let a2 = pt(&mut s, 0.0, 0.0);
+        s.add_line(a, b).unwrap();
+        s.add_line(b2, c).unwrap();
+        s.add_line(c2, a2).unwrap();
+        s.add_constraint(Constraint::Coincident { a: c, b: c2 })
+            .unwrap();
+        let regions = s.profiles();
+        assert_eq!(regions.len(), 1);
+    }
+
+    #[test]
+    fn an_empty_sketch_has_no_profiles() {
+        assert!(Sketch::new().profiles().is_empty());
+    }
+}
