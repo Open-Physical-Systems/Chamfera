@@ -844,6 +844,38 @@ impl ViewRenderer {
         });
         let preview_edges =
             vertex_buffer("preview edges", &preview_lines).map(|b| (b, preview_lines.len() as u32));
+        // A stock simulation, shaded like bodies in its theme colours (uploaded each
+        // frame: it changes with the time slider).
+        let stock: Vec<(wgpu::Buffer, u32, wgpu::BindGroup)> = frame
+            .scene
+            .stock
+            .iter()
+            .filter_map(|sm| {
+                let tris = mesh_vertices(&sm.mesh);
+                if tris.is_empty() {
+                    return None;
+                }
+                let buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("stock triangles"),
+                    contents: bytemuck::cast_slice(&tris),
+                    usage: wgpu::BufferUsages::VERTEX,
+                });
+                let colour = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("stock colour"),
+                    contents: bytemuck::cast_slice(&sm.style.color(frame.theme).linear()),
+                    usage: wgpu::BufferUsages::UNIFORM,
+                });
+                let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("stock"),
+                    layout: &self.body_layout,
+                    entries: &[wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: colour.as_entire_binding(),
+                    }],
+                });
+                Some((buf, tris.len() as u32, bind))
+            })
+            .collect();
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("viewport"),
@@ -911,6 +943,14 @@ impl ViewRenderer {
                         pass.set_vertex_buffer(0, g.edges.slice(..));
                         pass.draw(0..g.edge_vertices, 0..1);
                     }
+                }
+            }
+            if !stock.is_empty() {
+                pass.set_pipeline(&self.mesh);
+                for (buf, n, bind) in &stock {
+                    pass.set_bind_group(1, bind, &[]);
+                    pass.set_vertex_buffer(0, buf.slice(..));
+                    pass.draw(0..*n, 0..1);
                 }
             }
             // Transparent faces last, back to front, over the edges seen through them.

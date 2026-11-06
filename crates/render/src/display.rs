@@ -304,8 +304,11 @@ pub struct Display {
 
 /// The order bodies are drawn in: opaque bodies (in scene order), then transparent bodies
 /// from the farthest to the nearest, so each blends over what is behind it. Hidden bodies
-/// are left out.
+/// are left out, and every body while a stock simulation shows (it stands in for them).
 pub fn draw_order(scene: &Scene, camera: &Camera) -> (Vec<u32>, Vec<u32>) {
+    if !scene.stock.is_empty() {
+        return (Vec::new(), Vec::new());
+    }
     let eye = camera.eye();
     let forward = camera.basis().forward;
     let mut opaque = Vec::new();
