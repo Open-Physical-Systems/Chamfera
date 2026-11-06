@@ -240,6 +240,12 @@ fn scripts(dir: &str) -> Vec<PathBuf> {
         .unwrap()
         .map(|e| e.unwrap().path())
         .filter(|p| p.extension().is_some_and(|x| x == "json"))
+        // Scripts that save or export write files beside the working directory; they are
+        // covered by their own tests in a scratch folder.
+        .filter(|p| {
+            std::fs::read_to_string(p)
+                .is_ok_and(|s| !s.contains("\"design.save\"") && !s.contains("\"path\""))
+        })
         .collect();
     files.sort();
     files
