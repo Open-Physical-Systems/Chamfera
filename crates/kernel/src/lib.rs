@@ -43,6 +43,10 @@
 //! equal-distance [`chamfer`] on straight edges between planes (cylinders, sphere-octant
 //! corners) and on plane/cylinder rims (tori, cones).
 //!
+//! Sheet metal is here ([`Sheet`]): a base plate, flanges with exact cylindrical bends on
+//! straight edges (with bend reliefs), and the flat pattern by bend allowance, with its
+//! outline.
+//!
 //! Rung K12 (first part) is here: [`shell`] hollows a solid of planes, cylinders and
 //! cones into walls of a thickness, with chosen faces open (an inward offset subtracted).
 
@@ -59,6 +63,7 @@ mod loft;
 mod mass;
 mod planar;
 mod profile;
+mod sheet;
 mod shell;
 #[cfg(test)]
 mod spline_tests;
@@ -87,6 +92,10 @@ pub use loft::{LOFT_PARALLEL_TOLERANCE, MAX_LOFT_SECTIONS, loft};
 pub use mass::{MASS_QUADRATURE_TOLERANCE, MAX_DENSITY, MassProperties};
 pub use planar::{Arc2, Circle2, Line2, Segment2};
 pub use profile::{PROFILE_JOIN_TOLERANCE, Profile, ProfileEdge, polygon_edges};
+pub use sheet::{
+    BendPosition, BendReport, FlangeSpec, FlatEdge, MAX_FLANGES, Relief, ReliefKind, Sheet,
+    bend_allowance, check_thickness, flat_outline, outside_setback, position_trim,
+};
 pub use shell::shell;
 pub use ssi::{
     CurveSurfaceIntersection, CurveSurfacePoint, IntersectionCurve, ON_SURFACE_SAMPLES,

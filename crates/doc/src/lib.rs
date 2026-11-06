@@ -10,6 +10,7 @@ pub mod face_edit;
 pub mod feature;
 pub mod imported;
 pub mod joint;
+pub mod sheet;
 pub mod timeline;
 pub mod units;
 
@@ -27,6 +28,10 @@ pub use feature::{
 };
 pub use imported::ImportedBody;
 pub use joint::{EdgeEnd, Joint, JointKind, JointOrigin, OriginAt};
+pub use sheet::{
+    FlangePosition, FlangeSide, FlangeValues, ReliefShape, SheetBase, SheetFlange, SheetRule,
+    SheetUnfold,
+};
 pub use timeline::{Group, ItemKind, Timeline};
 pub use units::{DisplayUnits, LengthUnit};
 
@@ -72,7 +77,10 @@ use thiserror::Error;
 /// - 24: the design's display units (`units`: length unit and decimal places). A plain
 ///   number in an expression means the design's length unit. Older files open in mm with
 ///   two decimals, as before.
-pub const FORMAT_VERSION: u32 = 24;
+/// - 25: sheet metal: named rules (`sheet_rules`: thickness, bend radius, K-factor,
+///   relief) and the `sheet_base`, `sheet_flange` and `sheet_unfold` features. Older
+///   files open with no rules.
+pub const FORMAT_VERSION: u32 = 25;
 /// The tag every design file starts with, so other JSON is not mistaken for a design.
 pub const FORMAT_TAG: &str = "chamfera";
 /// Longest parameter name.
@@ -260,6 +268,9 @@ pub struct Document {
     /// How values are shown and typed: the length unit and decimal places.
     #[serde(default, skip_serializing_if = "DisplayUnits::is_default")]
     pub units: DisplayUnits,
+    /// Sheet metal rules, by name (format 25).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sheet_rules: Vec<SheetRule>,
 }
 
 impl Default for Document {
@@ -272,6 +283,7 @@ impl Default for Document {
             features: Vec::new(),
             last_feature_id: 0,
             imported: Vec::new(),
+            sheet_rules: Vec::new(),
             timeline: Timeline::default(),
             assembly: Assembly::default(),
             drawing: Drawing::default(),
@@ -679,6 +691,8 @@ impl Document {
         checked.features = doc.features;
         imported::check(&doc.imported, &mut seen, checked.last_feature_id)?;
         checked.imported = doc.imported;
+        Document::check_sheet_rules(&doc.sheet_rules)?;
+        checked.sheet_rules = doc.sheet_rules;
         doc.units.validate().map_err(DocError::Format)?;
         checked.units = doc.units;
         doc.assembly.check(checked.last_feature_id)?;

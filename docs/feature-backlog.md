@@ -191,10 +191,10 @@ Close runners-up: selection filters and box selection (UI and NAV), splines (nee
 
 | Feature | Description | Status | Pri | Size | Layer |
 |---|---|---|---|---|---|
-| Sheet metal rules | Thickness, bend radius, K-factor, relief shapes per design | missing | P2 | M | doc |
-| Flange | Sheet from a profile, and bent walls from edges | missing | P2 | L | kernel |
+| Sheet metal rules | Thickness, bend radius, K-factor, relief shapes per design | done (`sheet.rule`, named rules in the design, format 25) | P2 | M | doc |
+| Flange | Sheet from a profile, and bent walls from edges | done (`sheet.base`, `sheet.flange`: exact cylindrical bends on straight edges, inside/outside/bend-outside, offsets with rectangular, obround or rip reliefs; SHEET METAL tab) | P2 | L | kernel |
 | Bend | Bend a flat sheet along a sketch line | missing | P2 | L | kernel |
-| Flat pattern | Unfold to a flat part; export it as DXF | missing | P2 | L | kernel, io |
+| Flat pattern | Unfold to a flat part; export it as DXF | done (`sheet.flat_pattern` by BA = θ(R + K·T), shown beside the part; `sheet.export_flat` writes DXF R12) | P2 | L | kernel, io |
 | Convert to sheet metal | Turn a shelled body into sheet metal | missing | P2 | L | kernel |
 | Hem, rip, corner reliefs | Further sheet details | missing | P2 | M | kernel |
 

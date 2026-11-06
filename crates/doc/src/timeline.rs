@@ -117,6 +117,10 @@ pub fn kind_dependencies(kind: &FeatureKind) -> Vec<u32> {
         FeatureKind::Move(_) => {}
         // Their sketches (profile, path, sections) are listed above.
         FeatureKind::Sweep(_) | FeatureKind::Loft(_) => {}
+        // A base flange's sketch is listed above; a flange names its sheet's edge.
+        FeatureKind::SheetBase(_) => {}
+        FeatureKind::SheetFlange(f) => deps.extend(edge_features(&f.edge)),
+        FeatureKind::SheetUnfold(u) => deps.push(u.base),
     }
     deps.sort_unstable();
     deps.dedup();

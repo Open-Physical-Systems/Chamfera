@@ -209,6 +209,15 @@ impl FeatureKind {
                 }
             },
             FeatureKind::Shell(s) => vec![&mut s.thickness],
+            // Sheet metal rules hold plain mm; a flange's sizes are expressions.
+            FeatureKind::SheetBase(_) | FeatureKind::SheetUnfold(_) => Vec::new(),
+            FeatureKind::SheetFlange(f) => std::iter::once(&mut f.height)
+                .chain(
+                    [&mut f.offset_start, &mut f.offset_end]
+                        .into_iter()
+                        .flatten(),
+                )
+                .collect(),
             FeatureKind::OffsetFace(o) => vec![&mut o.distance],
             FeatureKind::DeleteFace(_) => Vec::new(),
             // A move's turn is an angle; its distance is a length.

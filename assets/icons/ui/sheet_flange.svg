@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+  <!-- Chamfera interface icon: flange (a wall bent up from a sheet's edge). Original artwork, MIT OR Apache-2.0. -->
+  <path stroke="#2B313B" d="M3.5 20H13M3.5 16.5H13M3.5 16.5V20"/>
+  <path stroke="#E8770E" d="M13 20a7 7 0 0 0 7-7V3.5M13 16.5a3.5 3.5 0 0 0 3.5-3.5V3.5M16.5 3.5H20"/>
+</svg>
