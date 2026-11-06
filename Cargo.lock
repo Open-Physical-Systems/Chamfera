@@ -281,6 +281,7 @@ version = "0.0.1"
 dependencies = [
  "chamfera-engine",
  "chamfera-gpu",
+ "chamfera-mcp",
  "chamfera-render",
  "serde_json",
 ]
@@ -350,6 +351,16 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "chamfera-mcp"
+version = "0.0.1"
+dependencies = [
+ "chamfera-engine",
+ "chamfera-gpu",
+ "chamfera-render",
+ "serde_json",
 ]
 
 [[package]]

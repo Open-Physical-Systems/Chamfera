@@ -19,6 +19,7 @@ const LAYERS: &[(&str, u32)] = &[
     ("chamfera-engine", 4),
     ("chamfera-gpu", 5),
     ("chamfera-ui", 6),
+    ("chamfera-mcp", 6),
     ("chamfera", 7),
     ("chamfera-cli", 7),
     ("chamfera-web", 7),
