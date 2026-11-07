@@ -1,0 +1,7 @@
+[
+  { "command": "sketch.create", "params": { "plane": "xy" } },
+  { "command": "sketch.import_dxf", "params": { "path": "examples/dxf-plate.dxf" } },
+  { "command": "view.standard", "params": { "view": "top" } },
+  { "command": "view.fit", "params": { "width": 1120, "height": 680 } },
+  { "command": "sketch.get" }
+]

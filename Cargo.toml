@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/*", "apps/*", "xtask"]
 
 [workspace.package]
-version = "0.0.1"
+version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 rust-version = "1.90"
@@ -17,13 +17,45 @@ chamfera-kernel = { path = "crates/kernel" }
 chamfera-render = { path = "crates/render" }
 chamfera-doc = { path = "crates/doc" }
 chamfera-io = { path = "crates/io" }
+chamfera-cam = { path = "crates/cam" }
+chamfera-raytrace = { path = "crates/raytrace" }
+chamfera-drawing = { path = "crates/drawing" }
 chamfera-engine = { path = "crates/engine" }
+chamfera-gpu = { path = "crates/gpu" }
+chamfera-ui = { path = "crates/ui" }
+chamfera-mcp = { path = "crates/mcp" }
+chamfera-assistant = { path = "crates/assistant" }
 
 # external: permissive licences only (deny.toml)
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["float_roundtrip"] }
 thiserror = "2"
 toml = "0.9"
+# Inflates the deflated parts of 3MF packages (crates/io): safe Rust, builds for wasm.
+miniz_oxide = { version = "0.8", default-features = false, features = ["with-alloc"] }
+# Glyph outlines for sketch text (MIT OR Apache-2.0; also used by egui).
+skrifa = { version = "0.44", default-features = false, features = ["std"] }
+# HTTPS for the assistant's calls to the Claude API (crates/assistant, desktop only): a small
+# blocking client on rustls with the ring provider, trusting the operating system's root
+# certificates (rustls-native-certs; no bundled root list).
+ureq = { version = "3.5", default-features = false, features = ["rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-native-certs = "0.8"
+# The local date for drawing title blocks (crates/engine, desktop only): the system's time
+# zone, read from the operating system's zone files (MIT or Unlicense).
+jiff = { version = "0.2", default-features = false, features = ["std", "tz-system", "tzdb-zoneinfo", "tzdb-bundle-platform"] }
+
+# GPU and UI (layers 5-6 only; `cargo xtask layers` enforces it)
+wgpu = "30"
+bytemuck = { version = "1", features = ["derive"] }
+pollster = "1"
+png = "0.18"
+egui = "0.37"
+eframe = { version = "0.37", default-features = false, features = ["wgpu", "default_fonts", "wayland", "x11"] }
+egui-wgpu = "0.37"
+rfd = "0.17"
+# Rasterises the interface icons (assets/icons/ui/*.svg) for egui: pure Rust, builds for wasm.
+resvg = { version = "0.49", default-features = false }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
@@ -36,6 +68,18 @@ todo = "deny"
 unimplemented = "deny"
 dbg_macro = "deny"
 
+# Debug builds keep line numbers for backtraces but not full debug info: build folders are
+# about half the size (each agent worktree has its own, and disk space is limited).
+[profile.dev]
+debug = "line-tables-only"
+
 [profile.release]
 lto = "thin"
 codegen-units = 1
+
+# The browser build (trunk, apps/chamfera-web/index.html): smallest code, whole-program LTO.
+# Only trunk uses it, so desktop release builds stay as they are.
+[profile.web-release]
+inherits = "release"
+opt-level = "z"
+lto = "fat"

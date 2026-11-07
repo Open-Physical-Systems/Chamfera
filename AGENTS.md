@@ -12,7 +12,9 @@ Status and the next milestone: `PLAN.md`. Layers: `docs/architecture.md`. Kernel
 - Never crash: no unwrap/expect/panic/todo/unsafe in non-test code; errors are `Result`; all input is hostile: clippy `-D warnings`, `hostile_params_never_panic`.
 - Model decisions use exact geometry; meshes are for display and export only.
 - Everything is a command, and programmatic calls never open dialogs: `skills/chamfera-commands/SKILL.md`.
-- Layering: geom (0) -> sketch, kernel, render (1) -> doc (2) -> io (3) -> engine (4) -> ui, mcp (5) -> apps. Nothing below layer 5 uses egui, winit, wgpu or rfd: `cargo xtask layers`.
+- Layering: geom (0) -> sketch, kernel, render (1) -> doc (2) -> io, drawing (3) -> engine (4) -> gpu, assistant (5) -> ui, mcp (6) -> apps (7). Nothing below layer 5 uses egui, winit, wgpu or rfd: `cargo xtask layers`.
+- Colours come from the theme tokens in `crates/render/src/theme.rs`; camera input goes only through `view.*` commands: `skills/chamfera-ui/SKILL.md`.
+- Show visible changes with a real screenshot you captured (`chamfera --screenshot`, `chamfera-cli snapshot`) and looked at: `skills/chamfera-agent-tools/SKILL.md`.
 - Libraries below the UI build for wasm: `cargo xtask wasm`.
 - Units are millimetres and radians internally; Z is up.
 - The product name is Chamfera; crates are `chamfera-*`, design files `.chamfera`.
@@ -31,3 +33,7 @@ Status and the next milestone: `PLAN.md`. Layers: `docs/architecture.md`. Kernel
 | A command, a crate boundary | `skills/chamfera-commands/SKILL.md` |
 | Writing or running tests | `skills/chamfera-tests/SKILL.md` |
 | Geometry, topology, the B-rep kernel, the sketch solver | `skills/chamfera-kernel/SKILL.md` |
+| A panel, menu, the viewport, colours, camera input | `skills/chamfera-ui/SKILL.md` |
+| Running the app, screenshots, snapshots | `skills/chamfera-agent-tools/SKILL.md` |
+| Building a part as an agent over MCP | `skills/chamfera-modeling/SKILL.md` |
+| Packages (Linux AppImage, Windows zip and installer, macOS dmg), releases | `skills/chamfera-packaging/SKILL.md` |

@@ -1,0 +1,15 @@
+[
+  {"command": "sketch.create", "params": {"plane": "xy"}, "as": "s"},
+  {"command": "sketch.rectangle", "params": {"x1": 0, "y1": 0, "x2": 60, "y2": 40}},
+  {"command": "sketch.finish"},
+  {"command": "solid.extrude", "params": {"sketch": "$s.sketch", "profiles": [{"x": 5, "y": 5}], "distance": 20}, "as": "block"},
+  {"command": "solid.fillet", "params": {"edges": ["2:top 0", "2:top 1", "2:top 2", "2:top 3"], "radius": 8}},
+  {"command": "cam.setup", "params": {"stock": {"kind": "from_model", "side": 3, "top": 2, "bottom": 0}}},
+  {"command": "cam.tool_add", "params": {"kind": "flat_end_mill", "diameter": 8, "feed": 1200}, "as": "rougher"},
+  {"command": "cam.tool_add", "params": {"kind": "ball_end_mill", "diameter": 6, "feed": 1500}, "as": "ball"},
+  {"command": "cam.op_add", "params": {"kind": "adaptive", "tool": "$rougher.tool", "stepdown": 4, "max_engagement": 60, "stock_to_leave": 0.5}},
+  {"command": "cam.op_add", "params": {"kind": "parallel", "tool": "$ball.tool", "stepover": 15, "tolerance": 0.01}},
+  {"command": "cam.generate"},
+  {"command": "cam.simulate", "params": {"resolution": 256, "time": 0.45}},
+  {"command": "view.home", "params": {"width": 1100, "height": 760}}
+]

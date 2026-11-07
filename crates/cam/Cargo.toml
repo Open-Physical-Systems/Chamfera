@@ -1,0 +1,21 @@
+[package]
+name = "chamfera-cam"
+description = "2.5D milling toolpaths and G-code output (layer 3)"
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+
+[dependencies]
+chamfera-doc.workspace = true
+chamfera-kernel.workspace = true
+chamfera-geom.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

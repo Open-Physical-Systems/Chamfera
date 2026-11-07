@@ -1,17 +1,162 @@
-//! Layer 2: the design document: parameters now, the feature timeline from M4.
+//! Layer 2: the design document: parameters and sketches now, the feature timeline from M4.
+
+pub mod appearance;
+pub mod body_tools;
+pub mod cam;
+pub mod component;
+pub mod config;
+pub mod construct;
+pub mod drawing;
+pub mod expr;
+pub mod face_edit;
+pub mod feature;
+pub mod imported;
+pub mod joint;
+pub mod model_params;
+pub mod motion;
+pub mod naming;
+pub mod sheet;
+pub mod surface;
+pub mod thread;
+pub mod timeline;
+pub mod units;
+
+pub use appearance::Appearance;
+pub use body_tools::{
+    Combine, RemoveBodies, SplitBody, SplitFace, SplitFaceTool, Thicken, ThickenDirection,
+};
+pub use component::{Assembly, Component, ROOT};
+pub use config::{Configuration, Configurations};
+pub use construct::{
+    AxisRef, ConstructKind, Construction, EdgeRef, OriginAxis, OriginPlane, PlaneRef, PointRef,
+};
+pub use drawing::Drawing;
+pub use face_edit::{DeleteFace, FaceTurn, MoveFace, OffsetFace};
+pub use feature::{
+    Blend, BlendKind, BlendSecond, Extrude, ExtrudeDirection, ExtrudeExtent, ExtrudeTo,
+    ExtrudeValues, Feature, FeatureKind, Hole, HoleKind, HoleSizes, Loft, LoftSection, Mirror,
+    MirrorPlane, Move, MoveTransform, Operation, Pattern, PatternLayout, Revolve, Shell, Sweep,
+    Thin, ThinSide,
+};
+pub use imported::{ImportedBody, ImportedMesh, SharedMesh};
+pub use joint::{EdgeEnd, Joint, JointKind, JointOrigin, OriginAt};
+pub use model_params::{ModelMeta, ModelParameter};
+pub use motion::{Motion, MotionKey};
+pub use sheet::{
+    FlangePosition, FlangeSide, FlangeValues, ReliefShape, SheetBase, SheetFlange, SheetRule,
+    SheetUnfold,
+};
+pub use surface::{
+    SurfaceExtrude, SurfaceFeature, SurfacePatch, SurfaceRevolve, SurfaceShapes, SurfaceStitch,
+    SurfaceSweep, SurfaceTrim, TrimKeep, TrimTool,
+};
+pub use timeline::{Group, ItemKind, Timeline};
+pub use units::{DisplayUnits, LengthUnit};
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use thiserror::Error;
 
 /// The design format version this build writes. Bump it with a migration for older files.
-pub const FORMAT_VERSION: u32 = 1;
+///
+/// - 1: parameters.
+/// - 2: sketches (each on a plane). Version 1 files open with no sketches.
+/// - 3: parameter expressions, and sketch dimensions driven by expressions.
+/// - 4: the feature timeline (extrude, revolve).
+/// - 5: sketches attached to a face of a feature's solid.
+/// - 6: feature operations (new body, join, cut, intersect).
+/// - 7: linear and circular patterns of features.
+/// - 8: imported solid bodies.
+/// - 9: fillets and chamfers of edges.
+/// - 10: shells (hollowed solids with open faces).
+/// - 11: construction planes, axes and points as timeline features (`construct`), sketches
+///   on a construction plane (`on_plane`), and revolves and circular patterns about a
+///   construction axis (`axis_feature`). Older files open unchanged: every new field is
+///   optional.
+/// - 12: hole features (simple, counterbore, countersink) on a flat face.
+/// - 13: extrude options: extents (through all, up to a face or plane), two sides with
+///   their own distances, a start offset and a taper angle. Older extrudes read as by
+///   distance from the sketch plane without a taper.
+/// - 14: mirror and move/copy of bodies and features.
+/// - 15: components (bodies grouped, each with a placement) and joints between them.
+///   Older files open as a single root component.
+/// - 16: the timeline: an explicit build order of sketches and features, the rollback
+///   marker and groups (`timeline`). Older files open in id order with the marker at
+///   the end, as their timeline showed them.
+/// - 17: sweeps along a path and lofts between profiles.
+/// - 18: drawings: sheets with views of the solids and dimensions (`drawing`).
+///   Older files open with no sheets.
+/// - 19: projected (linked) sketch curves and ellipses.
+/// - 20: the CAM section: setups, tools and machining operations (`cam`).
+/// - 21: body appearances (a colour and opacity per feature's body). Older files open
+///   with every body in the theme's colour.
+/// - 22: direct face edits on the timeline: offset faces (`offset_face`), delete faces
+///   (`delete_face`) and move faces (`move_face`). Older files open unchanged.
+/// - 24: the design's display units (`units`: length unit and decimal places). A plain
+///   number in an expression means the design's length unit. Older files open in mm with
+///   two decimals, as before.
+/// - 25: sheet metal: named rules (`sheet_rules`: thickness, bend radius, K-factor,
+///   relief) and the `sheet_base`, `sheet_flange` and `sheet_unfold` features. Older
+///   files open with no rules.
+/// - 26: body tools: combine, split body, split face, thicken and remove bodies
+///   (`combine`, `split_body`, `split_face`, `thicken`, `remove`). Older files open
+///   unchanged: they hold none.
+/// - 27: reference signatures (`references`: per sketch or feature, per reference name,
+///   the shape, normal or axis, a point and the neighbouring faces of what it was made
+///   on), so split pieces (`2:top#2`) and renamed faces resolve (rung K8). Older files
+///   open unchanged and resolve by name alone, as before.
+/// - 28: surface features (`kind: surface`, with `surface`: `extrude`, `revolve`,
+///   `sweep`, `patch`, `stitch` or `trim`), making surface bodies (open shells). Older
+///   files open unchanged: they hold none.
+/// - 29: motion studies: keyframes of joint values over time (`motion.keys`: joint,
+///   time in seconds, value). Older files open with no keys.
+/// - 30: parameters v2 and configurations: a comment and favourite mark per parameter
+///   (`comment`, `favourite`), names, comments and favourites of model parameters by key
+///   (`model_parameters`: `f{feature}.{field}` or `s{sketch}.d{constraint}`), and the
+///   design table (`configurations`: named overrides of user parameters and of feature
+///   suppression, and the active one). Model parameter names (`Extrude1.distance`) may
+///   appear in expressions. Older files open with none of these.
+/// - 31: drawings version 2: dimensions store what they measure on the model (`refs`:
+///   vertices and edges by their K8 names, with signatures) and follow it; section views
+///   (`section`) and detail views (`detail`); sheet annotations (`annotations`: notes,
+///   leaders, surface texture symbols, feature control frames, centre lines, balloons)
+///   and a parts list (`parts_list`). Older files open unchanged: their dimensions keep
+///   their points, as before.
+/// - 32: imported mesh bodies (`meshes`: id, name and triangles of each STL, OBJ or 3MF
+///   body), saved and undone like the rest of the design. Older files open with none.
+/// - 33: 3D machining operations in the CAM section: `parallel` (raster finishing),
+///   `waterline` (Z-level finishing) and `adaptive` (bounded-engagement roughing). Older
+///   files open unchanged: they hold none.
+/// - 34: physically based materials in body appearances (`metallic`, `roughness`,
+///   `transmission`, `ior`), read by the realistic style and the path tracer. Older files
+///   open unchanged: their bodies take a satin, opaque, non-metal material.
+/// - 36: CAM v3: tool holders (`holder`: stickout, shank diameter and a stack of
+///   cylinders and cones), the holder check of parallel and adaptive operations
+///   (`holder_check`), and the `pencil` and `scallop` (experimental) finishing
+///   operations. Older files open unchanged: every new field is optional.
+/// - 37: sketch constraints v2: `concentric`, `collinear`, `horizontal_points` and
+///   `vertical_points` constraints; `horizontal_distance`, `vertical_distance` and
+///   `arc_length` dimensions; and driven (reference) dimensions, marked `driven: true` on
+///   their constraint record. Older files open unchanged.
+/// - 38: solid modelling options: fillets and chamfers that follow tangent chains
+///   (`tangent_chain`), chamfers with two distances (`distance2`) or a distance and an
+///   angle (`angle`) from a reference face (`reference_face`, `flip`); thin extrudes
+///   (`thin`: thickness, side and an optional open chain of `curves`); holes that go to a
+///   face (`to`); and cosmetic threads (`kind: thread`). Older files open unchanged: every
+///   new field is optional.
+/// - 39: drawings version 3: ordinate dimensions (`ordinate_x`, `ordinate_y`), hole
+///   callouts (`hole_callout` annotations, their text worked out from the hole feature),
+///   and more title block fields (`drawing_number`, `revision`, `material`,
+///   `checked_by`). Older files open unchanged. (38 is another branch's.)
+pub const FORMAT_VERSION: u32 = 39;
 /// The tag every design file starts with, so other JSON is not mistaken for a design.
 pub const FORMAT_TAG: &str = "chamfera";
 /// Longest parameter name.
 pub const MAX_NAME_LEN: usize = 64;
 /// Most parameters one design may hold.
 pub const MAX_PARAMETERS: usize = 10_000;
+/// Most sketches one design may hold.
+pub const MAX_SKETCHES: usize = 10_000;
 
 #[derive(Debug, Clone, PartialEq, Error)]
 pub enum DocError {
@@ -27,6 +172,31 @@ pub enum DocError {
     Format(String),
     #[error("the design uses format {found}, this build reads up to {FORMAT_VERSION}")]
     TooNew { found: u32 },
+    #[error("no sketch {0}")]
+    NoSuchSketch(u32),
+    #[error("a design holds at most {MAX_SKETCHES} sketches")]
+    TooManySketches,
+    #[error("sketch {sketch}: {reason}")]
+    BadSketch { sketch: u32, reason: String },
+    #[error("{name}: {error}")]
+    Expression {
+        name: String,
+        error: expr::ExprError,
+    },
+    #[error("parameters refer to each other in a loop: {}", .0.join(" → "))]
+    Cycle(Vec<String>),
+    #[error("{name} is used by {}; change those first", .users.join(", "))]
+    InUse { name: String, users: Vec<String> },
+    #[error("sketch {sketch} cannot take the new dimensions: {reason}")]
+    Solve { sketch: u32, reason: String },
+    #[error("no feature {0}")]
+    NoSuchFeature(u32),
+    #[error("{reason}")]
+    BadFeature { reason: String },
+    #[error("timeline: {0}")]
+    Timeline(String),
+    #[error("drawing: {reason}")]
+    BadDrawing { reason: String },
 }
 
 /// What a parameter measures. Values are stored in internal units: mm and radians.
@@ -49,10 +219,93 @@ impl Unit {
     }
 }
 
+impl Unit {
+    /// The expression dimension this unit expects.
+    pub fn dim(self) -> expr::Dim {
+        match self {
+            Unit::Length => expr::Dim::LENGTH,
+            Unit::Angle => expr::Dim::ANGLE,
+            Unit::Unitless => expr::Dim::NONE,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Parameter {
+    /// The current value in internal units (mm, radians), kept up to date with
+    /// `expression` by [`Document::evaluate`].
     pub value: f64,
     pub unit: Unit,
+    /// What the user typed, such as `width / 2 + 3 mm`. `None` for a plain value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expression: Option<String>,
+    /// A note for people reading the parameter table (format 30).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub comment: String,
+    /// Pinned at the top of the parameter table (format 30).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub favourite: bool,
+}
+
+/// A face of a feature's solid, by the face's role name (`top`, `side 2`, ...). Names
+/// come from the kernel's sweeps and stay the same when the feature is rebuilt.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FaceRef {
+    pub feature: u32,
+    pub face: String,
+}
+
+/// Most projected edges one sketch may hold.
+pub const MAX_PROJECTIONS: usize = 10_000;
+/// Longest edge reference a projection may hold.
+pub const MAX_EDGE_REF_LEN: usize = 512;
+
+/// A model edge projected into a sketch: the sketch curve it became, fixed in place, and
+/// the edge it follows when the design rebuilds, by its reference name (`2:top 0`, or
+/// `between 2:side 0 and 2:top` for an edge without a name of its own).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Projection {
+    pub edge: String,
+    pub curve: u32,
+    /// Whether the curve follows the edge on rebuild; an unlinked copy stays where it is.
+    #[serde(default = "linked_default")]
+    pub linked: bool,
+}
+
+fn linked_default() -> bool {
+    true
+}
+
+/// A sketch and the plane it is drawn on.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SketchFeature {
+    pub id: u32,
+    pub name: String,
+    /// Sketch coordinates (x, y) map to `plane.from_plane(p)`.
+    pub plane: chamfera_geom::Frame,
+    pub sketch: chamfera_sketch::Sketch,
+    /// Dimensions driven by expressions: constraint id → expression. Re-evaluated when a
+    /// parameter changes.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub expressions: BTreeMap<u32, String>,
+    /// The face this sketch lies on, if any: its plane follows that face when the design
+    /// rebuilds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attached: Option<FaceRef>,
+    /// The construction plane (its feature id) this sketch lies on, if any: its plane
+    /// follows that construction when the design rebuilds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_plane: Option<u32>,
+    /// Model edges projected into the sketch (see [`Projection`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub projections: Vec<Projection>,
+}
+
+impl SketchFeature {
+    /// The projection that made `curve`, if any.
+    pub fn projection_of(&self, curve: u32) -> Option<&Projection> {
+        self.projections.iter().find(|p| p.curve == curve)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -60,6 +313,55 @@ pub struct Document {
     pub format: String,
     pub version: u32,
     pub parameters: BTreeMap<String, Parameter>,
+    #[serde(default)]
+    pub sketches: Vec<SketchFeature>,
+    /// The timeline, in build order.
+    #[serde(default)]
+    pub features: Vec<Feature>,
+    /// The last feature id handed out; ids are never reused.
+    #[serde(default)]
+    pub last_feature_id: u32,
+    /// Solid bodies imported from other CAD files (STEP), kept as exact B-rep bodies.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub imported: Vec<ImportedBody>,
+    /// Mesh bodies imported from STL, OBJ or 3MF files (format 32).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub meshes: Vec<ImportedMesh>,
+    /// Build order, rollback marker and groups of the sketches and features.
+    #[serde(default)]
+    pub timeline: Timeline,
+    /// Components and joints (format 15). A design without them is one root component.
+    #[serde(default, skip_serializing_if = "Assembly::is_empty")]
+    pub assembly: Assembly,
+    /// Drawing sheets (format 18).
+    #[serde(default, skip_serializing_if = "Drawing::is_empty")]
+    pub drawing: Drawing,
+    /// How the bodies a feature (or an import) made look, by its id. Display data only.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub appearances: BTreeMap<u32, Appearance>,
+    /// Manufacturing: setups, tools and operations (format 20). Older files have none.
+    #[serde(default, skip_serializing_if = "cam::Cam::is_empty")]
+    pub cam: cam::Cam,
+    /// How values are shown and typed: the length unit and decimal places.
+    #[serde(default, skip_serializing_if = "DisplayUnits::is_default")]
+    pub units: DisplayUnits,
+    /// Sheet metal rules, by name (format 25).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sheet_rules: Vec<SheetRule>,
+    /// The motion study's keyframes (format 29).
+    #[serde(default, skip_serializing_if = "Motion::is_empty")]
+    pub motion: Motion,
+    /// What each reference was made on (format 27): by the sketch or feature that holds
+    /// it, then by the reference name (`2:top`, `2:top 0#2`). See [`naming`].
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub references: BTreeMap<u32, BTreeMap<String, naming::Signature>>,
+    /// Names of their own, comments and favourites of model parameters, by key
+    /// (format 30). See [`model_params`].
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub model_parameters: BTreeMap<String, ModelMeta>,
+    /// The design table: configurations and the active one (format 30).
+    #[serde(default, skip_serializing_if = "Configurations::is_empty")]
+    pub configurations: Configurations,
 }
 
 impl Default for Document {
@@ -68,6 +370,22 @@ impl Default for Document {
             format: FORMAT_TAG.to_owned(),
             version: FORMAT_VERSION,
             parameters: BTreeMap::new(),
+            sketches: Vec::new(),
+            features: Vec::new(),
+            last_feature_id: 0,
+            imported: Vec::new(),
+            meshes: Vec::new(),
+            sheet_rules: Vec::new(),
+            references: BTreeMap::new(),
+            timeline: Timeline::default(),
+            assembly: Assembly::default(),
+            drawing: Drawing::default(),
+            appearances: BTreeMap::new(),
+            cam: cam::Cam::default(),
+            units: DisplayUnits::default(),
+            motion: Motion::default(),
+            model_parameters: BTreeMap::new(),
+            configurations: Configurations::default(),
         }
     }
 }
@@ -107,15 +425,211 @@ impl Document {
         if !self.parameters.contains_key(name) && self.parameters.len() >= MAX_PARAMETERS {
             return Err(DocError::TooManyParameters);
         }
+        self.check_free_name(name)?;
+        let before = self.clone();
+        let (comment, favourite) = self.note_of(name);
+        self.parameters.insert(
+            name.to_owned(),
+            Parameter {
+                value,
+                unit,
+                expression: None,
+                comment,
+                favourite,
+            },
+        );
+        if let Err(e) = self.evaluate() {
+            *self = before;
+            return Err(e);
+        }
+        Ok(())
+    }
+
+    /// Creates or replaces a parameter defined by an expression, then re-evaluates the
+    /// design. Fails without changing the document.
+    pub fn set_parameter_expression(
+        &mut self,
+        name: &str,
+        expression: &str,
+        unit: Unit,
+    ) -> Result<(), DocError> {
+        if !is_valid_name(name) {
+            return Err(DocError::BadName(name.to_owned()));
+        }
+        if !self.parameters.contains_key(name) && self.parameters.len() >= MAX_PARAMETERS {
+            return Err(DocError::TooManyParameters);
+        }
+        self.check_free_name(name)?;
+        if expression.chars().count() > expr::MAX_EXPRESSION_LEN {
+            return Err(DocError::Expression {
+                name: name.to_owned(),
+                error: expr::ExprError::TooLong,
+            });
+        }
+        let before = self.clone();
+        let (comment, favourite) = self.note_of(name);
+        self.parameters.insert(
+            name.to_owned(),
+            Parameter {
+                value: 0.0,
+                unit,
+                expression: Some(expression.to_owned()),
+                comment,
+                favourite,
+            },
+        );
+        if let Err(e) = self.evaluate() {
+            *self = before;
+            return Err(e);
+        }
+        Ok(())
+    }
+
+    /// Who refers to a parameter: other parameters, sketch dimensions, features (by
+    /// their model parameter names) and configurations.
+    pub fn parameter_users(&self, name: &str) -> Vec<String> {
+        self.expression_users(name)
+    }
+
+    /// A user parameter's comment and favourite mark, kept when it is set again.
+    fn note_of(&self, name: &str) -> (String, bool) {
         self.parameters
-            .insert(name.to_owned(), Parameter { value, unit });
+            .get(name)
+            .map(|p| (p.comment.clone(), p.favourite))
+            .unwrap_or_default()
+    }
+
+    /// A new user parameter may not take a model parameter's name.
+    fn check_free_name(&self, name: &str) -> Result<(), DocError> {
+        if !self.parameters.contains_key(name) && self.model_parameter(name).is_some() {
+            return Err(DocError::BadValue {
+                name: name.to_owned(),
+                reason: "that name is taken by a model parameter".into(),
+            });
+        }
+        Ok(())
+    }
+
+    /// Recomputes every parameter from its expression (in dependency order), then drives
+    /// sketch dimensions from theirs and solves those sketches. On error the document may
+    /// be partly updated: callers keep a copy and restore it (the session does).
+    pub fn evaluate(&mut self) -> Result<(), DocError> {
+        let mut ns = model_params::Namespace::new(self);
+        let names: Vec<String> = self.parameters.keys().cloned().collect();
+        for n in &names {
+            ns.resolve(n, &mut Vec::new())?;
+        }
+        for (n, p) in self.parameters.iter_mut() {
+            if let Some(q) = ns.values.get(n) {
+                p.value = q.value;
+            }
+        }
+        // Dimensions that follow expressions: work out every value, then apply them.
+        let mut updates: Vec<(usize, u32, f64)> = Vec::new();
+        for (i, s) in self.sketches.iter().enumerate() {
+            for (c, e) in &s.expressions {
+                let Some(constraint) = s.sketch.constraint(chamfera_sketch::ConstraintId(*c))
+                else {
+                    continue;
+                };
+                let dim = if constraint.kind_name() == "angle" {
+                    expr::Dim::ANGLE
+                } else {
+                    expr::Dim::LENGTH
+                };
+                let what = format!("{} dimension {c}", s.name);
+                let v = ns.eval(&what, e, dim)?;
+                if constraint.value() != Some(v) {
+                    updates.push((i, *c, v));
+                }
+            }
+        }
+        let mut changed = std::collections::BTreeSet::new();
+        for (i, c, v) in updates {
+            let Some(s) = self.sketches.get_mut(i) else {
+                continue;
+            };
+            s.sketch
+                .set_dimension(chamfera_sketch::ConstraintId(c), v)
+                .map_err(|err| DocError::Solve {
+                    sketch: s.id,
+                    reason: err.to_string(),
+                })?;
+            changed.insert(i);
+        }
+        for i in changed {
+            if let Some(s) = self.sketches.get_mut(i) {
+                s.sketch.solve().map_err(|err| DocError::Solve {
+                    sketch: s.id,
+                    reason: err.to_string(),
+                })?;
+            }
+        }
         Ok(())
     }
 
     pub fn remove_parameter(&mut self, name: &str) -> Result<Parameter, DocError> {
+        let users = self.parameter_users(name);
+        if !users.is_empty() {
+            return Err(DocError::InUse {
+                name: name.to_owned(),
+                users,
+            });
+        }
         self.parameters
             .remove(name)
             .ok_or_else(|| DocError::NoSuchParameter(name.to_owned()))
+    }
+
+    /// Adds an empty sketch on `plane` and returns its id.
+    pub fn add_sketch(&mut self, plane: chamfera_geom::Frame) -> Result<u32, DocError> {
+        if self.sketches.len() >= MAX_SKETCHES {
+            return Err(DocError::TooManySketches);
+        }
+        let id = self
+            .last_feature_id
+            .checked_add(1)
+            .ok_or(DocError::TooManySketches)?;
+        self.last_feature_id = id;
+        self.sketches.push(SketchFeature {
+            id,
+            name: format!("Sketch{}", self.sketches.len() + 1),
+            plane,
+            sketch: chamfera_sketch::Sketch::new(),
+            expressions: BTreeMap::new(),
+            attached: None,
+            projections: Vec::new(),
+            on_plane: None,
+        });
+        self.timeline_insert(id);
+        self.assembly.adopt(id);
+        Ok(id)
+    }
+
+    pub fn sketch(&self, id: u32) -> Result<&SketchFeature, DocError> {
+        self.sketches
+            .iter()
+            .find(|s| s.id == id)
+            .ok_or(DocError::NoSuchSketch(id))
+    }
+
+    pub fn sketch_mut(&mut self, id: u32) -> Result<&mut SketchFeature, DocError> {
+        self.sketches
+            .iter_mut()
+            .find(|s| s.id == id)
+            .ok_or(DocError::NoSuchSketch(id))
+    }
+
+    pub fn remove_sketch(&mut self, id: u32) -> Result<SketchFeature, DocError> {
+        let i = self
+            .sketches
+            .iter()
+            .position(|s| s.id == id)
+            .ok_or(DocError::NoSuchSketch(id))?;
+        let s = self.sketches.remove(i);
+        self.references.remove(&id);
+        self.timeline_remove();
+        Ok(s)
     }
 
     pub fn to_json(&self) -> Result<String, serde_json::Error> {
@@ -124,19 +638,147 @@ impl Document {
 
     /// Reads a design, refusing other JSON, newer formats and invalid content.
     pub fn from_json(text: &str) -> Result<Document, DocError> {
-        let doc: Document =
-            serde_json::from_str(text).map_err(|e| DocError::Format(e.to_string()))?;
-        if doc.format != FORMAT_TAG {
-            return Err(DocError::Format(format!("format tag is {:?}", doc.format)));
+        // Tell another file from a damaged design before reading it as one.
+        let value: serde_json::Value = serde_json::from_str(text).map_err(|_| {
+            DocError::Format("the file is not JSON text (is it a design file?)".into())
+        })?;
+        match value.get("format").and_then(serde_json::Value::as_str) {
+            Some(FORMAT_TAG) => {}
+            Some(other) => {
+                return Err(DocError::Format(format!(
+                    "the file is a {:?} file, not a design",
+                    other.chars().take(40).collect::<String>()
+                )));
+            }
+            None => {
+                return Err(DocError::Format(
+                    "the file holds JSON, but not a design (it has no format tag)".into(),
+                ));
+            }
         }
+        let doc: Document = serde_json::from_value(value)
+            .map_err(|e| DocError::Format(format!("the design is damaged: {e}")))?;
         if doc.version > FORMAT_VERSION {
             return Err(DocError::TooNew { found: doc.version });
         }
         // Re-validate everything: a file is hostile input.
         let mut checked = Document::default();
         for (name, p) in &doc.parameters {
-            checked.set_parameter(name, p.value, p.unit)?;
+            if !is_valid_name(name) {
+                return Err(DocError::BadName(name.clone()));
+            }
+            if checked.parameters.len() >= MAX_PARAMETERS {
+                return Err(DocError::TooManyParameters);
+            }
+            if !p.value.is_finite() {
+                return Err(DocError::BadValue {
+                    name: name.clone(),
+                    reason: "must be a finite number".into(),
+                });
+            }
+            if p.expression
+                .as_ref()
+                .is_some_and(|e| e.chars().count() > expr::MAX_EXPRESSION_LEN)
+            {
+                return Err(DocError::BadValue {
+                    name: name.clone(),
+                    reason: "the expression is too long".into(),
+                });
+            }
+            checked.parameters.insert(name.clone(), p.clone());
         }
+        if doc.sketches.len() > MAX_SKETCHES {
+            return Err(DocError::TooManySketches);
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        for s in &doc.sketches {
+            let bad = |reason: String| DocError::BadSketch {
+                sketch: s.id,
+                reason,
+            };
+            if !seen.insert(s.id) || s.id == 0 || s.id > doc.last_feature_id {
+                return Err(bad("duplicate or out-of-range id".into()));
+            }
+            if s.name.chars().count() > 256 {
+                return Err(bad("name is longer than 256 characters".into()));
+            }
+            s.sketch.validate().map_err(|e| bad(e.to_string()))?;
+            for (c, e) in &s.expressions {
+                if s.sketch
+                    .constraint(chamfera_sketch::ConstraintId(*c))
+                    .is_none()
+                    || e.chars().count() > expr::MAX_EXPRESSION_LEN
+                {
+                    return Err(bad(format!("expression for missing constraint {c}")));
+                }
+            }
+            if s.projections.len() > MAX_PROJECTIONS {
+                return Err(bad("too many projected edges".into()));
+            }
+            for p in &s.projections {
+                if s.sketch.curve(chamfera_sketch::CurveId(p.curve)).is_none()
+                    || p.edge.chars().count() > MAX_EDGE_REF_LEN
+                {
+                    return Err(bad(format!(
+                        "projection of {:?} to missing curve {}",
+                        p.edge, p.curve
+                    )));
+                }
+            }
+        }
+        checked.sketches = doc.sketches;
+        checked.last_feature_id = doc.last_feature_id;
+        if doc.features.len() > feature::MAX_FEATURES {
+            return Err(DocError::BadFeature {
+                reason: "too many features".into(),
+            });
+        }
+        for f in &doc.features {
+            if !seen.insert(f.id) || f.id == 0 || f.id > checked.last_feature_id {
+                return Err(DocError::BadFeature {
+                    reason: format!("feature {} has a duplicate or out-of-range id", f.id),
+                });
+            }
+            if f.name.chars().count() > 256 {
+                return Err(DocError::BadFeature {
+                    reason: format!("feature {} has a name longer than 256", f.id),
+                });
+            }
+            if let FeatureKind::Construct(c) = &f.kind {
+                c.check_shape().map_err(|reason| DocError::BadFeature {
+                    reason: format!("feature {}: {reason}", f.id),
+                })?;
+            }
+        }
+        checked.features = doc.features;
+        imported::check(&doc.imported, &mut seen, checked.last_feature_id)?;
+        checked.imported = doc.imported;
+        imported::check_meshes(&doc.meshes, &mut seen, checked.last_feature_id)?;
+        checked.meshes = doc.meshes;
+        Document::check_sheet_rules(&doc.sheet_rules)?;
+        checked.sheet_rules = doc.sheet_rules;
+        doc.units.validate().map_err(DocError::Format)?;
+        checked.units = doc.units;
+        doc.assembly.check(checked.last_feature_id)?;
+        checked.assembly = doc.assembly;
+        doc.motion.check(&checked.assembly)?;
+        Document::check_model_meta(&doc.model_parameters)?;
+        checked.model_parameters = doc.model_parameters;
+        checked.check_configurations(&doc.configurations)?;
+        checked.configurations = doc.configurations;
+        checked.motion = doc.motion.sorted();
+        checked.timeline = doc.timeline;
+        checked.check_timeline(&mut seen)?;
+        doc.drawing.check()?;
+        checked.drawing = doc.drawing;
+        appearance::check(&doc.appearances, checked.last_feature_id)?;
+        checked.appearances = doc.appearances;
+        doc.cam.validate()?;
+        checked.cam = doc.cam;
+        naming::check(&doc.references, &seen)?;
+        checked.references = doc.references;
+        // Values in the file must agree with their expressions.
+        checked.evaluate()?;
         Ok(checked)
     }
 }
@@ -175,9 +817,138 @@ mod tests {
     }
 
     #[test]
+    fn sketches_survive_a_round_trip_and_version_1_files_still_open() {
+        let mut doc = Document::default();
+        let id = doc.add_sketch(chamfera_geom::Frame::XZ).unwrap();
+        let s = &mut doc.sketch_mut(id).unwrap().sketch;
+        let a = s.add_point(chamfera_geom::Point2::new(0.1, 0.2)).unwrap();
+        let b = s
+            .add_point(chamfera_geom::Point2::new(10.0, 1.0 / 3.0))
+            .unwrap();
+        s.add_line(a, b).unwrap();
+        let back = Document::from_json(&doc.to_json().unwrap()).unwrap();
+        assert_eq!(back, doc, "float_roundtrip keeps every coordinate exact");
+
+        let v1 = r#"{"format":"chamfera","version":1,"parameters":{}}"#;
+        let old = Document::from_json(v1).unwrap();
+        assert!(old.sketches.is_empty());
+    }
+
+    #[test]
+    fn parameters_follow_their_expressions_in_dependency_order() {
+        let mut doc = Document::default();
+        doc.set_parameter_expression("width", "80 mm", Unit::Length)
+            .unwrap();
+        doc.set_parameter_expression("hole", "width / 10", Unit::Length)
+            .unwrap();
+        doc.set_parameter_expression("margin", "hole * 1.5", Unit::Length)
+            .unwrap();
+        assert_eq!(doc.parameters["margin"].value, 12.0);
+        doc.set_parameter_expression("width", "100", Unit::Length)
+            .unwrap();
+        assert_eq!(doc.parameters["hole"].value, 10.0);
+        assert_eq!(doc.parameters["margin"].value, 15.0);
+        let a = doc.set_parameter_expression("tilt", "15 deg * 2", Unit::Angle);
+        assert!(a.is_ok());
+        assert!((doc.parameters["tilt"].value - std::f64::consts::FRAC_PI_6).abs() < 1e-15);
+    }
+
+    #[test]
+    fn loops_units_and_unknown_names_are_refused_and_change_nothing() {
+        let mut doc = Document::default();
+        doc.set_parameter_expression("a", "10", Unit::Length)
+            .unwrap();
+        doc.set_parameter_expression("b", "a * 2", Unit::Length)
+            .unwrap();
+        let before = doc.clone();
+        assert!(matches!(
+            doc.set_parameter_expression("a", "b + 1", Unit::Length),
+            Err(DocError::Cycle(_))
+        ));
+        assert!(
+            doc.set_parameter_expression("c", "a + 5 deg", Unit::Length)
+                .is_err()
+        );
+        assert!(
+            doc.set_parameter_expression("c", "a * a", Unit::Length)
+                .is_err()
+        );
+        assert!(
+            doc.set_parameter_expression("c", "nope + 1", Unit::Length)
+                .is_err()
+        );
+        assert_eq!(doc, before);
+        assert!(matches!(
+            doc.remove_parameter("a"),
+            Err(DocError::InUse { .. })
+        ));
+        doc.remove_parameter("b").unwrap();
+        doc.remove_parameter("a").unwrap();
+    }
+
+    #[test]
+    fn a_dimension_follows_its_parameter() {
+        use chamfera_geom::Point2;
+        use chamfera_sketch::Constraint;
+        let mut doc = Document::default();
+        doc.set_parameter_expression("len", "40 mm", Unit::Length)
+            .unwrap();
+        let id = doc.add_sketch(chamfera_geom::Frame::XY).unwrap();
+        let f = doc.sketch_mut(id).unwrap();
+        let a = f.sketch.add_point(Point2::new(0.0, 0.0)).unwrap();
+        let b = f.sketch.add_point(Point2::new(30.0, 0.0)).unwrap();
+        let l = f.sketch.add_line(a, b).unwrap();
+        f.sketch.fix_point(a).unwrap();
+        f.sketch
+            .add_constraint(Constraint::Horizontal { line: l })
+            .unwrap();
+        let c = f
+            .sketch
+            .add_constraint(Constraint::Length {
+                line: l,
+                value: 30.0,
+            })
+            .unwrap();
+        f.expressions.insert(c.0, "len / 2".into());
+        doc.evaluate().unwrap();
+        let end = doc.sketch(id).unwrap().sketch.point(b).unwrap();
+        assert!((end.x - 20.0).abs() < 1e-9);
+        doc.set_parameter_expression("len", "70", Unit::Length)
+            .unwrap();
+        let end = doc.sketch(id).unwrap().sketch.point(b).unwrap();
+        assert!((end.x - 35.0).abs() < 1e-9);
+        // A value that the sketch cannot take (a zero length) is refused, nothing changes.
+        let before = doc.clone();
+        assert!(
+            doc.set_parameter_expression("len", "0", Unit::Length)
+                .is_err()
+        );
+        assert_eq!(doc, before);
+        // Round trip keeps the expressions and their values.
+        let back = Document::from_json(&doc.to_json().unwrap()).unwrap();
+        assert_eq!(back, doc);
+    }
+
+    #[test]
+    fn bad_sketch_ids_are_refused() {
+        let mut doc = Document::default();
+        doc.add_sketch(chamfera_geom::Frame::XY).unwrap();
+        let mut text: serde_json::Value = serde_json::from_str(&doc.to_json().unwrap()).unwrap();
+        text["last_feature_id"] = serde_json::json!(0);
+        assert!(Document::from_json(&text.to_string()).is_err());
+    }
+
+    #[test]
     fn other_json_newer_formats_and_bad_content_are_refused() {
         assert!(Document::from_json("{}").is_err());
         assert!(Document::from_json("not json").is_err());
+        // Another file says plainly that it is not a design, without the parser's words
+        // (QA user guide pass: "invalid type: integer `999`, expected struct Document").
+        for other in ["999", "not json", "{}", r#"{"format": "other"}"#] {
+            let e = Document::from_json(other).unwrap_err().to_string();
+            assert!(e.starts_with("not a Chamfera design"), "{e}");
+            assert!(!e.contains("expected") && !e.contains("struct"), "{e}");
+        }
         let newer = r#"{"format":"chamfera","version":999,"parameters":{}}"#;
         assert!(matches!(
             Document::from_json(newer),
@@ -186,5 +957,30 @@ mod tests {
         let bad =
             r#"{"format":"chamfera","version":1,"parameters":{"2x":{"value":1,"unit":"length"}}}"#;
         assert!(Document::from_json(bad).is_err());
+    }
+
+    #[test]
+    fn projections_must_name_a_curve_of_their_sketch() {
+        let mut doc = Document::default();
+        let id = doc.add_sketch(chamfera_geom::Frame::XY).unwrap();
+        let f = doc.sketch_mut(id).unwrap();
+        let p = f
+            .sketch
+            .add_point(chamfera_geom::Point2::new(0.0, 0.0))
+            .unwrap();
+        let c = f.sketch.add_circle(p, 4.0).unwrap();
+        f.projections.push(Projection {
+            edge: "2:top 4".into(),
+            curve: c.0,
+            linked: true,
+        });
+        let back = Document::from_json(&doc.to_json().unwrap()).unwrap();
+        assert_eq!(back, doc);
+        let mut text: serde_json::Value = serde_json::from_str(&doc.to_json().unwrap()).unwrap();
+        text["sketches"][0]["projections"][0]["curve"] = serde_json::json!(99);
+        assert!(Document::from_json(&text.to_string()).is_err());
+        text["sketches"][0]["projections"][0]["curve"] = serde_json::json!(c.0);
+        text["sketches"][0]["projections"][0]["edge"] = serde_json::json!("x".repeat(600));
+        assert!(Document::from_json(&text.to_string()).is_err());
     }
 }

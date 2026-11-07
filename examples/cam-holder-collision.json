@@ -1,0 +1,16 @@
+[
+  { "command": "sketch.create", "params": { "plane": "xy" }, "as": "base" },
+  { "command": "sketch.rectangle", "params": { "x1": 0, "y1": 0, "x2": 60, "y2": 40 } },
+  { "command": "sketch.finish" },
+  { "command": "solid.extrude", "params": { "sketch": "$base.sketch", "profiles": [{ "x": 5, "y": 5 }], "distance": 30 }, "as": "block" },
+  { "command": "sketch.create_on_face", "params": { "feature": "$block.feature", "face": "top" }, "as": "pocket" },
+  { "command": "sketch.rectangle", "params": { "x1": 20, "y1": 10, "x2": 40, "y2": 30 } },
+  { "command": "sketch.finish" },
+  { "command": "solid.extrude", "params": { "sketch": "$pocket.sketch", "profiles": [{ "x": 30, "y": 20 }], "distance": 20, "direction": "reversed", "operation": "cut" } },
+  { "command": "cam.setup", "params": { "stock": { "kind": "fixed", "x": 60, "y": 40, "z": 30 } } },
+  { "command": "cam.tool_add", "params": { "kind": "flat_end_mill", "diameter": 6, "flute_length": 8, "name": "6 mm short", "holder": { "stickout": 12, "segments": [{ "diameter": 30, "length": 40 }] } }, "as": "mill" },
+  { "command": "cam.op_add", "params": { "kind": "pocket", "tool": "$mill.tool", "face": "4:top", "stepover": 40, "stepdown": 2 } },
+  { "command": "cam.generate" },
+  { "command": "cam.simulate", "params": { "resolution": 256 } },
+  { "command": "view.home", "params": { "width": 1100, "height": 760 } }
+]

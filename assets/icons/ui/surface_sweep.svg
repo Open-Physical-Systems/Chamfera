@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+  <!-- Chamfera interface icon: surface sweep. Original artwork, MIT OR Apache-2.0. -->
+  <path stroke="#2B313B" d="M4 20c0-8 6-14 16-14"/>
+  <path stroke="#E8770E" d="M4 14.5c0-6 5-11 12-11.5M9.5 20c0-5 4-9 10.5-9.5"/>
+  <path stroke="#E8770E" d="M4 14.5 9.5 20M16 3l4 7.5"/>
+</svg>

@@ -1,0 +1,9 @@
+[
+  { "command": "sketch.create", "params": { "plane": "xy" }, "as": "s" },
+  { "command": "sketch.rectangle", "params": { "x1": 0, "y1": 0, "x2": 60, "y2": 40 } },
+  { "command": "sketch.circle", "params": { "cx": 30, "cy": 20, "radius": 8 } },
+  { "command": "sketch.finish" },
+  { "command": "solid.extrude", "params": { "sketch": "$s.sketch", "profiles": [{ "x": 5, "y": 5 }], "distance": 15 } },
+  { "command": "solid.fillet", "params": { "edges": ["2:sweep 0", "2:sweep 1", "2:sweep 2", "2:sweep 3"], "radius": 8 } },
+  { "command": "solid.chamfer", "params": { "edges": ["2:hole 0 top 0"], "distance": 1.5 } }
+]

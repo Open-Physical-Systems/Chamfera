@@ -1,0 +1,2178 @@
+//! Building the timeline: each feature becomes kernel bodies, tessellated for the viewport.
+//!
+//! The design stores only what the user asked for (sketches, features, parameters); the
+//! solids are worked out again from it after every change, so a parameter change rebuilds
+//! everything downstream. A feature that cannot be built keeps its error (shown in the
+//! timeline) and the rest of the timeline still builds, as CAD users expect.
+
+use crate::Session;
+use chamfera_doc::{
+    Blend, BlendKind, Extrude, ExtrudeDirection, FeatureKind, Loft, Operation, Revolve, Sweep,
+};
+use chamfera_geom::{Point2, Point3};
+use chamfera_kernel::{Body, EdgeId, Line2, Profile, ProfileEdge, TessOptions};
+use chamfera_sketch::{Curve, EllipseArc, ProfileLoop, Region, Sketch};
+use std::collections::BTreeMap;
+
+/// A solid built by a feature.
+#[derive(Debug, Clone)]
+pub struct Solid {
+    pub feature: u32,
+    /// The component it belongs to (`chamfera_doc::ROOT` for the design itself).
+    pub component: u32,
+    pub name: String,
+    pub body: Body,
+    /// The scene body that shows it, if it could be displayed.
+    pub scene_id: Option<u32>,
+    /// The kernel face behind each displayed triangle (for picking faces).
+    pub faces: Vec<chamfera_kernel::FaceId>,
+    /// Each true edge as the polyline that is drawn (for picking edges).
+    pub edges: Vec<(EdgeId, Vec<Point3>)>,
+}
+
+/// How far from an edge on screen, in pixels, a click still picks it.
+pub const EDGE_PICK_PIXELS: f64 = 8.0;
+
+/// How a fillet or chamfer refers to an edge: its name (`2:top 0`), or for an edge
+/// without one, its two faces (`between 2:side 0 and 2:top`).
+/// This is the inherited name, shared by every piece of a split edge; references go
+/// through [`crate::naming`], which tells the pieces apart (`2:top 0#2`).
+pub fn edge_ref(body: &Body, e: EdgeId) -> Option<String> {
+    chamfera_doc::naming::edge_ref(body, e)
+}
+
+/// Gives every edge of a feature's new body its full name, like [`name_faces`].
+pub(crate) fn name_edges(body: &mut Body, feature: u32) {
+    crate::perf::naming(|| {
+        for edge in body.edges() {
+            let role = body.edge_name(edge).ok().flatten().map(str::to_owned);
+            if let Some(role) = role
+                && split_face_key(&role).is_none()
+            {
+                let _ = body.set_edge_name(edge, &face_key(feature, &role));
+            }
+        }
+    });
+}
+
+/// Fillets or chamfers the named edges of the bodies built so far. Every name must still
+/// be found; a body without any of them is left alone.
+fn build_blend(
+    doc: &chamfera_doc::Document,
+    b: &Blend,
+    feature: u32,
+    made: &[(u32, String, Body)],
+) -> Result<Vec<(u32, String, Body)>, String> {
+    let size = doc
+        .evaluate_feature_value(&b.size, chamfera_doc::expr::Dim::LENGTH)
+        .map_err(|x| x.to_string())?;
+    let word = match b.blend {
+        BlendKind::Fillet => "fillet",
+        BlendKind::Chamfer => "chamfer",
+    };
+    // Every named edge, through the resolver: all pieces of a split edge, or the piece
+    // a `#k` reference or its signature picks.
+    let mut per_body: BTreeMap<usize, Vec<EdgeId>> = BTreeMap::new();
+    {
+        let bodies = crate::naming::bodies(made);
+        for r in &b.edges {
+            let found = crate::naming::resolve(
+                doc,
+                feature,
+                &bodies,
+                crate::naming::Kind::Edge,
+                r,
+                crate::naming::Want::All,
+            )
+            .map_err(|x| format!("{word}: {x}"))?;
+            for f in found {
+                if let Some(e) = f.edge() {
+                    let list = per_body.entry(f.body).or_default();
+                    if !list.contains(&e) {
+                        list.push(e);
+                    }
+                }
+            }
+        }
+    }
+    // The reference face of an unequal chamfer, per body: its first piece there.
+    let second = doc.blend_second(b).map_err(|x| x.to_string())?;
+    let mut reference: BTreeMap<usize, chamfera_kernel::FaceId> = BTreeMap::new();
+    if let Some(r) = &b.reference_face {
+        let bodies = crate::naming::bodies(made);
+        let found = crate::naming::resolve(
+            doc,
+            feature,
+            &bodies,
+            crate::naming::Kind::Face,
+            r,
+            crate::naming::Want::All,
+        )
+        .map_err(|x| format!("{word}: the reference face: {x}"))?;
+        for f in found {
+            if let Some(face) = f.face() {
+                reference.entry(f.body).or_insert(face);
+            }
+        }
+    }
+    let mut next = made.to_vec();
+    for (i, (_, _, body)) in next.iter_mut().enumerate() {
+        let Some(mut edges) = per_body.remove(&i) else {
+            continue;
+        };
+        if b.tangent_chain {
+            edges =
+                chamfera_kernel::tangent_chain(body, &edges).map_err(|x| format!("{word}: {x}"))?;
+        }
+        let mut out = match b.blend {
+            BlendKind::Fillet => chamfera_kernel::fillet(body, &edges, size),
+            BlendKind::Chamfer => {
+                let spec = chamfera_kernel::ChamferSpec {
+                    distance: size,
+                    second: match second {
+                        None => chamfera_kernel::ChamferSecond::Equal,
+                        Some(chamfera_doc::BlendSecond::Distance(d)) => {
+                            chamfera_kernel::ChamferSecond::Distance(d)
+                        }
+                        Some(chamfera_doc::BlendSecond::Angle(a)) => {
+                            chamfera_kernel::ChamferSecond::Angle(a)
+                        }
+                    },
+                    reference: reference.get(&i).copied(),
+                    flip: b.flip,
+                };
+                chamfera_kernel::chamfer_with(body, &edges, &spec)
+            }
+        }
+        .map_err(|x| format!("{word}: {x}"))?;
+        name_faces(&mut out, feature);
+        name_edges(&mut out, feature);
+        *body = out;
+    }
+    Ok(next)
+}
+
+/// The first edge a blend names that no body built so far has, as `edge "2:top 0" of
+/// Extrude1`.
+fn missing_edge(
+    doc: &chamfera_doc::Document,
+    b: &Blend,
+    feature: u32,
+    made: &[(u32, String, Body)],
+) -> Option<String> {
+    let bodies = crate::naming::bodies(made);
+    let gone = b.edges.iter().find(|e| {
+        crate::naming::resolve(
+            doc,
+            feature,
+            &bodies,
+            crate::naming::Kind::Edge,
+            e,
+            crate::naming::Want::All,
+        )
+        .is_err()
+    })?;
+    let owner = gone
+        .split_whitespace()
+        .find_map(|w| w.split_once(':'))
+        .and_then(|(id, _)| id.parse::<u32>().ok());
+    Some(match owner {
+        Some(f) => format!("edge {gone:?} of {}", feature_name(doc, f)),
+        None => format!("edge {gone:?}"),
+    })
+}
+
+/// Hollows the bodies built so far (rung K12). A body is shelled when it has one of the
+/// named open faces; with no faces named, every body is hollowed closed. Every name must
+/// still be found.
+fn build_shell(
+    doc: &chamfera_doc::Document,
+    sh: &chamfera_doc::Shell,
+    feature: u32,
+    made: &[(u32, String, Body)],
+) -> Result<Vec<(u32, String, Body)>, String> {
+    let thickness = doc
+        .evaluate_feature_value(&sh.thickness, chamfera_doc::expr::Dim::LENGTH)
+        .map_err(|x| x.to_string())?;
+    // The open faces, through the resolver: every piece of a split face, or the piece
+    // a `#k` reference or its signature picks.
+    let mut per_body: BTreeMap<usize, Vec<chamfera_kernel::FaceId>> = BTreeMap::new();
+    {
+        let bodies = crate::naming::bodies(made);
+        for r in &sh.faces {
+            let found = crate::naming::resolve(
+                doc,
+                feature,
+                &bodies,
+                crate::naming::Kind::Face,
+                r,
+                crate::naming::Want::All,
+            )
+            .map_err(|x| format!("shell: {x}"))?;
+            for f in found {
+                if let Some(face) = f.face() {
+                    let list = per_body.entry(f.body).or_default();
+                    if !list.contains(&face) {
+                        list.push(face);
+                    }
+                }
+            }
+        }
+    }
+    let mut next = made.to_vec();
+    let mut any = false;
+    for (i, (_, _, body)) in next.iter_mut().enumerate() {
+        let open = per_body.remove(&i).unwrap_or_default();
+        if open.is_empty() && !sh.faces.is_empty() {
+            continue;
+        }
+        let mut out =
+            chamfera_kernel::shell(body, &open, thickness).map_err(|x| format!("shell: {x}"))?;
+        name_faces(&mut out, feature);
+        name_edges(&mut out, feature);
+        *body = out;
+        any = true;
+    }
+    if !any {
+        return Err("shell: there is no solid to shell".into());
+    }
+    Ok(next)
+}
+
+/// The plane of a flat face, with its normal pointing out of the solid.
+pub fn face_plane(body: &Body, face: chamfera_kernel::FaceId) -> Option<chamfera_geom::Frame> {
+    match body.face_surface(face).ok()?? {
+        (chamfera_kernel::Surface::Plane(frame), same_sense) => {
+            Some(if same_sense { frame } else { frame.flipped() })
+        }
+        _ => None,
+    }
+}
+
+/// A face's full name in built bodies: the feature that made it, then its role, like
+/// `2:top`. Booleans keep these names, so after a boss is joined onto a plate, the plate's
+/// top is still `2:top` and the boss's is `4:top`.
+pub fn face_key(feature: u32, role: &str) -> String {
+    format!("{feature}:{role}")
+}
+
+/// Splits `2:top` into (2, "top").
+pub fn split_face_key(name: &str) -> Option<(u32, &str)> {
+    let (f, role) = name.split_once(':')?;
+    Some((f.parse().ok()?, role))
+}
+
+/// Gives every face of a feature's new body its full name (see [`face_key`]).
+pub(crate) fn name_faces(body: &mut Body, feature: u32) {
+    crate::perf::naming(|| {
+        for face in body.faces() {
+            let role = body.face_name(face).ok().flatten().map(str::to_owned);
+            if let Some(role) = role
+                && split_face_key(&role).is_none()
+            {
+                let _ = body.set_face_name(face, &face_key(feature, &role));
+            }
+        }
+    });
+}
+
+/// True when `body` has a face that `feature` made (it made or changed the body).
+pub fn body_has_feature(body: &Body, feature: u32) -> bool {
+    body.faces().into_iter().any(|f| {
+        body.face_name(f)
+            .ok()
+            .flatten()
+            .and_then(split_face_key)
+            .is_some_and(|(id, _)| id == feature)
+    })
+}
+
+/// The plane of the face `r.face` of feature `r.feature`, from bodies built so far in this
+/// rebuild (whichever body it ended up in after joins and cuts).
+/// Item `owner` holds the reference; its signature picks the piece of a split face.
+fn attached_plane(
+    doc: &chamfera_doc::Document,
+    owner: u32,
+    made: &[(u32, String, Body)],
+    r: &chamfera_doc::FaceRef,
+) -> Result<chamfera_geom::Frame, String> {
+    let bodies = crate::naming::bodies(made);
+    match crate::naming::one_face(doc, owner, &bodies, r, crate::naming::Want::Surface) {
+        Ok((_, body, face)) => {
+            face_plane(body, face).ok_or_else(|| format!("the face {:?} is not flat", r.face))
+        }
+        Err(crate::naming::NameError::Gone { .. }) => Err(format!(
+            "the face {:?} it is drawn on is gone ({} changed, failed or is not built)",
+            r.face,
+            feature_name(doc, r.feature)
+        )),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// A feature's name, for messages.
+fn feature_name(doc: &chamfera_doc::Document, id: u32) -> String {
+    doc.item_name(id).unwrap_or_else(|| format!("feature {id}"))
+}
+
+/// What the last rebuild produced.
+#[derive(Debug, Default, Clone)]
+pub struct Built {
+    pub solids: Vec<Solid>,
+    /// Features that could not be built, and why.
+    pub errors: BTreeMap<u32, String>,
+    /// Features whose solids were built but cannot be shown yet, and why.
+    pub display_errors: BTreeMap<u32, String>,
+    /// Where each component is, and joints that could not be solved.
+    pub placements: crate::assembly::Placements,
+    /// For a feature that failed because something it refers to changed upstream: that
+    /// reference, such as `face "top" of Extrude1`.
+    pub broken: BTreeMap<u32, String>,
+    /// Sketches on a face that could not follow it, and why.
+    pub sketch_errors: BTreeMap<u32, String>,
+    /// Construction planes, axes and points, by feature id.
+    pub constructs: BTreeMap<u32, crate::construct::Constructed>,
+    /// Sheet metal parts and flat patterns.
+    pub sheet: crate::sheet::SheetState,
+    /// The solids each direct face edit changed, by name (their faces keep the names of
+    /// the features that made them).
+    pub edited: BTreeMap<u32, Vec<String>>,
+    /// Exploded components: where each sits and how far it is shown moved.
+    pub exploded: BTreeMap<u32, crate::motion::Exploded>,
+    /// Cosmetic threads, by feature id.
+    pub threads: BTreeMap<u32, crate::thread::BuiltThread>,
+}
+
+/// An ellipse or elliptical arc of a sketch as exact profile edges: its rational
+/// B-spline (so swept sides are extrusion surfaces, elliptic cylinders), a whole ellipse
+/// as two halves as the kernel wants every loop edge to have two ends.
+pub(crate) fn ellipse_edges(sketch: &Sketch, curve: &Curve) -> Result<Vec<ProfileEdge>, String> {
+    let e = sketch
+        .ellipse_arc_of(curve)
+        .ok_or_else(|| "an ellipse of the profile has no size".to_owned())?;
+    let halves = if e.is_full() {
+        let half = std::f64::consts::PI;
+        vec![
+            EllipseArc { sweep: half, ..e },
+            EllipseArc {
+                t0: e.t0 + half,
+                sweep: half,
+                ..e
+            },
+        ]
+    } else {
+        vec![e]
+    };
+    halves
+        .iter()
+        .map(|h| h.to_nurbs().map(ProfileEdge::Spline))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("an ellipse of the profile: {e}"))
+}
+
+/// A sketch loop as exact kernel profile edges: lines stay lines, arcs and circles stay
+/// arcs and circles, ellipses become their exact rational splines, in the loop's direction.
+fn loop_edges(sketch: &Sketch, l: &ProfileLoop) -> Result<Vec<ProfileEdge>, String> {
+    let gone = || "a curve of the profile is gone".to_owned();
+    l.segments
+        .iter()
+        .map(|seg| {
+            let curve = sketch.curve(seg.curve).ok_or_else(gone)?;
+            // A piece of a curve that other curves cross: the piece between its two ends.
+            if let Some([a, b]) = seg.piece {
+                let edge = match curve {
+                    Curve::Line { .. } => ProfileEdge::line(a, b),
+                    Curve::Arc { centre, .. } | Curve::Circle { centre, .. } => {
+                        ProfileEdge::arc_from_points(sketch.point(*centre).ok_or_else(gone)?, a, b)
+                            .map_err(|e| format!("an arc of the profile: {e}"))?
+                    }
+                    Curve::Ellipse { .. } | Curve::EllipticalArc { .. } | Curve::Spline { .. } => {
+                        // The exact piece: an elliptical arc as its rational spline, or
+                        // the part of the spline between the two cuts.
+                        let piece = sketch
+                            .piece_curve(seg.curve, [a, b])
+                            .ok_or_else(|| "a piece of a profile curve is gone".to_owned())?;
+                        let spline = match piece {
+                            chamfera_sketch::PieceCurve::Ellipse(arc) => arc
+                                .to_nurbs()
+                                .map_err(|e| format!("an ellipse of the profile: {e}"))?,
+                            chamfera_sketch::PieceCurve::Spline(c) => c,
+                        };
+                        ProfileEdge::Spline(spline)
+                    }
+                };
+                return Ok(vec![if seg.reversed { edge.reversed() } else { edge }]);
+            }
+            let edge = match curve {
+                Curve::Line { start, end, .. } => {
+                    let (a, b) = (
+                        sketch.point(*start).ok_or_else(gone)?,
+                        sketch.point(*end).ok_or_else(gone)?,
+                    );
+                    ProfileEdge::line(a, b)
+                }
+                Curve::Circle { centre, radius, .. } => {
+                    ProfileEdge::circle(sketch.point(*centre).ok_or_else(gone)?, *radius)
+                }
+                Curve::Arc {
+                    centre, start, end, ..
+                } => ProfileEdge::arc_from_points(
+                    sketch.point(*centre).ok_or_else(gone)?,
+                    sketch.point(*start).ok_or_else(gone)?,
+                    sketch.point(*end).ok_or_else(gone)?,
+                )
+                .map_err(|e| format!("an arc of the profile: {e}"))?,
+                Curve::Spline { .. } => {
+                    // A spline's own curve; a closed one (a loop by itself) as two halves,
+                    // as the kernel wants every loop edge to have two ends.
+                    let c = sketch
+                        .spline_of(curve)
+                        .ok_or_else(|| "a spline of the profile has no curve".to_owned())?;
+                    let mut pieces = if c.is_closed() {
+                        let (lo, hi) = c.domain();
+                        let (a, b) = c
+                            .split_at(0.5 * (lo + hi))
+                            .map_err(|e| format!("a spline of the profile: {e}"))?;
+                        vec![ProfileEdge::Spline(a), ProfileEdge::Spline(b)]
+                    } else {
+                        vec![ProfileEdge::Spline(c)]
+                    };
+                    if seg.reversed {
+                        pieces.reverse();
+                        for p in &mut pieces {
+                            *p = p.reversed();
+                        }
+                    }
+                    return Ok(pieces);
+                }
+                Curve::Ellipse { .. } | Curve::EllipticalArc { .. } => {
+                    let mut pieces = ellipse_edges(sketch, curve)?;
+                    if seg.reversed {
+                        pieces.reverse();
+                        for p in &mut pieces {
+                            *p = p.reversed();
+                        }
+                    }
+                    return Ok(pieces);
+                }
+            };
+            Ok(vec![if seg.reversed { edge.reversed() } else { edge }])
+        })
+        .collect::<Result<Vec<Vec<ProfileEdge>>, String>>()
+        .map(|v| v.into_iter().flatten().collect())
+}
+
+/// A sketch region as an exact kernel profile (outer loop and holes).
+fn region_profile(sketch: &Sketch, r: &Region) -> Result<Profile, String> {
+    let outer = loop_edges(sketch, &r.outer)?;
+    let holes = r
+        .holes
+        .iter()
+        .map(|h| loop_edges(sketch, h))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(Profile::new(outer, holes))
+}
+
+/// The profiles a feature uses, found from its seed points.
+pub(crate) fn feature_profiles(
+    f: &chamfera_doc::SketchFeature,
+    seeds: &[Point2],
+) -> Result<Vec<Profile>, String> {
+    seeds
+        .iter()
+        .map(|seed| {
+            let region = f.sketch.region_at(*seed).ok_or_else(|| {
+                format!(
+                    "the profile at ({:.2}, {:.2}) of {} is no longer closed",
+                    seed.x, seed.y, f.name
+                )
+            })?;
+            region_profile(&f.sketch, &region)
+        })
+        .collect()
+}
+
+/// The lines and arcs `curves` of `sketch` as one chain of profile edges, each turned to
+/// continue from the one before (the first so that it leads into the second).
+pub(crate) fn chain_edges(
+    f: &chamfera_doc::SketchFeature,
+    curves: &[u32],
+) -> Result<Vec<ProfileEdge>, String> {
+    let gone = |id: u32| format!("curve {id} of {} is gone", f.name);
+    let tol = chamfera_kernel::PROFILE_JOIN_TOLERANCE;
+    let mut out: Vec<ProfileEdge> = Vec::with_capacity(curves.len());
+    for (k, id) in curves.iter().enumerate() {
+        let sketch = &f.sketch;
+        let edge = match sketch.curve(chamfera_sketch::CurveId(*id)) {
+            Some(Curve::Line { start, end, .. }) => ProfileEdge::line(
+                sketch.point(*start).ok_or_else(|| gone(*id))?,
+                sketch.point(*end).ok_or_else(|| gone(*id))?,
+            ),
+            Some(Curve::Arc {
+                centre, start, end, ..
+            }) => ProfileEdge::arc_from_points(
+                sketch.point(*centre).ok_or_else(|| gone(*id))?,
+                sketch.point(*start).ok_or_else(|| gone(*id))?,
+                sketch.point(*end).ok_or_else(|| gone(*id))?,
+            )
+            .map_err(|e| format!("arc {id} of {}: {e}", f.name))?,
+            Some(_) => return Err(format!("curve {id} of {} is not a line or an arc", f.name)),
+            None => return Err(gone(*id)),
+        };
+        match out.last_mut() {
+            None => out.push(edge),
+            Some(prev) => {
+                let at = prev.end();
+                let edge = if edge.start().distance(at) <= tol {
+                    edge
+                } else if edge.end().distance(at) <= tol {
+                    edge.reversed()
+                } else if k == 1
+                    && (edge.start().distance(prev.start()) <= tol
+                        || edge.end().distance(prev.start()) <= tol)
+                {
+                    // The first curve runs the other way along the chain.
+                    *prev = prev.reversed();
+                    let at = prev.end();
+                    if edge.start().distance(at) <= tol {
+                        edge
+                    } else {
+                        edge.reversed()
+                    }
+                } else {
+                    return Err(format!(
+                        "curve {id} of {} does not join the curve before it; give the chain's curves in order",
+                        f.name
+                    ));
+                };
+                out.push(edge);
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// The profiles an extrude sweeps: its regions, or for a thin extrude the wall along
+/// each loop of them (or along its chain of curves).
+fn extrude_profiles(
+    doc: &chamfera_doc::Document,
+    f: &chamfera_doc::SketchFeature,
+    e: &Extrude,
+) -> Result<Vec<Profile>, String> {
+    let Some(thin) = &e.thin else {
+        return feature_profiles(f, &e.profiles);
+    };
+    let t = doc.thin_thickness(thin).map_err(|x| x.to_string())?;
+    let side = match thin.side {
+        chamfera_doc::ThinSide::Inside => chamfera_kernel::ThinSide::Inside,
+        chamfera_doc::ThinSide::Outside => chamfera_kernel::ThinSide::Outside,
+        chamfera_doc::ThinSide::Both => chamfera_kernel::ThinSide::Both,
+    };
+    let wall = |chain: &[ProfileEdge], side| {
+        chamfera_kernel::thin_profile(chain, side, t).map_err(|x| format!("thin extrude: {x}"))
+    };
+    if !thin.curves.is_empty() {
+        return Ok(vec![wall(&chain_edges(f, &thin.curves)?, side)?]);
+    }
+    // Inside the profile is outside its holes.
+    let hole_side = match side {
+        chamfera_kernel::ThinSide::Inside => chamfera_kernel::ThinSide::Outside,
+        chamfera_kernel::ThinSide::Outside => chamfera_kernel::ThinSide::Inside,
+        chamfera_kernel::ThinSide::Both => chamfera_kernel::ThinSide::Both,
+    };
+    let mut out = Vec::new();
+    for p in feature_profiles(f, &e.profiles)? {
+        out.push(wall(&p.outer, side)?);
+        for h in &p.holes {
+            out.push(wall(h, hole_side)?);
+        }
+    }
+    Ok(out)
+}
+
+/// Boolean operations on kernel bodies. The engine calls these only; kernel rung K7
+/// provides them.
+mod booleans {
+    use chamfera_kernel::{Body, KernelError};
+
+    pub fn union(a: &Body, b: &Body) -> Result<Body, String> {
+        crate::perf::boolean(|| chamfera_kernel::union(a, b)).map_err(|e| format!("join: {e}"))
+    }
+
+    /// `None` when nothing is left.
+    pub fn subtract(a: &Body, b: &Body) -> Result<Option<Body>, String> {
+        match crate::perf::boolean(|| chamfera_kernel::subtract(a, b)) {
+            Ok(body) => Ok(Some(body)),
+            Err(KernelError::EmptyResult) => Ok(None),
+            Err(e) => Err(format!("cut: {e}")),
+        }
+    }
+
+    /// `None` when they don't overlap.
+    pub fn intersect(a: &Body, b: &Body) -> Result<Option<Body>, String> {
+        match crate::perf::boolean(|| chamfera_kernel::intersect(a, b)) {
+            Ok(body) => Ok(Some(body)),
+            Err(KernelError::EmptyResult) => Ok(None),
+            Err(e) => Err(format!("intersect: {e}")),
+        }
+    }
+}
+
+/// True when two bodies' bounding boxes overlap (or touch).
+fn boxes_overlap(a: &Body, b: &Body) -> bool {
+    match (a.bounding_box(), b.bounding_box()) {
+        (Some(x), Some(y)) => {
+            let t = chamfera_geom::LINEAR_TOLERANCE;
+            x.min.x <= y.max.x + t
+                && y.min.x <= x.max.x + t
+                && x.min.y <= y.max.y + t
+                && y.min.y <= x.max.y + t
+                && x.min.z <= y.max.z + t
+                && y.min.z <= x.max.z + t
+        }
+        _ => false,
+    }
+}
+
+/// Applies a feature's new shapes (`tools`) to the bodies built so far: Join merges each
+/// tool with every body it overlaps, Cut removes it from them, Intersect keeps only the
+/// overlap. The targets are the bodies whose bounds meet the tool, like Fusion users
+/// expect, so nothing has to be referenced by name.
+pub(crate) fn apply_operation(
+    made: &mut Vec<(u32, String, Body)>,
+    tools: &[Body],
+    operation: Operation,
+) -> Result<(), String> {
+    let verb = match operation {
+        Operation::NewBody => return Ok(()),
+        Operation::Join => "join",
+        Operation::Cut => "cut",
+        Operation::Intersect => "intersect",
+    };
+    for tool in tools {
+        let targets: Vec<usize> = made
+            .iter()
+            .enumerate()
+            .filter(|(_, m)| boxes_overlap(&m.2, tool))
+            .map(|(i, _)| i)
+            .collect();
+        if targets.is_empty() {
+            return Err(format!(
+                "nothing to {verb}: the new shape does not reach any body"
+            ));
+        }
+        match operation {
+            Operation::Join => {
+                // Everything the tool touches becomes one body, named after the first.
+                let mut acc = tool.clone();
+                for &i in targets.iter().rev() {
+                    let Some(target) = made.get(i) else { continue };
+                    acc = booleans::union(&target.2, &acc)?;
+                }
+                let first = targets[0];
+                for &i in targets.iter().skip(1).rev() {
+                    made.remove(i);
+                }
+                if let Some(m) = made.get_mut(first) {
+                    m.2 = acc;
+                }
+            }
+            Operation::Cut | Operation::Intersect => {
+                for &i in targets.iter().rev() {
+                    let Some(target) = made.get(i) else { continue };
+                    let result = if operation == Operation::Cut {
+                        booleans::subtract(&target.2, tool)?
+                    } else {
+                        booleans::intersect(&target.2, tool)?
+                    };
+                    match result {
+                        Some(b) => {
+                            if let Some(m) = made.get_mut(i) {
+                                m.2 = b;
+                            }
+                        }
+                        None => {
+                            made.remove(i);
+                        }
+                    }
+                }
+            }
+            Operation::NewBody => {}
+        }
+    }
+    Ok(())
+}
+
+/// The moved copies a pattern makes of its source's shapes (copy 1 is the source itself,
+/// so copies 2..=count are returned), and the operation they do.
+fn pattern_copies(
+    doc: &chamfera_doc::Document,
+    p: &chamfera_doc::Pattern,
+    pattern_id: u32,
+    tools: &BTreeMap<u32, (Vec<Body>, Operation)>,
+    constructs: &BTreeMap<u32, crate::construct::Constructed>,
+) -> Result<(Vec<Body>, Operation), String> {
+    use chamfera_doc::PatternLayout;
+    use chamfera_geom::Transform;
+    let (source, op) = tools.get(&p.source).ok_or_else(|| {
+        format!(
+            "feature {} it repeats is suppressed or could not be built",
+            p.source
+        )
+    })?;
+    let count = doc.pattern_count(p).map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    for k in 1..count {
+        let t = match &p.layout {
+            PatternLayout::Linear { direction, spacing } => {
+                let s = doc
+                    .evaluate_feature_value(spacing, chamfera_doc::expr::Dim::LENGTH)
+                    .map_err(|e| e.to_string())?;
+                let d = direction
+                    .normalized()
+                    .ok_or("the direction has no length")?;
+                Transform::translation(d * (s * k as f64))
+            }
+            PatternLayout::Circular {
+                origin,
+                axis,
+                angle,
+                axis_feature,
+            } => {
+                let (origin, axis) = match axis_feature {
+                    Some(id) => construct_axis(constructs, *id)?,
+                    None => (*origin, *axis),
+                };
+                let a = doc
+                    .evaluate_feature_value(angle, chamfera_doc::expr::Dim::ANGLE)
+                    .map_err(|e| e.to_string())?;
+                // A full circle spreads `count` copies with none on top of the first;
+                // a partial one puts the last copy at the end of the angle.
+                let full =
+                    (a.abs() - std::f64::consts::TAU).abs() < chamfera_geom::ANGULAR_TOLERANCE;
+                let step = if full {
+                    a / count as f64
+                } else {
+                    a / (count - 1) as f64
+                };
+                Transform::rotation_about(origin, axis, step * k as f64)
+            }
+        }
+        .ok_or("the pattern's move leaves the working range")?;
+        for body in source {
+            let mut copy = body.transformed(&t).map_err(|e| format!("pattern: {e}"))?;
+            // Copy k's faces, edges and vertices are named `<pattern>:<k> <role>` so each
+            // copy is its own: a fillet on an edge of copy 3 rounds that copy only, and
+            // the source's own edges keep their names (rung K8).
+            rename_copy(&mut copy, pattern_id, k + 1);
+            out.push(copy);
+        }
+    }
+    Ok((out, *op))
+}
+
+/// How far past the farthest body a through-all extrude goes, so that its far cap lies
+/// clear of every face instead of on one (a coplanar cap would make the boolean decide
+/// touching faces).
+pub const THROUGH_ALL_MARGIN: f64 = 1.0;
+
+/// The prefix of the face and edge roles of a tapered two-sided extrude's second side
+/// (`back top`, `back side 0`), so they differ from the first side's.
+const BACK_SIDE: &str = "back ";
+
+/// Where an extrude reaches, as signed distances along the sketch plane's normal from
+/// its start plane: `(back, front)` with `back <= 0 <= front`, one of them non-zero.
+fn extrude_span(
+    doc: &chamfera_doc::Document,
+    owner: u32,
+    e: &Extrude,
+    values: &chamfera_doc::ExtrudeValues,
+    start: &chamfera_geom::Frame,
+    bodies: &[&Body],
+) -> Result<(f64, f64), String> {
+    use chamfera_doc::{ExtrudeExtent, ExtrudeTo};
+    let tol = chamfera_geom::LINEAR_TOLERANCE;
+    let n = start.z();
+    let (back, front) = match e.extent {
+        ExtrudeExtent::Distance => {
+            let d = values.distance;
+            match e.direction {
+                ExtrudeDirection::Normal => (d.min(0.0), d.max(0.0)),
+                ExtrudeDirection::Reversed => ((-d).min(0.0), (-d).max(0.0)),
+                ExtrudeDirection::Symmetric => (-d.abs() * 0.5, d.abs() * 0.5),
+                ExtrudeDirection::TwoSides => (-values.distance2, d),
+            }
+        }
+        ExtrudeExtent::ThroughAll => {
+            // The corners of every body's box, measured along the normal: the extrude
+            // reaches past the farthest one.
+            let along: Vec<f64> = bodies
+                .iter()
+                .filter_map(|b| b.bounding_box())
+                .flat_map(|bb| {
+                    let (a, b) = (bb.min, bb.max);
+                    [
+                        (a.x, a.y, a.z),
+                        (b.x, a.y, a.z),
+                        (a.x, b.y, a.z),
+                        (b.x, b.y, a.z),
+                        (a.x, a.y, b.z),
+                        (b.x, a.y, b.z),
+                        (a.x, b.y, b.z),
+                        (b.x, b.y, b.z),
+                    ]
+                })
+                .map(|(x, y, z)| (chamfera_geom::Point3::new(x, y, z) - start.origin()).dot(n))
+                .collect();
+            if along.is_empty() {
+                return Err("through all: there is no body to go through yet".into());
+            }
+            let ahead = along.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+            let behind = along.iter().copied().fold(f64::INFINITY, f64::min);
+            let fwd = if ahead > tol {
+                ahead + THROUGH_ALL_MARGIN
+            } else {
+                0.0
+            };
+            let bwd = if behind < -tol {
+                behind - THROUGH_ALL_MARGIN
+            } else {
+                0.0
+            };
+            match e.direction {
+                ExtrudeDirection::Normal => (0.0, fwd),
+                ExtrudeDirection::Reversed => (bwd, 0.0),
+                ExtrudeDirection::Symmetric | ExtrudeDirection::TwoSides => (bwd, fwd),
+            }
+        }
+        ExtrudeExtent::ToObject => {
+            let (plane, what) = match &e.to {
+                Some(ExtrudeTo::Face(r)) => {
+                    let wanted = face_key(r.feature, &r.face);
+                    let found = crate::naming::one_face(
+                        doc,
+                        owner,
+                        bodies,
+                        r,
+                        crate::naming::Want::Surface,
+                    );
+                    match found {
+                        Ok((_, b, f)) => match face_plane(b, f) {
+                            Some(p) => (p, format!("the face {wanted}")),
+                            None => {
+                                return Err(format!(
+                                    "to object: the face {wanted} is not flat; pick a flat face or a plane"
+                                ));
+                            }
+                        },
+                        Err(crate::naming::NameError::Gone { .. }) => {
+                            return Err(format!(
+                                "to object: the face {wanted} is gone (feature {} changed, failed or comes later)",
+                                r.feature
+                            ));
+                        }
+                        Err(x) => return Err(format!("to object: {x}")),
+                    }
+                }
+                Some(ExtrudeTo::Plane(p)) => (*p, "the plane".to_owned()),
+                None => return Err("to object: pick the face or plane to extrude up to".into()),
+            };
+            if plane.z().cross(n).length() > chamfera_geom::ANGULAR_TOLERANCE {
+                return Err(format!(
+                    "to object: {what} is not parallel to the profile's plane; only parallel faces and planes are supported"
+                ));
+            }
+            let t = (plane.origin() - start.origin()).dot(n);
+            (t.min(0.0), t.max(0.0))
+        }
+    };
+    if !(back.is_finite() && front.is_finite()) || front - back <= tol {
+        return Err(match e.extent {
+            ExtrudeExtent::ThroughAll => {
+                "through all: no body lies that way from the profile".to_owned()
+            }
+            ExtrudeExtent::ToObject => {
+                "to object: the face or plane lies on the start plane".to_owned()
+            }
+            ExtrudeExtent::Distance => "the extrude has no length".to_owned(),
+        });
+    }
+    Ok((back, front))
+}
+
+/// Puts `prefix` in front of every face and edge role of `body`.
+fn prefix_names(body: &mut Body, prefix: &str) {
+    for f in body.faces() {
+        if let Some(n) = body.face_name(f).ok().flatten().map(str::to_owned) {
+            let _ = body.set_face_name(f, &format!("{prefix}{n}"));
+        }
+    }
+    for e in body.edges() {
+        if let Some(n) = body.edge_name(e).ok().flatten().map(str::to_owned) {
+            let _ = body.set_edge_name(e, &format!("{prefix}{n}"));
+        }
+    }
+}
+
+/// Renames a copy's faces and edges `<feature>:<k> <role>` (from `<source>:<role>`), so
+/// each copy's names are its own and a fillet or sketch finds the one it means.
+fn rename_copy(body: &mut Body, feature: u32, k: usize) {
+    let renamed = |name: Option<&str>| {
+        name.and_then(split_face_key)
+            .map(|(_, role)| face_key(feature, &format!("{k} {role}")))
+    };
+    for face in body.faces() {
+        if let Some(n) = renamed(body.face_name(face).ok().flatten()) {
+            let _ = body.set_face_name(face, &n);
+        }
+    }
+    for edge in body.edges() {
+        if let Some(n) = renamed(body.edge_name(edge).ok().flatten()) {
+            let _ = body.set_edge_name(edge, &n);
+        }
+    }
+    for v in body.vertices() {
+        if let Some(n) = renamed(body.vertex_name(v).ok().flatten()) {
+            let _ = body.set_vertex_name(v, &n);
+        }
+    }
+}
+
+/// The body built so far with this name.
+fn named_body<'a>(made: &'a [(u32, String, Body)], name: &str) -> Result<&'a Body, String> {
+    made.iter()
+        .find(|m| m.1 == name)
+        .map(|m| &m.2)
+        .ok_or_else(|| format!("there is no body named {name:?} at this point"))
+}
+
+/// The mirror plane as a point and a normal.
+fn mirror_plane(
+    doc: &chamfera_doc::Document,
+    owner: u32,
+    plane: &chamfera_doc::MirrorPlane,
+    made: &[(u32, String, Body)],
+) -> Result<(Point3, chamfera_geom::Vec3), String> {
+    use chamfera_doc::MirrorPlane;
+    use chamfera_geom::Frame;
+    let frame = match plane {
+        MirrorPlane::Xy => Frame::XY,
+        MirrorPlane::Xz => Frame::XZ,
+        MirrorPlane::Yz => Frame::YZ,
+        MirrorPlane::Face { feature, face } => attached_plane(
+            doc,
+            owner,
+            made,
+            &chamfera_doc::FaceRef {
+                feature: *feature,
+                face: face.clone(),
+            },
+        )?,
+        MirrorPlane::Plane { origin, normal } => return Ok((*origin, *normal)),
+    };
+    Ok((frame.origin(), frame.z()))
+}
+
+/// The mirror images a mirror makes: of the named bodies as built so far, then of the
+/// listed features' own shapes. Each is renamed as copy `k` of the mirror.
+fn mirror_bodies(
+    doc: &chamfera_doc::Document,
+    m: &chamfera_doc::Mirror,
+    mirror_id: u32,
+    made: &[(u32, String, Body)],
+    tools: &BTreeMap<u32, (Vec<Body>, Operation)>,
+) -> Result<Vec<Body>, String> {
+    let (point, normal) = mirror_plane(doc, mirror_id, &m.plane, made)?;
+    let mut sources: Vec<&Body> = Vec::new();
+    for name in &m.bodies {
+        sources.push(named_body(made, name)?);
+    }
+    for id in &m.features {
+        let (shapes, _) = tools.get(id).ok_or_else(|| {
+            format!("feature {id} it mirrors is suppressed, later or could not be built")
+        })?;
+        sources.extend(shapes.iter());
+    }
+    sources
+        .into_iter()
+        .enumerate()
+        .map(|(i, b)| {
+            let mut copy = b
+                .mirrored(point, normal)
+                .map_err(|e| format!("mirror: {e}"))?;
+            rename_copy(&mut copy, mirror_id, i + 1);
+            Ok(copy)
+        })
+        .collect()
+}
+
+/// The bodies after a move: each named body moved in place (keeping its names, so faces
+/// that sketches are drawn on follow it), or with `copy`, a moved copy added after it.
+fn move_bodies(
+    doc: &chamfera_doc::Document,
+    m: &chamfera_doc::Move,
+    feature: &chamfera_doc::Feature,
+    made: &[(u32, String, Body)],
+) -> Result<Vec<(u32, String, Body)>, String> {
+    let t = doc.move_transform(m).map_err(|e| e.to_string())?;
+    let mut next = made.to_vec();
+    for (k, name) in m.bodies.iter().enumerate() {
+        let moved = named_body(made, name)?
+            .transformed(&t)
+            .map_err(|e| format!("move: {e}"))?;
+        if m.copy {
+            let mut copy = moved;
+            rename_copy(&mut copy, feature.id, k + 1);
+            let label = if m.bodies.len() == 1 {
+                feature.name.clone()
+            } else {
+                format!("{} ({})", feature.name, k + 1)
+            };
+            next.push((feature.id, label, copy));
+        } else if let Some(slot) = next.iter_mut().find(|x| x.1 == *name) {
+            slot.0 = feature.id;
+            slot.2 = moved;
+        }
+    }
+    Ok(next)
+}
+
+/// The bodies one extrude makes: one per profile. `bodies` are the solids built before
+/// it, for through all and to object.
+fn build_extrude(
+    doc: &chamfera_doc::Document,
+    owner: u32,
+    e: &Extrude,
+    bodies: &[&Body],
+) -> Result<Vec<Body>, String> {
+    let f = doc.sketch(e.sketch).map_err(|x| x.to_string())?;
+    let values = doc.extrude_values(e).map_err(|x| x.to_string())?;
+    let start = f
+        .plane
+        .with_origin(f.plane.origin() + f.plane.z() * values.start_offset)
+        .ok_or("extrude: the start offset leaves the working range")?;
+    let (back, front) = extrude_span(doc, owner, e, &values, &start, bodies)?;
+    let tol = chamfera_geom::LINEAR_TOLERANCE;
+    let taper = values.taper;
+    let tapered = taper.abs() > chamfera_geom::ANGULAR_TOLERANCE;
+    extrude_profiles(doc, f, e)?
+        .iter()
+        .map(|profile| {
+            let k = |x: chamfera_kernel::KernelError| format!("extrude: {x}");
+            // One side: from the start plane (its `bottom`), tapering away from it.
+            if back.abs() <= tol {
+                return chamfera_kernel::extrude_tapered(&start, profile, front, taper).map_err(k);
+            }
+            if front.abs() <= tol {
+                return chamfera_kernel::extrude_tapered(&start, profile, back, taper).map_err(k);
+            }
+            if !tapered {
+                // Both ways without a taper: one prism from the back (`bottom`) to the
+                // front, as symmetric extrudes always were.
+                let from = start
+                    .with_origin(start.origin() + start.z() * back)
+                    .ok_or("extrude: the extrude leaves the working range")?;
+                return chamfera_kernel::extrude(&from, profile, front - back).map_err(k);
+            }
+            // Tapered both ways: each side narrows away from the start plane; the two
+            // halves meet in the profile and are joined.
+            let one = chamfera_kernel::extrude_tapered(&start, profile, front, taper).map_err(k)?;
+            let mut two =
+                chamfera_kernel::extrude_tapered(&start, profile, back, taper).map_err(k)?;
+            prefix_names(&mut two, BACK_SIDE);
+            crate::perf::boolean(|| chamfera_kernel::union(&one, &two))
+                .map_err(|x| format!("extrude: joining the two tapered sides: {x}"))
+        })
+        .collect()
+}
+
+impl Session {
+    /// The shapes an extrude would make now, after every built solid, without changing
+    /// anything (for a preview while its options change).
+    pub fn extrude_shapes(&self, e: &Extrude) -> Result<Vec<Body>, String> {
+        self.doc
+            .check_feature(&FeatureKind::Extrude(e.clone()))
+            .map_err(|x| x.to_string())?;
+        let bodies: Vec<&Body> = self.built.solids.iter().map(|s| &s.body).collect();
+        // A preview is not on the timeline yet: its face references resolve by name.
+        build_extrude(&self.doc, 0, e, &bodies)
+    }
+}
+
+/// A built construction axis: a point on it and its direction.
+fn construct_axis(
+    constructs: &BTreeMap<u32, crate::construct::Constructed>,
+    id: u32,
+) -> Result<(Point3, chamfera_geom::Vec3), String> {
+    match constructs.get(&id) {
+        Some(crate::construct::Constructed::Axis {
+            origin, direction, ..
+        }) => Ok((*origin, *direction)),
+        _ => Err(format!(
+            "axis {id} it turns around is suppressed or could not be built"
+        )),
+    }
+}
+
+/// A revolve's axis in its sketch's plane coordinates: a construction axis lying in the
+/// sketch plane, or a line of the sketch.
+pub(crate) fn revolve_axis(
+    f: &chamfera_doc::SketchFeature,
+    axis_curve: u32,
+    axis_feature: Option<u32>,
+    constructs: &BTreeMap<u32, crate::construct::Constructed>,
+) -> Result<Line2, String> {
+    let sketch_line = match axis_feature {
+        Some(id) => {
+            let (o, d) = construct_axis(constructs, id)?;
+            // The axis must lie in the sketch plane: its direction has no normal part and
+            // its point is on the plane.
+            let n = f.plane.z();
+            let off = n.dot(o - f.plane.origin());
+            if d.dot(n).abs() > crate::construct::PARALLEL_SIN
+                || off.abs() > chamfera_geom::LINEAR_TOLERANCE
+            {
+                return Err(format!("axis {id} does not lie in the plane of {}", f.name));
+            }
+            let a = f.plane.to_plane(o);
+            let v = chamfera_geom::Vec2::new(d.dot(f.plane.x()), d.dot(f.plane.y()));
+            Some(Line2::new(a, v).map_err(|e| format!("the axis: {e}"))?)
+        }
+        None => None,
+    };
+    let axis = match (
+        sketch_line,
+        f.sketch.curve(chamfera_sketch::CurveId(axis_curve)),
+    ) {
+        (Some(line), _) => line,
+        (None, Some(Curve::Line { start, end, .. })) => {
+            let (Some(a), Some(b)) = (f.sketch.point(*start), f.sketch.point(*end)) else {
+                return Err("the axis line has lost a point".into());
+            };
+            Line2::new(a, b - a).map_err(|e| format!("the axis: {e}"))?
+        }
+        _ => {
+            return Err(format!(
+                "the axis {} is not a line of {}",
+                axis_curve, f.name
+            ));
+        }
+    };
+    Ok(axis)
+}
+
+/// The bodies one revolve makes: one per profile, about a line of the same sketch or a
+/// construction axis in the sketch plane.
+fn build_revolve(
+    doc: &chamfera_doc::Document,
+    r: &Revolve,
+    constructs: &BTreeMap<u32, crate::construct::Constructed>,
+) -> Result<Vec<Body>, String> {
+    let f = doc.sketch(r.sketch).map_err(|x| x.to_string())?;
+    let angle = doc
+        .evaluate_feature_value(&r.angle, chamfera_doc::expr::Dim::ANGLE)
+        .map_err(|x| x.to_string())?;
+    let axis = revolve_axis(f, r.axis, r.axis_feature, constructs)?;
+    feature_profiles(f, &r.profiles)?
+        .iter()
+        .map(|profile| {
+            chamfera_kernel::revolve(&f.plane, profile, &axis, angle)
+                .map_err(|x| format!("revolve: {x}"))
+        })
+        .collect()
+}
+
+/// A sweep's path as kernel segments in space (lines, and arcs counter-clockwise about
+/// the path sketch's normal as the sketch stores them).
+pub(crate) fn sweep_path_segments(
+    f: &chamfera_doc::SketchFeature,
+    curves: &[u32],
+) -> Result<Vec<chamfera_kernel::PathSegment>, String> {
+    use chamfera_kernel::PathSegment;
+    let gone = || format!("a curve of the path in {} is gone", f.name);
+    curves
+        .iter()
+        .map(|id| {
+            let at = |p: chamfera_sketch::PointId| {
+                f.sketch
+                    .point(p)
+                    .map(|q| f.plane.from_plane(q))
+                    .ok_or_else(gone)
+            };
+            match f.sketch.curve(chamfera_sketch::CurveId(*id)) {
+                Some(Curve::Line { start, end, .. }) => Ok(PathSegment::Line {
+                    start: at(*start)?,
+                    end: at(*end)?,
+                }),
+                Some(Curve::Arc {
+                    centre, start, end, ..
+                }) => {
+                    PathSegment::arc_from_points(at(*centre)?, f.plane.z(), at(*start)?, at(*end)?)
+                        .map_err(|e| format!("an arc of the path: {e}"))
+                }
+                Some(_) => Err(format!("curve {id} of {} is not a line or an arc", f.name)),
+                None => Err(gone()),
+            }
+        })
+        .collect()
+}
+
+/// The ends of a line or an arc (`None` for other curves).
+fn curve_ends(c: &Curve) -> Option<[chamfera_sketch::PointId; 2]> {
+    match c {
+        Curve::Line { start, end, .. } | Curve::Arc { start, end, .. } => Some([*start, *end]),
+        _ => None,
+    }
+}
+
+/// The lines and arcs of `sketch` joined end to end with `curve` (ends at the same
+/// place), in order along the chain. A place where more than two lines and arcs end
+/// ends the chain (a branch).
+pub fn path_chain(sketch: &Sketch, curve: u32) -> Vec<u32> {
+    let tol = chamfera_geom::LINEAR_TOLERANCE;
+    let ends: Vec<(u32, [Point2; 2])> = sketch
+        .curves()
+        .filter_map(|(id, c)| {
+            let [a, b] = curve_ends(c)?;
+            Some((id.0, [sketch.point(a)?, sketch.point(b)?]))
+        })
+        .collect();
+    let users = |p: Point2| -> Vec<u32> {
+        ends.iter()
+            .filter(|(_, e)| e.iter().any(|q| q.distance(p) <= tol))
+            .map(|(id, _)| *id)
+            .collect()
+    };
+    let Some(&(_, start)) = ends.iter().find(|(id, _)| *id == curve) else {
+        return Vec::new();
+    };
+    // Walk from the curve out of each of its ends.
+    let walk = |from: Point2| -> Vec<u32> {
+        let mut out = Vec::new();
+        let (mut at, mut prev) = (from, curve);
+        for _ in 0..ends.len() {
+            let u = users(at);
+            if u.len() != 2 {
+                break;
+            }
+            let Some(next) = u.into_iter().find(|c| *c != prev) else {
+                break;
+            };
+            if next == curve || out.contains(&next) {
+                break;
+            }
+            let Some((_, e)) = ends.iter().find(|(id, _)| *id == next) else {
+                break;
+            };
+            out.push(next);
+            at = if e[0].distance(at) <= tol { e[1] } else { e[0] };
+            prev = next;
+        }
+        out
+    };
+    let mut chain = walk(start[0]);
+    chain.reverse();
+    chain.push(curve);
+    for c in walk(start[1]) {
+        if !chain.contains(&c) {
+            chain.push(c);
+        }
+    }
+    chain
+}
+
+/// The bodies one sweep makes: one per profile, along the same path.
+fn build_sweep(doc: &chamfera_doc::Document, s: &Sweep) -> Result<Vec<Body>, String> {
+    let f = doc.sketch(s.sketch).map_err(|x| x.to_string())?;
+    let p = doc.sketch(s.path_sketch).map_err(|x| x.to_string())?;
+    let path = sweep_path_segments(p, &s.path)?;
+    feature_profiles(f, &s.profiles)?
+        .iter()
+        .map(|profile| {
+            chamfera_kernel::sweep_path(&f.plane, profile, &path).map_err(|x| format!("sweep: {x}"))
+        })
+        .collect()
+}
+
+/// The body one loft makes, through its profiles in order.
+fn build_loft(doc: &chamfera_doc::Document, l: &Loft) -> Result<Vec<Body>, String> {
+    let mut sections = Vec::with_capacity(l.sections.len());
+    for s in &l.sections {
+        let f = doc.sketch(s.sketch).map_err(|x| x.to_string())?;
+        let profile = feature_profiles(f, &[s.profile])?
+            .into_iter()
+            .next()
+            .ok_or("a loft profile is missing")?;
+        sections.push((f.plane, profile));
+    }
+    chamfera_kernel::loft(&sections)
+        .map(|b| vec![b])
+        .map_err(|x| format!("loft: {x}"))
+}
+
+/// What a rebuild carries from one timeline item to the next: the bodies built so far and
+/// what the items found out about them. A rebuild keeps a copy after each item (a
+/// checkpoint, see [`crate::perf`]) so the next one can start there.
+#[derive(Debug, Default, Clone)]
+pub(crate) struct Progress {
+    made: Vec<(u32, String, Body)>,
+    /// Each built feature's own shapes (before they were combined), for patterns.
+    tools: BTreeMap<u32, (Vec<Body>, Operation)>,
+    /// Everything but the solids (worked out after the walk).
+    built: Built,
+    /// Sketches that follow a face, plane or projected edges, as they ended up: the
+    /// rebuild moves them in the design, so starting from a checkpoint moves them again.
+    followed: BTreeMap<u32, chamfera_doc::SketchFeature>,
+}
+
+/// About how many bytes one cached flat pattern or sheet is counted as.
+const SHEET_BYTES: usize = 64 * 1024;
+
+impl Progress {
+    /// About how many bytes the checkpoint holds (for the cache's limit).
+    pub(crate) fn approx_bytes(&self) -> usize {
+        let bodies = self
+            .made
+            .iter()
+            .map(|m| m.2.approx_bytes().saturating_add(m.1.len()))
+            .chain(
+                self.tools
+                    .values()
+                    .flat_map(|(b, _)| b.iter().map(Body::approx_bytes)),
+            )
+            .fold(0usize, usize::saturating_add);
+        let sketches = self
+            .followed
+            .values()
+            .map(|s| serde_json::to_vec(s).map_or(SHEET_BYTES, |v| v.len()))
+            .fold(0usize, usize::saturating_add);
+        let b = &self.built;
+        let messages = [&b.errors, &b.broken, &b.sketch_errors]
+            .into_iter()
+            .flat_map(|m| m.values().map(String::len))
+            .fold(0usize, usize::saturating_add);
+        let sheets = b
+            .sheet
+            .sheets
+            .len()
+            .saturating_add(b.sheet.flats.len())
+            .saturating_mul(SHEET_BYTES);
+        bodies
+            .saturating_add(sketches)
+            .saturating_add(messages)
+            .saturating_add(sheets)
+            .saturating_add(
+                b.constructs
+                    .len()
+                    .saturating_add(b.edited.len())
+                    .saturating_mul(256),
+            )
+    }
+}
+
+/// The kind of a timeline item, for reports: `sketch`, or the feature's kind.
+fn item_kind(doc: &chamfera_doc::Document, id: u32) -> String {
+    if doc.sketch(id).is_ok() {
+        return "sketch".into();
+    }
+    doc.feature(id)
+        .ok()
+        .and_then(|f| serde_json::to_value(&f.kind).ok())
+        .and_then(|v| v.get("kind").and_then(|k| k.as_str()).map(str::to_owned))
+        .unwrap_or_default()
+}
+
+impl Session {
+    /// Rebuilds the timeline, in order, and replaces the solid bodies in the scene.
+    /// Meshes and other bodies (imported STL) are left alone. Items whose definition and
+    /// inputs are unchanged since an earlier rebuild are not built again (see
+    /// [`crate::perf`]); the result is the same as building everything.
+    pub fn rebuild(&mut self) {
+        // A preview shows what a tool would make of the design as it was.
+        self.scene.previews.clear();
+        // Items after the timeline marker are not built.
+        let order = self.doc.timeline_order();
+        let marker = self.doc.marker();
+        let items: Vec<u32> = order.into_iter().take(marker).collect();
+        let keys = if self.caches.enabled {
+            crate::perf::item_keys(&self.doc, &items)
+        } else {
+            None
+        };
+        // Start after the last item built before with the same key, if any.
+        let mut start = 0;
+        let mut progress = Progress::default();
+        if let Some(keys) = &keys
+            && let Some((i, p)) = keys
+                .iter()
+                .enumerate()
+                .rev()
+                .find(|(_, k)| self.caches.checkpoints.contains(k))
+                .and_then(|(i, k)| Some((i, self.caches.checkpoints.get(k)?.clone())))
+        {
+            start = i + 1;
+            progress = p;
+            for (id, s) in &progress.followed {
+                if let Ok(f) = self.doc.sketch_mut(*id) {
+                    *f = s.clone();
+                }
+            }
+        }
+        self.caches.stats.last_reused = start;
+        self.caches.stats.last_built = items.len().saturating_sub(start);
+        let timing = crate::perf::timing();
+        for (i, &id) in items.iter().enumerate().skip(start) {
+            let clock = crate::perf::Stopwatch::start();
+            if timing {
+                crate::perf::take_phases();
+            }
+            self.build_item(id, &mut progress);
+            if timing {
+                let total_ms = clock.ms();
+                let (booleans_ms, naming_ms) = crate::perf::take_phases();
+                self.timings.push(crate::perf::FeatureTiming {
+                    id,
+                    name: feature_name(&self.doc, id),
+                    kind: item_kind(&self.doc, id),
+                    kernel_ms: (total_ms - booleans_ms - naming_ms).max(0.0),
+                    booleans_ms,
+                    naming_ms,
+                    tessellation_ms: 0.0,
+                    total_ms,
+                });
+            }
+            if let Some(key) = keys.as_ref().and_then(|k| k.get(i)) {
+                let bytes = progress.approx_bytes();
+                self.caches
+                    .checkpoints
+                    .insert(*key, progress.clone(), bytes);
+            }
+        }
+        let Progress {
+            made, mut built, ..
+        } = progress;
+        // Replace the scene's solid bodies.
+        let old: Vec<u32> = self
+            .built
+            .solids
+            .iter()
+            .filter_map(|s| s.scene_id)
+            .collect();
+        // Selected solids stay selected through the rebuild (by the feature that made
+        // them), so a panel working on the selection, such as Appearance, keeps it.
+        let reselect: Vec<u32> = self
+            .built
+            .solids
+            .iter()
+            .filter(|x| {
+                x.scene_id
+                    .is_some_and(|id| self.scene.selected.contains(&id))
+            })
+            .map(|x| x.feature)
+            .collect();
+        self.scene.bodies.retain(|b| !old.contains(&b.id));
+        self.scene.deselect(|b| old.contains(&b));
+        let options = TessOptions::default();
+        let placed = self.place_components(made, &mut built);
+        // An exploded view moves what is shown, not the exact bodies.
+        built.exploded = if self.view_state.explode_factor.is_some()
+            || !self.view_state.explode_manual.is_empty()
+        {
+            crate::motion::explode_offsets(
+                &placed,
+                self.view_state.explode_factor,
+                &self.view_state.explode_manual,
+            )
+        } else {
+            BTreeMap::new()
+        };
+        // An interference highlight shows the design as it was checked.
+        self.view_state.overlaps.clear();
+        for (feature, component, name, body) in placed {
+            // A solid that cannot be shown is still built: its measures and export work.
+            let mut faces = Vec::new();
+            let mut edges = Vec::new();
+            let clock = crate::perf::Stopwatch::start();
+            let mesh = self.caches.tessellate(&body, &options);
+            if timing {
+                let ms = clock.ms();
+                if let Some(t) = self.timings.iter_mut().rev().find(|t| t.id == feature) {
+                    t.tessellation_ms += ms;
+                    t.total_ms += ms;
+                }
+            }
+            let scene_id = match mesh {
+                Ok(mut m) => {
+                    if let Some(e) = built.exploded.get(&component) {
+                        for p in &mut m.mesh.positions {
+                            *p = *p + e.offset;
+                        }
+                        for (_, l) in &mut m.edge_polylines {
+                            for p in l.iter_mut() {
+                                *p = *p + e.offset;
+                            }
+                        }
+                    }
+                    faces = m.face_of_triangle;
+                    edges = m.edge_polylines;
+                    let id = self.scene.add(&name, m.mesh);
+                    self.dress_body(id, feature, edges.iter().map(|(_, l)| l.clone()).collect());
+                    self.mark_surface(id, body.is_open());
+                    if id.is_none() {
+                        built
+                            .display_errors
+                            .insert(feature, "the scene holds no more bodies".into());
+                    }
+                    Session::tint_body(&self.doc.assembly, &mut self.scene, id, component);
+                    id
+                }
+                Err(e) => {
+                    built
+                        .display_errors
+                        .insert(feature, format!("the solid cannot be shown yet: {e}"));
+                    None
+                }
+            };
+            built.solids.push(Solid {
+                faces,
+                edges,
+                feature,
+                component,
+                name,
+                body,
+                scene_id,
+            });
+        }
+        self.show_imported(&mut built);
+        self.sync_meshes();
+        for x in &built.solids {
+            if let Some(id) = x.scene_id
+                && reselect.contains(&x.feature)
+                && !self.scene.selected.contains(&id)
+            {
+                self.scene.selected.push(id);
+            }
+        }
+        self.built = built;
+        // Toolpaths follow the model.
+        self.regenerate_cam();
+    }
+
+    /// Builds one timeline item onto `progress`. A feature that cannot be built keeps its
+    /// error and leaves the bodies as they were.
+    fn build_item(&mut self, id: u32, progress: &mut Progress) {
+        let Progress {
+            made,
+            tools,
+            built,
+            followed,
+        } = progress;
+        // A sketch drawn on a face follows that face, as built at this point.
+        if let Ok(s) = self.doc.sketch(id) {
+            let follows = s.attached.is_some()
+                || s.on_plane.is_some()
+                || s.projections.iter().any(|p| p.linked);
+            if let Err(e) = self.follow_attached_sketch(id, made, &built.constructs) {
+                built.sketch_errors.insert(id, e);
+            }
+            if follows && let Ok(s) = self.doc.sketch(id) {
+                followed.insert(id, s.clone());
+            }
+            return;
+        }
+        let Ok(feature) = self.doc.feature(id).cloned() else {
+            return;
+        };
+        let feature = &feature;
+        if self.doc.is_suppressed(feature) {
+            return;
+        }
+        // Every sketch the feature uses (a sweep's path, a loft's sections too) was
+        // followed in timeline order before it.
+        if let Some((sketch, e)) = feature
+            .kind
+            .sketches()
+            .into_iter()
+            .find_map(|s| built.sketch_errors.get(&s).map(|e| (s, e.clone())))
+        {
+            let name = feature_name(&self.doc, sketch);
+            built.errors.insert(feature.id, format!("{name}: {e}"));
+            if let Some(r) = self
+                .doc
+                .sketch(sketch)
+                .ok()
+                .and_then(|s| s.attached.clone())
+            {
+                built.broken.insert(
+                    feature.id,
+                    format!(
+                        "face {:?} of {}",
+                        r.face,
+                        feature_name(&self.doc, r.feature)
+                    ),
+                );
+            }
+            return;
+        }
+        if let FeatureKind::Construct(c) = &feature.kind {
+            match crate::construct::build(&self.doc, feature.id, c, made, &built.constructs) {
+                Ok(g) => {
+                    built.constructs.insert(feature.id, g);
+                }
+                Err(e) => {
+                    built.errors.insert(feature.id, e);
+                }
+            }
+            return;
+        }
+        if let FeatureKind::Pattern(p) = &feature.kind {
+            if !tools.contains_key(&p.source) {
+                built
+                    .broken
+                    .insert(feature.id, feature_name(&self.doc, p.source));
+            }
+            let copies = pattern_copies(&self.doc, p, feature.id, tools, &built.constructs);
+            match copies {
+                Ok((bodies, Operation::NewBody)) => {
+                    for (k, b) in bodies.into_iter().enumerate() {
+                        made.push((feature.id, format!("{} ({})", feature.name, k + 2), b));
+                    }
+                }
+                Ok((bodies, op)) => {
+                    let mut next = made.clone();
+                    match apply_operation(&mut next, &bodies, op) {
+                        Ok(()) => *made = next,
+                        Err(e) => {
+                            built.errors.insert(feature.id, e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    built.errors.insert(feature.id, e);
+                }
+            }
+            return;
+        }
+        if let FeatureKind::Mirror(m) = &feature.kind {
+            let result = mirror_bodies(&self.doc, m, feature.id, made, tools).and_then(|bodies| {
+                tools.insert(feature.id, (bodies.clone(), m.operation));
+                let mut next = made.clone();
+                if m.operation == Operation::NewBody {
+                    let n = bodies.len();
+                    for (k, b) in bodies.into_iter().enumerate() {
+                        let name = if n == 1 {
+                            feature.name.clone()
+                        } else {
+                            format!("{} ({})", feature.name, k + 1)
+                        };
+                        next.push((feature.id, name, b));
+                    }
+                } else {
+                    apply_operation(&mut next, &bodies, m.operation)?;
+                }
+                Ok(next)
+            });
+            match result {
+                Ok(next) => *made = next,
+                Err(e) => {
+                    built.errors.insert(feature.id, e);
+                }
+            }
+            return;
+        }
+        if let FeatureKind::Move(m) = &feature.kind {
+            match move_bodies(&self.doc, m, feature, made) {
+                Ok(next) => *made = next,
+                Err(e) => {
+                    built.errors.insert(feature.id, e);
+                }
+            }
+            return;
+        }
+        if let FeatureKind::Blend(b) = &feature.kind {
+            match build_blend(&self.doc, b, feature.id, made) {
+                Ok(next) => *made = next,
+                Err(e) => {
+                    if let Some(r) = missing_edge(&self.doc, b, feature.id, made) {
+                        built.broken.insert(feature.id, r);
+                    }
+                    built.errors.insert(feature.id, e);
+                }
+            }
+            return;
+        }
+        if let FeatureKind::Thread(t) = &feature.kind {
+            match crate::thread::build_thread(&self.doc, t, feature.id, made) {
+                Ok(b) => {
+                    built.threads.insert(feature.id, b);
+                }
+                Err(e) => {
+                    built.errors.insert(feature.id, e);
+                }
+            }
+            return;
+        }
+        if let FeatureKind::Hole(h) = &feature.kind {
+            match crate::hole::build_hole(&self.doc, h, feature.id, made) {
+                Ok((next, cuts)) => {
+                    *made = next;
+                    tools.insert(feature.id, (cuts, Operation::Cut));
+                }
+                Err(e) => {
+                    built.errors.insert(feature.id, e);
+                }
+            }
+            return;
+        }
+        let face_edit = match &feature.kind {
+            FeatureKind::OffsetFace(o) => Some(crate::face_edit::build_offset_face(
+                &self.doc, o, feature.id, made,
+            )),
+            FeatureKind::DeleteFace(d) => Some(crate::face_edit::build_delete_face(
+                &self.doc, d, feature.id, made,
+            )),
+            FeatureKind::MoveFace(m) => Some(crate::face_edit::build_move_face(
+                &self.doc, m, feature.id, made,
+            )),
+            _ => None,
+        };
+        if let Some(result) = face_edit {
+            match result {
+                Ok((next, changed)) => {
+                    *made = next;
+                    built.edited.insert(feature.id, changed);
+                }
+                Err(e) => {
+                    built.errors.insert(feature.id, e);
+                }
+            }
+            return;
+        }
+        if let FeatureKind::Surface(sf) = &feature.kind {
+            match crate::surface::build(&self.doc, feature, sf, made, &built.constructs) {
+                Ok(next) => *made = next,
+                Err(e) => {
+                    built.errors.insert(feature.id, e);
+                }
+            }
+            return;
+        }
+        if feature.kind.is_body_tool() {
+            match crate::body_tools::build(&self.doc, feature, made, &built.constructs) {
+                Ok(next) => *made = next,
+                Err(e) => {
+                    built.errors.insert(feature.id, e);
+                }
+            }
+            return;
+        }
+        if let FeatureKind::Shell(sh) = &feature.kind {
+            match build_shell(&self.doc, sh, feature.id, made) {
+                Ok(next) => *made = next,
+                Err(e) => {
+                    built.errors.insert(feature.id, e);
+                }
+            }
+            return;
+        }
+        if crate::sheet::is_sheet_feature(&feature.kind) {
+            let mut next = made.clone();
+            match crate::sheet::build_feature(&self.doc, feature, &mut next, &mut built.sheet) {
+                Ok(()) => *made = next,
+                Err(e) => {
+                    built.errors.insert(feature.id, e);
+                }
+            }
+            return;
+        }
+        let result = match &feature.kind {
+            FeatureKind::Extrude(e) => {
+                let bodies: Vec<&Body> = made.iter().map(|m| &m.2).collect();
+                build_extrude(&self.doc, feature.id, e, &bodies)
+            }
+            FeatureKind::Sweep(s) => build_sweep(&self.doc, s),
+            FeatureKind::Loft(l) => build_loft(&self.doc, l),
+            FeatureKind::Revolve(r) => build_revolve(&self.doc, r, &built.constructs),
+            FeatureKind::Pattern(_)
+            | FeatureKind::Construct(_)
+            | FeatureKind::Blend(_)
+            | FeatureKind::Shell(_)
+            | FeatureKind::Mirror(_)
+            | FeatureKind::Move(_)
+            | FeatureKind::Combine(_)
+            | FeatureKind::SplitBody(_)
+            | FeatureKind::SplitFace(_)
+            | FeatureKind::Thicken(_)
+            | FeatureKind::Remove(_)
+            | FeatureKind::Surface(_)
+            | FeatureKind::Thread(_)
+            | FeatureKind::Hole(_)
+            | FeatureKind::SheetBase(_)
+            | FeatureKind::SheetFlange(_)
+            | FeatureKind::SheetUnfold(_) => return,
+            FeatureKind::OffsetFace(_) | FeatureKind::DeleteFace(_) | FeatureKind::MoveFace(_) => {
+                return;
+            }
+        };
+        let operation = feature.kind.operation();
+        let result = result.map(|bodies| {
+            bodies
+                .into_iter()
+                .map(|mut b| {
+                    name_faces(&mut b, feature.id);
+                    name_edges(&mut b, feature.id);
+                    b
+                })
+                .collect::<Vec<_>>()
+        });
+        if let Ok(bodies) = &result {
+            tools.insert(feature.id, (bodies.clone(), operation));
+        }
+        match result {
+            Ok(bodies) if operation == Operation::NewBody => {
+                let n = bodies.len();
+                for (k, body) in bodies.into_iter().enumerate() {
+                    let name = if n == 1 {
+                        feature.name.clone()
+                    } else {
+                        format!("{} ({})", feature.name, k + 1)
+                    };
+                    made.push((feature.id, name, body));
+                }
+            }
+            Ok(tools) => {
+                // Work on a copy so a failure leaves the bodies built so far intact.
+                let mut next = made.clone();
+                match apply_operation(&mut next, &tools, operation) {
+                    Ok(()) => *made = next,
+                    Err(e) => {
+                        built.errors.insert(feature.id, e);
+                    }
+                }
+            }
+            Err(e) => {
+                if e.contains("no longer closed")
+                    && let Some(sketch) = feature.kind.sketch()
+                {
+                    built.broken.insert(
+                        feature.id,
+                        format!("a profile of {}", feature_name(&self.doc, sketch)),
+                    );
+                }
+                built.errors.insert(feature.id, e);
+            }
+        }
+    }
+
+    /// Moves an attached sketch's plane onto its face or construction plane, and its
+    /// projected edges onto their edges, as built so far.
+    fn follow_attached_sketch(
+        &mut self,
+        sketch: u32,
+        made: &[(u32, String, Body)],
+        constructs: &BTreeMap<u32, crate::construct::Constructed>,
+    ) -> Result<(), String> {
+        let Ok(f) = self.doc.sketch(sketch) else {
+            return Ok(());
+        };
+        let plane = match (f.attached.clone(), f.on_plane) {
+            (Some(r), _) => Some(attached_plane(&self.doc, sketch, made, &r)?),
+            (None, Some(id)) => match constructs.get(&id) {
+                Some(crate::construct::Constructed::Plane { frame, .. }) => Some(*frame),
+                _ => {
+                    return Err(format!(
+                        "the plane {id} it is drawn on is suppressed or could not be built"
+                    ));
+                }
+            },
+            (None, None) => None,
+        };
+        if let Some(plane) = plane
+            && let Ok(f) = self.doc.sketch_mut(sketch)
+        {
+            f.plane = plane;
+        }
+        self.follow_projections(sketch, made.iter().map(|m| &m.2))
+    }
+
+    /// The solid face under pixel `(x, y)`: (solid index, face, the point hit on the
+    /// display mesh).
+    pub fn face_hit_at(
+        &self,
+        x: f64,
+        y: f64,
+        w: f64,
+        h: f64,
+    ) -> Option<(usize, chamfera_kernel::FaceId, Point3)> {
+        let bounds = self.scene.bounds();
+        let ray = self.camera.ray_through(x, y, w, h, bounds.as_ref())?;
+        let hit = self.scene.pick(&ray)?;
+        let (si, solid) = self
+            .built
+            .solids
+            .iter()
+            .enumerate()
+            .find(|(_, s)| s.scene_id == Some(hit.body))?;
+        let face = *solid.faces.get(hit.triangle)?;
+        let p = ray.at(hit.distance);
+        Some((si, face, p))
+    }
+
+    /// The solid face under pixel `(x, y)`: (feature, face role, plane), for flat faces
+    /// with a name. The role is unique: `top#2` for a piece of a split `top`.
+    pub fn face_at(
+        &self,
+        x: f64,
+        y: f64,
+        w: f64,
+        h: f64,
+    ) -> Option<(u32, String, chamfera_geom::Frame)> {
+        let (si, face, _) = self.face_hit_at(x, y, w, h)?;
+        let solid = self.built.solids.get(si)?;
+        let name = self.reference_name(si, chamfera_kernel::Entity::Face(face))?;
+        let (feature, role) = split_face_key(&name)?;
+        let plane = face_plane(&solid.body, face)?;
+        Some((feature, role.to_owned(), plane))
+    }
+
+    /// The full name (`2:top`, `2:top#2` for a piece) of the face of a built solid under
+    /// pixel `(x, y)`, flat or curved (a shell opens either).
+    pub fn face_ref_at(&self, x: f64, y: f64, w: f64, h: f64) -> Option<String> {
+        let (si, face, _) = self.face_hit_at(x, y, w, h)?;
+        self.reference_name(si, chamfera_kernel::Entity::Face(face))
+    }
+
+    /// The true edge nearest pixel `(x, y)` on screen, within [`EDGE_PICK_PIXELS`], that is
+    /// not hidden behind a face: (solid index, edge, its reference name).
+    pub fn edge_at(&self, x: f64, y: f64, w: f64, h: f64) -> Option<(usize, EdgeId, String)> {
+        use chamfera_render::{mat_mul, transform_point};
+        if !(w >= 1.0 && h >= 1.0 && x.is_finite() && y.is_finite()) {
+            return None;
+        }
+        let bounds = self.scene.bounds();
+        let vp = mat_mul(
+            &self.camera.projection_matrix(w / h, bounds.as_ref()),
+            &self.camera.view_matrix(),
+        );
+        let screen = |p: Point3| -> Option<(f64, f64)> {
+            let n = transform_point(&vp, p)?;
+            if !(0.0..=1.0).contains(&n[2]) {
+                return None;
+            }
+            Some(((n[0] + 1.0) * 0.5 * w, (1.0 - n[1]) * 0.5 * h))
+        };
+        // (pixel distance, solid, edge, the nearest segment of the edge, the pixel on it)
+        type Segment = (Point3, Point3);
+        type Near = (f64, usize, EdgeId, Segment, (f64, f64));
+        let mut near: Vec<Near> = Vec::new();
+        for (si, s) in self.built.solids.iter().enumerate() {
+            let shown = s
+                .scene_id
+                .and_then(|id| self.scene.bodies.iter().find(|b| b.id == id))
+                .is_some_and(|b| b.visible);
+            if !shown {
+                continue;
+            }
+            for (e, line) in &s.edges {
+                let mut best: Option<(f64, Segment, (f64, f64))> = None;
+                for pair in line.windows(2) {
+                    let [a, b] = pair else { continue };
+                    let (Some(sa), Some(sb)) = (screen(*a), screen(*b)) else {
+                        continue;
+                    };
+                    let (dx, dy) = (sb.0 - sa.0, sb.1 - sa.1);
+                    let len2 = dx * dx + dy * dy;
+                    let t = if len2 > 1e-12 {
+                        (((x - sa.0) * dx + (y - sa.1) * dy) / len2).clamp(0.0, 1.0)
+                    } else {
+                        0.0
+                    };
+                    let px = (sa.0 + t * dx, sa.1 + t * dy);
+                    let d = ((px.0 - x).powi(2) + (px.1 - y).powi(2)).sqrt();
+                    if best.is_none_or(|b| d < b.0) {
+                        best = Some((d, (*a, *b), px));
+                    }
+                }
+                if let Some((d, p, px)) = best
+                    && d <= EDGE_PICK_PIXELS
+                {
+                    near.push((d, si, *e, p, px));
+                }
+            }
+        }
+        near.sort_by(|a, b| a.0.total_cmp(&b.0));
+        for (_, si, e, (a, b), px) in near {
+            // Hidden when a face is clearly nearer the eye along the ray through it. The
+            // edge's depth is where the ray passes closest to the segment (a point taken
+            // by its place on screen would be off under perspective).
+            let ray = self.camera.ray_through(px.0, px.1, w, h, bounds.as_ref())?;
+            let u = b - a;
+            let w0 = a - ray.origin;
+            let (uu, ud) = (u.dot(u), u.dot(ray.direction));
+            let denom = uu - ud * ud;
+            let s = if denom > 1e-12 {
+                ((ud * ray.direction.dot(w0) - u.dot(w0)) / denom).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            let along = (a + u * s - ray.origin).dot(ray.direction);
+            let hidden = self
+                .scene
+                .pick(&ray)
+                .is_some_and(|hit| hit.distance < along - (1e-3 * along.abs()).max(0.05));
+            if hidden {
+                continue;
+            }
+            if let Some(r) = self.reference_name(si, chamfera_kernel::Entity::Edge(e)) {
+                return Some((si, e, r));
+            }
+        }
+        None
+    }
+
+    /// The solids of the last rebuild.
+    pub fn solids(&self) -> &[Solid] {
+        &self.built.solids
+    }
+
+    /// The names of the selected solid bodies (what `solid.mirror` and `solid.move` act
+    /// on when no `bodies` are given).
+    pub fn selected_body_names(&self) -> Vec<String> {
+        let Some(hit) = self.scene.selection else {
+            return Vec::new();
+        };
+        self.built
+            .solids
+            .iter()
+            .filter(|x| x.scene_id == Some(hit.body))
+            .map(|x| x.name.clone())
+            .collect()
+    }
+
+    /// The names of the solids the direct face edit `feature` changed in the last rebuild.
+    pub fn edited_solids(&self, feature: u32) -> &[String] {
+        self.built.edited.get(&feature).map_or(&[], Vec::as_slice)
+    }
+
+    /// Features that failed in the last rebuild.
+    pub fn feature_errors(&self) -> &BTreeMap<u32, String> {
+        &self.built.errors
+    }
+
+    /// Features built but not displayable (for example curved faces before their
+    /// tessellation exists).
+    pub fn display_errors(&self) -> &BTreeMap<u32, String> {
+        &self.built.display_errors
+    }
+
+    /// The reference that broke for each feature that failed because of an upstream
+    /// change, such as `face "top" of Extrude1`.
+    pub fn broken_references(&self) -> &BTreeMap<u32, String> {
+        &self.built.broken
+    }
+
+    /// Sketches on a face that could not follow it in the last rebuild, and why.
+    pub fn sketch_errors(&self) -> &BTreeMap<u32, String> {
+        &self.built.sketch_errors
+    }
+
+    /// The profile under pixel `(x, y)`: the nearest sketch plane the ray meets where a
+    /// closed region lies. Returns (sketch id, seed point inside the region, its area).
+    pub fn profile_at(&self, x: f64, y: f64, w: f64, h: f64) -> Option<(u32, Point2, f64)> {
+        let bounds = self.scene.bounds();
+        let ray = self.camera.ray_through(x, y, w, h, bounds.as_ref())?;
+        let mut best: Option<(f64, u32, Point2, f64)> = None;
+        for f in &self.doc.sketches {
+            let n = f.plane.z();
+            let denom = n.dot(ray.direction);
+            if denom.abs() < 1e-6 {
+                continue;
+            }
+            let t = n.dot(f.plane.origin() - ray.origin) / denom;
+            if t < 0.0 {
+                continue;
+            }
+            let p = f.plane.to_plane(ray.at(t));
+            if let Some(region) = f.sketch.region_at(p)
+                && best.is_none_or(|b| t < b.0)
+            {
+                // Remember the click point itself: it is inside this region and is what
+                // the user meant.
+                best = Some((t, f.id, p, region.area));
+            }
+        }
+        best.map(|(_, s, p, a)| (s, p, a))
+    }
+
+    /// The sketch line or arc nearest pixel `(x, y)` on screen (within
+    /// [`crate::sketching::PICK_CURVE_PX`]), in any sketch, and the chain of lines and
+    /// arcs joined end to end with it (through points no third curve uses), for picking
+    /// a sweep path in one click: (sketch, curve, chain in path order).
+    pub fn path_at(&self, x: f64, y: f64, w: f64, h: f64) -> Option<(u32, u32, Vec<u32>)> {
+        use chamfera_render::{mat_mul, transform_point};
+        if !(w >= 1.0 && h >= 1.0 && x.is_finite() && y.is_finite()) {
+            return None;
+        }
+        let bounds = self.scene.bounds();
+        let vp = mat_mul(
+            &self.camera.projection_matrix(w / h, bounds.as_ref()),
+            &self.camera.view_matrix(),
+        );
+        let screen = |p: Point3| -> Option<(f64, f64)> {
+            let n = transform_point(&vp, p)?;
+            if !(0.0..=1.0).contains(&n[2]) {
+                return None;
+            }
+            Some(((n[0] + 1.0) * 0.5 * w, (1.0 - n[1]) * 0.5 * h))
+        };
+        let mut best: Option<(f64, u32, u32)> = None;
+        for f in &self.doc.sketches {
+            for (id, curve) in f.sketch.curves() {
+                if !matches!(curve, Curve::Line { .. } | Curve::Arc { .. }) {
+                    continue;
+                }
+                let pts: Vec<(f64, f64)> = crate::sketching::curve_polyline(&f.sketch, curve)
+                    .into_iter()
+                    .filter_map(|p| screen(f.plane.from_plane(p)))
+                    .collect();
+                for pair in pts.windows(2) {
+                    let [a, b] = pair else { continue };
+                    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+                    let len2 = dx * dx + dy * dy;
+                    let t = if len2 > 1e-12 {
+                        (((x - a.0) * dx + (y - a.1) * dy) / len2).clamp(0.0, 1.0)
+                    } else {
+                        0.0
+                    };
+                    let d = (a.0 + t * dx - x).hypot(a.1 + t * dy - y);
+                    if d <= crate::sketching::PICK_CURVE_PX && best.is_none_or(|bb| d < bb.0) {
+                        best = Some((d, f.id, id.0));
+                    }
+                }
+            }
+        }
+        let (_, sketch, curve) = best?;
+        let f = self.doc.sketch(sketch).ok()?;
+        Some((sketch, curve, path_chain(&f.sketch, curve)))
+    }
+
+    /// The outline (outer loop and holes) of the region at `seed`, as world line segments.
+    pub fn profile_outline(&self, sketch: u32, seed: Point2) -> Vec<[Point3; 2]> {
+        let Ok(f) = self.doc.sketch(sketch) else {
+            return Vec::new();
+        };
+        let Some(region) = f.sketch.region_at(seed) else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        for l in std::iter::once(&region.outer).chain(region.holes.iter()) {
+            let poly = f.sketch.loop_polyline(l);
+            for i in 0..poly.len() {
+                if let (Some(a), Some(b)) = (poly.get(i), poly.get((i + 1) % poly.len())) {
+                    out.push([f.plane.from_plane(*a), f.plane.from_plane(*b)]);
+                }
+            }
+        }
+        out
+    }
+}

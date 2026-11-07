@@ -1,0 +1,45 @@
+{
+  "id": "parametric-plate",
+  "title": "A parametric plate",
+  "summary": "Drive a plate's thickness from a named parameter, then change the value and watch the plate follow.",
+  "workspace": "design",
+  "steps": [
+    {
+      "title": "Add a parameter",
+      "text": "Open the MODIFY list under the tools and choose Parameters. In the empty row at the bottom type the name thickness and the expression 6 mm, then click Add.",
+      "tool": "parameters",
+      "commands": ["param.set"]
+    },
+    {
+      "title": "Start a sketch",
+      "text": "Click Create Sketch and choose Top plane (XY).",
+      "tool": "sketch.create",
+      "commands": ["sketch.create"]
+    },
+    {
+      "title": "Draw the plate outline",
+      "text": "Pick the Rectangle tool (R) and click two opposite corners.",
+      "tool": "sketch.tool.rectangle",
+      "commands": ["sketch.rectangle", "sketch.rectangle.centre"]
+    },
+    {
+      "title": "Finish the sketch",
+      "text": "Click Finish Sketch.",
+      "tool": "sketch.finish",
+      "commands": ["sketch.finish"]
+    },
+    {
+      "title": "Extrude by the parameter",
+      "text": "Click Extrude, click inside the rectangle and type thickness (the parameter's name, not a number) as the distance. Press OK.",
+      "tool": "solid.extrude",
+      "commands": ["solid.extrude"]
+    },
+    {
+      "title": "Change the value",
+      "text": "In the Parameters window, change the expression of thickness to 12 mm and press Enter. The plate rebuilds twice as thick.",
+      "tool": "parameters",
+      "commands": ["param.set"]
+    }
+  ],
+  "finish": "Any feature value or sketch dimension can be an expression of parameters, such as width / 2. Configurations keep several sets of values in one design."
+}

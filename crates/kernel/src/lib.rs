@@ -4,8 +4,136 @@
 //! (see `skills/chamfera-kernel/SKILL.md` and `docs/kernel-ladder.md`). No code from
 //! OpenCASCADE or any other GPL/LGPL kernel is read, copied or linked.
 //!
-//! M0 holds only the error type. The first rungs of the ladder (topology, analytic
-//! surfaces, extrude) arrive in M3.
+//! Rung K1 is here: curves in space ([`Line3`], [`Segment3`], [`Circle3`], [`Arc3`],
+//! [`Ellipse3`], [`EllipticalArc3`]), planar curves in a frame's plane ([`Line2`],
+//! [`Segment2`], [`Circle2`], [`Arc2`]) and their pairwise intersections. Frames,
+//! transforms and robust predicates (K0) live in `chamfera-geom`.
+//!
+//! Rung K2 is here: boundary-representation topology ([`Body`] with shells, faces,
+//! loops, half-edges, edges and vertices), the Euler operators that build it, validity
+//! checks ([`Body::validate_topology`], [`Body::validate`]), builders for a cuboid, a
+//! prism with holes and a cylinder, and exact area and volume.
+//!
+//! Rung K3 is here: analytic surfaces ([`Surface`]: plane, [`Cylinder`], [`Cone`],
+//! [`Sphere`], [`Torus`]) with evaluation, normals, projection and closest points; faces on
+//! them are validated, classified ([`Body::classify_point_on_face`]) and measured.
+//!
+//! Rung K4 is here: a planar [`Profile`] of lines and arcs with holes is swept into a valid
+//! solid by [`extrude`], [`extrude_symmetric`] and [`revolve`], every face, edge and vertex
+//! named from the profile element and role that made it.
+//!
+//! Rung K6 is here: surface-surface intersection ([`intersect_surfaces`], exact lines,
+//! circles and ellipses or an explicit [`SurfaceIntersection`]), curve-surface
+//! intersection ([`intersect_curve_surface`]) and point-solid classification
+//! ([`classify_point`]), the geometry booleans (K7) need.
+//!
+//! Rung K7 is here: booleans on solids ([`union`], [`subtract`], [`intersect`]) by face
+//! intersection, splitting, classification and sewing, with coplanar and touching cases,
+//! multi-lump results and result faces named after the operand faces they came from.
+//!
+//! Rung K10 (curves) is here: B-spline edges ([`Curve::BSpline`], the curves in
+//! `chamfera_geom::BSplineCurve3`), spline profile edges ([`ProfileEdge::Spline`]) and
+//! surfaces of linear extrusion ([`Extrusion`]) for extruded splines, with their
+//! intersections against planes, parallel cylinders and parallel extrusions, so booleans
+//! take spline sides; blends still refuse spline faces.
+//!
+//! Inspect is here: [`Body::mass_properties`] (centre of mass and inertia from the exact
+//! faces, after Mirtich 1996) and [`closest_points`] / [`angle_between`] for measuring.
+//!
+//! Rung K11 (first part) is here: edge blends, constant-radius [`fillet`] and
+//! equal-distance [`chamfer`] on straight edges between planes (cylinders, sphere-octant
+//! corners) and on plane/cylinder rims (tori, cones).
+//!
+//! Sheet metal is here ([`Sheet`]): a base plate, flanges with exact cylindrical bends on
+//! straight edges (with bend reliefs), and the flat pattern by bend allowance, with its
+//! outline.
+//!
+//! Rung K12 (first part) is here: [`shell`] hollows a solid of planes, cylinders and
+//! cones into walls of a thickness, with chosen faces open (an inward offset subtracted).
+//!
+//! Surface bodies are here: open shells ([`Body::is_open`], [`Validation::Surface`]),
+//! swept surfaces without caps ([`surface_extrude`], [`surface_revolve`],
+//! [`surface_sweep`]), planar patches ([`patch_profile`], [`patch_edges`]), [`stitch`]
+//! and trimming ([`trim_by_plane`], [`trim_by_solid`]).
+//!
+//! Body tools are here: [`split_body`] cuts a solid by a plane, [`split_faces`] imprints a
+//! plane on flat faces, and [`thicken`] gives a flat or cylindrical face a thickness.
+
+mod face_edit;
+pub use face_edit::{delete_faces, move_faces, offset_faces};
+mod blend;
+mod boolean;
+mod check;
+mod curve3;
+mod distance;
+mod extrusion;
+mod intersect;
+mod loft;
+mod mass;
+mod planar;
+mod plane_split;
+mod profile;
+mod sheet;
+mod shell;
+#[cfg(test)]
+mod spline_tests;
+mod ssi;
+mod surface;
+mod surfacing;
+mod sweep;
+mod sweep_path;
+mod tessellate;
+mod thin;
+mod topology;
+
+pub use blend::{
+    ChamferSecond, ChamferSpec, MAX_BLEND_EDGES, TANGENT_CHAIN_TOLERANCE, chamfer, chamfer_with,
+    fillet, fillet_variable, tangent_chain,
+};
+pub use boolean::{
+    BooleanOp, MAX_BOOLEAN_ENTITIES, MAX_BOOLEAN_FACES, boolean, intersect, subtract, union,
+};
+pub use curve3::{
+    Arc3, Circle3, ClosestPoint, ELLIPSE_LENGTH_RELATIVE_TOLERANCE, Ellipse3, EllipticalArc3,
+    Line3, Segment3,
+};
+pub use distance::{Closest, Entity, MAX_DISTANCE_PAIRS, angle_between, closest_points};
+pub use extrusion::Extrusion;
+pub use intersect::{
+    Contact, IntersectionPoint, Intersections, Overlap, arc_arc, circle_arc, circle_circle,
+    line_arc, line_circle, line_line, line_segment, segment_arc, segment_circle, segment_segment,
+};
+pub use loft::{LOFT_PARALLEL_TOLERANCE, MAX_LOFT_SECTIONS, loft};
+pub use mass::{MASS_QUADRATURE_TOLERANCE, MAX_DENSITY, MassProperties};
+pub use planar::{Arc2, Circle2, Line2, Segment2};
+pub use plane_split::{split_body, split_faces, thicken};
+pub use profile::{PROFILE_JOIN_TOLERANCE, Profile, ProfileEdge, polygon_edges};
+pub use sheet::{
+    BendPosition, BendReport, FlangeSpec, FlatEdge, MAX_FLANGES, Relief, ReliefKind, Sheet,
+    bend_allowance, check_thickness, flat_outline, outside_setback, position_trim,
+};
+pub use shell::shell;
+pub use ssi::{
+    CurveSurfaceIntersection, CurveSurfacePoint, IntersectionCurve, ON_SURFACE_SAMPLES,
+    PointInSolid, RAY_DIRECTIONS, SurfaceIntersection, UnsupportedIntersection, classify_point,
+    intersect_curve_surface, intersect_curve_surface_on, intersect_surfaces,
+};
+pub use surface::{Cone, Cylinder, Sphere, Surface, SurfaceParameters, SurfacePoint, Torus};
+pub use surfacing::{
+    MAX_SURFACE_EDGES, SurfaceProfile, patch_edges, patch_profile, stitch, surface_extrude,
+    surface_revolve, surface_sweep, trim_by_plane, trim_by_solid,
+};
+pub use sweep::{MAX_TAPER, extrude, extrude_symmetric, extrude_tapered, revolve};
+pub use sweep_path::{MAX_PATH_SEGMENTS, PATH_TANGENT_TOLERANCE, PathSegment, sweep_path};
+pub use tessellate::{BodyMesh, TessOptions, tessellate};
+pub use thin::{MAX_THIN_EDGES, ThinSide, thin_profile};
+pub use topology::{
+    Body, Curve, CurveId, EdgeCurve, EdgeId, FaceId, HalfEdgeId, LoopId, MAX_NAME_LENGTH,
+    MAX_PROFILE_VERTICES, MAX_TOPOLOGY_ENTITIES, Mvfs, PointId, PointOnFace,
+    SURFACE_QUADRATURE_TOLERANCE, ShellId, ShellReport, SurfaceId, TopologyError, TopologyReport,
+    TopologySummary, Validation, VertexId,
+};
+pub(crate) use topology::{ListEdge, ListFace, ListVertex};
 
 use thiserror::Error;
 
@@ -19,6 +147,19 @@ pub enum KernelError {
     Unsupported(String),
     #[error("the result would not be a valid solid: {0}")]
     InvalidResult(String),
+    #[error("a numeric method did not converge: {0}")]
+    NoConvergence(String),
+    #[error("the result is empty: the operation leaves no material")]
+    EmptyResult,
 }
 
 pub type KernelResult<T> = Result<T, KernelError>;
+
+impl From<chamfera_geom::NurbsError> for KernelError {
+    fn from(e: chamfera_geom::NurbsError) -> Self {
+        match e {
+            chamfera_geom::NurbsError::NoConvergence(m) => KernelError::NoConvergence(m),
+            other => KernelError::InvalidInput(other.to_string()),
+        }
+    }
+}

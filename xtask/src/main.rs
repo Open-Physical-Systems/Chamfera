@@ -1,11 +1,13 @@
 //! Repository checks. `cargo xtask ci` runs them all; each rule in AGENTS.md names the check
 //! that enforces it.
 
+mod notices;
+
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
-const USAGE: &str = "usage: cargo xtask <ci|layers|skills|licences|wasm>";
+const USAGE: &str = "usage: cargo xtask <ci|layers|skills|licences|notices [--out FILE]|wasm>";
 
 /// The layer of every crate. A crate may depend only on crates in a lower layer.
 /// Keep in step with docs/architecture.md.
@@ -16,11 +18,20 @@ const LAYERS: &[(&str, u32)] = &[
     ("chamfera-sketch", 1),
     ("chamfera-doc", 2),
     ("chamfera-io", 3),
+    ("chamfera-drawing", 3),
+    ("chamfera-cam", 3),
+    ("chamfera-raytrace", 3),
     ("chamfera-engine", 4),
-    ("chamfera-cli", 6),
+    ("chamfera-gpu", 5),
+    ("chamfera-assistant", 5),
+    ("chamfera-ui", 6),
+    ("chamfera-mcp", 6),
+    ("chamfera", 7),
+    ("chamfera-cli", 7),
+    ("chamfera-web", 7),
 ];
 
-/// Window, GPU and dialog crates: only layer 5 (UI) and apps may use them.
+/// Window, GPU and dialog crates: only layer 5 (gpu) and up may use them.
 const UI_ONLY_DEPS: &[&str] = &["egui", "eframe", "winit", "wgpu", "rfd", "egui-wgpu"];
 
 /// Crates that build for the browser (wasm32-unknown-unknown).
@@ -31,11 +42,18 @@ const WASM_CRATES: &[&str] = &[
     "chamfera-render",
     "chamfera-doc",
     "chamfera-io",
+    "chamfera-drawing",
+    "chamfera-cam",
+    "chamfera-raytrace",
     "chamfera-engine",
+    "chamfera-gpu",
+    "chamfera-assistant",
+    "chamfera-ui",
+    "chamfera-web",
 ];
 
 /// Subcommands, so `cargo xtask skills` can check that docs name only real ones.
-const SUBCOMMANDS: &[&str] = &["ci", "layers", "skills", "licences", "wasm"];
+const SUBCOMMANDS: &[&str] = &["ci", "layers", "skills", "licences", "notices", "wasm"];
 
 type CheckResult = Result<(), String>;
 
@@ -53,6 +71,14 @@ fn main() -> ExitCode {
         Some("layers") => layers(&root),
         Some("skills") => skills(&root),
         Some("licences") => licences(&root),
+        Some("notices") => {
+            let args: Vec<String> = std::env::args().skip(2).collect();
+            match args.as_slice() {
+                [] => notices::notices(&root, None),
+                [flag, path] if flag == "--out" => notices::notices(&root, Some(path)),
+                _ => Err(USAGE.to_owned()),
+            }
+        }
         Some("wasm") => wasm(&root),
         _ => Err(USAGE.to_owned()),
     };
@@ -107,6 +133,8 @@ fn ci(root: &Path) -> CheckResult {
     println!("==> skills");
     skills(root)?;
     licences(root)?;
+    // Every shipped crate has its licence text (target/THIRD-PARTY-LICENSES.txt).
+    notices::notices(root, None)?;
     wasm(root)?;
     println!("ci: all checks passed");
     Ok(())

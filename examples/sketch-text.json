@@ -1,0 +1,10 @@
+[
+  { "command": "sketch.create", "params": { "plane": "xy" } },
+  { "command": "sketch.rectangle", "params": { "x1": 0, "y1": -6, "x2": 76, "y2": 16 } },
+  { "command": "sketch.text", "params": { "text": "Chamfera", "x": 38, "y": 0, "height": 10, "align": "centre" } },
+  { "command": "sketch.get", "params": {} },
+  { "command": "sketch.finish", "params": {} },
+  { "command": "solid.extrude", "params": { "sketch": 1, "profiles": [{ "x": 2, "y": -4 }], "distance": 3 } },
+  { "command": "view.standard", "params": { "view": "iso" } },
+  { "command": "view.fit", "params": { "width": 1180, "height": 640 } }
+]

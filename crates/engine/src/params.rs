@@ -45,3 +45,120 @@ pub fn none(params: &Value) -> Result<(), CommandError> {
         )),
     }
 }
+
+/// An optional finite number.
+pub fn opt_f64(params: &Value, key: &str) -> Result<Option<f64>, CommandError> {
+    match object(params)?.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(_) => req_f64(params, key).map(Some),
+    }
+}
+
+/// An optional JSON object (`null` or missing: none).
+pub fn object_field<'a>(params: &'a Value, key: &str) -> Result<Option<&'a Value>, CommandError> {
+    match object(params)?.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(v @ Value::Object(_)) => Ok(Some(v)),
+        Some(_) => Err(CommandError::BadParams(format!(
+            "`{key}` must be an object"
+        ))),
+    }
+}
+
+/// A required boolean.
+pub fn req_bool(params: &Value, key: &str) -> Result<bool, CommandError> {
+    match object(params)?.get(key) {
+        Some(Value::Bool(b)) => Ok(*b),
+        None | Some(Value::Null) => Err(CommandError::BadParams(format!("`{key}` is required"))),
+        Some(_) => Err(CommandError::BadParams(format!(
+            "`{key}` must be true or false"
+        ))),
+    }
+}
+
+/// A required id: a whole number from 1 to u32::MAX.
+pub fn req_id(params: &Value, key: &str) -> Result<u32, CommandError> {
+    let bad = || CommandError::BadParams(format!("`{key}` must be a whole number id"));
+    match object(params)?.get(key) {
+        Some(Value::Number(n)) => n
+            .as_u64()
+            .and_then(|v| u32::try_from(v).ok())
+            .filter(|v| *v > 0)
+            .ok_or_else(bad),
+        None | Some(Value::Null) => Err(CommandError::BadParams(format!("`{key}` is required"))),
+        Some(_) => Err(bad()),
+    }
+}
+
+/// A viewport size in pixels: `width` and `height`, each 1 to 32768.
+pub fn viewport(params: &Value) -> Result<(f64, f64), CommandError> {
+    let w = req_f64(params, "width")?;
+    let h = req_f64(params, "height")?;
+    if !(1.0..=32768.0).contains(&w) || !(1.0..=32768.0).contains(&h) {
+        return Err(CommandError::BadParams(
+            "`width` and `height` must be 1 to 32768 pixels".into(),
+        ));
+    }
+    Ok((w, h))
+}
+
+/// A pixel inside a viewport: `x` and `y` (top-left origin) plus `width` and `height`.
+pub fn pixel(params: &Value) -> Result<(f64, f64, f64, f64), CommandError> {
+    let (w, h) = viewport(params)?;
+    let x = req_f64(params, "x")?;
+    let y = req_f64(params, "y")?;
+    if !(0.0..=w).contains(&x) || !(0.0..=h).contains(&y) {
+        return Err(CommandError::BadParams(
+            "`x`, `y` must be inside the viewport".into(),
+        ));
+    }
+    Ok((x, y, w, h))
+}
+
+/// Longest display name of a sketch, feature or body, in characters.
+pub const MAX_DISPLAY_NAME: usize = 80;
+
+/// A required display name (of a sketch, feature or body): trimmed, not empty, at most
+/// [`MAX_DISPLAY_NAME`] characters, no control characters.
+pub fn req_display_name(params: &Value, key: &str) -> Result<String, CommandError> {
+    let name = req_str(params, key)?.trim();
+    if name.is_empty() {
+        return Err(CommandError::BadParams(format!(
+            "`{key}` must not be empty"
+        )));
+    }
+    if name.chars().count() > MAX_DISPLAY_NAME {
+        return Err(CommandError::BadParams(format!(
+            "`{key}` must be at most {MAX_DISPLAY_NAME} characters"
+        )));
+    }
+    if name.chars().any(char::is_control) {
+        return Err(CommandError::BadParams(format!(
+            "`{key}` must not contain control characters"
+        )));
+    }
+    Ok(name.to_owned())
+}
+
+/// An optional point `{x, y, z}` in mm, each finite and within the working range.
+pub fn opt_point3(
+    params: &Value,
+    key: &str,
+) -> Result<Option<chamfera_geom::Point3>, CommandError> {
+    let Some(v) = object_field(params, key)? else {
+        return Ok(None);
+    };
+    let c = |k: &str| -> Result<f64, CommandError> {
+        let x = req_f64(v, k).map_err(|_| {
+            CommandError::BadParams(format!("`{key}` must be {{x, y, z}} with finite numbers"))
+        })?;
+        if x.abs() > chamfera_geom::MAX_COORDINATE {
+            return Err(CommandError::BadParams(format!(
+                "`{key}.{k}` must be within ±{} mm",
+                chamfera_geom::MAX_COORDINATE
+            )));
+        }
+        Ok(x)
+    };
+    Ok(Some(chamfera_geom::Point3::new(c("x")?, c("y")?, c("z")?)))
+}

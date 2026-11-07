@@ -1,9 +1,36 @@
 //! The command registry. Each area has its own file; `registry()` joins them.
 
 mod app;
+mod body;
+mod body_tools;
+mod cam;
+mod component;
+mod config;
+mod construct;
+mod debug;
 mod design;
+pub mod drawing;
+mod dxf;
 mod edit;
-mod param;
+mod face_edit;
+mod feature;
+mod hole;
+pub mod inspect;
+mod joint;
+mod motion;
+pub mod param;
+mod render;
+mod select;
+mod sheet;
+mod sketch;
+mod spline;
+mod surface;
+mod text;
+mod thread;
+mod timeline;
+mod transform;
+mod version;
+mod view;
 
 use crate::{CmdResult, Session};
 use serde_json::Value;
@@ -26,9 +53,36 @@ pub fn registry() -> Vec<&'static CommandSpec> {
     let mut all: Vec<&'static CommandSpec> = Vec::new();
     for area in [
         app::COMMANDS,
+        body::COMMANDS,
+        cam::COMMANDS,
+        body_tools::COMMANDS,
+        component::COMMANDS,
+        config::COMMANDS,
+        construct::COMMANDS,
+        debug::COMMANDS,
         design::COMMANDS,
+        drawing::COMMANDS,
+        dxf::COMMANDS,
         edit::COMMANDS,
+        face_edit::COMMANDS,
+        feature::COMMANDS,
+        hole::COMMANDS,
+        inspect::COMMANDS,
+        joint::COMMANDS,
+        motion::COMMANDS,
         param::COMMANDS,
+        render::COMMANDS,
+        select::COMMANDS,
+        sheet::COMMANDS,
+        sketch::COMMANDS,
+        spline::COMMANDS,
+        surface::COMMANDS,
+        text::COMMANDS,
+        thread::COMMANDS,
+        timeline::COMMANDS,
+        transform::COMMANDS,
+        version::COMMANDS,
+        view::COMMANDS,
     ] {
         all.extend(area.iter());
     }
@@ -37,6 +91,11 @@ pub fn registry() -> Vec<&'static CommandSpec> {
 
 pub fn find(id: &str) -> Option<&'static CommandSpec> {
     registry().into_iter().find(|c| c.id == id)
+}
+
+/// True for script names like `rect` or `axis2` (the same rule as parameter names).
+pub fn is_valid_name(s: &str) -> bool {
+    chamfera_doc::is_valid_name(s)
 }
 
 /// True for ids like `param.set` or `sketch.rectangle.two_point`.

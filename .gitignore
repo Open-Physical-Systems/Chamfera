@@ -3,3 +3,8 @@ target*/
 /plan/
 *.swp
 .DS_Store
+# Agent worktrees (Claude Code)
+/.claude/worktrees/
+
+# Version history folders written beside saved designs
+*.chamfera.history/

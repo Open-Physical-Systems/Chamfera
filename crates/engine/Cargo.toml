@@ -10,12 +10,20 @@ authors.workspace = true
 
 [dependencies]
 chamfera-doc.workspace = true
+chamfera-drawing.workspace = true
 chamfera-io.workspace = true
+chamfera-cam.workspace = true
+chamfera-raytrace.workspace = true
 chamfera-kernel.workspace = true
 chamfera-sketch.workspace = true
+chamfera-render.workspace = true
 chamfera-geom.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+jiff.workspace = true
 
 [lints]
 workspace = true

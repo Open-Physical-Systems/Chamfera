@@ -1,0 +1,12 @@
+[
+  { "command": "sketch.create", "params": { "plane": "xy" } },
+  { "command": "sketch.rectangle", "params": { "x1": 0, "y1": 0, "x2": 50, "y2": 30 } },
+  { "command": "sketch.finish" },
+  { "command": "solid.extrude", "params": { "sketch": 1, "profiles": [{ "x": 25, "y": 15 }], "distance": 10 }, "as": "block" },
+  { "command": "sketch.create", "params": { "plane": "xy" } },
+  { "command": "sketch.circle", "params": { "cx": 80, "cy": 15, "radius": 8 } },
+  { "command": "sketch.finish" },
+  { "command": "solid.extrude", "params": { "sketch": 3, "profiles": [{ "x": 80, "y": 15 }], "distance": 20 }, "as": "pin" },
+  { "command": "view.home", "params": { "width": 1200, "height": 700 } },
+  { "command": "inspect.measure", "params": { "a": { "solid": "$block.solids.0.name" }, "b": { "solid": "$pin.solids.0.name" } } }
+]

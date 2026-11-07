@@ -1,9 +1,30 @@
-//! Layer 0: vectors, points and tolerances.
+//! Layer 0: vectors, points, tolerances, frames, transforms, robust predicates and NURBS
+//! curves (`nurbs`).
 //!
 //! Conventions used everywhere in Chamfera:
 //! - lengths are millimetres, angles are radians;
 //! - the world is right-handed and Z is up;
 //! - geometry is exact (f64); meshes are only for display and export.
+
+mod frame;
+mod mesh;
+mod nurbs;
+mod predicates;
+mod transform;
+mod vec2;
+
+pub use frame::Frame;
+pub use mesh::{Aabb, MAX_TRIANGLES, MeshError, Ray, TriMesh, same_length};
+pub use nurbs::{
+    BSplineCurve2, BSplineCurve3, CurveProjection, DEFAULT_SPLINE_DEGREE, KNOT_TOLERANCE,
+    LENGTH_RELATIVE_TOLERANCE, MAX_CONTROL_POINTS, MAX_DEGREE, MAX_FIT_POINTS, MAX_KNOT,
+    MAX_WEIGHT, MIN_WEIGHT, NurbsError,
+};
+pub use predicates::{
+    PREDICATE_MAX_MAGNITUDE, PREDICATE_MIN_MAGNITUDE, Sign, incircle, orient2d, orient3d,
+};
+pub use transform::Transform;
+pub use vec2::{Point2, Vec2};
 
 use serde::{Deserialize, Serialize};
 use std::ops::{Add, Mul, Neg, Sub};

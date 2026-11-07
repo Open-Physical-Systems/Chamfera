@@ -1,0 +1,22 @@
+[package]
+name = "chamfera-assistant"
+description = "The in-app Claude assistant: Messages API client, streaming and the tool loop over Chamfera's commands (layer 5)"
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+
+[dependencies]
+chamfera-engine.workspace = true
+serde_json.workspace = true
+
+# HTTPS on the desktop only: the browser build has no client (src/http.rs).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+ureq.workspace = true
+rustls.workspace = true
+rustls-native-certs.workspace = true
+
+[lints]
+workspace = true

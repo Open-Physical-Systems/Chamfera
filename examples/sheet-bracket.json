@@ -1,0 +1,11 @@
+[
+  { "command": "sheet.rule", "params": { "name": "Steel 2 mm", "thickness": 2, "bend_radius": 2, "k_factor": 0.44, "relief": "rectangular", "relief_width": 2, "relief_depth": 2 } },
+  { "command": "sketch.create", "params": { "plane": "xy" } },
+  { "command": "sketch.rectangle", "params": { "x1": 0, "y1": 0, "x2": 100, "y2": 50 } },
+  { "command": "sketch.finish" },
+  { "command": "sheet.base", "params": { "sketch": 1, "profile": { "x": 50, "y": 25 }, "rule": "Steel 2 mm" } },
+  { "command": "sheet.flange", "params": { "edge": "2:top 1", "height": 30 } },
+  { "command": "sheet.flange", "params": { "edge": "2:top 3", "height": 20, "offset_start": 10, "offset_end": 10 } },
+  { "command": "sheet.flat_pattern" },
+  { "command": "view.home", "params": { "width": 1150, "height": 680 } }
+]

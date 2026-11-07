@@ -1,0 +1,39 @@
+[package]
+name = "chamfera-ui"
+description = "The desktop and browser user interface (egui + wgpu), layer 6"
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+
+[dependencies]
+chamfera-assistant.workspace = true
+chamfera-doc.workspace = true
+chamfera-drawing.workspace = true
+chamfera-engine.workspace = true
+chamfera-raytrace.workspace = true
+chamfera-geom.workspace = true
+chamfera-gpu.workspace = true
+chamfera-io.workspace = true
+chamfera-render.workspace = true
+chamfera-sketch.workspace = true
+egui.workspace = true
+eframe.workspace = true
+egui-wgpu.workspace = true
+serde_json.workspace = true
+resvg.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# The browser's file picker, downloads and local storage (crates/ui/src/web.rs).
+js-sys = "0.3"
+wasm-bindgen = "0.2"
+web-sys = { version = "0.3", features = ["Blob", "BlobPropertyBag", "Document", "DomStringMap", "HtmlElement", "File", "FileList", "FileReader", "HtmlAnchorElement", "HtmlInputElement", "Storage", "Url", "Window"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rfd.workspace = true
+png.workspace = true
+
+[lints]
+workspace = true

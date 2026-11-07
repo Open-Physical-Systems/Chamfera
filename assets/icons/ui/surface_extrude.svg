@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+  <!-- Chamfera interface icon: surface extrude. Original artwork, MIT OR Apache-2.0. -->
+  <path stroke="#2B313B" d="M4 18.5c3-2 6-2 8 0s5 2 8 0"/>
+  <path stroke="#E8770E" d="M4 18.5V9.5c3-2 6-2 8 0s5 2 8 0v9"/>
+  <path stroke="#2B313B" d="M12 6.5V3.5M10 5.25 12 3.5l2 1.75"/>
+</svg>

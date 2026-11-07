@@ -20,6 +20,6 @@ A dialog (M1+) is a front-end form that builds the parameters and then runs the 
 
 ## Layering
 `cargo xtask layers` fails when a crate depends on its own or a higher layer:
-geom (0) -> sketch, kernel, render (1) -> doc (2) -> io (3) -> engine (4) -> ui, mcp (5) -> apps (6).
+geom (0) -> sketch, kernel, render (1) -> doc (2) -> io, drawing, cam, raytrace (3) -> engine (4) -> gpu, assistant (5) -> ui, mcp (6) -> apps (7).
 - Geometry and topology go in `geom` or `kernel`; the solver in `sketch`; what a design stores in `doc`; files in `io`; commands in `engine`. The UI only reads engine state and runs commands.
 - A new crate needs a row in `LAYERS` in `xtask/src/main.rs` and in `docs/architecture.md`.

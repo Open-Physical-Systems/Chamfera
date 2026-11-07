@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+  <!-- Chamfera interface icon: hole (a counterbored hole through a block, in section). Original artwork, MIT OR Apache-2.0. -->
+  <path stroke="#2B313B" d="M7.5 7H3v12h6.5"/>
+  <path stroke="#2B313B" d="M16.5 7H21v12h-6.5"/>
+  <path stroke="#E8770E" d="M7.5 7v4h2v8"/>
+  <path stroke="#E8770E" d="M16.5 7v4h-2v8"/>
+  <path stroke="#E8770E" stroke-dasharray="1.75 2.5" d="M12 3.5v17"/>
+</svg>

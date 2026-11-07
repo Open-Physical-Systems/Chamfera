@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+  <!-- Chamfera interface icon: arc tangent. Original artwork, MIT OR Apache-2.0. -->
+  <path stroke="#2B313B" d="M3.5 18H10"/>
+  <path stroke="#E8770E" d="M10 18a7.5 7.5 0 0 0 7.5-7.5"/>
+  <circle cx="10" cy="18" r="1.9" fill="#E8770E" stroke="none"/>
+</svg>

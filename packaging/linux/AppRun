@@ -1,0 +1,9 @@
+#!/bin/sh
+# Chamfera AppImage entry point. `Chamfera.AppImage cli <args>` runs the command-line tool;
+# anything else opens the desktop app.
+HERE="$(dirname "$(readlink -f "$0")")"
+if [ "$1" = "cli" ]; then
+    shift
+    exec "$HERE/usr/bin/chamfera-cli" "$@"
+fi
+exec "$HERE/usr/bin/chamfera" "$@"

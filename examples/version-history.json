@@ -1,0 +1,22 @@
+[
+  { "command": "param.set", "params": { "name": "w", "expression": "50 mm" } },
+  { "command": "sketch.create", "params": { "plane": "xy" } },
+  { "command": "sketch.rectangle", "params": { "x1": 0, "y1": 0, "x2": 50, "y2": 30 }, "as": "r" },
+  { "command": "sketch.constrain", "params": { "constraint": { "kind": "fix", "point": "$r.points.0", "at": { "x": 0, "y": 0 } } } },
+  { "command": "sketch.constrain", "params": { "constraint": { "kind": "length", "line": "$r.curves.0", "value": 50 } }, "as": "cw" },
+  { "command": "sketch.constrain", "params": { "constraint": { "kind": "length", "line": "$r.curves.1", "value": 30 } } },
+  { "command": "sketch.circle", "params": { "cx": 20, "cy": 12, "radius": 4 }, "as": "c" },
+  { "command": "sketch.constrain", "params": { "constraint": { "kind": "fix", "point": "$c.centre", "at": { "x": 20, "y": 12 } } } },
+  { "command": "sketch.constrain", "params": { "constraint": { "kind": "diameter", "curve": "$c.curve", "value": 8 } } },
+  { "command": "sketch.dimension", "params": { "constraint": "$cw.constraint", "expression": "w" } },
+  { "command": "sketch.finish", "params": {} },
+  { "command": "solid.extrude", "params": { "sketch": 1, "profiles": [{ "x": 2, "y": 2 }], "distance": 10 } },
+  { "command": "design.save", "params": { "path": "history-example.chamfera" }, "as": "v1" },
+  { "command": "param.set", "params": { "name": "w", "expression": "60 mm" } },
+  { "command": "version.save", "params": { "note": "Plate widened to 60 mm" }, "as": "v2" },
+  { "command": "version.compare", "params": { "a": "$v1.version", "b": "$v2.version.id" } },
+  { "command": "view.standard", "params": { "view": "iso" } },
+  { "command": "view.fit", "params": { "width": 1125, "height": 680 } },
+  { "command": "view.zoom", "params": { "factor": 1.25 } },
+  { "command": "view.pan", "params": { "dx": -260, "dy": 40, "height": 680 } }
+]

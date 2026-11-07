@@ -1,0 +1,20 @@
+[
+  {"command": "sketch.create", "params": {"plane": "xy"}},
+  {"command": "sketch.circle", "params": {"cx": 0, "cy": 0, "radius": 14}},
+  {"command": "sketch.finish"},
+  {"command": "solid.extrude", "params": {"sketch": 1, "profiles": [{"x": 0, "y": 0}], "distance": 36}},
+  {"command": "sketch.create", "params": {"plane": "xy"}},
+  {"command": "sketch.rectangle", "params": {"x1": 26, "y1": -18, "x2": 62, "y2": 18}},
+  {"command": "sketch.finish"},
+  {"command": "solid.extrude", "params": {"sketch": 3, "profiles": [{"x": 44, "y": 0}], "distance": 14, "operation": "new_body"}},
+  {"command": "sketch.create", "params": {"plane": "xy"}},
+  {"command": "sketch.circle", "params": {"cx": -40, "cy": 10, "radius": 13}},
+  {"command": "sketch.finish"},
+  {"command": "solid.extrude", "params": {"sketch": 5, "profiles": [{"x": -40, "y": 10}], "distance": 44, "operation": "new_body"}},
+  {"command": "body.appearance", "params": {"body": "Extrude1", "preset": "brass"}},
+  {"command": "body.appearance", "params": {"body": "Extrude2", "preset": "rubber"}},
+  {"command": "body.appearance", "params": {"body": "Extrude3", "preset": "glass"}},
+  {"command": "render.environment", "params": {"preset": "studio"}},
+  {"command": "view.style", "params": {"style": "realistic"}},
+  {"command": "view.home", "params": {"width": 1280, "height": 800}}
+]
