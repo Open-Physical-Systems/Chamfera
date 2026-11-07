@@ -15,7 +15,7 @@ mod edit;
 mod face_edit;
 mod feature;
 mod hole;
-mod inspect;
+pub mod inspect;
 mod joint;
 mod motion;
 pub mod param;

@@ -248,14 +248,15 @@ Close runners-up: selection filters and box selection (UI and NAV), splines (nee
 
 | Feature | Description | Status | Pri | Size | Layer |
 |---|---|---|---|---|---|
-| Drawing sheets | Sheets of chosen size with a title block template we design ourselves | done (A4/A3/A2, ANSI A/B, our own title block) | P1 | L | new `drawing` crate, ui |
+| Drawing sheets | Sheets of chosen size with a title block template we design ourselves | done (A4/A3/A2, ANSI A/B, our own title block with part, drawing number, revision, material, scale, date, drawn and checked by; Sheet Settings dialog over `drawing.edit_sheet`; a sheet picker for several sheets) | P1 | L | new `drawing` crate, ui |
 | Base and projected views | Orthographic views from the model, with hidden lines | done (exact silhouettes of cylinders, cones and spheres; tori sampled densely) | P1 | L | kernel (exact projection), drawing |
-| Section, detail, auxiliary and break views | Further view kinds | partial (section views with cutting-plane lines and A-A labels, detail views clipped and enlarged; auxiliary and break views missing) | P2 | L | drawing, kernel |
+| Section, detail, auxiliary and break views | Further view kinds | partial (section views with cutting-plane lines, hatching and A-A labels, detail views clipped and enlarged, both from the ribbon; auxiliary, break, stepped and broken-out views missing) | P2 | L | drawing, kernel |
 | Views update with the model | Associative views | done (views, and dimensions through K8 references; a lost reference shows dangling) | P1 | M | doc, drawing |
-| Dimensions on drawings | Linear, aligned, angular, radial, diameter, ordinate, baseline, chain | partial (linear, aligned, angular, radius, diameter) | P1 | L | drawing |
-| Centre marks and centre lines | Automatic marks on holes and axes | done | P1 | S | drawing |
+| Dimensions on drawings | Linear, aligned, angular, radial, diameter, ordinate, baseline, chain | done (all associative; ordinate along x or y from an origin, baseline sets stacked evenly, chains on one line; tolerances and dimension styles missing) | P1 | L | drawing |
+| Centre marks and centre lines | Automatic marks on holes and axes | done (automatic marks and axis lines; Centre Line between two circles) | P1 | S | drawing |
 | Annotations | Notes, leaders, balloons, surface texture, weld and datum symbols, GD&T frames | partial (notes, leaders, balloons, surface texture, feature control frames with datums, centre lines; weld and datum feature symbols missing) | P2 | L | drawing |
-| Tables | Parts list, hole table, revision table | partial (parts list from components; hole and revision tables missing) | P2 | M | drawing |
+| Hole and thread callouts | Count, size, depth or THRU, counterbore and countersink written from the hole feature; thread notes | partial (hole callouts from the Hole feature, following it; thread callouts wait for cosmetic threads in the model) | P1 | M | drawing, engine |
+| Tables | Parts list, hole table, revision table | partial (parts list from components with balloons on views; hole and revision tables missing) | P2 | M | drawing |
 | Hatching | Fill closed regions with a pattern (solid, lines at an angle, cross-hatch), associative to the boundary | partial (section faces hatched at 45°/135° per part; free regions missing) | P1 | M | drawing, geom |
 | Layers | Named layers with colour, line type, line weight, on/off, lock, freeze | missing | P1 | M | drawing (and sketch later) |
 | Line types and line weights | Dashed, centre, phantom lines; plotted widths | missing | P1 | S | drawing |
@@ -265,7 +266,7 @@ Close runners-up: selection filters and box selection (UI and NAV), splines (nee
 | Command line with aliases | Type a command or a short alias (`L` for line, `C` for circle); options as prompts | missing | P1 | M | ui (on top of the command registry) |
 | 2D modify tools | Move, copy, rotate, scale, stretch, array, mirror, offset, fillet, chamfer, join, break, explode | branch (`sketch/tools` has offset, mirror, fillet, chamfer, patterns, split) / missing for the rest | P1 | M | sketch, drawing |
 | Paper space / model space and viewports | Layouts with scaled windows into the model | missing | P2 | L | drawing |
-| Print and export to PDF, DXF, DWG | Output drawings (DWG through a clean-room reader/writer of the public spec only) | partial (SVG, DXF R12, PDF 1.4) | P1 | L | io |
+| Print and export to PDF, DXF, DWG | Output drawings (DWG through a clean-room reader/writer of the public spec only) | partial (SVG, DXF R12, PDF 1.4, each the sheet as shown; DWG and printing missing) | P1 | L | io |
 
 ## 11. Import and export
 

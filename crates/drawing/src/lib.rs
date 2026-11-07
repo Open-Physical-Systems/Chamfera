@@ -12,6 +12,9 @@
 //!   silhouettes of cones, spheres and tori, section views with hatching (`section.rs`),
 //!   detail views, notes, leaders, surface texture symbols, feature control frames,
 //!   centre lines, balloons and the parts list (`annot.rs`).
+//! - Version 3: ordinate dimensions, hole callouts (their text handed in as
+//!   [`HoleNote`]s by the caller, from the hole features), and a title block with the
+//!   drawing number, revision, material and checker.
 //! - [`svg::write`], [`dxf::write`] and [`pdf::write`]: SVG 1.1, DXF R12 (AC1009) ASCII
 //!   and a minimal hand-written PDF 1.4, from public specifications only.
 //!
@@ -32,8 +35,10 @@ mod text;
 mod tests;
 #[cfg(test)]
 mod tests_v2;
+#[cfg(test)]
+mod tests_v3;
 
-pub use annot::PartRow;
+pub use annot::{HoleNote, PartRow};
 pub use chamfera_doc::drawing::{
     DimensionKind, Drawing, Orientation, Paper, ProjectionAngle, Sheet, SheetDimension, SheetView,
     TitleBlock, ViewDirection,
@@ -42,7 +47,8 @@ pub use dims::{DimensionPlan, format_value, measure, moved_offset, plan_dimensio
 pub use hlr::{Basis, Curve2, ViewCurve, ViewGeometry, project, project_basis};
 pub use sheet::{
     DimensionState, Owner, PlacedView, SheetGeometry, Shown, centre_line_refs, dimension_refs,
-    projects_from, render_sheet, render_with_parts, scale_text, shown,
+    hole_callout_refs, projects_from, render_full, render_sheet, render_with_parts, scale_text,
+    shown,
 };
 pub use sheet::{MARGIN, MARGIN_LEFT, TITLE_HEIGHT};
 pub use text::width as text_width;

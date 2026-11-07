@@ -330,6 +330,24 @@ fn drilling_finds_both_vertical_holes_of_the_plate() {
     // An 8 mm drill is refused for 6 mm holes.
     let err = ops::drill(&holes, &cutter(8.0), 12.0, None, 0.0, 20.0).unwrap_err();
     assert!(matches!(err, CamError::Refused(_)));
+    // QA user guide pass: a 5 mm drill in the 6 mm holes drills them, but they would
+    // come out 5 mm, which is worth a warning; a 6 mm drill fits and a 5.995 mm one is
+    // within the 0.01 mm fit tolerance. A flat end mill is warned about too.
+    let w = ops::drill_warnings(5.0, true, "drill", &holes);
+    assert_eq!(
+        w,
+        ["the 5 mm tool is smaller than 2 6 mm holes: they would come out 5 mm"]
+    );
+    assert!(ops::drill_warnings(6.0, true, "drill", &holes).is_empty());
+    assert!(ops::drill_warnings(5.995, true, "drill", &holes).is_empty());
+    let w = ops::drill_warnings(6.0, false, "flat end mill", &holes);
+    assert_eq!(w.len(), 1);
+    assert!(w[0].contains("flat end mill, not a drill"), "{w:?}");
+    let one = [holes[0]];
+    assert_eq!(
+        ops::drill_warnings(5.0, true, "drill", &one),
+        ["the 5 mm tool is smaller than the 6 mm hole: it would come out 5 mm"]
+    );
 }
 
 #[test]

@@ -60,7 +60,7 @@ Outside contours climb-mill and get tangent lead-in arcs of the tool's radius; i
 
 ### Drill
 
-**MANUFACTURE > 2D > Drill** (in the 2D group's list) drills **every vertical hole** of the model, top to bottom. Leave **Peck** empty for a plain drilling cycle (G81) or give a peck depth for a peck cycle (G83). The reply lists the holes it found with their diameters and depths. Choosing particular holes, the retract plane (default 2 mm above the stock) and a breakthrough below the hole are script options.
+**MANUFACTURE > 2D > Drill** (in the 2D group's list) drills **every vertical hole** of the model, top to bottom. Leave **Peck** empty for a plain drilling cycle (G81) or give a peck depth for a peck cycle (G83). The reply lists the holes it found with their diameters and depths. A tool that is not a drill, or a drill smaller than a hole (a 5 mm drill in a 6 mm hole comes out 5 mm), is drilled anyway but warned about: the reply's `warnings`, `cam.generate`'s `warnings` (each named after its operation) and the status bar say so. A drill bigger than a hole is refused. Choosing particular holes, the retract plane (default 2 mm above the stock) and a breakthrough below the hole are script options.
 
 ## 3D operations
 
@@ -95,7 +95,7 @@ Example (`examples/cam-3d-simulate.json`): a 60 × 40 × 20 mm block with 8 mm f
 ## Post G-code
 
 1. Generate first, and check the simulation.
-2. Pick the dialect: **File > Post G-code (LinuxCNC)…** or **File > Post G-code (GRBL)…**. The **MANUFACTURE > ACTIONS > Post** button always posts for LinuxCNC.
+2. Pick the dialect: **MANUFACTURE > ACTIONS > Post** (LinuxCNC) or **Post GRBL** beside it, or **File > Post G-code (LinuxCNC)…** or **File > Post G-code (GRBL)…**.
 3. Choose where to save (the name defaults to the design's name with `.nc`; `.ngc` and `.gcode` are offered too).
 4. The status bar says "Posted 406 lines to …".
 
@@ -134,7 +134,7 @@ Only the first setup is posted. Suppressed operations are left out.
 - 3-axis milling only: no lathe, no 4th or 5th axis, no tool-length or cutter-radius compensation in the code, no coolant codes.
 - One posted setup per file (the first); no setup dialog, no stock or origin picking in the UI yet.
 - Drill finds every vertical hole; the UI cannot pick some of them. Drilling under a deep pocket starts its pecks at the stock's retract plane, so it pecks through air.
-- There is no check that a tool is long enough, that the holder clears the part, or that a drill's diameter matches the hole (a 5 mm drill in a 6 mm hole is accepted).
+- There is no check that a tool is long enough or that the holder clears the part.
 - The simulation is a grid of columns: volumes and gouge depths are approximate to about one cell, and it does not check the holder or rapids into the stock.
 - Cycle times ignore acceleration and tool changes.
 - 3D toolpaths are worked out again after every model change, which can take a few seconds on detailed parts (see troubleshooting.md).

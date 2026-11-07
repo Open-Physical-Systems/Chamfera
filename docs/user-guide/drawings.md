@@ -3,8 +3,10 @@
 The Drawing workspace turns the model into 2D sheets you can print or send to a
 workshop: a paper sheet with a border and title block, orthographic and isometric views
 projected from the exact model, section and detail views, dimensions that stay attached
-to the model, and annotations (notes, leaders, feature control frames, surface texture
-symbols, centre lines, a parts list and balloons). A sheet is exported as PDF, SVG or DXF.
+to the model (linear, aligned, angular, radius, diameter, ordinate, baseline and chain),
+hole callouts written from the Hole features, and annotations (notes, leaders, feature
+control frames, surface texture symbols, centre lines, a parts list and balloons). A sheet
+is exported as PDF, SVG or DXF, exactly as it is shown.
 
 Drawings are saved inside the `.chamfera` design, so there is no separate drawing file to
 keep in step with the model: when the model changes, the views and dimensions redraw.
@@ -27,15 +29,30 @@ and **Esc** drops the tool.
 ## Start a sheet
 
 1. Click **DRAWING > SHEET > New Sheet**. You get an A3 landscape sheet at 1:1, third-angle
-   projection, with a title block (part name, scale, units, date, drawn by).
-2. To switch between third- and first-angle projection, click **SHEET > Projection**. The
-   projection symbol in the title block changes with it, and the projected views move to
-   the other side of their base view (see Limits).
+   projection, with a title block.
+2. Click **SHEET > Settings** to open the Sheet Settings dialog:
+   - **Paper**: A4, A3, A2, ANSI A or ANSI B, **Landscape** or **Portrait**.
+   - **Scale**: type `1:2`, `2:1` or a plain factor such as `0.5`. Views that have no
+     scale of their own follow it.
+   - **Projection**: third or first angle. The projection symbol in the title block
+     changes with it, and projected views move to the other side of their base view
+     (see Limits).
+   - **Sheet name**, and the title block's fields: **Part**, **Drawing no.**,
+     **Revision**, **Material**, **Drawn by**, **Checked by** and **Date** (each up to 64
+     characters; the date starts as today's).
+3. Click **OK**. All the changes are one step: one **Undo** (Ctrl+Z) takes them all back.
+   If a value is refused (a scale that does not read, a field that is too long), the
+   dialog stays open and says why.
 
-If you place a view before making a sheet, a sheet is made for you. The paper size,
-orientation, scale and title block fields can only be set from a script for now
-(`drawing.new_sheet` and `drawing.edit_sheet`, below); the New Sheet button always makes an
-A3 sheet at 1:1.
+**SHEET > Projection** switches between third- and first-angle projection in one click.
+If you place a view before making a sheet, a sheet is made for you. With more than one
+sheet, a list at the top left of the sheet picks the one shown.
+
+The title block is Chamfera's own: the projection symbol on the left, then the part name,
+drawing number and revision across the top, and the scale, units, material, date, who drew
+it and who checked it below. Empty fields stay blank.
+
+![The Sheet Settings dialog over an A3 sheet at 2:1](images/drawings-sheet-settings.png)
 
 ## Place views
 
@@ -83,6 +100,29 @@ set from a script (`scale`, `body`).
 The value is measured on the model, not on the paper, so a dimension on a 2:1 view still
 reads the model size.
 
+### Ordinate, baseline and chain dimensions
+
+These are in the DIMENSIONS list (under the group's caption). Before the clicks, the tool's
+options box says what to measure: **Across (x)** for distances along the view's width, or
+**Up (y)** for its height.
+
+- **Ordinate Dimensions**: click the origin (a vertex, an edge or a hole's centre); it gets
+  a `0` and the origin's small circle. Then click each point to measure: each one gets its
+  distance from the origin, written along a line that ends 10 mm beyond the origin (below
+  it for x, left of it for y). A point on the other side of the origin reads negative.
+  Press **Esc** when you are done.
+- **Baseline Dimensions**: click the baseline point first, then the points to measure from
+  it, and press **Enter** (or **Place** in the options box). Each point gets a dimension
+  from the baseline; the shortest is nearest the part and the others are stacked 7 mm
+  apart.
+- **Chain Dimensions**: click the points in any order and press **Enter**. Each pair of
+  neighbours along the axis gets one dimension, all on one line.
+
+A set is made with one command, so one Undo removes it; afterwards each dimension is an
+ordinary one that follows the model, can be dragged and can be deleted on its own.
+Snapping works as for the other dimensions: vertices, points on edges and the centres of
+circles.
+
 ### Associative and dangling dimensions
 
 A dimension remembers which model vertices and edges it measures, by their persistent
@@ -121,9 +161,20 @@ first, then click. These tools, and Centre Line, stay on for the next one until 
   untick **Material removal required** if needed, then click the surface the symbol sits on.
 - **Centre Line** (in the ANNOTATE list): click two circles of one view. The line joins
   their centres and follows the model.
+- **Hole Callout** (in the ANNOTATE list): click the rim of a hole made by the Hole feature
+  (see solid-modelling.md), then where the text goes. The callout says how many holes the
+  feature drills, their size and their depth, and the counterbore or countersink:
+  `4 x Ø6.6 THRU` over `CBORE Ø11.22 x 4 DEEP`, `Ø6 THRU` over `CSK Ø12 x 90°`, or
+  `2 x Ø5 x 6 DEEP`. The text is worked out from the feature every time the sheet is
+  drawn, so it changes when you change the hole's sizes, and the leader follows the hole.
+  A hole that is suppressed or deleted leaves its callout in the warning colour.
 
 Notes, leaders, frames and texture symbols are placed on the paper: they do not move when
-the model changes. Centre lines, dimensions and balloons do.
+the model changes. Centre lines, dimensions, hole callouts and balloons do.
+
+![The hole plate at 2:1: ordinate dimensions from the lower-left corner, a chain across the top, hole callouts for the counterbored, countersunk and blind holes, the front view and section A-A](images/drawings-holes.png)
+
+The picture above is `examples/drawing-holes.json`, exported as PDF.
 
 ![Section A-A, detail B at 4:1, dimensions, a centre line, three feature control frames, a surface texture symbol, a leader, a note, a parts list and balloons](images/drawings-annotated.png)
 
@@ -170,9 +221,17 @@ block with a Ø16 hole and 8 mm fillets, as in `examples/drawing-sheet.json`):
 The dimension replies give `"text": "60"` and `"text": "Ø16"` with `"associative": true`.
 Other commands:
 
-- `drawing.new_sheet {paper: a4|a3|a2|ansi_a|ansi_b, orientation, scale, projection: third|first, name, part_name, drawn_by, date}`
-  and `drawing.edit_sheet {sheet, ...the same}`.
-- `drawing.add_dimension {view, kind: horizontal|vertical|aligned|diameter|radius|angular, x1, y1, x2, y2, offset}`.
+- `drawing.new_sheet {paper: a4|a3|a2|ansi_a|ansi_b, orientation, scale, projection: third|first, name, part_name, drawing_number, revision, material, drawn_by, checked_by, date}`
+  and `drawing.edit_sheet {sheet, ...the same}` (it replies with all the settings).
+- `drawing.add_dimension {view, kind: horizontal|vertical|aligned|diameter|radius|angular|ordinate_x|ordinate_y, x1, y1, x2, y2, offset}`;
+  for an ordinate, point 1 is the origin and `offset` is where its line ends, sheet mm from
+  the origin.
+- `drawing.add_ordinate {view, axis: x|y, x0, y0, points: [{x, y}], offset}` (the origin's
+  0 and one per point), `drawing.add_baseline {view, kind: horizontal|vertical, points, offset, spacing}`
+  (from the first point) and `drawing.add_chain {view, kind, points, offset}`; each replies
+  with the `dimensions` it made and their values.
+- `drawing.add_hole_callout {view, x1, y1, x, y, feature}`: `x1, y1` near a hole's circle,
+  `x, y` the text; replies with the `text` lines. `drawing.list` gives each callout's text.
 - `drawing.add_section {view, x1, y1, x2, y2, x, y, flip, scale, label}` replies with the
   `hatched_area` in model mm²; `drawing.add_detail {view, cx, cy, radius, x, y, scale, label}`.
 - `drawing.add_note {x, y, text, height}`, `drawing.add_leader {points: [{x, y}, ...], text}`,
@@ -188,16 +247,14 @@ Other commands:
 
 `examples/drawing-annotated.json` uses every annotation. Its section through both holes
 of an 80 x 50 x 12 plate with a Ø8 x 20 pin replies `hatched_area` 928: 80 x 12 less two
-8 x 12 holes is 768, plus the pin's 8 x 20 = 160.
+8 x 12 holes is 768, plus the pin's 8 x 20 = 160. `examples/drawing-holes.json` adds the
+title block fields, ordinate and chain dimensions and hole callouts.
 
 ## Limits
 
-- **No editing on the sheet yet.** In the app a placed view, dimension or annotation
-  cannot be selected, moved or deleted, and there is no Sheet Settings window: Undo
-  (Ctrl+Z) is the way back, and `drawing.delete` and `drawing.edit_sheet` do the rest from
-  a script or the assistant (assistant.md).
-- **One sheet on screen.** New Sheet adds a sheet and shows it, but the app has no way to
-  go back to an earlier sheet; all sheets are kept and exported by id from a script.
+- With no tool, a click on the sheet selects a view, dimension or annotation, a drag moves
+  it and **Delete** removes it. A view's scale and body, and a dimension's text, cannot be
+  edited in place yet: delete and place it again, or use a script.
 - **Switching to first-angle projection can push views off the paper.** The projected
   views swap sides about the base view; if the base view is near an edge they land outside
   the sheet. Place the base view near the middle, or switch projection before placing views.
@@ -205,7 +262,11 @@ of an 80 x 50 x 12 plate with a Ø8 x 20 pin replies `hatched_area` 928: 80 x 12
   detail or isometric view); there are no stepped, aligned or broken-out sections.
 - Notes, leaders, feature control frames and surface texture symbols are fixed on the
   paper and do not follow the model.
-- The date in the title block is the UTC date, which can be a day off your local date.
+- Dimensions have no tolerances or styles yet, and there are no hole or revision tables.
+  Hole callouts cover the Hole feature only: a hole cut by an extrude has none, and there
+  are no thread callouts until the model has cosmetic threads.
+- The browser app leaves the title block date empty (the desktop app fills in today's
+  local date).
 - Export PDF, SVG and DXF only; the sheet is exported at its paper size, not scaled to fit.
 
 See also: file-formats.md (other export formats), parameters-and-configurations.md

@@ -28,6 +28,8 @@ pub(crate) struct DrawOptions {
     pub flip: bool,
     /// The detail's scale as typed (`2`, `2:1`, `5:1`); empty for twice the view's.
     pub scale: String,
+    /// Ordinate, baseline and chain dimensions measure up the view, not across it.
+    pub vertical: bool,
 }
 
 impl Default for DrawOptions {
@@ -42,6 +44,7 @@ impl Default for DrawOptions {
             datums: String::new(),
             flip: false,
             scale: String::new(),
+            vertical: false,
         }
     }
 }
@@ -57,6 +60,10 @@ pub(crate) fn command(t: DrawTool) -> Option<&'static str> {
         DrawTool::Gdt => "drawing.add_gdt",
         DrawTool::CentreLine => "drawing.add_centre_line",
         DrawTool::Balloons => "drawing.add_balloons",
+        DrawTool::Ordinate => "drawing.add_ordinate",
+        DrawTool::Baseline => "drawing.add_baseline",
+        DrawTool::Chain => "drawing.add_chain",
+        DrawTool::HoleCallout => "drawing.add_hole_callout",
         DrawTool::PlaceView(_) | DrawTool::Dimension(_) => return None,
     })
 }
@@ -65,7 +72,7 @@ pub(crate) fn command(t: DrawTool) -> Option<&'static str> {
 fn clicks(t: DrawTool) -> usize {
     match t {
         DrawTool::Section | DrawTool::Detail => 3,
-        DrawTool::Leader | DrawTool::Gdt | DrawTool::CentreLine => 2,
+        DrawTool::Leader | DrawTool::Gdt | DrawTool::CentreLine | DrawTool::HoleCallout => 2,
         _ => 1,
     }
 }
@@ -85,6 +92,14 @@ pub(crate) fn hint(t: DrawTool) -> &'static str {
         DrawTool::Gdt => "Click the feature, then where the frame goes · Esc cancels",
         DrawTool::CentreLine => "Click two circles of a view · Esc cancels",
         DrawTool::Balloons => "Click a view to balloon its components · Esc cancels",
+        DrawTool::Ordinate => {
+            "Click the origin on a view, then each point to measure from it · Esc ends"
+        }
+        DrawTool::Baseline => {
+            "Click the baseline, then each point to measure from it · Enter places · Esc cancels"
+        }
+        DrawTool::Chain => "Click points along the view · Enter places · Esc cancels",
+        DrawTool::HoleCallout => "Click a hole's circle, then where the callout goes · Esc ends",
         _ => "",
     }
 }
@@ -118,6 +133,14 @@ impl ChamferaApp {
     /// A click with a section, detail or annotation tool. Tests call this with sheet
     /// points instead of a mouse.
     pub(crate) fn drawing_tool_click(&mut self, tool: DrawTool, p: Point2) {
+        match tool {
+            DrawTool::Ordinate => return self.drawing_ordinate_click(p),
+            DrawTool::Baseline | DrawTool::Chain => {
+                self.drawing.picks.push(p);
+                return;
+            }
+            _ => {}
+        }
         self.drawing.picks.push(p);
         if self.drawing.picks.len() < clicks(tool) {
             return;
@@ -129,7 +152,11 @@ impl ChamferaApp {
         let (a, b, c) = (at(0), at(1), at(2));
         let needs_view = matches!(
             tool,
-            DrawTool::Section | DrawTool::Detail | DrawTool::CentreLine | DrawTool::Balloons
+            DrawTool::Section
+                | DrawTool::Detail
+                | DrawTool::CentreLine
+                | DrawTool::Balloons
+                | DrawTool::HoleCallout
         );
         let view = if needs_view {
             match self.drawing_view_at(a) {
@@ -178,7 +205,12 @@ impl ChamferaApp {
             }
             DrawTool::CentreLine => json!({ "x1": a.x, "y1": a.y, "x2": b.x, "y2": b.y }),
             DrawTool::Balloons => json!({}),
-            DrawTool::PlaceView(_) | DrawTool::Dimension(_) => return,
+            DrawTool::HoleCallout => json!({ "x1": a.x, "y1": a.y, "x": b.x, "y": b.y }),
+            DrawTool::PlaceView(_)
+            | DrawTool::Dimension(_)
+            | DrawTool::Ordinate
+            | DrawTool::Baseline
+            | DrawTool::Chain => return,
         };
         if let Some(v) = view {
             params["view"] = json!(v);
@@ -189,6 +221,15 @@ impl ChamferaApp {
             let what = match tool {
                 DrawTool::Section => format!("Section {0}-{0}", r["label"].as_str().unwrap_or("")),
                 DrawTool::Detail => format!("Detail {}", r["label"].as_str().unwrap_or("")),
+                DrawTool::HoleCallout => r["text"]
+                    .as_array()
+                    .map(|l| {
+                        l.iter()
+                            .filter_map(Value::as_str)
+                            .collect::<Vec<_>>()
+                            .join(" · ")
+                    })
+                    .unwrap_or_default(),
                 _ => label(id).to_owned(),
             };
             self.message = Some((what, false));
@@ -199,6 +240,87 @@ impl ChamferaApp {
             ) {
                 self.drawing.tool = None;
             }
+        }
+    }
+
+    /// A click with the Ordinate tool: the first sets the origin (and its 0), each next
+    /// one adds the distance of the point clicked from it.
+    fn drawing_ordinate_click(&mut self, p: Point2) {
+        let vertical = self.drawing.options.vertical;
+        let Some(&origin) = self.drawing.picks.first() else {
+            let Some(view) = self.drawing_view_at(p) else {
+                self.message = Some((
+                    format!("{}: click on a view", label("drawing.add_ordinate")),
+                    true,
+                ));
+                return;
+            };
+            let axis = if vertical { "y" } else { "x" };
+            let params = json!({ "view": view, "axis": axis, "x0": p.x, "y0": p.y });
+            if self.run("drawing.add_ordinate", params).is_some() {
+                self.drawing.picks.push(p);
+                self.message = Some(("Origin 0: now click the points to measure".into(), false));
+            }
+            return;
+        };
+        let Some(view) = self.drawing_view_at(origin) else {
+            self.drawing.picks.clear();
+            return;
+        };
+        let kind = if vertical { "ordinate_y" } else { "ordinate_x" };
+        let params = json!({
+            "view": view, "kind": kind, "x1": origin.x, "y1": origin.y, "x2": p.x, "y2": p.y,
+            "offset": -10.0,
+        });
+        if let Some(r) = self.run("drawing.add_dimension", params) {
+            self.message = Some((
+                format!("Ordinate {}", r["text"].as_str().unwrap_or("")),
+                false,
+            ));
+        }
+    }
+
+    /// Enter or Place with the Baseline or Chain tool: one command for the points
+    /// clicked so far; the tool stays on for the next set.
+    pub(crate) fn drawing_finish_set(&mut self) {
+        let Some(tool @ (DrawTool::Baseline | DrawTool::Chain)) = self.drawing.tool else {
+            return;
+        };
+        let Some(id) = command(tool) else { return };
+        if self.drawing.picks.len() < 2 {
+            self.message = Some((format!("{}: click at least two points", label(id)), true));
+            return;
+        }
+        let picks = std::mem::take(&mut self.drawing.picks);
+        let first = picks.first().copied().unwrap_or(Point2::ORIGIN);
+        let Some(view) = self.drawing_view_at(first) else {
+            self.message = Some((format!("{}: click on a view", label(id)), true));
+            return;
+        };
+        let vertical = self.drawing.options.vertical;
+        // The lines go on the side of the view the points are on, as for one dimension.
+        let centre = self
+            .drawing_sheet()
+            .and_then(|s| chamfera_engine::cmd::drawing::render(&self.session, s).ok())
+            .and_then(|g| g.view(view).map(|v| v.centre));
+        let n = picks.len() as f64;
+        let mean = Point2::new(
+            picks.iter().map(|q| q.x).sum::<f64>() / n,
+            picks.iter().map(|q| q.y).sum::<f64>() / n,
+        );
+        let below = centre.is_some_and(|c| if vertical { mean.x < c.x } else { mean.y < c.y });
+        let params = json!({
+            "view": view,
+            "kind": if vertical { "vertical" } else { "horizontal" },
+            "points": picks.iter().map(|q| json!({ "x": q.x, "y": q.y })).collect::<Vec<_>>(),
+            "offset": if below { -10.0 } else { 10.0 },
+        });
+        if let Some(r) = self.run(id, params) {
+            let texts: Vec<&str> = r["dimensions"]
+                .as_array()
+                .map(|d| d.iter().filter_map(|x| x["text"].as_str()).collect())
+                .unwrap_or_default();
+            self.message = Some((format!("{}: {}", label(id), texts.join(", ")), false));
         }
     }
 
@@ -220,9 +342,13 @@ impl ChamferaApp {
             return;
         };
         let Some(id) = command(tool) else { return };
-        if matches!(tool, DrawTool::CentreLine | DrawTool::Balloons) {
+        if matches!(
+            tool,
+            DrawTool::CentreLine | DrawTool::Balloons | DrawTool::HoleCallout
+        ) {
             return;
         }
+        let picked = self.drawing.picks.len();
         let look = Look {
             theme: &self.theme,
             icons: &self.icons,
@@ -230,11 +356,14 @@ impl ChamferaApp {
         let title = label(id);
         let icon = match tool {
             DrawTool::Section | DrawTool::Detail => Icon::ViewFront,
-            DrawTool::Gdt => Icon::Dimension,
+            DrawTool::Gdt | DrawTool::Ordinate | DrawTool::Baseline | DrawTool::Chain => {
+                Icon::Dimension
+            }
             _ => Icon::Edit,
         };
         let o = &mut self.drawing.options;
         let mut close = false;
+        let mut place = false;
         const WIDTH: f32 = 300.0;
         egui::Window::new(title)
             .id(egui::Id::unique("drawing tool options"))
@@ -309,6 +438,14 @@ impl ChamferaApp {
                                 ui.checkbox(&mut o.flip, "Look the other way");
                                 ui.end_row();
                             }
+                            DrawTool::Ordinate | DrawTool::Baseline | DrawTool::Chain => {
+                                widgets::field_label(ui, look, "Measure");
+                                ui.horizontal(|ui| {
+                                    ui.radio_value(&mut o.vertical, false, "Across (x)");
+                                    ui.radio_value(&mut o.vertical, true, "Up (y)");
+                                });
+                                ui.end_row();
+                            }
                             DrawTool::Detail => {
                                 widgets::field_label(ui, look, "Scale");
                                 ui.add_sized(
@@ -327,14 +464,29 @@ impl ChamferaApp {
                     );
                 });
                 widgets::dialog_footer(ui, look, |ui| {
-                    if widgets::secondary_button(ui, look, "Close").clicked() {
-                        close = true;
-                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if matches!(tool, DrawTool::Baseline | DrawTool::Chain)
+                            && widgets::primary_button(
+                                ui,
+                                look,
+                                &format!("Place ({picked} points)"),
+                                picked >= 2,
+                            )
+                            .clicked()
+                        {
+                            place = true;
+                        }
+                        if widgets::secondary_button(ui, look, "Close").clicked() {
+                            close = true;
+                        }
+                    });
                 });
             });
         if close {
             self.drawing.tool = None;
             self.drawing.picks.clear();
+        } else if place {
+            self.drawing_finish_set();
         }
     }
 }
@@ -425,5 +577,70 @@ mod tests {
         app.drawing_click(Point2::new(200.0, 240.0));
         let notes = &app.session.doc.drawing.sheets[0].annotations;
         assert_eq!(notes.len(), 2, "{:?}", app.message);
+    }
+
+    /// The hole plate (`examples/hole-plate.json`) with its top view at (150, 200):
+    /// model (x, y) is sheet (110 + x, 175 + y).
+    fn hole_plate_top() -> ChamferaApp {
+        let mut app = ChamferaApp::headless();
+        let steps: Value =
+            serde_json::from_str(include_str!("../../../examples/hole-plate.json")).unwrap();
+        chamfera_engine::script::run_steps(&mut app.session, steps.as_array().unwrap()).unwrap();
+        app.drawing.active = true;
+        app.run(
+            "drawing.add_view",
+            json!({"view": "top", "x": 150, "y": 200}),
+        );
+        app
+    }
+
+    fn values(app: &ChamferaApp) -> Vec<f64> {
+        app.session.doc.drawing.sheets[0]
+            .dimensions
+            .iter()
+            .map(|d| chamfera_drawing::measure(d.kind, &d.points).unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn clicks_make_ordinate_baseline_and_chain_dimensions_and_a_hole_callout() {
+        let mut app = hole_plate_top();
+        // Ordinate: the corner (110, 175) is the origin (0), then the hole centres at
+        // x = 10 and 40 (sheet 120 and 150).
+        app.drawing.tool = Some(DrawTool::Ordinate);
+        app.drawing_click(Point2::new(110.0, 175.0));
+        app.drawing_click(Point2::new(120.0, 185.0));
+        app.drawing_click(Point2::new(150.0, 200.0));
+        assert_eq!(values(&app), vec![0.0, 10.0, 40.0], "{:?}", app.message);
+        // Baseline up the view: the corner, then the centres at y = 10 and 40; nothing
+        // until Enter (here: Place).
+        app.drawing.tool = Some(DrawTool::Baseline);
+        app.drawing.picks.clear();
+        app.drawing.options.vertical = true;
+        app.drawing_click(Point2::new(110.0, 175.0));
+        app.drawing_click(Point2::new(120.0, 215.0));
+        app.drawing_click(Point2::new(120.0, 185.0));
+        assert_eq!(values(&app).len(), 3);
+        app.drawing_finish_set();
+        assert_eq!(values(&app)[3..], [10.0, 40.0], "{:?}", app.message);
+        assert!(app.drawing.picks.is_empty() && app.drawing.tool == Some(DrawTool::Baseline));
+        // Chain across: centres at x = 25, 40 and 55 (sheet 135, 150, 165): 15, 15.
+        app.drawing.tool = Some(DrawTool::Chain);
+        app.drawing.options.vertical = false;
+        for x in [165.0, 135.0, 150.0] {
+            app.drawing_click(Point2::new(x, 200.0));
+        }
+        app.drawing_finish_set();
+        assert_eq!(values(&app)[5..], [15.0, 15.0], "{:?}", app.message);
+        // Hole callout: the countersunk hole's rim (156, 200), then the text's place.
+        app.drawing.tool = Some(DrawTool::HoleCallout);
+        app.drawing_click(Point2::new(156.0, 200.0));
+        app.drawing_click(Point2::new(200.0, 250.0));
+        let a = &app.session.doc.drawing.sheets[0].annotations;
+        assert_eq!(a.len(), 1, "{:?}", app.message);
+        assert_eq!(
+            app.message.as_ref().map(|m| m.0.as_str()),
+            Some("Ø6 THRU · CSK Ø12 x 90°")
+        );
     }
 }

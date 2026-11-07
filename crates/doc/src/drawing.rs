@@ -120,6 +120,55 @@ pub struct TitleBlock {
     /// The date as written, for example `2026-11-06`.
     #[serde(default)]
     pub date: String,
+    /// The drawing's number, its revision, the material and who checked it (format 39).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub drawing_number: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub revision: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub material: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub checked_by: String,
+}
+
+impl TitleBlock {
+    /// The parameter names of the fields, in the order [`TitleBlock::fields`] gives them.
+    pub const NAMES: [&'static str; 7] = [
+        "part_name",
+        "drawn_by",
+        "date",
+        "drawing_number",
+        "revision",
+        "material",
+        "checked_by",
+    ];
+
+    /// Every field, in the order of [`TitleBlock::NAMES`].
+    pub fn fields(&self) -> [&str; 7] {
+        [
+            &self.part_name,
+            &self.drawn_by,
+            &self.date,
+            &self.drawing_number,
+            &self.revision,
+            &self.material,
+            &self.checked_by,
+        ]
+    }
+
+    /// The field named `name` (one of [`TitleBlock::NAMES`]).
+    pub fn field_mut(&mut self, name: &str) -> Option<&mut String> {
+        Some(match name {
+            "part_name" => &mut self.part_name,
+            "drawn_by" => &mut self.drawn_by,
+            "date" => &mut self.date,
+            "drawing_number" => &mut self.drawing_number,
+            "revision" => &mut self.revision,
+            "material" => &mut self.material,
+            "checked_by" => &mut self.checked_by,
+            _ => return None,
+        })
+    }
 }
 
 /// The direction a view looks from. Z is up: the front view looks along +Y (from -Y),
@@ -253,17 +302,29 @@ pub enum DimensionKind {
     Diameter,
     Radius,
     Angular,
+    /// An ordinate (coordinate) dimension along the view's x axis: the signed distance
+    /// of the second point from the first, the origin (format 39).
+    OrdinateX,
+    /// The same along the view's y axis.
+    OrdinateY,
 }
 
 impl DimensionKind {
-    pub const ALL: [DimensionKind; 6] = [
+    pub const ALL: [DimensionKind; 8] = [
         DimensionKind::Horizontal,
         DimensionKind::Vertical,
         DimensionKind::Aligned,
         DimensionKind::Diameter,
         DimensionKind::Radius,
         DimensionKind::Angular,
+        DimensionKind::OrdinateX,
+        DimensionKind::OrdinateY,
     ];
+
+    /// An ordinate dimension: measured from an origin, and zero at the origin itself.
+    pub fn is_ordinate(self) -> bool {
+        matches!(self, DimensionKind::OrdinateX | DimensionKind::OrdinateY)
+    }
 
     pub fn id(self) -> &'static str {
         match self {
@@ -273,6 +334,8 @@ impl DimensionKind {
             DimensionKind::Diameter => "diameter",
             DimensionKind::Radius => "radius",
             DimensionKind::Angular => "angular",
+            DimensionKind::OrdinateX => "ordinate_x",
+            DimensionKind::OrdinateY => "ordinate_y",
         }
     }
 
@@ -302,7 +365,11 @@ impl DimensionKind {
     /// The kind and point each of its references must have.
     pub fn ref_fits(self, r: &ModelRef) -> bool {
         match self {
-            DimensionKind::Horizontal | DimensionKind::Vertical | DimensionKind::Aligned => {
+            DimensionKind::Horizontal
+            | DimensionKind::Vertical
+            | DimensionKind::Aligned
+            | DimensionKind::OrdinateX
+            | DimensionKind::OrdinateY => {
                 matches!(
                     r.at,
                     RefPoint::Point | RefPoint::Start | RefPoint::End | RefPoint::Centre
@@ -510,6 +577,19 @@ pub enum AnnotationKind {
         at: Point2,
         target: Point2,
     },
+    /// A hole callout (format 39): the sizes of hole feature `feature` (`4 x Ø6.6 THRU`,
+    /// with its counterbore or countersink), written at `at` with a leader to the hole
+    /// whose centre is `target` on view `view` (in its coordinates). It follows the hole
+    /// through `refs` (one circular edge at its centre) when it can; its text comes from
+    /// the feature's sizes whenever the sheet is drawn.
+    HoleCallout {
+        view: u32,
+        feature: u32,
+        at: Point2,
+        target: Point2,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        refs: Vec<ModelRef>,
+    },
 }
 
 /// One annotation on a sheet.
@@ -547,9 +627,9 @@ impl AnnotationKind {
     /// The view it belongs to, if any.
     pub fn view(&self) -> Option<u32> {
         match self {
-            AnnotationKind::CentreLine { view, .. } | AnnotationKind::Balloon { view, .. } => {
-                Some(*view)
-            }
+            AnnotationKind::CentreLine { view, .. }
+            | AnnotationKind::Balloon { view, .. }
+            | AnnotationKind::HoleCallout { view, .. } => Some(*view),
             _ => None,
         }
     }
@@ -640,6 +720,20 @@ impl AnnotationKind {
                 if !model_point_ok(target) {
                     return Err("a balloon's target must be finite model coordinates".into());
                 }
+            }
+            AnnotationKind::HoleCallout {
+                at, target, refs, ..
+            } => {
+                place(at)?;
+                if !model_point_ok(target) {
+                    return Err("a hole callout's target must be finite model coordinates".into());
+                }
+                if refs.len() > 1 || refs.iter().any(|r| r.at != RefPoint::Centre) {
+                    return Err(
+                        "a hole callout has one reference (a circle's centre) or none".into(),
+                    );
+                }
+                refs.iter().try_for_each(ModelRef::check)?;
             }
         }
         Ok(())
@@ -762,11 +856,7 @@ impl Drawing {
         };
         for s in &self.sheets {
             id_ok(s.id, "sheet")?;
-            if !is_valid_text(&s.name)
-                || !is_valid_text(&s.title.part_name)
-                || !is_valid_text(&s.title.drawn_by)
-                || !is_valid_text(&s.title.date)
-            {
+            if !is_valid_text(&s.name) || !s.title.fields().iter().all(|v| is_valid_text(v)) {
                 return Err(bad(format!(
                     "sheet {}: names and title block fields hold at most {MAX_TEXT} \
                      characters and no control characters",

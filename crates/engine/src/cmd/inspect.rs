@@ -40,7 +40,9 @@ pub static COMMANDS: &[CommandSpec] = &[
         id: "inspect.mass",
         label: "Mass Properties",
         params: "body: string or number (required) - the solid's name, or the scene id that shows it\n\
-                 density: number (optional) - mass per mm³, default 1",
+                 density: number or string (optional) - mass per mm³ (default 1), or with a unit: \
+                 \"7.85 g/cm3\", \"7850 kg/m3\", \"0.284 lb/in3\" (also g/mm3, g/cc, kg/dm3, lb/ft3); \
+                 with a unit the mass is in g, kg or lb (`mass_unit`)",
         mutates: false,
         run: mass,
     },
@@ -312,7 +314,17 @@ fn mass(s: &mut Session, p: &Value) -> CmdResult {
         .get("body")
         .ok_or_else(|| bad("`body` is required"))?;
     let si = find_solid(s, which, "body")?;
-    let density = params::opt_f64(p, "density")?.unwrap_or(1.0);
+    let (density, mass_unit) = match p.get("density") {
+        None | Some(Value::Null) => (1.0, None),
+        Some(Value::String(text)) => density_with_unit(text).ok_or_else(|| {
+            bad(format!(
+                "`density` {:?} is not a density: a number above 0, with a unit such as \
+                 g/cm3, kg/m3 or lb/in3",
+                text.chars().take(64).collect::<String>()
+            ))
+        })?,
+        Some(_) => (params::opt_f64(p, "density")?.unwrap_or(1.0), None),
+    };
     let solid = s
         .solids()
         .get(si)
@@ -325,11 +337,45 @@ fn mass(s: &mut Session, p: &Value) -> CmdResult {
         "volume": m.volume,
         "area": m.area,
         "mass": m.mass,
+        "mass_unit": mass_unit,
         "centre_of_mass": xyz(m.centre_of_mass),
         "inertia": m.inertia,
         "principal_moments": m.principal_moments,
         "principal_axes": m.principal_axes.map(|a| [a.x, a.y, a.z]),
     }))
+}
+
+/// A typed density as mass per mm³ and the unit of that mass: 7.85 g/cm3 is 0.00785 g
+/// per mm³ (1 cm³ = 1000 mm³), 7850 kg/m3 is 7.85e-6 kg per mm³ (1 m³ = 1e9 mm³),
+/// 0.284 lb/in3 is 0.284 / 16387.064 lb per mm³ (1 in = 25.4 mm). A plain number is mass
+/// per mm³ with no unit. `None` unless it is a number above 0 with one of these units.
+pub fn density_with_unit(text: &str) -> Option<(f64, Option<&'static str>)> {
+    let t = text.trim();
+    let split = t
+        .find(|c: char| !(c.is_ascii_digit() || matches!(c, '.' | 'e' | 'E' | '+' | '-')))
+        .unwrap_or(t.len());
+    let (number, unit) = t.split_at(split);
+    let v = number.trim().parse::<f64>().ok()?;
+    let unit: String = unit
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .map(|c| match c {
+            '³' => '3',
+            c => c.to_ascii_lowercase(),
+        })
+        .collect();
+    let (per_mm3, mass) = match unit.as_str() {
+        "" => (1.0, None),
+        "g/mm3" => (1.0, Some("g")),
+        "g/cm3" | "g/cc" | "g/ml" => (1e-3, Some("g")),
+        "kg/m3" => (1e-9, Some("kg")),
+        "kg/dm3" | "kg/l" => (1e-6, Some("kg")),
+        "lb/in3" => (1.0 / (25.4 * 25.4 * 25.4), Some("lb")),
+        "lb/ft3" => (1.0 / (304.8 * 304.8 * 304.8), Some("lb")),
+        _ => return None,
+    };
+    let d = v * per_mm3;
+    (v.is_finite() && v > 0.0 && d.is_finite() && d > 0.0).then_some((d, mass))
 }
 
 fn measure(s: &mut Session, p: &Value) -> CmdResult {

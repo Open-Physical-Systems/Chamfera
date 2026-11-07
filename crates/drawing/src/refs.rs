@@ -357,3 +357,52 @@ pub fn centre_refs(
         _ => Vec::new(),
     }
 }
+
+/// The reference of the circle centred at `c` with radius `r` (view coordinates), for a
+/// hole callout.
+pub fn hole_ref(c: Point2, r: f64, basis: &Basis, bodies: &[&Body]) -> Option<ModelRef> {
+    circle_ref(bodies, basis, c, r)
+}
+
+/// A hole callout's circle now (view coordinates: centre, radius), from its reference;
+/// `None` radius when it keeps its stored centre.
+pub fn resolve_circle(
+    stored: Point2,
+    refs: &[ModelRef],
+    basis: &Basis,
+    bodies: &[&Body],
+) -> Result<(Point2, Option<f64>), String> {
+    let Some(r) = refs.first() else {
+        return Ok((stored, None));
+    };
+    match resolve_ref(bodies, r)? {
+        Now::Circle(c, radius) => Ok((basis.project(c), Some(radius))),
+        Now::Point(c) => Ok((basis.project(c), None)),
+        Now::Line(_) => Err("a hole callout needs a circle".into()),
+    }
+}
+
+/// The hole feature a reference name is made by: names of the faces and edges a Hole
+/// feature makes hold `<feature>:hole <k> ...` (`between 5:hole 0 wall and 1:top`).
+pub fn hole_feature(name: &str) -> Option<u32> {
+    let mut rest = name;
+    while let Some(i) = rest.find(":hole ") {
+        let (before, after) = (rest.get(..i)?, rest.get(i + ":hole ".len()..)?);
+        let digits: String = before
+            .chars()
+            .rev()
+            .take_while(char::is_ascii_digit)
+            .collect::<Vec<char>>()
+            .into_iter()
+            .rev()
+            .collect();
+        if !digits.is_empty()
+            && after.chars().next().is_some_and(|c| c.is_ascii_digit())
+            && let Ok(id) = digits.parse::<u32>()
+        {
+            return Some(id);
+        }
+        rest = after;
+    }
+    None
+}

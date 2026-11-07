@@ -15,6 +15,7 @@ use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
 
 mod about_ui;
+mod assembly_edit_ui;
 mod assembly_ui;
 mod assistant_ui;
 mod blend_ui;
@@ -27,6 +28,7 @@ mod config_ui;
 mod construct_ui;
 mod context_menu;
 mod display_ui;
+mod drawing_sheet_ui;
 mod drawing_tools_ui;
 mod drawing_ui;
 mod file_ui;
@@ -92,6 +94,8 @@ pub struct Options {
     pub tool_library: bool,
     /// Open the DRAWING workspace at start.
     pub drawing: bool,
+    /// Open the DRAWING workspace's Sheet Settings dialog on the shown sheet at start.
+    pub sheet_settings: bool,
     /// Open the Extrude tool at start and pick the profile under the viewport's centre,
     /// as a click there would.
     pub extrude: bool,
@@ -149,6 +153,9 @@ pub struct Options {
     pub render_window: Option<[u32; 3]>,
     /// Start this guided tour (`tutorial_ui`, such as `first-part`).
     pub tutorial: Option<String>,
+    /// Open a dialog at start, for screenshots: `joint-edit:ID`, `component-move:ID`,
+    /// `component-rename:ID`, `edit-feature:ID` or `dxf-insert:PATH`.
+    pub dialog: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -473,7 +480,10 @@ impl ChamferaApp {
             app.cam.active = true;
             app.cam.library_open = true;
         }
-        app.drawing.active = options.drawing;
+        app.drawing.active = options.drawing || options.sheet_settings;
+        if options.sheet_settings {
+            app.toggle_sheet_settings();
+        }
         if options.extrude {
             let mut tool = solid_ui::ExtrudeTool::default();
             if let Some(p) = &options.extrude_with {
@@ -549,7 +559,55 @@ impl ChamferaApp {
         if let Some(id) = &options.tutorial {
             app.start_tutorial(id);
         }
+        if let Some(spec) = &options.dialog
+            && let Err(e) = app.open_named_dialog(spec)
+        {
+            app.message = Some((e, true));
+        }
         app
+    }
+
+    /// Opens the dialog `--dialog` names: `joint-edit:ID`, `component-move:ID`,
+    /// `component-rename:ID`, `edit-feature:ID` or `dxf-insert:PATH`.
+    fn open_named_dialog(&mut self, spec: &str) -> Result<(), String> {
+        let (name, arg) = spec.split_once(':').unwrap_or((spec, ""));
+        let id = || {
+            arg.trim()
+                .parse::<u32>()
+                .map_err(|_| format!("--dialog {name} takes an id: {name}:1"))
+        };
+        match name {
+            "joint-edit" | "component-move" | "component-rename" => {
+                let id = id()?;
+                match name {
+                    "joint-edit" => self.open_joint_edit(id),
+                    "component-move" => self.open_component_move(id),
+                    _ => self.open_component_rename(id),
+                }
+                if self.assembly.edit.is_none() {
+                    return Err(format!(
+                        "--dialog {name}: there is no such joint or component {id}"
+                    ));
+                }
+            }
+            "edit-feature" => self.edit_feature(id()?),
+            "dxf-insert" if !arg.is_empty() => {
+                let file = std::path::Path::new(arg)
+                    .file_name()
+                    .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+                self.file.dxf = Some(file_ui::DxfInsert::new(
+                    file_ui::DxfSource::Path(arg.to_owned()),
+                    file,
+                ));
+            }
+            _ => {
+                return Err(format!(
+                    "--dialog takes joint-edit:ID, component-move:ID, component-rename:ID, \
+                     edit-feature:ID or dxf-insert:PATH, not {spec:?}"
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// Runs a command and shows its error, if any, in the status bar.
@@ -1192,6 +1250,8 @@ impl eframe::App for ChamferaApp {
             self.extrude_dialog(&ctx);
             self.blend_dialog(&ctx);
             self.joint_dialog(&ctx);
+            self.assembly_edit_dialog(&ctx);
+            self.dxf_insert_dialog(&ctx);
             self.motion_panels(&ctx);
             self.hole_dialog(&ctx);
             self.transform_dialog(&ctx);

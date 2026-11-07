@@ -381,6 +381,19 @@ impl OpDialog {
     }
 }
 
+/// A reply's warnings for the status bar: " · Warning: ..." for each, or nothing.
+pub(crate) fn warning_text(warnings: &Value) -> String {
+    warnings
+        .as_array()
+        .map(|l| {
+            l.iter()
+                .filter_map(Value::as_str)
+                .map(|w| format!(" · Warning: {w}"))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 impl ChamferaApp {
     /// Opens or closes the Manufacture workspace (toolpaths show only there).
     pub(crate) fn set_manufacture(&mut self, on: bool) {
@@ -426,9 +439,10 @@ impl ChamferaApp {
         if let Some(r) = self.run("cam.generate", json!({})) {
             let errors = r["errors"].as_u64().unwrap_or(0);
             let minutes = r["minutes"].as_f64().unwrap_or(0.0);
+            let warnings = warning_text(&r["warnings"]);
             self.message = Some(if errors == 0 {
                 (
-                    format!("Toolpaths generated · cycle time {minutes:.1} min"),
+                    format!("Toolpaths generated · cycle time {minutes:.1} min{warnings}"),
                     false,
                 )
             } else {
@@ -982,9 +996,10 @@ impl ChamferaApp {
                     ),
                     None => (
                         format!(
-                            "{} · {:.1} min",
+                            "{} · {:.1} min{}",
                             r["name"].as_str().unwrap_or(title),
-                            r["minutes"].as_f64().unwrap_or(0.0)
+                            r["minutes"].as_f64().unwrap_or(0.0),
+                            warning_text(&r["warnings"])
                         ),
                         false,
                     ),

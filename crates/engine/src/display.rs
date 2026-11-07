@@ -107,7 +107,8 @@ fn base_plane(s: &Session, name: &str) -> Result<Frame, CommandError> {
 }
 
 pub(crate) fn section(s: &mut Session, p: &Value) -> CmdResult {
-    let plane = base_plane(s, params::req_str(p, "plane")?)?;
+    let name = params::req_str(p, "plane")?;
+    let plane = base_plane(s, name)?;
     let offset = params::opt_f64(p, "offset")?.unwrap_or(0.0);
     if offset.abs() > MAX_COORDINATE {
         return Err(bad(format!("`offset` must be within ±{MAX_COORDINATE} mm")));
@@ -117,11 +118,26 @@ pub(crate) fn section(s: &mut Session, p: &Value) -> CmdResult {
         Some(_) => params::req_bool(p, "flip")?,
     };
     let n = plane.z();
-    let origin = plane.origin() + n * offset;
+    // An origin plane's offset runs along the world axis it is named for (+Z, +Y, +X),
+    // so XZ at +25 cuts at y = +25 although that plane's normal is -Y; the side cut
+    // away stays the normal's side. A face's offset runs along its normal.
+    let along = section_axis(name).unwrap_or(n);
+    let origin = plane.origin() + along * offset;
     let normal = if flip { -n } else { n };
     s.scene.display.section =
         Some(Section::new(origin, normal).ok_or_else(|| bad("the plane is out of range"))?);
     Ok(display_json(s))
+}
+
+/// The world axis a section's offset runs along for an origin plane: xy +Z, xz +Y,
+/// yz +X; `None` for a face.
+pub fn section_axis(plane: &str) -> Option<chamfera_geom::Vec3> {
+    match plane {
+        "xy" => Some(chamfera_geom::Vec3::Z),
+        "xz" => Some(chamfera_geom::Vec3::Y),
+        "yz" => Some(chamfera_geom::Vec3::X),
+        _ => None,
+    }
 }
 
 pub(crate) fn section_clear(s: &mut Session, p: &Value) -> CmdResult {

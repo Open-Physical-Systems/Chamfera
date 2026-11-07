@@ -251,6 +251,8 @@ fn hostile_params_never_panic() {
         json!({"type": "planar", "a": {"component": 0, "edge": "1:top 0", "end": "start"}, "b": {"pick": {"x": 1e300}}, "offset": {"x": 1e300}, "flip": 3}),
         json!({"joint": 1, "value": "90 mm", "distance": 1e300, "offset": "none"}),
         json!({"joint": 4294967295u64, "value": [1]}),
+        json!({"joint": 1, "min": "(((", "max": 1e300, "limits": "no", "name": long}),
+        json!({"joint": 1, "min": -1e300, "max": [1], "limits": true, "name": "\u{7}"}),
         json!({"joint": 1, "time": 1e300, "t": -1, "value": "((("}),
         json!({"joint": 1, "time": 0.5, "t": 1e300, "value": 1e300}),
         json!({"id": -1, "note": long, "a": "x", "b": 1e300, "show": 3, "clear": "yes", "design_path": 5}),
@@ -274,6 +276,11 @@ fn hostile_params_never_panic() {
         json!({"view": 2, "kind": "diameter", "x1": 0, "y1": 0, "format": "exe", "path": "/dev/null"}),
         json!({"paper": "a0", "orientation": 5, "projection": "second", "part_name": long, "date": "\u{1}"}),
         json!({"sheet": 1, "dimension": -1, "view": [1], "format": "pdf", "kind": "radius"}),
+        json!({"view": 2, "axis": "z", "x0": 1e300, "y0": f64::NAN, "points": [{"x": "a"}], "spacing": 0,
+               "kind": "ordinate_x", "feature": -1, "drawing_number": long, "revision": "\u{7}"}),
+        json!({"view": 2, "axis": "x", "x0": 0, "y0": 0, "points": vec![json!({"x": 0, "y": 0}); 70],
+               "spacing": 1e300, "kind": "horizontal", "feature": 4294967295u64, "material": 5,
+               "checked_by": [], "x1": 0, "y1": 0, "x": 1e300, "y": 0}),
         json!({"face": "2:top", "points": [{"x": 1e300, "y": 0}], "diameter": 1e300, "through_all": true}),
         json!({"face": "2:top", "points": [{"x": 0, "y": 0}], "diameter": "6 mm", "depth": f64::MAX, "tip_angle": 1e-300}),
         json!({"face": ":", "points": [{"x": 0, "y": 0, "width": 0, "height": -1}], "diameter": 6, "depth": 4}),
@@ -5394,12 +5401,21 @@ fn a_section_on_a_face_cuts_the_view_at_its_offset() {
     )
     .unwrap();
     assert!((s.scene.pick(&ray).unwrap().point.z - 10.0).abs() < 1e-9);
-    // An origin plane: xz is the front plane, its normal along Y.
+    // An origin plane: xz is the front plane. Its offset runs along +Y (QA user guide
+    // pass: +25 cut at y = -25), so +15 cuts at y = +15; the side cut away is still the
+    // plane normal's (-Y, the front), as before.
     s.execute("view.section", &json!({"plane": "xz", "offset": 15}))
         .unwrap();
     let sec = s.scene.display.section.unwrap();
-    assert!((sec.normal.y.abs() - 1.0).abs() < 1e-9);
-    assert!((sec.origin.y.abs() - 15.0).abs() < 1e-9);
+    assert!((sec.normal.y + 1.0).abs() < 1e-9, "{:?}", sec.normal);
+    assert!((sec.origin.y - 15.0).abs() < 1e-9, "{:?}", sec.origin);
+    // xy and yz run along +Z and +X: 3 and 20.
+    s.execute("view.section", &json!({"plane": "xy", "offset": 3}))
+        .unwrap();
+    assert!((s.scene.display.section.unwrap().origin.z - 3.0).abs() < 1e-9);
+    s.execute("view.section", &json!({"plane": "yz", "offset": 20}))
+        .unwrap();
+    assert!((s.scene.display.section.unwrap().origin.x - 20.0).abs() < 1e-9);
     for bad in [
         json!({"plane": "diagonal"}),
         json!({"plane": "9:nowhere"}),

@@ -956,6 +956,16 @@ pub const TOOLS: &[RibbonTool] = &[
     )
     .primary()
     .short("Projection"),
+    tool(
+        D,
+        "SHEET",
+        Action::Tool("drawing.edit_sheet"),
+        Icon::Parameters,
+        "Sheet Settings",
+        "Paper size, scale, projection and the title block: part, drawing number, revision, material, names",
+    )
+    .primary()
+    .short("Settings"),
     // DRAWING > VIEWS
     view(
         "drawing.view.front",
@@ -1044,6 +1054,28 @@ pub const TOOLS: &[RibbonTool] = &[
         Icon::ConstraintPerpendicular,
         "Click two straight edges",
     ),
+    dimension(
+        "drawing.add_ordinate",
+        "Ordinate Dimensions",
+        "Ordinate",
+        Icon::Dimension,
+        "Click the origin, then each point: its distance from the origin along x or y",
+    )
+    .sep(),
+    dimension(
+        "drawing.add_baseline",
+        "Baseline Dimensions",
+        "Baseline",
+        Icon::Dimension,
+        "Click the baseline, then the points; Enter: each measured from the baseline, stacked",
+    ),
+    dimension(
+        "drawing.add_chain",
+        "Chain Dimensions",
+        "Chain",
+        Icon::Dimension,
+        "Click the points; Enter: one dimension between each neighbouring pair, in line",
+    ),
     // DRAWING > ANNOTATE
     tool(
         D,
@@ -1081,6 +1113,15 @@ pub const TOOLS: &[RibbonTool] = &[
         "Surface Texture",
         "Click the surface: the texture symbol with its requirement (Ra 1.6)",
     ),
+    tool(
+        D,
+        "ANNOTATE",
+        Action::Tool("drawing.add_hole_callout"),
+        Icon::Hole,
+        "Hole Callout",
+        "Click a hole, then the text's place: count, size, depth, counterbore or countersink, from the Hole feature",
+    )
+    .short("Hole"),
     tool(
         D,
         "ANNOTATE",
@@ -1237,10 +1278,19 @@ pub const TOOLS: &[RibbonTool] = &[
         Action::Tool("cam.post"),
         Icon::CamPost,
         "Post G-code",
-        "Write the setup's toolpaths as LinuxCNC G-code (GRBL: File > Post G-code (GRBL))",
+        "Write the setup's toolpaths as LinuxCNC G-code (Post GRBL writes GRBL)",
     )
     .primary()
     .short("Post"),
+    tool(
+        M,
+        "ACTIONS",
+        Action::Tool("cam.post.grbl"),
+        Icon::CamPost,
+        "Post GRBL",
+        "Write the setup's toolpaths as GRBL G-code: no tool changes, no canned cycles",
+    )
+    .primary(),
     tool(
         M,
         "ACTIONS",
@@ -1455,6 +1505,10 @@ fn draw_tool(id: &str) -> Option<crate::drawing_ui::DrawTool> {
         "drawing.add_gdt" => DrawTool::Gdt,
         "drawing.add_centre_line" => DrawTool::CentreLine,
         "drawing.add_balloons" => DrawTool::Balloons,
+        "drawing.add_ordinate" => DrawTool::Ordinate,
+        "drawing.add_baseline" => DrawTool::Baseline,
+        "drawing.add_chain" => DrawTool::Chain,
+        "drawing.add_hole_callout" => DrawTool::HoleCallout,
         _ => return None,
     })
 }
@@ -1745,6 +1799,7 @@ impl ChamferaApp {
                     self.session.scene.display.style == chamfera_render::VisualStyle::Realistic
                 }
                 "render.start" => self.render.window.is_some(),
+                "drawing.edit_sheet" => self.drawing.settings.is_some(),
                 _ => {
                     if let Some(k) = body_tool_kind(id) {
                         s.body_tool.as_ref().is_some_and(|t| t.kind == k)
@@ -1863,7 +1918,7 @@ impl ChamferaApp {
             }
             Tab::Drawing => match id {
                 "drawing.new_sheet" => return None,
-                "drawing.projection" if self.drawing_sheet().is_none() => {
+                "drawing.projection" | "drawing.edit_sheet" if self.drawing_sheet().is_none() => {
                     format!("{name}: add a sheet first")
                 }
                 _ if id.starts_with("drawing.view.") && !has_solids => {
@@ -1893,6 +1948,10 @@ impl ChamferaApp {
                             | "drawing.add_detail"
                             | "drawing.add_centre_line"
                             | "drawing.add_balloons"
+                            | "drawing.add_ordinate"
+                            | "drawing.add_baseline"
+                            | "drawing.add_chain"
+                            | "drawing.add_hole_callout"
                     ))
                     && !self.drawing_has_views() =>
                 {
@@ -1916,7 +1975,9 @@ impl ChamferaApp {
                     _ if cam_op(id).is_some() && cam.tools.is_empty() => {
                         format!("{name}: add a tool first")
                     }
-                    "cam.generate" | "cam.post" | "cam.simulate" if cam.operations.is_empty() => {
+                    "cam.generate" | "cam.post" | "cam.post.grbl" | "cam.simulate"
+                        if cam.operations.is_empty() =>
+                    {
                         format!("{name}: add an operation first")
                     }
                     _ => return None,
@@ -1971,12 +2032,14 @@ impl ChamferaApp {
             }
             "drawing.new_sheet" => self.drawing_new_sheet(),
             "drawing.projection" => self.drawing_toggle_projection(),
+            "drawing.edit_sheet" => self.toggle_sheet_settings(),
             "drawing.add_parts_list" => self.drawing_parts_list(),
             "cam.setup" => self.cam_setup(),
             "cam.tool_add" => self.open_cam_tool_dialog(),
             "cam.tool_library" => self.cam.library_open = !self.cam.library_open,
             "cam.generate" => self.generate_toolpaths(),
             "cam.post" => self.post_dialog("linuxcnc"),
+            "cam.post.grbl" => self.post_dialog("grbl"),
             "cam.simulate" => self.toggle_simulation(),
             "solid.remove" => {
                 self.run("solid.remove", json!({}));
@@ -2501,14 +2564,15 @@ mod tests {
             "drawing.add_dimension", // the dimension tools
             "drawing.add_view",      // the view tools
             "drawing.delete",
-            "drawing.edit_sheet", // Projection
+            "drawing.edit_sheet", // Sheet Settings and Projection
             "drawing.export",     // the export tools
             "drawing.export_bytes",
             "drawing.list",
             "drawing.move", // a drag on the sheet canvas
             "drawing.pick", // a click on the sheet canvas
             "inspect.measure_at",
-            "joint.delete",
+            "joint.delete", // the Browser's joint rows
+            "joint.edit",
             "joint.origin_at",
             "joint.set_value",
             "solid.edge_at",

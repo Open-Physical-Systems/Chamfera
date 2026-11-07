@@ -185,7 +185,9 @@ pub(crate) fn mass_rows(u: DisplayUnits, r: &Value) -> Vec<(String, String)> {
         .filter_map(|(a, b)| num(&r["inertia"][a][b]))
         .collect();
     let largest = all.iter().fold(0.0_f64, |m, x| m.max(x.abs()));
-    let unit = format!("mass·{}²", u.length.symbol());
+    // The mass unit the density was typed in (g, kg, lb), else plain "mass".
+    let mass_unit = r["mass_unit"].as_str();
+    let unit = format!("{}·{}²", mass_unit.unwrap_or("mass"), u.length.symbol());
     let f = |v: &Value| {
         num(v).map_or_else(
             || "-".to_owned(),
@@ -210,7 +212,10 @@ pub(crate) fn mass_rows(u: DisplayUnits, r: &Value) -> Vec<(String, String)> {
         ),
         (
             "Mass".into(),
-            num(&r["mass"]).map_or("-".into(), |v| format!("{v:.4}")),
+            num(&r["mass"]).map_or("-".into(), |v| match mass_unit {
+                Some(m) => format!("{} {m}", significant(v)),
+                None => format!("{v:.4}"),
+            }),
         ),
         ("Centre of mass".into(), xyz(u, &r["centre_of_mass"])),
     ];
@@ -276,13 +281,16 @@ impl ChamferaApp {
             return;
         };
         let typed = tool.density.trim().to_owned();
-        let density = typed
-            .parse::<f64>()
-            .ok()
-            .filter(|d| d.is_finite() && *d > 0.0);
+        let density = match typed.parse::<f64>() {
+            Ok(d) => (d.is_finite() && d > 0.0).then(|| json!(d)),
+            Err(_) => {
+                chamfera_engine::cmd::inspect::density_with_unit(&typed).map(|_| json!(typed))
+            }
+        };
         let Some(density) = density else {
-            // Steel is 7.85 g/cm³ = 0.00785 g/mm³.
-            let e = "Density must be a number above 0:\nmass per mm³ (steel: 0.00785 g)".to_owned();
+            let e = "Density must be a number above 0: mass per mm³,\nor with a unit: \
+                     7.85 g/cm3, 7850 kg/m3, 0.284 lb/in3"
+                .to_owned();
             self.message = Some((e.clone(), true));
             if let Some(tool) = self.solid.inspect.as_mut() {
                 tool.result = None;
@@ -540,9 +548,13 @@ impl ChamferaApp {
                                     .add_sized(
                                         widgets::FIELD,
                                         egui::TextEdit::singleline(&mut tool.density)
-                                            .hint_text("1"),
+                                            .hint_text("7.85 g/cm3"),
                                     )
-                                    .on_hover_text("Mass per mm³ (1 gives mass = volume)");
+                                    .on_hover_text(
+                                        "Density with its unit (7.85 g/cm3, 7850 kg/m3, \
+                                         0.284 lb/in3) gives the mass in g, kg or lb;\n\
+                                         a plain number is mass per mm³ (1 gives mass = volume)",
+                                    );
                                 if edit.lost_focus() || edit.changed() {
                                     recompute = true;
                                 }
@@ -606,7 +618,10 @@ impl ChamferaApp {
                 Some("inspect.mass") => {
                     let mut tool = InspectTool::new(InspectMode::Mass);
                     tool.body = reply["solid"].as_str().map(str::to_owned);
-                    tool.density = num(&reply["density"]).map_or("1".into(), |d| d.to_string());
+                    tool.density = match &step["params"]["density"] {
+                        Value::String(t) => t.clone(),
+                        _ => num(&reply["density"]).map_or("1".into(), |d| d.to_string()),
+                    };
                     tool.result = Some(reply.clone());
                     self.solid.inspect = Some(tool);
                     return;
@@ -743,15 +758,40 @@ mod tests {
         assert_eq!(get(&mass_rows(inch, &r), "Ixx"), "0.0152094 mass·in²");
     }
 
-    /// A density that is not a number ("7.85 g/cm3", "abc", "-2", empty) is refused
+    /// A density that is not a number ("7.85 furlongs", "abc", "-2", empty) is refused
     /// with an error saying what is allowed; it is never taken as 1 (mass 15000 for the
     /// 50 x 30 x 10 box). A good density afterwards clears the error.
+    /// A density with its unit gives the mass in that unit (QA user guide pass: mass had
+    /// no unit). The 50 x 30 x 10 box is 15 cm³: at 7.85 g/cm3 it weighs 117.75 g; at
+    /// 7850 kg/m3, 0.11775 kg. Ixx about the centre of mass is m (30² + 10²) / 12 =
+    /// 117.75 x 1000 / 12 = 9812.5 g·mm².
+    #[test]
+    fn mass_properties_take_a_density_with_its_unit() {
+        let mut app = ChamferaApp::headless();
+        boxed(&mut app, 0.0, 50.0);
+        app.open_inspect(InspectMode::Mass);
+        app.solid.inspect.as_mut().unwrap().density = "7.85 g/cm3".into();
+        app.refresh_mass();
+        let r = app.solid.inspect.as_ref().unwrap().result.clone().unwrap();
+        assert_eq!(r["mass_unit"], "g");
+        assert!((r["mass"].as_f64().unwrap() - 117.75).abs() < 1e-9, "{r}");
+        let rows = mass_rows(DisplayUnits::default(), &r);
+        let get = |k: &str| rows.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
+        assert_eq!(get("Mass").as_deref(), Some("117.75 g"));
+        assert_eq!(get("Ixx").as_deref(), Some("9812.5 g·mm²"));
+        app.solid.inspect.as_mut().unwrap().density = "7850 kg/m³".into();
+        app.refresh_mass();
+        let r = app.solid.inspect.as_ref().unwrap().result.clone().unwrap();
+        assert_eq!(r["mass_unit"], "kg");
+        assert!((r["mass"].as_f64().unwrap() - 0.11775).abs() < 1e-12, "{r}");
+    }
+
     #[test]
     fn mass_properties_refuse_an_unreadable_density() {
         let mut app = ChamferaApp::headless();
         boxed(&mut app, 0.0, 50.0);
         app.open_inspect(InspectMode::Mass);
-        for bad in ["7.85 g/cm3", "abc", "-2", "0", ""] {
+        for bad in ["7.85 furlongs", "abc", "-2", "0", "", "-1 g/cm3"] {
             app.solid.inspect.as_mut().unwrap().density = bad.into();
             app.refresh_mass();
             let tool = app.solid.inspect.as_ref().unwrap();

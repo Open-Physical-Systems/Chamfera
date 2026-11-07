@@ -597,3 +597,296 @@ fn drawing_v2_commands_refuse_hostile_input_and_change_nothing() {
         }
     }
 }
+
+/// The values of a reply's `dimensions` list.
+fn values(r: &Value) -> Vec<f64> {
+    r["dimensions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| d["value"].as_f64().unwrap())
+        .collect()
+}
+
+fn offsets(s: &Session, r: &Value) -> Vec<f64> {
+    r["dimensions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| {
+            let id = u32::try_from(d["dimension"].as_u64().unwrap()).unwrap();
+            s.doc.drawing.sheets[0]
+                .dimensions
+                .iter()
+                .find(|x| x.id == id)
+                .unwrap()
+                .offset
+        })
+        .collect()
+}
+
+fn close(a: &[f64], b: &[f64]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-9)
+}
+
+/// The top view of the hole plate (80 x 50 x 10, `examples/hole-plate.json`) at
+/// (150, 200), 1:1: the plate's centre (40, 25) is there, so model (x, y) is sheet
+/// (110 + x, 175 + y). Its holes: counterbored at (10, 10), (70, 10), (70, 40), (10, 40);
+/// countersunk at (40, 25); blind at (25, 25) and (55, 25).
+fn hole_plate_top() -> (Session, u64) {
+    let mut s = example("hole-plate.json");
+    let top = run(
+        &mut s,
+        "drawing.add_view",
+        json!({"view": "top", "x": 150, "y": 200}),
+    )["view"]
+        .as_u64()
+        .unwrap();
+    (s, top)
+}
+
+#[test]
+fn ordinate_baseline_and_chain_dimensions_of_the_hole_plate_read_the_hole_positions() {
+    let (mut s, top) = hole_plate_top();
+    // Ordinates along x from the lower-left corner (110, 175) to the hole centres at
+    // x = 10, 25, 40, 55, 70: 0 at the corner, then each centre's x.
+    let r = run(
+        &mut s,
+        "drawing.add_ordinate",
+        json!({"view": top, "axis": "x", "x0": 110.4, "y0": 175.3, "points": [
+            {"x": 120, "y": 185}, {"x": 135, "y": 200}, {"x": 150, "y": 200},
+            {"x": 165, "y": 200}, {"x": 180, "y": 185}]}),
+    );
+    assert!(
+        close(&values(&r), &[0.0, 10.0, 25.0, 40.0, 55.0, 70.0]),
+        "{r}"
+    );
+    assert!(
+        r["dimensions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|d| d["associative"] == true)
+    );
+    // And along y: the counterbored centres at y = 10 and 40.
+    let r = run(
+        &mut s,
+        "drawing.add_ordinate",
+        json!({"view": top, "axis": "y", "x0": 110, "y0": 175, "offset": -10,
+               "points": [{"x": 120, "y": 185}, {"x": 120, "y": 215}]}),
+    );
+    assert!(close(&values(&r), &[0.0, 10.0, 40.0]));
+    // One command, one undo step for the whole set.
+    let before = s.doc.drawing.sheets[0].dimensions.len();
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(s.doc.drawing.sheets[0].dimensions.len(), before - 3);
+
+    // Baseline from the corner to centres at x = 10, 40, 70 and the right corner at 80,
+    // given out of order: shortest first. Their lines stack 7 mm apart beyond the
+    // highest point (the centres at y = 200): y = 210, 217, 224, 231. A dimension's line
+    // is `offset` beyond the higher of its own two points, so the offsets are
+    // 210 - 185 = 25, 217 - 200 = 17, 224 - 185 = 39 and 231 - 175 = 56.
+    let r = run(
+        &mut s,
+        "drawing.add_baseline",
+        json!({"view": top, "kind": "horizontal", "points": [
+            {"x": 110, "y": 175}, {"x": 190, "y": 175}, {"x": 150, "y": 200}, {"x": 120, "y": 185},
+            {"x": 180, "y": 185}]}),
+    );
+    assert!(close(&values(&r), &[10.0, 40.0, 70.0, 80.0]), "{r}");
+    assert!(
+        close(&offsets(&s, &r), &[25.0, 17.0, 39.0, 56.0]),
+        "{:?}",
+        offsets(&s, &r)
+    );
+
+    // A vertical chain on the left, given out of order: corner (110, 175), the centres
+    // (120, 185) and (120, 215), the corner (110, 225): 10, 30, 10, all on the line
+    // x = 100, 10 mm left of the leftmost point. Offsets: -10, -10 - (120 - 110) = -20,
+    // -10.
+    let r = run(
+        &mut s,
+        "drawing.add_chain",
+        json!({"view": top, "kind": "vertical", "offset": -10, "points": [
+            {"x": 120, "y": 215}, {"x": 110, "y": 175}, {"x": 110, "y": 225}, {"x": 120, "y": 185}]}),
+    );
+    assert!(close(&values(&r), &[10.0, 30.0, 10.0]), "{r}");
+    assert!(close(&offsets(&s, &r), &[-10.0, -20.0, -10.0]));
+
+    // Refused without changing anything: a point off the part, too few points, a
+    // wrong axis.
+    for (id, p) in [
+        (
+            "drawing.add_baseline",
+            json!({"view": top, "kind": "horizontal", "points": [{"x": 110, "y": 175}, {"x": 5, "y": 5}]}),
+        ),
+        (
+            "drawing.add_chain",
+            json!({"view": top, "kind": "vertical", "points": [{"x": 110, "y": 175}]}),
+        ),
+        (
+            "drawing.add_chain",
+            json!({"view": top, "kind": "aligned", "points": [{"x": 110, "y": 175}, {"x": 190, "y": 175}]}),
+        ),
+        (
+            "drawing.add_ordinate",
+            json!({"view": top, "axis": "z", "x0": 110, "y0": 175}),
+        ),
+        (
+            "drawing.add_ordinate",
+            json!({"view": top, "axis": "x", "x0": 5, "y0": 5}),
+        ),
+        (
+            "drawing.add_baseline",
+            json!({"view": top, "kind": "horizontal", "spacing": 1, "points": [{"x": 110, "y": 175}, {"x": 190, "y": 175}]}),
+        ),
+    ] {
+        let before = s.doc.clone();
+        assert!(s.execute(id, &p).is_err(), "{id} {p}");
+        assert_eq!(s.doc, before);
+    }
+}
+
+#[test]
+fn hole_callouts_of_the_hole_plate_say_what_each_hole_feature_drills_and_follow_it() {
+    let (mut s, top) = hole_plate_top();
+    // The counterbored holes: Ø6.6 (`bolt`) through, counterbore Ø6.6 x 1.7 = 11.22 and
+    // 10 x 0.4 = 4 deep, at four sketch points. Picked on the rim of the one at
+    // (10, 10), sheet (120, 185): the counterbore's radius 5.61 to the right.
+    let cb = run(
+        &mut s,
+        "drawing.add_hole_callout",
+        json!({"view": top, "x1": 125.61, "y1": 185, "x": 95, "y": 245}),
+    );
+    assert_eq!(
+        cb["text"],
+        json!(["4 x Ø6.6 THRU", "CBORE Ø11.22 x 4 DEEP"]),
+        "{cb}"
+    );
+    assert_eq!(cb["associative"], true);
+    // The countersunk hole at (40, 25), sheet (150, 200): Ø6 through, Ø12 x 90°.
+    let cs = run(
+        &mut s,
+        "drawing.add_hole_callout",
+        json!({"view": top, "x1": 156, "y1": 200, "x": 200, "y": 250}),
+    );
+    assert_eq!(cs["text"], json!(["Ø6 THRU", "CSK Ø12 x 90°"]));
+    // The two blind holes Ø5, 6 deep: picked at the one at (25, 25), sheet (135, 200).
+    let blind = run(
+        &mut s,
+        "drawing.add_hole_callout",
+        json!({"view": top, "x1": 137.5, "y1": 200, "x": 60, "y": 140}),
+    );
+    assert_eq!(blind["text"], json!(["2 x Ø5 x 6 DEEP"]));
+    assert_ne!(cb["feature"], cs["feature"]);
+    // The plate's own outline is no hole: refused, nothing changed.
+    let before = s.doc.clone();
+    assert!(
+        s.execute(
+            "drawing.add_hole_callout",
+            &json!({"view": top, "x1": 110, "y1": 200, "x": 60, "y": 140}),
+        )
+        .is_err()
+    );
+    assert_eq!(s.doc, before);
+
+    // The bolt made 8 mm: the callout follows the feature, Ø8 and a Ø13.6 counterbore.
+    run(
+        &mut s,
+        "param.set",
+        json!({"name": "bolt", "expression": "8 mm"}),
+    );
+    let l = run(&mut s, "drawing.list", json!({}));
+    let ann = l["sheets"][0]["annotations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["id"] == cb["annotation"])
+        .cloned()
+        .unwrap();
+    assert_eq!(ann["text"], json!(["4 x Ø8 THRU", "CBORE Ø13.6 x 4 DEEP"]));
+    assert!(ann["dangling"].is_null(), "{ann}");
+    // Suppressing the countersunk hole leaves its callout dangling, not dropped.
+    let feature = cs["feature"].as_u64().unwrap();
+    run(
+        &mut s,
+        "feature.edit",
+        json!({"feature": feature, "suppressed": true}),
+    );
+    let l = run(&mut s, "drawing.list", json!({}));
+    let ann = l["sheets"][0]["annotations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["id"] == cs["annotation"])
+        .cloned()
+        .unwrap();
+    assert!(ann["dangling"].is_string(), "{ann}");
+    // A callout moves with drawing.move and is saved with the design.
+    let id = cb["annotation"].as_u64().unwrap();
+    let m = run(
+        &mut s,
+        "drawing.move",
+        json!({"annotation": id, "dx": 5, "dy": -5}),
+    );
+    assert_eq!(
+        (m["x"].as_f64(), m["y"].as_f64()),
+        (Some(100.0), Some(240.0))
+    );
+    let text = s.doc.to_json().unwrap();
+    let back = chamfera_doc::Document::from_json(&text).unwrap();
+    assert_eq!(back.drawing, s.doc.drawing);
+}
+
+#[test]
+fn sheet_settings_set_every_title_block_field_and_refuse_bad_ones() {
+    let mut s = Session::new();
+    parametric_box(&mut s);
+    run(
+        &mut s,
+        "drawing.add_view",
+        json!({"view": "front", "x": 150, "y": 150}),
+    );
+    let r = run(
+        &mut s,
+        "drawing.edit_sheet",
+        json!({"paper": "a4", "orientation": "portrait", "scale": 0.5, "projection": "first",
+               "name": "Detail sheet", "part_name": "Bracket", "drawing_number": "CH-0042",
+               "revision": "C", "material": "AlMg3", "drawn_by": "DB", "checked_by": "QA",
+               "date": "2026-11-07"}),
+    );
+    // A4 portrait is 210 x 297 (ISO 216).
+    assert_eq!(
+        (r["width"].as_f64(), r["height"].as_f64()),
+        (Some(210.0), Some(297.0))
+    );
+    assert_eq!(r["paper"], "a4");
+    assert_eq!(r["scale"], 0.5);
+    assert_eq!(r["projection"], "first");
+    let t = s.doc.drawing.sheets[0].title.clone();
+    assert_eq!(
+        t.fields(),
+        ["Bracket", "DB", "2026-11-07", "CH-0042", "C", "AlMg3", "QA"]
+    );
+    // The scale shows as 1:2 in the title block; the fields round-trip through the file.
+    let l = run(&mut s, "drawing.list", json!({}));
+    assert_eq!(l["sheets"][0]["title"]["drawing_number"], "CH-0042");
+    let back = chamfera_doc::Document::from_json(&s.doc.to_json().unwrap()).unwrap();
+    assert_eq!(back.drawing.sheets[0].title, t);
+    // Too long, control characters, an unknown paper or scale: refused, nothing changed.
+    for p in [
+        json!({"material": "x".repeat(65)}),
+        json!({"revision": "a\nb"}),
+        json!({"checked_by": 5}),
+        json!({"paper": "a0"}),
+        json!({"scale": 0}),
+    ] {
+        let before = s.doc.clone();
+        assert!(s.execute("drawing.edit_sheet", &p).is_err(), "{p}");
+        assert_eq!(s.doc, before);
+    }
+    // A design from before format 39 (no new fields) still opens.
+    let old: chamfera_doc::drawing::TitleBlock =
+        serde_json::from_str(r#"{"part_name": "P", "drawn_by": "", "date": ""}"#).unwrap();
+    assert!(old.drawing_number.is_empty() && old.checked_by.is_empty());
+}
