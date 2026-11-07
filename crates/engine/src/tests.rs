@@ -5436,6 +5436,86 @@ fn conflicts_list_what_to_remove_and_replace_removes_it_in_one_step() {
     assert!(s.execute("sketch.conflicts", &json!({})).is_err());
 }
 
+/// Sketch text: an `H` of straight strokes is one region whose area is the shoelace area
+/// of the font's own outline (scaled to 10 mm capitals); `Hi` adds the stem and the dot
+/// of the `i`; an `O` is a ring (one region with a hole). The H extrudes to area x depth.
+#[test]
+fn sketch_text_draws_letters_as_regions_that_extrude() {
+    use chamfera_io::font::{Align, DEFAULT_FONT, Segment, text_outline};
+    let outline = text_outline(
+        DEFAULT_FONT,
+        "H",
+        chamfera_geom::Point2::new(0.0, 0.0),
+        10.0,
+        Align::Left,
+    )
+    .unwrap();
+    // Shoelace: ½ Σ (x_i y_{i+1} - x_{i+1} y_i) over the H's straight edges.
+    let shoelace: f64 = outline.contours[0]
+        .iter()
+        .map(|s| match s {
+            Segment::Line(a, b) => 0.5 * (a.x * b.y - b.x * a.y),
+            Segment::Cubic(_) => panic!("an H has no curves"),
+        })
+        .sum::<f64>()
+        .abs();
+    assert!(shoelace > 10.0, "{shoelace}");
+    let mut s = Session::new();
+    s.execute("sketch.create", &json!({"plane": "xy"})).unwrap();
+    let r = s
+        .execute("sketch.text", &json!({"text": "H", "height": 10}))
+        .unwrap();
+    let areas = r["profiles"].as_array().unwrap();
+    assert_eq!(areas.len(), 1, "{r}");
+    assert!((areas[0].as_f64().unwrap() - shoelace).abs() < 1e-9, "{r}");
+    s.execute("edit.undo", &json!({})).unwrap();
+    let r = s
+        .execute("sketch.text", &json!({"text": "Hi", "height": 10}))
+        .unwrap();
+    assert_eq!(r["contours"], 3);
+    assert_eq!(r["profiles"].as_array().unwrap().len(), 3, "{r}");
+    s.execute("edit.undo", &json!({})).unwrap();
+    let r = s
+        .execute("sketch.text", &json!({"text": "O", "x": 50, "height": 10}))
+        .unwrap();
+    let g = s.execute("sketch.get", &json!({})).unwrap();
+    let profiles = g["profiles"].as_array().unwrap();
+    assert_eq!(profiles.len(), 2, "{r}");
+    assert!(profiles.iter().any(|p| p["holes"] == 1), "{g}");
+    s.execute("edit.undo", &json!({})).unwrap();
+    s.execute("sketch.text", &json!({"text": "H", "height": 10}))
+        .unwrap();
+    s.execute("sketch.finish", &json!({})).unwrap();
+    // Inside the left stem: just right of the outline's leftmost point, halfway up.
+    let left = outline.contours[0]
+        .iter()
+        .map(|s| s.start().x)
+        .fold(f64::INFINITY, f64::min);
+    let r = s
+        .execute(
+            "solid.extrude",
+            &json!({"sketch": 1, "profiles": [{"x": left + 0.2, "y": 5.0}], "distance": 2}),
+        )
+        .unwrap();
+    let v = extruded_volume(&r);
+    assert!(
+        (v - 2.0 * shoelace).abs() < 1e-6,
+        "{v} vs {}",
+        2.0 * shoelace
+    );
+    // Bad input changes nothing.
+    s.execute("sketch.create", &json!({"plane": "xy"})).unwrap();
+    for bad in [
+        json!({"text": ""}),
+        json!({"text": "H", "height": -1}),
+        json!({"text": "H", "align": "middle"}),
+        json!({"text": "H", "font": "/dev/zero"}),
+        json!({"text": "   "}),
+    ] {
+        assert!(s.execute("sketch.text", &bad).is_err(), "{bad}");
+    }
+}
+
 #[test]
 fn concentric_collinear_and_point_alignment_from_the_selection() {
     use crate::sketching::SketchItem;

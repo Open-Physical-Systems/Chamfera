@@ -63,6 +63,7 @@ mod solid_ui;
 mod spline_ui;
 mod surface_ui;
 mod sweep_ui;
+mod text_ui;
 mod timeline;
 mod transform_ui;
 mod tutorial_ui;
@@ -1248,6 +1249,7 @@ impl eframe::App for ChamferaApp {
             self.joint_dialog(&ctx);
             self.assembly_edit_dialog(&ctx);
             self.conflict_dialog(&ctx);
+            self.text_dialog(&ctx);
             self.dxf_insert_dialog(&ctx);
             self.motion_panels(&ctx);
             self.hole_dialog(&ctx);

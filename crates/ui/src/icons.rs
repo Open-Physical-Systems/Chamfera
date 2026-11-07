@@ -132,6 +132,7 @@ pub enum Icon {
     SurfaceSweep,
     SurfaceTrim,
     Sweep,
+    Text,
     Thicken,
     Trim,
     Undo,
@@ -153,7 +154,7 @@ pub enum Icon {
 
 impl Icon {
     #[cfg(test)]
-    pub const ALL: [Icon; 130] = [
+    pub const ALL: [Icon; 131] = [
         Icon::RenderCamera,
         Icon::RenderEnvironment,
         Icon::RenderImage,
@@ -276,6 +277,7 @@ impl Icon {
         Icon::SurfaceSweep,
         Icon::SurfaceTrim,
         Icon::Sweep,
+        Icon::Text,
         Icon::Thicken,
         Icon::Trim,
         Icon::Undo,
@@ -349,6 +351,7 @@ impl Icon {
             Icon::Line => master!("line"),
             Icon::Loft => master!("loft"),
             Icon::Sweep => master!("sweep"),
+            Icon::Text => master!("text"),
             Icon::Thicken => master!("thicken"),
             Icon::Patch => master!("patch"),
             Icon::Stitch => master!("stitch"),

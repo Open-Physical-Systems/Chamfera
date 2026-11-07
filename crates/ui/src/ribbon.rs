@@ -752,6 +752,14 @@ pub const TOOLS: &[RibbonTool] = &[
     sketch("CREATE", S::Polygon, Icon::Polygon, "Polygon").primary(),
     sketch("CREATE", S::Spline, Icon::Spline, "Spline").primary(),
     sketch("CREATE", S::Point, Icon::SketchPoint, "Point"),
+    tool(
+        K,
+        "CREATE",
+        Action::Tool("sketch.text"),
+        Icon::Text,
+        "Text",
+        "Draw words as closed profiles, to extrude or cut",
+    ),
     sketch(
         "CREATE",
         S::CentreRectangle,
@@ -1738,6 +1746,7 @@ impl ChamferaApp {
             }
             Action::Tool(id) => match id {
                 "sketch.ortho" => self.sketch.ortho,
+                "sketch.text" => self.sketch.text.is_some(),
                 "solid.hole" => s.hole.is_some(),
                 "solid.shell" => s.shell.is_some(),
                 "solid.offset_face" => pull == Some(PullMode::Offset),
@@ -1991,6 +2000,7 @@ impl ChamferaApp {
                 self.run_sketch("sketch.split", json!({}));
             }
             "sketch.ortho" => self.toggle_ortho(),
+            "sketch.text" => self.open_text_dialog(),
             "drawing.new_sheet" => self.drawing_new_sheet(),
             "drawing.projection" => self.drawing_toggle_projection(),
             "drawing.add_parts_list" => self.drawing_parts_list(),

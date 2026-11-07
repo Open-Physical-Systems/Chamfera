@@ -13,6 +13,7 @@ chamfera-doc.workspace = true
 chamfera-kernel.workspace = true
 chamfera-geom.workspace = true
 miniz_oxide.workspace = true
+skrifa.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 

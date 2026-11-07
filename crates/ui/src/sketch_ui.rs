@@ -520,6 +520,8 @@ pub struct SketchUi {
     pub(crate) glyph_selected: Option<u32>,
     /// The open conflict dialog (`constraint_ui.rs`).
     pub(crate) conflict: Option<crate::constraint_ui::Conflict>,
+    /// The open Text dialog (`text_ui.rs`).
+    pub(crate) text: Option<crate::text_ui::TextDialog>,
 }
 
 /// How constrained the active sketch is.
