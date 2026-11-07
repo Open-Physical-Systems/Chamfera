@@ -426,3 +426,60 @@ pub fn clip_arc(k: Point2, rho: f64, start: f64, end: f64, c: Point2, r: f64) ->
     out.dedup_by(|x, y| (x.0 - y.0).abs() < 1e-12 && (x.1 - y.1).abs() < 1e-12);
     out
 }
+
+/// What a hole callout says about one hole feature: its lines of text, worked out from
+/// the feature's sizes by the caller (`4 x Ø6.6 THRU`, `CBORE Ø11 x 6.4 DEEP`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HoleNote {
+    pub feature: u32,
+    pub lines: Vec<String>,
+}
+
+/// The gap between the lines of a callout (mm): text height and a half.
+pub const LINE_PITCH: f64 = TEXT * 1.6;
+
+/// A hole callout: a leader from `at` towards the hole's centre `centre`, its arrow on
+/// the hole's outline (radius `radius`, sheet mm; 0 puts it on the centre), and the
+/// lines of text on a landing at `at`, the first line on top.
+pub fn hole_callout(
+    items: &mut Vec<Item>,
+    at: Point2,
+    centre: Point2,
+    radius: f64,
+    lines: &[String],
+    layer: Layer,
+) {
+    let mut own = Vec::new();
+    let tip = match (at - centre).normalized() {
+        Some(u) if radius > 0.0 && centre.distance(at) > radius => centre + u * radius,
+        _ => centre,
+    };
+    if let Some(d) = (tip - at).normalized() {
+        arrow(&mut own, tip, d);
+    }
+    line(&mut own, Layer::Dim, tip, at);
+    let right = at.x >= centre.x;
+    let lines: Vec<String> = lines.iter().map(|l| clean(l, 120)).collect();
+    let land = lines.iter().map(|l| width(l, TEXT)).fold(0.0_f64, f64::max) + 2.0;
+    let end = Point2::new(if right { at.x + land } else { at.x - land }, at.y);
+    line(&mut own, Layer::Dim, at, end);
+    let x = if right { at.x + 1.0 } else { at.x - 1.0 };
+    let align = if right { Align::Left } else { Align::Right };
+    // The first line sits on the landing; the others hang below it.
+    for (k, l) in lines.iter().enumerate() {
+        let y = if k == 0 {
+            at.y + 1.0
+        } else {
+            at.y - LINE_PITCH * k as f64 + 1.0 - TEXT * 0.4
+        };
+        text(&mut own, Point2::new(x, y), TEXT, align, l);
+    }
+    for mut i in own {
+        i.layer = if layer == Layer::Dangling {
+            Layer::Dangling
+        } else {
+            Layer::Dim
+        };
+        items.push(i);
+    }
+}

@@ -551,3 +551,63 @@ pub(super) fn add_balloons(s: &mut Session, p: &Value) -> CmdResult {
     }
     Ok(json!({ "sheet": sheet, "balloons": made }))
 }
+
+pub(super) fn add_hole_callout(s: &mut Session, p: &Value) -> CmdResult {
+    let (view, sheet) = view_and_sheet(s, p)?;
+    let pick = point(p, "x1", "y1")?;
+    let at = point(p, "x", "y")?;
+    let given = opt_id(p, "feature")?;
+    let pv = placed(s, sheet, view)?;
+    let circle = circle_near(&pv, pick).ok_or_else(|| {
+        unavailable(format!(
+            "no circle of view {view} within {PICK} mm of ({:.2}, {:.2})",
+            pick.x, pick.y
+        ))
+    })?;
+    let refs =
+        chamfera_drawing::hole_callout_refs(s.doc.drawing.sheet(sheet)?, &bodies(s), view, circle);
+    // The hole feature: as given, else the one the circle's edge is named after.
+    let feature = given
+        .or_else(|| {
+            refs.first()
+                .and_then(|r| chamfera_drawing::refs::hole_feature(&r.name))
+        })
+        .ok_or_else(|| {
+            unavailable(
+                "that circle is not a hole made by a Hole feature: pick a hole's rim, or give \
+                 `feature`",
+            )
+        })?;
+    let is_hole = s
+        .doc
+        .features
+        .iter()
+        .any(|f| f.id == feature && matches!(f.kind, chamfera_doc::FeatureKind::Hole(_)));
+    if !is_hole {
+        return Err(bad(format!("feature {feature} is not a Hole feature")));
+    }
+    let lines = super::hole_notes(s)
+        .into_iter()
+        .find(|n| n.feature == feature)
+        .map(|n| n.lines)
+        .ok_or_else(|| unavailable(format!("hole feature {feature} is suppressed or failed")))?;
+    let associative = !refs.is_empty();
+    let id = push(
+        s,
+        sheet,
+        AnnotationKind::HoleCallout {
+            view,
+            feature,
+            at,
+            target: circle.0,
+            refs,
+        },
+    )?;
+    Ok(json!({
+        "sheet": sheet,
+        "annotation": id,
+        "feature": feature,
+        "text": lines,
+        "associative": associative,
+    }))
+}

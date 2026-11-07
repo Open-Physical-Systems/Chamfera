@@ -136,7 +136,11 @@ use thiserror::Error;
 ///   `vertical_points` constraints; `horizontal_distance`, `vertical_distance` and
 ///   `arc_length` dimensions; and driven (reference) dimensions, marked `driven: true` on
 ///   their constraint record. Older files open unchanged.
-pub const FORMAT_VERSION: u32 = 37;
+/// - 39: drawings version 3: ordinate dimensions (`ordinate_x`, `ordinate_y`), hole
+///   callouts (`hole_callout` annotations, their text worked out from the hole feature),
+///   and more title block fields (`drawing_number`, `revision`, `material`,
+///   `checked_by`). Older files open unchanged. (38 is another branch's.)
+pub const FORMAT_VERSION: u32 = 39;
 /// The tag every design file starts with, so other JSON is not mistaken for a design.
 pub const FORMAT_TAG: &str = "chamfera";
 /// Longest parameter name.

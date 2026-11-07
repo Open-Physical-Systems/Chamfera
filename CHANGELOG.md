@@ -55,6 +55,8 @@ pull requests on GitHub.
 ### Drawings
 - Sheets with views, hidden lines and dimensions [#41].
 - Associative dimensions, silhouettes, section and detail views, GD&T and a parts list [#56].
+- Sheet Settings dialog and a fuller title block; ordinate, baseline and chain dimensions;
+  hole callouts from the Hole feature (design format 39).
 
 ### Manufacture (CAM)
 - 2D milling toolpaths and G-code [#43].

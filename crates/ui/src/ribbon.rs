@@ -973,6 +973,16 @@ pub const TOOLS: &[RibbonTool] = &[
     )
     .primary()
     .short("Projection"),
+    tool(
+        D,
+        "SHEET",
+        Action::Tool("drawing.edit_sheet"),
+        Icon::Parameters,
+        "Sheet Settings",
+        "Paper size, scale, projection and the title block: part, drawing number, revision, material, names",
+    )
+    .primary()
+    .short("Settings"),
     // DRAWING > VIEWS
     view(
         "drawing.view.front",
@@ -1061,6 +1071,28 @@ pub const TOOLS: &[RibbonTool] = &[
         Icon::ConstraintPerpendicular,
         "Click two straight edges",
     ),
+    dimension(
+        "drawing.add_ordinate",
+        "Ordinate Dimensions",
+        "Ordinate",
+        Icon::Dimension,
+        "Click the origin, then each point: its distance from the origin along x or y",
+    )
+    .sep(),
+    dimension(
+        "drawing.add_baseline",
+        "Baseline Dimensions",
+        "Baseline",
+        Icon::Dimension,
+        "Click the baseline, then the points; Enter: each measured from the baseline, stacked",
+    ),
+    dimension(
+        "drawing.add_chain",
+        "Chain Dimensions",
+        "Chain",
+        Icon::Dimension,
+        "Click the points; Enter: one dimension between each neighbouring pair, in line",
+    ),
     // DRAWING > ANNOTATE
     tool(
         D,
@@ -1098,6 +1130,15 @@ pub const TOOLS: &[RibbonTool] = &[
         "Surface Texture",
         "Click the surface: the texture symbol with its requirement (Ra 1.6)",
     ),
+    tool(
+        D,
+        "ANNOTATE",
+        Action::Tool("drawing.add_hole_callout"),
+        Icon::Hole,
+        "Hole Callout",
+        "Click a hole, then the text's place: count, size, depth, counterbore or countersink, from the Hole feature",
+    )
+    .short("Hole"),
     tool(
         D,
         "ANNOTATE",
@@ -1481,6 +1522,10 @@ fn draw_tool(id: &str) -> Option<crate::drawing_ui::DrawTool> {
         "drawing.add_gdt" => DrawTool::Gdt,
         "drawing.add_centre_line" => DrawTool::CentreLine,
         "drawing.add_balloons" => DrawTool::Balloons,
+        "drawing.add_ordinate" => DrawTool::Ordinate,
+        "drawing.add_baseline" => DrawTool::Baseline,
+        "drawing.add_chain" => DrawTool::Chain,
+        "drawing.add_hole_callout" => DrawTool::HoleCallout,
         _ => return None,
     })
 }
@@ -1773,6 +1818,7 @@ impl ChamferaApp {
                     self.session.scene.display.style == chamfera_render::VisualStyle::Realistic
                 }
                 "render.start" => self.render.window.is_some(),
+                "drawing.edit_sheet" => self.drawing.settings.is_some(),
                 _ => {
                     if let Some(k) = body_tool_kind(id) {
                         s.body_tool.as_ref().is_some_and(|t| t.kind == k)
@@ -1891,7 +1937,7 @@ impl ChamferaApp {
             }
             Tab::Drawing => match id {
                 "drawing.new_sheet" => return None,
-                "drawing.projection" if self.drawing_sheet().is_none() => {
+                "drawing.projection" | "drawing.edit_sheet" if self.drawing_sheet().is_none() => {
                     format!("{name}: add a sheet first")
                 }
                 _ if id.starts_with("drawing.view.") && !has_solids => {
@@ -1921,6 +1967,10 @@ impl ChamferaApp {
                             | "drawing.add_detail"
                             | "drawing.add_centre_line"
                             | "drawing.add_balloons"
+                            | "drawing.add_ordinate"
+                            | "drawing.add_baseline"
+                            | "drawing.add_chain"
+                            | "drawing.add_hole_callout"
                     ))
                     && !self.drawing_has_views() =>
                 {
@@ -2003,6 +2053,7 @@ impl ChamferaApp {
             "sketch.text" => self.open_text_dialog(),
             "drawing.new_sheet" => self.drawing_new_sheet(),
             "drawing.projection" => self.drawing_toggle_projection(),
+            "drawing.edit_sheet" => self.toggle_sheet_settings(),
             "drawing.add_parts_list" => self.drawing_parts_list(),
             "cam.setup" => self.cam_setup(),
             "cam.tool_add" => self.open_cam_tool_dialog(),
@@ -2534,7 +2585,7 @@ mod tests {
             "drawing.add_dimension", // the dimension tools
             "drawing.add_view",      // the view tools
             "drawing.delete",
-            "drawing.edit_sheet", // Projection
+            "drawing.edit_sheet", // Sheet Settings and Projection
             "drawing.export",     // the export tools
             "drawing.export_bytes",
             "drawing.list",
