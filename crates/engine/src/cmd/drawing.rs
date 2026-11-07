@@ -11,11 +11,12 @@ use chamfera_doc::drawing::{
     self as dd, DimensionKind, Orientation, Paper, ProjectionAngle, Sheet, SheetDimension,
     SheetView, TitleBlock, ViewDirection,
 };
-use chamfera_drawing::{Format, PartRow, SheetGeometry};
+use chamfera_drawing::{Format, HoleNote, PartRow, SheetGeometry};
 use chamfera_geom::Point2;
 use serde_json::{Value, json};
 
 mod annot;
+mod dimset;
 
 pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec {
@@ -28,6 +29,22 @@ pub static COMMANDS: &[CommandSpec] = &[
         run: annot::add_balloons,
     },
     CommandSpec {
+        id: "drawing.add_baseline",
+        label: "Baseline Dimensions",
+        params: "view: id (required) - the view to dimension\n\
+                 kind: string (required) - horizontal or vertical\n\
+                 points: [{x, y}] (required) - 2 to 64 sheet points, each near a vertex or edge \
+                 of the view; the first is the baseline every other point is measured from\n\
+                 offset: number (optional) - sheet mm from the points to the nearest dimension \
+                 line (negative: the other side); default 10\n\
+                 spacing: number (optional) - sheet mm between the stacked lines, 2 to 50; \
+                 default 7\n\
+                 sheet: id (optional) - default the view's sheet\n\
+                 Replies with each dimension's id and value, shortest first",
+        mutates: true,
+        run: dimset::add_baseline,
+    },
+    CommandSpec {
         id: "drawing.add_centre_line",
         label: "Centre Line",
         params: "view: id (required) - the view\n\
@@ -35,6 +52,19 @@ pub static COMMANDS: &[CommandSpec] = &[
                  the view; the line joins their centres and follows the model",
         mutates: true,
         run: annot::add_centre_line,
+    },
+    CommandSpec {
+        id: "drawing.add_chain",
+        label: "Chain Dimensions",
+        params: "view: id (required) - the view to dimension\n\
+                 kind: string (required) - horizontal or vertical\n\
+                 points: [{x, y}] (required) - 2 to 64 sheet points, each near a vertex or edge \
+                 of the view; each neighbouring pair along the axis gets one dimension, all on \
+                 one line\n\
+                 offset: number (optional) - sheet mm from the points to the line; default 10\n\
+                 sheet: id (optional) - default the view's sheet",
+        mutates: true,
+        run: dimset::add_chain,
     },
     CommandSpec {
         id: "drawing.add_detail",
@@ -52,13 +82,17 @@ pub static COMMANDS: &[CommandSpec] = &[
         id: "drawing.add_dimension",
         label: "Add Dimension",
         params: "view: id (required) - the view to dimension\n\
-                 kind: string (required) - horizontal, vertical, aligned, diameter, radius or angular\n\
+                 kind: string (required) - horizontal, vertical, aligned, diameter, radius, angular, \
+                 ordinate_x or ordinate_y\n\
                  x1, y1: number (required) - the first pick, sheet mm from the lower-left corner: \
-                 a vertex or edge (linear), a point on the circle (diameter, radius) or on the \
-                 first edge (angular)\n\
-                 x2, y2: number (required for linear and angular) - the second vertex or edge\n\
+                 a vertex or edge (linear; an ordinate's origin), a point on the circle \
+                 (diameter, radius) or on the first edge (angular)\n\
+                 x2, y2: number (required for linear, ordinate and angular) - the second vertex \
+                 or edge (an ordinate's measured point; the origin itself reads 0)\n\
                  offset: number (optional) - sheet mm from the measured points to the dimension \
-                 line (negative: the other side), the leader length, or the arc radius; default 10\n\
+                 line (negative: the other side), the leader length, the arc radius, or where an \
+                 ordinate's line ends from its origin (up for ordinate_x, right for ordinate_y); \
+                 default 10\n\
                  sheet: id (optional) - default the view's sheet\n\
                  The dimension keeps what it measures on the model (vertices and edges by \
                  their persistent names) and follows edits; when that is gone it is shown \
@@ -82,6 +116,19 @@ pub static COMMANDS: &[CommandSpec] = &[
         run: annot::add_gdt,
     },
     CommandSpec {
+        id: "drawing.add_hole_callout",
+        label: "Hole Callout",
+        params: "view: id (required) - the view\n\
+                 x1, y1: number (required) - sheet mm near the circle of a hole made by a Hole \
+                 feature\n\
+                 x, y: number (required) - where the callout's text goes, sheet mm\n\
+                 feature: id (optional) - the hole feature, when the circle's name does not say\n\
+                 The text (count, diameter, depth or THRU, counterbore or countersink) comes \
+                 from the feature whenever the sheet is drawn, and the leader follows the hole",
+        mutates: true,
+        run: annot::add_hole_callout,
+    },
+    CommandSpec {
         id: "drawing.add_leader",
         label: "Leader",
         params: "points: [{x, y}] (required) - 2 to 16 sheet points: the arrow's tip first, the \
@@ -100,6 +147,21 @@ pub static COMMANDS: &[CommandSpec] = &[
                  sheet: id (optional) - default the last sheet",
         mutates: true,
         run: annot::add_note,
+    },
+    CommandSpec {
+        id: "drawing.add_ordinate",
+        label: "Ordinate Dimensions",
+        params: "view: id (required) - the view to dimension\n\
+                 axis: string (required) - x (distances along the view's width) or y (its height)\n\
+                 x0, y0: number (required) - the origin, sheet mm near a vertex or edge; it gets \
+                 a 0 with the origin's circle\n\
+                 points: [{x, y}] (optional) - up to 64 more sheet points, each near a vertex or \
+                 edge; each gets its distance from the origin\n\
+                 offset: number (optional) - where the lines end, sheet mm from the origin (up \
+                 for x, right for y; negative the other way); default -10\n\
+                 sheet: id (optional) - default the view's sheet",
+        mutates: true,
+        run: dimset::add_ordinate,
     },
     CommandSpec {
         id: "drawing.add_parts_list",
@@ -213,7 +275,8 @@ pub static COMMANDS: &[CommandSpec] = &[
                  scale: number (optional) - sheet mm per model mm, default 1 (0.5 is 1:2)\n\
                  projection: string (optional) - third (default) or first angle\n\
                  name: string (optional) - the sheet's name\n\
-                 part_name, drawn_by, date: string (optional) - title block fields; the date \
+                 part_name, drawing_number, revision, material, drawn_by, checked_by, date: \
+                 string (optional) - title block fields, at most 64 characters; the date \
                  defaults to today",
         mutates: true,
         run: new_sheet,
@@ -355,14 +418,12 @@ fn apply_settings(sheet: &mut Sheet, p: &Value) -> Result<(), CommandError> {
     if let Some(t) = text_param(p, "name")? {
         sheet.name = t;
     }
-    if let Some(t) = text_param(p, "part_name")? {
-        sheet.title.part_name = t;
-    }
-    if let Some(t) = text_param(p, "drawn_by")? {
-        sheet.title.drawn_by = t;
-    }
-    if let Some(t) = text_param(p, "date")? {
-        sheet.title.date = t;
+    for name in TitleBlock::NAMES {
+        if let Some(t) = text_param(p, name)?
+            && let Some(f) = sheet.title.field_mut(name)
+        {
+            *f = t;
+        }
     }
     Ok(())
 }
@@ -398,6 +459,7 @@ fn make_sheet(s: &mut Session, p: &Value) -> Result<u32, CommandError> {
             part_name: part,
             drawn_by: String::new(),
             date: today(),
+            ..Default::default()
         },
         views: Vec::new(),
         dimensions: Vec::new(),
@@ -424,7 +486,17 @@ fn edit_sheet(s: &mut Session, p: &Value) -> CmdResult {
     let sheet = s.doc.drawing.sheet_mut(id)?;
     apply_settings(sheet, p)?;
     let (w, h) = sheet.size();
-    Ok(json!({ "sheet": id, "width": w, "height": h }))
+    Ok(json!({
+        "sheet": id,
+        "width": w,
+        "height": h,
+        "paper": sheet.paper.id(),
+        "orientation": sheet.orientation,
+        "scale": sheet.scale,
+        "projection": sheet.projection,
+        "name": sheet.name,
+        "title": sheet.title,
+    }))
 }
 
 fn add_view(s: &mut Session, p: &Value) -> CmdResult {
@@ -504,8 +576,61 @@ fn sheet_of_view(s: &Session, view: u32) -> Result<u32, CommandError> {
 /// Lays out sheet `id` with the current solids.
 pub fn render(s: &Session, id: u32) -> Result<SheetGeometry, CommandError> {
     let sheet = s.doc.drawing.sheet(id)?;
-    chamfera_drawing::render_with_parts(sheet, &bodies(s), &parts(s))
+    chamfera_drawing::render_full(sheet, &bodies(s), &parts(s), &hole_notes(s))
         .map_err(|e| CommandError::Unavailable(e.to_string()))
+}
+
+/// A length on a drawing: two decimals at most, trailing zeros dropped.
+fn mm(v: f64) -> String {
+    chamfera_drawing::format_value(DimensionKind::Horizontal, v)
+}
+
+/// What a hole callout says about each built hole feature: `4 x Ø6.6 THRU` or
+/// `Ø5 x 10 DEEP`, then `CBORE Ø11 x 6.4 DEEP` or `CSK Ø12 x 90°`. Suppressed holes and
+/// holes whose sizes do not evaluate have none.
+pub fn hole_notes(s: &Session) -> Vec<HoleNote> {
+    let mut out = Vec::new();
+    for f in &s.doc.features {
+        let chamfera_doc::FeatureKind::Hole(h) = &f.kind else {
+            continue;
+        };
+        if f.suppressed {
+            continue;
+        }
+        let Ok(z) = s.doc.hole_sizes(h) else {
+            continue;
+        };
+        let from_sketch = h
+            .sketch
+            .and_then(|k| s.doc.sketch(k).ok())
+            .map_or(0, |k| crate::hole::sketch_hole_points(&k.sketch).len());
+        let n = h.points.len() + from_sketch;
+        let count = if n > 1 {
+            format!("{n} x ")
+        } else {
+            String::new()
+        };
+        let depth = match z.depth {
+            None => "THRU".to_owned(),
+            Some(d) => format!("x {} DEEP", mm(d)),
+        };
+        let mut lines = vec![format!("{count}Ø{} {depth}", mm(z.diameter))];
+        if let Some((d, depth)) = z.counterbore {
+            lines.push(format!("CBORE Ø{} x {} DEEP", mm(d), mm(depth)));
+        }
+        if let Some((d, angle)) = z.countersink {
+            lines.push(format!(
+                "CSK Ø{} x {}",
+                mm(d),
+                chamfera_drawing::format_value(DimensionKind::Angular, angle.to_degrees())
+            ));
+        }
+        out.push(HoleNote {
+            feature: f.id,
+            lines,
+        });
+    }
+    out
 }
 
 /// The solids by name, as the drawing crate takes them.
@@ -556,7 +681,8 @@ fn add_dimension(s: &mut Session, p: &Value) -> CmdResult {
     let kind_name = params::req_str(p, "kind")?;
     let kind = DimensionKind::parse(kind_name).ok_or_else(|| {
         bad(format!(
-            "unknown kind {kind_name:?}: use horizontal, vertical, aligned, diameter, radius or angular"
+            "unknown kind {kind_name:?}: use horizontal, vertical, aligned, diameter, radius, \
+             angular, ordinate_x or ordinate_y"
         ))
     })?;
     let mut picks = vec![Point2::new(coordinate(p, "x1")?, coordinate(p, "y1")?)];
@@ -568,6 +694,21 @@ fn add_dimension(s: &mut Session, p: &Value) -> CmdResult {
         Some(v) if dd::is_valid_sheet_coordinate(v) => v,
         Some(_) => return Err(bad("`offset` must be a finite number of mm")),
     };
+    let mut made = push_dimensions(s, sheet, view, &[(kind, picks, offset)])?;
+    let mut reply = made.pop().unwrap_or(Value::Null);
+    reply["sheet"] = json!(sheet);
+    Ok(reply)
+}
+
+/// Plans dimensions on view `view` of `sheet` from picks (sheet mm), each a kind, its
+/// picks and its offset, and adds them all, or none when one fails. Replies with each
+/// one's `dimension` id, `value`, `text` and `associative`.
+pub(super) fn push_dimensions(
+    s: &mut Session,
+    sheet: u32,
+    view: u32,
+    specs: &[(DimensionKind, Vec<Point2>, f64)],
+) -> Result<Vec<Value>, CommandError> {
     let geometry = render(s, sheet)?;
     let placed = geometry
         .view(view)
@@ -575,39 +716,49 @@ fn add_dimension(s: &mut Session, p: &Value) -> CmdResult {
     if let Some(problem) = &placed.problem {
         return Err(CommandError::Unavailable(format!("view {view}: {problem}")));
     }
-    let plan = chamfera_drawing::plan_dimension(placed, kind, &picks)
-        .map_err(|e| CommandError::Unavailable(e.to_string()))?;
-    let refs = chamfera_drawing::dimension_refs(
-        s.doc.drawing.sheet(sheet)?,
-        &bodies(s),
-        view,
-        kind,
-        &plan.points,
-    );
-    let associative = !refs.is_empty();
-    let id = s.doc.drawing.next_id()?;
-    let sh = s.doc.drawing.sheet_mut(sheet)?;
-    if sh.dimensions.len() >= dd::MAX_DIMENSIONS {
+    let mut planned = Vec::new();
+    for (kind, picks, offset) in specs {
+        let plan = chamfera_drawing::plan_dimension(placed, *kind, picks)
+            .map_err(|e| CommandError::Unavailable(e.to_string()))?;
+        let refs = chamfera_drawing::dimension_refs(
+            s.doc.drawing.sheet(sheet)?,
+            &bodies(s),
+            view,
+            *kind,
+            &plan.points,
+        );
+        planned.push((plan, refs, *offset));
+    }
+    if s.doc.drawing.sheet(sheet)?.dimensions.len() + planned.len() > dd::MAX_DIMENSIONS {
         return Err(bad(format!(
             "a sheet holds at most {} dimensions",
             dd::MAX_DIMENSIONS
         )));
     }
-    sh.dimensions.push(SheetDimension {
-        id,
-        view,
-        kind,
-        points: plan.points.clone(),
-        offset,
-        refs,
-    });
-    Ok(json!({
-        "sheet": sheet,
-        "dimension": id,
-        "value": plan.value,
-        "text": chamfera_drawing::format_value(kind, plan.value),
-        "associative": associative,
-    }))
+    let mut out = Vec::new();
+    for (plan, refs, offset) in planned {
+        let id = s.doc.drawing.next_id()?;
+        let associative = !refs.is_empty();
+        s.doc
+            .drawing
+            .sheet_mut(sheet)?
+            .dimensions
+            .push(SheetDimension {
+                id,
+                view,
+                kind: plan.kind,
+                points: plan.points.clone(),
+                offset,
+                refs,
+            });
+        out.push(json!({
+            "dimension": id,
+            "value": plan.value,
+            "text": chamfera_drawing::format_value(plan.kind, plan.value),
+            "associative": associative,
+        }));
+    }
+    Ok(out)
 }
 
 /// `v`, with -0 (an empty sum) as 0.
@@ -679,7 +830,8 @@ fn move_item(s: &mut Session, p: &Value) -> CmdResult {
                 K::Note { at, .. }
                 | K::SurfaceFinish { at, .. }
                 | K::Gdt { at, .. }
-                | K::Balloon { at, .. } => at,
+                | K::Balloon { at, .. }
+                | K::HoleCallout { at, .. } => at,
                 K::Leader { points, .. } => points
                     .last_mut()
                     .ok_or_else(|| bad(format!("leader {a} has no points")))?,
@@ -818,6 +970,7 @@ fn export_bytes(s: &mut Session, p: &Value) -> CmdResult {
 fn list(s: &mut Session, p: &Value) -> CmdResult {
     params::none(p)?;
     let mut sheets = Vec::new();
+    let notes = hole_notes(s);
     for sheet in &s.doc.drawing.sheets {
         let geometry = render(s, sheet.id).ok();
         let (w, h) = sheet.size();
@@ -876,7 +1029,14 @@ fn list(s: &mut Session, p: &Value) -> CmdResult {
                         .find(|x| x.0 == a.id)
                         .map(|x| x.1.clone())
                 });
-                json!({ "id": a.id, "annotation": a.kind, "dangling": dangling })
+                let text = match &a.kind {
+                    dd::AnnotationKind::HoleCallout { feature, .. } => notes
+                        .iter()
+                        .find(|n| n.feature == *feature)
+                        .map(|n| json!(n.lines)),
+                    _ => None,
+                };
+                json!({ "id": a.id, "annotation": a.kind, "dangling": dangling, "text": text })
             })
             .collect();
         let parts: Vec<Value> = match (&sheet.parts_list, geometry.as_ref()) {

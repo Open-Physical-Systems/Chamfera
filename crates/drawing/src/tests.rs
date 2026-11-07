@@ -53,6 +53,7 @@ pub(crate) fn sheet_with(views: Vec<SheetView>, dims: Vec<SheetDimension>) -> Sh
             part_name: "Block".into(),
             drawn_by: "Test".into(),
             date: "2026-11-06".into(),
+            ..Default::default()
         },
         views,
         dimensions: dims,
@@ -396,8 +397,8 @@ fn svg_and_dxf_parse_back_with_the_expected_entities() {
     // - HIDDEN: the hole's two silhouettes.
     // - CENTER: the hole's centre line, and the projection symbol's two axes.
     // - BORDER: the frame (4), the title block's box (4), the symbol column's divider
-    //   (1), the row divider (1), three cell dividers (3), the symbol's cone (4): 17
-    //   lines, and the symbol's two circles.
+    //   (1), the row divider (1), two cell dividers in the top row and five in the
+    //   bottom row (7), the symbol's cone (4): 21 lines, and the symbol's two circles.
     let svg = svg::write(&out);
     assert!(svg.starts_with("<?xml"));
     assert!(svg.trim_end().ends_with("</svg>"));
@@ -405,11 +406,12 @@ fn svg_and_dxf_parse_back_with_the_expected_entities() {
     assert_eq!(svg_count(&svg, "HIDDEN", "line"), 2);
     assert!(svg.contains(r#"<g id="HIDDEN" fill="none" stroke="black" stroke-width="0.25" stroke-linecap="round" stroke-dasharray="3 1.5">"#));
     assert_eq!(svg_count(&svg, "CENTER", "line"), 3);
-    assert_eq!(svg_count(&svg, "BORDER", "line"), 17);
+    assert_eq!(svg_count(&svg, "BORDER", "line"), 21);
     assert_eq!(svg_count(&svg, "BORDER", "circle"), 2);
-    // 9 texts in the title block: PART, CHAMFERA, the name, 4 labels... and 4 values,
-    // and the projection's name: 3 + 8 + 1 = 12.
-    assert_eq!(svg_count(&svg, "BORDER", "text"), 12);
+    // Texts in the title block: 9 labels (PART, DRAWING NO., REV; SCALE, UNITS,
+    // MATERIAL, DATE, DRAWN, CHECKED), the 5 values given (Block, 1:1, mm, the date,
+    // Test; empty fields write nothing), CHAMFERA and the projection's name: 16.
+    assert_eq!(svg_count(&svg, "BORDER", "text"), 16);
 
     let dxf = dxf::write(&out);
     assert!(dxf.contains("$ACADVER\n  1\nAC1009"));
@@ -418,9 +420,9 @@ fn svg_and_dxf_parse_back_with_the_expected_entities() {
     assert_eq!(n("LINE", "VISIBLE"), 4);
     assert_eq!(n("LINE", "HIDDEN"), 2);
     assert_eq!(n("LINE", "CENTER"), 3);
-    assert_eq!(n("LINE", "BORDER"), 17);
+    assert_eq!(n("LINE", "BORDER"), 21);
     assert_eq!(n("CIRCLE", "BORDER"), 2);
-    assert_eq!(n("TEXT", "BORDER"), 12);
+    assert_eq!(n("TEXT", "BORDER"), 16);
     // Every layer is declared with its line type.
     for (layer, lt) in [
         ("HIDDEN", "DASHED"),
