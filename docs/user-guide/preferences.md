@@ -77,8 +77,13 @@ Dimensions, dialogs, measurements and the status bar use these units, and a numb
 | GRID > Automatic grid (follows the zoom) | on |
 | Grid spacing (when automatic is off) | 0.001 to 100 000 mm, typed in the design's unit; 10 mm |
 | SKETCH > Snap to grid while sketching | off |
+| OBJECT SNAPS > Endpoint, Centre, Origin, Midpoint, Intersection, Quadrant, Perpendicular, Tangent, On curve | each on |
+| Snap radius | 2 to 40 px, 9 px |
+| TRACKING > Alignment guides through existing points | on |
+| Perpendicular and tangent guides from the line or arc a line starts on | on |
+| Polar guides every | 1 to 90 degrees, off, 15 degrees |
 
-With snap on, clicks on empty space land on the nearest grid point; clicks on a point still snap to the point. A spacing outside the range is not taken ("Type a length from 0.001 to 100000 mm.").
+With snap on, clicks on empty space land on the nearest grid point; clicks on a point still snap to the point. Holding Ctrl while drawing turns every snap and guide off for that click. A spacing outside the range is not taken ("Type a length from 0.001 to 100000 mm.").
 
 ## Assistant
 

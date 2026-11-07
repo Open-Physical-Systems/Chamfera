@@ -52,6 +52,43 @@ pub enum SnapKind {
 }
 
 impl SnapKind {
+    /// Every kind, in the order the snap settings list them.
+    pub const ALL: [SnapKind; 9] = [
+        SnapKind::Endpoint,
+        SnapKind::Centre,
+        SnapKind::Origin,
+        SnapKind::Midpoint,
+        SnapKind::Intersection,
+        SnapKind::Quadrant,
+        SnapKind::Perpendicular,
+        SnapKind::Tangent,
+        SnapKind::OnCurve,
+    ];
+
+    /// The key the preferences file stores the kind under.
+    pub fn key(self) -> &'static str {
+        match self {
+            SnapKind::Endpoint => "endpoint",
+            SnapKind::Centre => "centre",
+            SnapKind::Origin => "origin",
+            SnapKind::Midpoint => "midpoint",
+            SnapKind::Intersection => "intersection",
+            SnapKind::Quadrant => "quadrant",
+            SnapKind::Perpendicular => "perpendicular",
+            SnapKind::Tangent => "tangent",
+            SnapKind::OnCurve => "on_curve",
+        }
+    }
+
+    /// The kind stored under `key`.
+    pub fn parse(key: &str) -> Option<SnapKind> {
+        SnapKind::ALL.into_iter().find(|k| k.key() == key)
+    }
+
+    fn bit(self) -> u16 {
+        1 << (self as u16)
+    }
+
     /// The word shown beside the snap marker.
     pub fn label(self) -> &'static str {
         match self {
@@ -75,6 +112,36 @@ impl SnapKind {
             SnapKind::Perpendicular | SnapKind::Tangent => 2,
             SnapKind::OnCurve => 3,
         }
+    }
+}
+
+/// A set of snap kinds: the ones a query may return.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SnapKinds(u16);
+
+impl SnapKinds {
+    /// Every kind.
+    pub const ALL: SnapKinds = SnapKinds((1 << SnapKind::ALL.len()) - 1);
+    /// No kind: object snaps off.
+    pub const NONE: SnapKinds = SnapKinds(0);
+
+    pub fn contains(self, kind: SnapKind) -> bool {
+        self.0 & kind.bit() != 0
+    }
+
+    /// The set with `kind` turned on or off.
+    pub fn with(self, kind: SnapKind, on: bool) -> SnapKinds {
+        if on {
+            SnapKinds(self.0 | kind.bit())
+        } else {
+            SnapKinds(self.0 & !kind.bit())
+        }
+    }
+}
+
+impl Default for SnapKinds {
+    fn default() -> Self {
+        SnapKinds::ALL
     }
 }
 
@@ -104,6 +171,8 @@ pub struct SnapQuery {
     pub curve_radius: f64,
     /// The previous point of the segment being drawn, for perpendicular and tangent snaps.
     pub from: Option<Point2>,
+    /// The kinds that may snap (the snap settings).
+    pub kinds: SnapKinds,
 }
 
 /// The middle of the segment from `a` to `b`.
@@ -245,7 +314,7 @@ impl Sketch {
         let mut out = Vec::new();
         let near = |p: Point2| p.distance(cursor) <= q.radius;
         let mut add = |kind, at: Point2, point, curve, other| {
-            if at.is_valid() {
+            if at.is_valid() && q.kinds.contains(kind) {
                 out.push(Snap {
                     kind,
                     at,
@@ -430,6 +499,7 @@ mod tests {
             radius: 1.0,
             curve_radius: 0.8,
             from: None,
+            kinds: SnapKinds::ALL,
         }
     }
 
@@ -638,6 +708,38 @@ mod tests {
         assert_eq!(got.y, 4.0);
         assert!(lock_angle(from, from, step).is_none());
         assert!(lock_angle(from, p(1.0, 1.0), f64::NAN).is_none());
+    }
+
+    #[test]
+    fn a_kind_turned_off_never_snaps_and_the_next_best_wins() {
+        // Near the end (20, 0) of the line from (10, 0): with endpoints off, the cursor
+        // (19.6, 0.3) lands on the line at the foot (19.6, 0).
+        let (s, _) = with_line(p(10.0, 0.0), p(20.0, 0.0));
+        let q = SnapQuery {
+            kinds: SnapKinds::ALL.with(SnapKind::Endpoint, false),
+            ..query(19.6, 0.3)
+        };
+        let snap = s.snap(&q).unwrap();
+        assert_eq!(snap.kind, SnapKind::OnCurve);
+        assert!(close(snap.at, p(19.6, 0.0)));
+        // With every kind off nothing snaps; turning one back on brings only it: the
+        // middle of (10, 0)-(20, 0) is (15, 0).
+        let none = SnapQuery {
+            kinds: SnapKinds::NONE,
+            ..query(15.2, 0.1)
+        };
+        assert!(s.snap(&none).is_none());
+        let mid = SnapQuery {
+            kinds: SnapKinds::NONE.with(SnapKind::Midpoint, true),
+            ..none
+        };
+        let snap = s.snap(&mid).unwrap();
+        assert_eq!(snap.kind, SnapKind::Midpoint);
+        assert!(close(snap.at, p(15.0, 0.0)));
+        for k in SnapKind::ALL {
+            assert_eq!(SnapKind::parse(k.key()), Some(k));
+            assert!(SnapKinds::ALL.contains(k) && !SnapKinds::NONE.contains(k));
+        }
     }
 
     #[test]
