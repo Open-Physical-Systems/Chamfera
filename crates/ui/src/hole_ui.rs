@@ -1,6 +1,8 @@
 //! The Hole tool: click points on a flat face (click a point again to remove it), choose
 //! simple, counterbore or countersink, set the sizes, OK. The circles of each hole are
-//! drawn on the face as a preview. Acts only through `solid.hole` and `feature.edit`.
+//! drawn on the face as a preview. The extent is a depth, through all, or to a face:
+//! with Pick on, the next click picks the face the holes go down to. Acts only through
+//! `solid.hole` and `feature.edit`.
 
 use crate::icons::Icon;
 use crate::widgets::{self, Look};
@@ -22,6 +24,10 @@ pub struct HoleTool {
     pub diameter: String,
     pub through: bool,
     pub depth: String,
+    /// Down to this face (`2:bottom`) instead of a depth or through all.
+    pub to: Option<String>,
+    /// The next click picks the face to go to.
+    pub picking_to: bool,
     pub cb_diameter: String,
     pub cb_depth: String,
     pub cs_diameter: String,
@@ -43,6 +49,8 @@ impl Default for HoleTool {
             diameter: "6 mm".into(),
             through: true,
             depth: "10 mm".into(),
+            to: None,
+            picking_to: false,
             cb_diameter: "10 mm".into(),
             cb_depth: "3 mm".into(),
             cs_diameter: "12 mm".into(),
@@ -64,8 +72,10 @@ impl HoleTool {
             points: h.points.clone(),
             kind: h.hole,
             diameter: h.diameter.clone(),
-            through: h.depth.is_none(),
+            through: h.depth.is_none() && h.to.is_none(),
             depth: h.depth.clone().unwrap_or(d.depth),
+            to: h.to.as_ref().map(|t| format!("{}:{}", t.feature, t.face)),
+            picking_to: false,
             cb_diameter: h.cb_diameter.clone().unwrap_or(d.cb_diameter),
             cb_depth: h.cb_depth.clone().unwrap_or(d.cb_depth),
             cs_diameter: h.cs_diameter.clone().unwrap_or(d.cs_diameter),
@@ -85,10 +95,10 @@ impl HoleTool {
             "diameter": t(&self.diameter),
             "tip_angle": if self.tip { t(&self.tip_angle) } else { json!("flat") },
         });
-        if self.through {
-            p["through_all"] = json!(true);
-        } else {
-            p["depth"] = t(&self.depth);
+        match &self.to {
+            Some(face) => p["to"] = json!(face),
+            None if self.through => p["through_all"] = json!(true),
+            None => p["depth"] = t(&self.depth),
         }
         match self.kind {
             HoleKind::Simple => {}
@@ -121,9 +131,10 @@ fn kind_name(k: HoleKind) -> &'static str {
 /// The timeline's one-line summary of a hole feature.
 pub(crate) fn hole_details(h: &Hole) -> String {
     let n = h.points.len();
-    let extent = match &h.depth {
-        Some(d) => format!("{d} deep"),
-        None => "through all".into(),
+    let extent = match (&h.depth, &h.to) {
+        (_, Some(t)) => format!("to {}", t.face),
+        (Some(d), None) => format!("{d} deep"),
+        (None, None) => "through all".into(),
     };
     let points = if h.sketch.is_some() {
         "sketch points".to_owned()
@@ -182,6 +193,13 @@ impl ChamferaApp {
         let Some((feature, role, p)) = self.session.face_point_at(x, y, w, h) else {
             return;
         };
+        if let Some(tool) = self.solid.hole.as_mut()
+            && tool.picking_to
+        {
+            tool.to = Some(format!("{feature}:{role}"));
+            tool.picking_to = false;
+            return;
+        }
         let key = format!("{feature}:{role}");
         let radius = self.hole_radius();
         let Some(tool) = self.solid.hole.as_mut() else {
@@ -338,7 +356,9 @@ impl ChamferaApp {
             Some(_) => label("feature.edit"),
             None => label("solid.hole"),
         };
-        let ready = !tool.points.is_empty() && !tool.diameter.trim().is_empty();
+        let ready = !tool.points.is_empty()
+            && !tool.diameter.trim().is_empty()
+            && tool.to.as_ref().is_none_or(|t| !t.trim().is_empty());
         egui::Window::new(title)
             .id(egui::Id::unique("hole dialog"))
             .title_bar(false)
@@ -405,20 +425,41 @@ impl ChamferaApp {
                             ui.end_row();
                             field(ui, "Diameter", &mut tool.diameter, "6 mm");
                             widgets::field_label(ui, look, "Extent");
+                            // 0 distance, 1 through all, 2 to a face.
+                            let mut extent = match (&tool.to, tool.through) {
+                                (Some(_), _) => 2,
+                                (None, true) => 1,
+                                (None, false) => 0,
+                            };
+                            let was = extent;
                             egui::ComboBox::from_id_salt("hole extent")
-                                .selected_text(if tool.through {
-                                    "Through all"
-                                } else {
-                                    "Distance"
-                                })
+                                .selected_text(["Distance", "Through all", "To face"][extent])
                                 .width(widgets::FIELD_WIDTH)
                                 .show_ui(ui, |ui| {
-                                    ui.selectable_value(&mut tool.through, false, "Distance");
-                                    ui.selectable_value(&mut tool.through, true, "Through all");
+                                    ui.selectable_value(&mut extent, 0, "Distance");
+                                    ui.selectable_value(&mut extent, 1, "Through all");
+                                    ui.selectable_value(&mut extent, 2, "To face");
                                 });
                             ui.end_row();
-                            if !tool.through {
+                            if extent != was {
+                                tool.through = extent == 1;
+                                tool.to = (extent == 2).then(String::new);
+                                tool.picking_to = extent == 2;
+                            }
+                            if extent == 0 {
                                 field(ui, "Depth", &mut tool.depth, "10 mm");
+                            }
+                            if let Some(to) = tool.to.as_mut() {
+                                widgets::field_label(ui, look, "Face");
+                                ui.horizontal(|ui| {
+                                    ui.add_sized(
+                                        [widgets::FIELD_WIDTH - 56.0, widgets::FIELD[1]],
+                                        egui::TextEdit::singleline(to).hint_text("2:bottom"),
+                                    );
+                                    ui.toggle_value(&mut tool.picking_to, "Pick")
+                                        .on_hover_text("Click the flat face the holes go down to");
+                                });
+                                ui.end_row();
                             }
                             match tool.kind {
                                 HoleKind::Simple => {}
@@ -431,7 +472,7 @@ impl ChamferaApp {
                                     field(ui, "Countersink angle", &mut tool.cs_angle, "90 deg");
                                 }
                             }
-                            if !tool.through {
+                            if !tool.through && tool.to.is_none() {
                                 widgets::field_label(ui, look, "Drill point");
                                 ui.checkbox(&mut tool.tip, "");
                                 ui.end_row();
@@ -486,6 +527,39 @@ mod tests {
         app.run("view.normal_to", json!({ "x": 0, "y": 0, "z": 1 }));
         app.run("view.fit", json!({ "width": w, "height": h }));
         app
+    }
+
+    #[test]
+    fn a_hole_to_a_face_picks_the_face_and_drills_down_to_it() {
+        let (w, h) = (800.0, 600.0);
+        let mut app = plate_from_above(w, h);
+        app.solid.hole = Some(HoleTool {
+            to: Some(String::new()),
+            picking_to: true,
+            through: false,
+            ..HoleTool::default()
+        });
+        // With Pick on, the click picks the face to go to, and places no point.
+        app.hole_click(w / 2.0, h / 2.0, w, h);
+        let tool = app.solid.hole.as_ref().unwrap();
+        assert_eq!(tool.to.as_deref(), Some("2:top"));
+        assert!(tool.points.is_empty() && !tool.picking_to);
+        app.hole_click(w / 2.0, h / 2.0, w, h);
+        assert_eq!(app.solid.hole.as_ref().unwrap().points.len(), 1);
+        if let Some(t) = app.solid.hole.as_mut() {
+            t.to = Some("2:bottom".into());
+        }
+        let r = app.hole_ok().unwrap();
+        // Down to the bottom of the 10 mm plate, r = 3: 15000 - 9π·10.
+        let v = r["solids"][0]["volume"].as_f64().unwrap();
+        assert!((v - (15_000.0 - 90.0 * PI)).abs() < 1e-6, "{v}");
+        let id = r["feature"].as_u64().unwrap() as u32;
+        let chamfera_doc::FeatureKind::Hole(hole) = &app.session.doc.feature(id).unwrap().kind
+        else {
+            panic!("not a hole");
+        };
+        assert_eq!(HoleTool::editing(id, hole).to.as_deref(), Some("2:bottom"));
+        assert!(hole_details(hole).contains("to bottom"));
     }
 
     #[test]

@@ -398,6 +398,8 @@ pub enum OverlayStyle {
     Interference,
     /// An exploded view's trail from a component's place to where it is shown.
     ExplodeTrail,
+    /// The rings of a cosmetic thread, drawn like model edges.
+    Thread,
 }
 
 impl OverlayStyle {
@@ -417,6 +419,7 @@ impl OverlayStyle {
             OverlayStyle::ToolpathStale => theme.toolpath_stale,
             OverlayStyle::Interference => theme.interference,
             OverlayStyle::ExplodeTrail => theme.explode_trail,
+            OverlayStyle::Thread => theme.edge,
         }
     }
 }

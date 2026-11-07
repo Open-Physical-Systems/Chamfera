@@ -19,10 +19,10 @@
 //! tangentially into another blended edge (whose blend has the same section there), or
 //! ends on a planar face through the axis.
 
-use super::Kind;
 use super::build::{
     Conic, FacePlane, VKey, edge_label, face_plane, internal, too_large, unsupported,
 };
+use super::{ChamferSpec, Kind};
 use crate::{
     Body, Circle3, Cone, Curve, EdgeId, FaceId, HalfEdgeId, KernelResult, Segment3, Surface, Torus,
     VertexId,
@@ -45,6 +45,10 @@ pub(in crate::blend) struct RimBlend {
     pub convex: bool,
     kind: Kind,
     size: f64,
+    /// The setbacks on the plane and on the cylinder (both `size` but for an unequal
+    /// chamfer).
+    plane_size: f64,
+    cylinder_size: f64,
     pub plane_face: FaceId,
     pub cylinder_face: FaceId,
     /// The circle's centre (on the axis, in the plane).
@@ -74,6 +78,7 @@ impl RimBlend {
         e: EdgeId,
         kind: Kind,
         size: f64,
+        chamfer: Option<ChamferSpec>,
     ) -> KernelResult<RimBlend> {
         let label = edge_label(body, e)?;
         let faces = body.edge_faces(e)?;
@@ -140,7 +145,23 @@ impl RimBlend {
         let into_cylinder = into(cyl_normal, cylinder_face)?;
         let convex = into_plane.dot(cyl_normal) < 0.0;
         let plane_sign = into_plane.dot(radial).signum();
-        let plane_radius = circle.radius() + size * plane_sign;
+        // A right angle in every meridian section.
+        let (plane_size, cylinder_size) = match (kind, chamfer) {
+            (Kind::Chamfer, Some(spec)) => {
+                let s = spec.setbacks(
+                    spec.reference_index(faces),
+                    std::f64::consts::FRAC_PI_2,
+                    &label,
+                )?;
+                if faces[0] == plane_face {
+                    (s[0], s[1])
+                } else {
+                    (s[1], s[0])
+                }
+            }
+            _ => (size, size),
+        };
+        let plane_radius = circle.radius() + plane_size * plane_sign;
         if plane_radius <= LINEAR_TOLERANCE {
             return Err(too_large(
                 kind,
@@ -153,6 +174,8 @@ impl RimBlend {
             convex,
             kind,
             size,
+            plane_size,
+            cylinder_size,
             plane_face,
             cylinder_face,
             center,
@@ -201,9 +224,9 @@ impl RimBlend {
     pub(in crate::blend) fn contact_point(&self, f: FaceId, p: Point3) -> KernelResult<Point3> {
         let (wp, wc) = self.directions_at(p)?;
         Ok(if f == self.plane_face {
-            p + wp * self.size
+            p + wp * self.plane_size
         } else {
-            p + wc * self.size
+            p + wc * self.cylinder_size
         })
     }
 
@@ -219,7 +242,7 @@ impl RimBlend {
             (self.center, self.plane_radius)
         } else {
             (
-                self.center + self.into_cylinder * self.size,
+                self.center + self.into_cylinder * self.cylinder_size,
                 self.cylinder_radius,
             )
         };
@@ -348,7 +371,8 @@ impl RimBlend {
             Kind::Chamfer => {
                 let frame = Frame::from_normal_and_x(self.center, self.into_cylinder, seam)
                     .ok_or_else(|| internal("a rim chamfer's frame is degenerate"))?;
-                let half_angle = (self.cylinder_radius - self.plane_radius).atan2(s);
+                let half_angle =
+                    (self.cylinder_radius - self.plane_radius).atan2(self.cylinder_size);
                 Ok((
                     Surface::Cone(Cone::new(frame, self.plane_radius, half_angle)?),
                     self.cylinder_same_sense,

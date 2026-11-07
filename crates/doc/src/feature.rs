@@ -159,7 +159,60 @@ pub struct Extrude {
     /// The face or plane a to-object extrude goes up to.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub to: Option<ExtrudeTo>,
+    /// A thin extrude: a wall of this thickness along each profile's loops, or along an
+    /// open chain of the sketch's curves (format 38). `None` extrudes the whole profile.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thin: Option<Thin>,
 }
+
+/// Which side of its profile a thin extrude's wall lies on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ThinSide {
+    /// Inside the profile (inside its outer loop, outside its holes); left of an open
+    /// chain, seen along its first curve.
+    #[default]
+    Inside,
+    /// Outside the profile; right of an open chain.
+    Outside,
+    /// Half the thickness each side.
+    Both,
+}
+
+impl ThinSide {
+    pub fn parse(s: &str) -> Option<ThinSide> {
+        Some(match s {
+            "inside" => ThinSide::Inside,
+            "outside" => ThinSide::Outside,
+            "both" => ThinSide::Both,
+            _ => return None,
+        })
+    }
+
+    pub fn key(self) -> &'static str {
+        match self {
+            ThinSide::Inside => "inside",
+            ThinSide::Outside => "outside",
+            ThinSide::Both => "both",
+        }
+    }
+}
+
+/// The wall of a thin extrude.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Thin {
+    /// The wall thickness, an expression such as `2 mm`.
+    pub thickness: String,
+    #[serde(default)]
+    pub side: ThinSide,
+    /// An open (or closed) chain of the sketch's lines and arcs, in order end to end,
+    /// instead of the extrude's profiles.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub curves: Vec<u32>,
+}
+
+/// Most curves one thin extrude's chain may hold.
+pub const MAX_THIN_CURVES: usize = 10_000;
 
 fn is_default<T: Default + PartialEq>(v: &T) -> bool {
     *v == T::default()
@@ -179,6 +232,7 @@ impl Default for Extrude {
             start_offset: None,
             taper: None,
             to: None,
+            thin: None,
         }
     }
 }
@@ -267,8 +321,51 @@ pub enum BlendKind {
 pub struct Blend {
     pub blend: BlendKind,
     pub edges: Vec<String>,
-    /// The radius (fillet) or distance (chamfer), an expression such as `2 mm`.
+    /// The radius (fillet) or distance (chamfer), an expression such as `2 mm`. An
+    /// unequal chamfer's distance on each edge's reference face.
     pub size: String,
+    /// Also blend every edge that continues a named one tangentially, found again at
+    /// every rebuild (format 38).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub tangent_chain: bool,
+    /// A chamfer's distance on each edge's other face (two distances, format 38).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub distance2: Option<String>,
+    /// A chamfer's angle from each edge's reference face (distance and angle, format 38).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub angle: Option<String>,
+    /// The face (`2:top`) that takes `size` on every edge bounding it; other edges use the
+    /// face their first half-edge lies in (format 38).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference_face: Option<String>,
+    /// Swap each edge's reference face for its other face (format 38).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub flip: bool,
+}
+
+impl Blend {
+    /// A plain fillet or equal-distance chamfer of `edges`.
+    pub fn new(blend: BlendKind, edges: Vec<String>, size: String) -> Blend {
+        Blend {
+            blend,
+            edges,
+            size,
+            tangent_chain: false,
+            distance2: None,
+            angle: None,
+            reference_face: None,
+            flip: false,
+        }
+    }
+}
+
+/// A chamfer's evaluated second size.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum BlendSecond {
+    /// mm on each edge's other face.
+    Distance(f64),
+    /// Radians from each edge's reference face.
+    Angle(f64),
 }
 
 /// Most edges one blend may hold.
@@ -357,9 +454,13 @@ pub struct Hole {
     #[serde(default)]
     pub cs_angle: Option<String>,
     /// The drill point's included angle, such as `118 deg`; `None` is a flat bottom.
-    /// Ignored for a through hole.
+    /// Ignored for a through hole and a hole to a face.
     #[serde(default)]
     pub tip_angle: Option<String>,
+    /// A flat face parallel to the hole's face that the hole goes down to, ending flat on
+    /// it, instead of `depth` (format 38). Found again by name at every rebuild.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to: Option<crate::FaceRef>,
 }
 
 /// Most points one hole feature may drill.
@@ -521,6 +622,8 @@ pub enum FeatureKind {
     Remove(crate::body_tools::RemoveBodies),
     /// A surface body feature: swept surfaces, patch, stitch, trim (format 28).
     Surface(crate::surface::SurfaceFeature),
+    /// A cosmetic thread on a cylindrical face (format 38).
+    Thread(crate::thread::Thread),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -563,7 +666,8 @@ impl FeatureKind {
             | FeatureKind::Move(_)
             | FeatureKind::OffsetFace(_)
             | FeatureKind::DeleteFace(_)
-            | FeatureKind::MoveFace(_) => None,
+            | FeatureKind::MoveFace(_)
+            | FeatureKind::Thread(_) => None,
         }
     }
 
@@ -606,7 +710,8 @@ impl FeatureKind {
             | FeatureKind::Move(_)
             | FeatureKind::OffsetFace(_)
             | FeatureKind::DeleteFace(_)
-            | FeatureKind::MoveFace(_) => Operation::NewBody,
+            | FeatureKind::MoveFace(_)
+            | FeatureKind::Thread(_) => Operation::NewBody,
         }
     }
 
@@ -635,7 +740,8 @@ impl FeatureKind {
             | FeatureKind::Loft(_)
             | FeatureKind::OffsetFace(_)
             | FeatureKind::DeleteFace(_)
-            | FeatureKind::MoveFace(_) => &[],
+            | FeatureKind::MoveFace(_)
+            | FeatureKind::Thread(_) => &[],
         }
     }
 
@@ -673,6 +779,7 @@ impl FeatureKind {
             FeatureKind::SplitFace(_) => "SplitFace",
             FeatureKind::Thicken(_) => "Thicken",
             FeatureKind::Remove(_) => "Remove",
+            FeatureKind::Thread(_) => "Thread",
         }
     }
 }
@@ -684,6 +791,9 @@ impl Document {
         let bad = |reason: String| DocError::BadFeature { reason };
         if let FeatureKind::Pattern(p) = kind {
             return self.check_pattern(p);
+        }
+        if let FeatureKind::Thread(t) = kind {
+            return self.thread_values(t).map(|_| ());
         }
         if let FeatureKind::Hole(h) = kind {
             return self.check_hole(h);
@@ -729,6 +839,7 @@ impl Document {
             if !s.is_finite() || s <= chamfera_geom::LINEAR_TOLERANCE {
                 return Err(bad("the size must be above 0".into()));
             }
+            self.blend_second(b)?;
             return Ok(());
         }
         if let FeatureKind::Loft(l) = kind {
@@ -755,8 +866,15 @@ impl Document {
         };
         let f = self.sketch(sketch)?;
         let seeds = kind.profiles();
-        if seeds.is_empty() {
+        let open_thin = matches!(kind, FeatureKind::Extrude(e)
+            if e.thin.as_ref().is_some_and(|t| !t.curves.is_empty()));
+        if seeds.is_empty() && !open_thin {
             return Err(bad("select at least one profile".into()));
+        }
+        if open_thin && !seeds.is_empty() {
+            return Err(bad(
+                "a thin extrude takes profiles or a chain of curves, not both".into(),
+            ));
         }
         if seeds.len() > MAX_FEATURE_PROFILES {
             return Err(bad(format!("at most {MAX_FEATURE_PROFILES} profiles")));
@@ -793,7 +911,8 @@ impl Document {
             | FeatureKind::Loft(_)
             | FeatureKind::OffsetFace(_)
             | FeatureKind::DeleteFace(_)
-            | FeatureKind::MoveFace(_) => {}
+            | FeatureKind::MoveFace(_)
+            | FeatureKind::Thread(_) => {}
             FeatureKind::Sweep(s) => self.check_sweep_path(s)?,
             FeatureKind::Revolve(r) => {
                 let a = self.evaluate_feature_value(&r.angle, expr::Dim::ANGLE)?;
@@ -947,7 +1066,50 @@ impl Document {
     }
 
     fn check_extrude(&self, e: &Extrude) -> Result<(), DocError> {
-        self.extrude_values(e).map(|_| ())
+        self.extrude_values(e)?;
+        if let Some(t) = &e.thin {
+            self.thin_thickness(t)?;
+            if t.curves.len() > MAX_THIN_CURVES {
+                return Err(DocError::BadFeature {
+                    reason: format!(
+                        "a thin extrude's chain may hold at most {MAX_THIN_CURVES} curves"
+                    ),
+                });
+            }
+            let f = self.sketch(e.sketch)?;
+            for c in &t.curves {
+                match f.sketch.curve(chamfera_sketch::CurveId(*c)) {
+                    Some(
+                        chamfera_sketch::Curve::Line { .. } | chamfera_sketch::Curve::Arc { .. },
+                    ) => {}
+                    Some(_) => {
+                        return Err(DocError::BadFeature {
+                            reason: format!("curve {c} of {} is not a line or an arc", f.name),
+                        });
+                    }
+                    None => {
+                        return Err(DocError::BadFeature {
+                            reason: format!("{} has no curve {c}", f.name),
+                        });
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// A thin extrude's wall thickness in mm, checked (above 0).
+    pub fn thin_thickness(&self, t: &Thin) -> Result<f64, DocError> {
+        let v = self.evaluate_feature_value(&t.thickness, expr::Dim::LENGTH)?;
+        if !v.is_finite()
+            || v <= chamfera_geom::LINEAR_TOLERANCE
+            || v > chamfera_geom::MAX_COORDINATE
+        {
+            return Err(DocError::BadFeature {
+                reason: "the wall thickness must be above 0".into(),
+            });
+        }
+        Ok(v)
     }
 
     /// The number of copies a pattern makes, checked (2 to [`MAX_PATTERN_COUNT`]).
@@ -959,6 +1121,51 @@ impl Document {
             });
         }
         Ok(n as usize)
+    }
+
+    /// A chamfer's second size, checked: `None` for equal distances (and fillets).
+    pub fn blend_second(&self, b: &Blend) -> Result<Option<BlendSecond>, DocError> {
+        let bad = |reason: &str| DocError::BadFeature {
+            reason: reason.into(),
+        };
+        if b.blend == BlendKind::Fillet
+            && (b.distance2.is_some() || b.angle.is_some() || b.reference_face.is_some() || b.flip)
+        {
+            return Err(bad(
+                "a second distance, an angle, a reference face and flip belong to chamfers",
+            ));
+        }
+        if let Some(r) = &b.reference_face
+            && (r.is_empty() || r.chars().count() > 512)
+        {
+            return Err(bad("the reference face name is empty or too long"));
+        }
+        match (&b.distance2, &b.angle) {
+            (Some(_), Some(_)) => Err(bad(
+                "give a chamfer a second distance or an angle, not both",
+            )),
+            (Some(d), None) => {
+                let v = self.evaluate_feature_value(d, expr::Dim::LENGTH)?;
+                if !v.is_finite()
+                    || v <= chamfera_geom::LINEAR_TOLERANCE
+                    || v > chamfera_geom::MAX_COORDINATE
+                {
+                    return Err(bad("the second distance must be above 0"));
+                }
+                Ok(Some(BlendSecond::Distance(v)))
+            }
+            (None, Some(a)) => {
+                let v = self.evaluate_feature_value(a, expr::Dim::ANGLE)?;
+                let tol = chamfera_geom::ANGULAR_TOLERANCE.sqrt();
+                if !v.is_finite() || v <= tol || v >= std::f64::consts::PI - tol {
+                    return Err(bad(
+                        "the chamfer angle must be above 0 and below 180 degrees",
+                    ));
+                }
+                Ok(Some(BlendSecond::Angle(v)))
+            }
+            (None, None) => Ok(None),
+        }
     }
 
     /// A hole's sizes, evaluated and checked: every size above 0, a counterbore or
@@ -1059,6 +1266,17 @@ impl Document {
                 return Err(bad("place at least one hole point".into()));
             }
             None => {}
+        }
+        if let Some(to) = &h.to {
+            if h.depth.is_some() {
+                return Err(bad(
+                    "give a hole a depth or a face to go to, not both".into()
+                ));
+            }
+            self.feature(to.feature)?;
+            if to.face.is_empty() || to.face.chars().count() > 512 {
+                return Err(bad("the face name is empty or too long".into()));
+            }
         }
         self.hole_sizes(h)?;
         Ok(())

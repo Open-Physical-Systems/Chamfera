@@ -101,9 +101,20 @@ impl FeatureKind {
                 push_opt(o, "distance2", L, &mut e.distance2);
                 push_opt(o, "start_offset", L, &mut e.start_offset);
                 push_opt(o, "taper", A, &mut e.taper);
+                if let Some(t) = &mut e.thin {
+                    o.push(("thickness".into(), L, &mut t.thickness));
+                }
             }
             FeatureKind::Revolve(r) => o.push(("angle".into(), A, &mut r.angle)),
-            FeatureKind::Blend(b) => o.push(("size".into(), L, &mut b.size)),
+            FeatureKind::Thread(t) => {
+                o.push(("pitch".into(), L, &mut t.pitch));
+                push_opt(o, "length", L, &mut t.length);
+            }
+            FeatureKind::Blend(b) => {
+                o.push(("size".into(), L, &mut b.size));
+                push_opt(o, "distance2", L, &mut b.distance2);
+                push_opt(o, "angle", A, &mut b.angle);
+            }
             FeatureKind::Hole(h) => {
                 o.push(("diameter".into(), L, &mut h.diameter));
                 push_opt(o, "depth", L, &mut h.depth);

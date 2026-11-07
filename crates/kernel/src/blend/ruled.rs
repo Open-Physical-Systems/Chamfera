@@ -22,9 +22,9 @@
 //! the surface is `r`). A chamfer's contact point on each face is the point of the
 //! section curve at straight distance `d` from the edge, found the same way.
 
-use super::Kind;
 use super::build::{face_label, internal, too_large, unsupported};
 use super::rim::AXIS_PARALLEL_TOLERANCE;
+use super::{ChamferSpec, Kind};
 use crate::{Body, FaceId, KernelResult, Surface};
 use chamfera_geom::{ANGULAR_TOLERANCE, LINEAR_TOLERANCE, Point3, Vec3};
 
@@ -136,7 +136,9 @@ pub(super) struct Ruled {
 }
 
 /// Analyses the straight edge through `p` along `dir` between `faces` (`faces[0]` holds
-/// its first half-edge) for a blend of `size`.
+/// its first half-edge) for a blend of `size` (a chamfer's setbacks by `chamfer` when
+/// given).
+#[allow(clippy::too_many_arguments)]
 pub(super) fn analyse(
     body: &Body,
     label: &str,
@@ -145,6 +147,7 @@ pub(super) fn analyse(
     dir: Vec3,
     kind: Kind,
     size: f64,
+    chamfer: Option<ChamferSpec>,
 ) -> KernelResult<Ruled> {
     // Outward normals at p, then the directions into each face: face A (first half-edge)
     // lies on the left of `dir` seen from outside, so into it is n_A × dir; face B's
@@ -184,19 +187,30 @@ pub(super) fn analyse(
     }
     let convex = inward[0].dot(normal[1]) < 0.0;
     let side = if convex { 1.0 } else { -1.0 };
-    let setback = match kind {
-        Kind::Chamfer => size,
-        Kind::Fillet => size / (0.5 * beta).tan(),
+    let planar = matches!(sa, Section::Plane { .. }) && matches!(sb, Section::Plane { .. });
+    let setback = match (kind, chamfer) {
+        (Kind::Chamfer, Some(spec)) => {
+            if !planar && matches!(spec.second, super::ChamferSecond::Angle(_)) {
+                return Err(unsupported(format!(
+                    "{label}: a chamfer by distance and angle needs two planar faces (or a rim between a plane and a cylinder); give two distances for curved faces"
+                )));
+            }
+            spec.setbacks(spec.reference_index(faces), beta, label)?
+        }
+        (Kind::Chamfer, None) => [size; 2],
+        (Kind::Fillet, _) => [size / (0.5 * beta).tan(); 2],
     };
-    if !(setback.is_finite() && setback > LINEAR_TOLERANCE) {
+    if !setback
+        .iter()
+        .all(|s| s.is_finite() && *s > LINEAR_TOLERANCE)
+    {
         return Err(too_large(
             kind,
             format!("its setback on {label} is not a usable length"),
         ));
     }
-    let planar = matches!(sa, Section::Plane { .. }) && matches!(sb, Section::Plane { .. });
     if planar {
-        let contact = [inward[0] * setback, inward[1] * setback];
+        let contact = [inward[0] * setback[0], inward[1] * setback[1]];
         let spine = contact[0] + normal[0] * (-side * size);
         return Ok(Ruled {
             normal,
@@ -207,8 +221,8 @@ pub(super) fn analyse(
         });
     }
     let start = [
-        sa.param(p + inward[0] * setback),
-        sb.param(p + inward[1] * setback),
+        sa.param(p + inward[0] * setback[0]),
+        sb.param(p + inward[1] * setback[1]),
     ];
     let (contact, spine) = match kind {
         Kind::Fillet => {
@@ -236,7 +250,7 @@ pub(super) fn analyse(
         Kind::Chamfer => {
             let mut q = [p; 2];
             for (i, sec) in [sa, sb].iter().enumerate() {
-                let t = chord_point(sec, start[i], p, size).ok_or_else(|| {
+                let t = chord_point(sec, start[i], p, setback[i]).ok_or_else(|| {
                     too_large(
                         kind,
                         format!(

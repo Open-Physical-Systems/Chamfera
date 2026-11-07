@@ -133,6 +133,47 @@ fn reach_below(body: &Body, plane: &Frame) -> Result<f64, String> {
     Ok(most)
 }
 
+/// How deep a hole on the face `plane` goes to reach the flat face `to`: the distance
+/// between the parallel planes, which must lie below the hole's face (into the
+/// material) and deeper than its counterbore or countersink.
+fn depth_to(
+    doc: &Document,
+    feature: u32,
+    bodies: &[&Body],
+    plane: &Frame,
+    to: &chamfera_doc::FaceRef,
+    sizes: &HoleSizes,
+) -> Result<f64, String> {
+    let name = crate::naming::face_ref_name(to);
+    let (_, b, f) =
+        crate::naming::one_face(doc, feature, bodies, to, Want::Surface).map_err(|e| match e {
+            crate::naming::NameError::Gone { .. } => {
+                format!("the face {name} the hole goes to is gone")
+            }
+            e => e.to_string(),
+        })?;
+    let target = face_plane(b, f)
+        .ok_or_else(|| format!("a hole goes to a flat face; {name} is not flat"))?;
+    if target.z().cross(plane.z()).length() > chamfera_geom::ANGULAR_TOLERANCE.sqrt() {
+        return Err(format!(
+            "the face {name} is not parallel to the hole's face; a hole goes to a parallel face"
+        ));
+    }
+    // Below the face is along -normal.
+    let depth = -(target.origin() - plane.origin()).dot(plane.z());
+    if !depth.is_finite() || depth <= LINEAR_TOLERANCE {
+        return Err(format!(
+            "the face {name} does not lie below the hole's face"
+        ));
+    }
+    if mouth_depth(sizes) >= depth - LINEAR_TOLERANCE {
+        return Err(format!(
+            "the counterbore or countersink is deeper than the hole down to {name}"
+        ));
+    }
+    Ok(depth)
+}
+
 /// One hole's tool solid at `centre` (face coordinates), its faces and edges named
 /// `<feature>:hole <k> <role>`.
 fn hole_tool(
@@ -236,9 +277,10 @@ pub(crate) fn build_hole(
     }
     let index = index.unwrap_or(first.body);
     let body = &made.get(index).ok_or("the body is gone")?.2;
-    let (depth, through) = match sizes.depth {
-        Some(d) => (d, false),
-        None => {
+    let (depth, through) = match (sizes.depth, &h.to) {
+        (_, Some(to)) => (depth_to(doc, feature, &bodies, &plane, to, &sizes)?, true),
+        (Some(d), None) => (d, false),
+        (None, None) => {
             let reach = reach_below(body, &plane)?;
             (
                 reach.max(mouth_depth(&sizes) + LINEAR_TOLERANCE) + THROUGH_MARGIN,
@@ -553,6 +595,77 @@ mod tests {
             s.execute("feature.delete", &json!({ "feature": 2 }))
                 .is_err()
         );
+    }
+
+    /// The name of the flat face of the first solid at height `z` facing up.
+    fn face_up_at(s: &Session, z: f64) -> String {
+        let b = &s.solids()[0].body;
+        b.faces()
+            .into_iter()
+            .find(|f| {
+                crate::solids::face_plane(b, *f)
+                    .is_some_and(|p| p.z().z > 1.0 - 1e-12 && (p.origin().z - z).abs() < 1e-9)
+            })
+            .and_then(|f| b.face_name(f).ok().flatten().map(str::to_owned))
+            .unwrap()
+    }
+
+    #[test]
+    fn a_hole_to_a_face_ends_on_its_plane_and_follows_it() {
+        let mut s = Session::new();
+        plate(&mut s);
+        // A pocket 20 x 10, 4 deep, from the top in the plate's right half.
+        let sk = s
+            .execute("sketch.create", &json!({ "plane": "xy" }))
+            .unwrap()["sketch"]
+            .clone();
+        s.execute(
+            "sketch.rectangle",
+            &json!({ "x1": 30, "y1": 5, "x2": 50, "y2": 15 }),
+        )
+        .unwrap();
+        s.execute("sketch.finish", &json!({})).unwrap();
+        let pocket = s
+            .execute(
+                "solid.extrude",
+                &json!({ "sketch": sk, "profiles": [{ "x": 40, "y": 10 }], "distance": 4,
+                         "direction": "reversed", "start_offset": "t", "operation": "cut" }),
+            )
+            .unwrap()["feature"]
+            .as_u64()
+            .unwrap();
+        let floor = face_up_at(&s, 6.0);
+        // The hole at (12, 15), away from the pocket, down to the pocket floor's plane:
+        // 4 deep, flat, r = 3: 15000 - 20·10·4 - 9π·4.
+        let mut p = json!({ "face": "2:top", "points": [top_point(&s, 12.0, 15.0)],
+                            "diameter": 6, "to": floor });
+        let r = s.execute("solid.hole", &p).unwrap();
+        assert_volume(&r, 15_000.0 - 800.0 - 36.0 * PI);
+        // A deeper pocket takes the hole down with it: 15000 - 1000 - 9π·5.
+        s.execute("feature.edit", &json!({ "feature": pocket, "distance": 5 }))
+            .unwrap();
+        assert!(s.feature_errors().is_empty(), "{:?}", s.feature_errors());
+        let v = s.solids()[0].body.volume().unwrap();
+        let want = 15_000.0 - 1000.0 - 45.0 * PI;
+        assert!((v - want).abs() < 1e-6, "{v} vs {want}");
+        // Down to the plate's bottom is the whole 10 mm.
+        let id = r["feature"].as_u64().unwrap();
+        let r = s
+            .execute("feature.edit", &json!({ "feature": id, "to": "2:bottom" }))
+            .unwrap();
+        assert_volume(&r, 15_000.0 - 1000.0 - 90.0 * PI);
+        // Faces not below the hole's face, or not parallel to it, are refused.
+        let n = s.doc.features.len();
+        for to in ["2:top", "2:side 0", "9:nowhere", "top"] {
+            p["to"] = json!(to);
+            assert!(s.execute("solid.hole", &p).is_err(), "{to}");
+        }
+        p["to"] = json!(5);
+        assert!(s.execute("solid.hole", &p).is_err());
+        p["to"] = json!("2:bottom");
+        p["depth"] = json!(3);
+        assert!(s.execute("solid.hole", &p).is_err());
+        assert_eq!(s.doc.features.len(), n);
     }
 
     #[test]

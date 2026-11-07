@@ -17,6 +17,7 @@ pub mod motion;
 pub mod naming;
 pub mod sheet;
 pub mod surface;
+pub mod thread;
 pub mod timeline;
 pub mod units;
 
@@ -32,9 +33,10 @@ pub use construct::{
 pub use drawing::Drawing;
 pub use face_edit::{DeleteFace, FaceTurn, MoveFace, OffsetFace};
 pub use feature::{
-    Blend, BlendKind, Extrude, ExtrudeDirection, ExtrudeExtent, ExtrudeTo, ExtrudeValues, Feature,
-    FeatureKind, Hole, HoleKind, HoleSizes, Loft, LoftSection, Mirror, MirrorPlane, Move,
-    MoveTransform, Operation, Pattern, PatternLayout, Revolve, Shell, Sweep,
+    Blend, BlendKind, BlendSecond, Extrude, ExtrudeDirection, ExtrudeExtent, ExtrudeTo,
+    ExtrudeValues, Feature, FeatureKind, Hole, HoleKind, HoleSizes, Loft, LoftSection, Mirror,
+    MirrorPlane, Move, MoveTransform, Operation, Pattern, PatternLayout, Revolve, Shell, Sweep,
+    Thin, ThinSide,
 };
 pub use imported::{ImportedBody, ImportedMesh, SharedMesh};
 pub use joint::{EdgeEnd, Joint, JointKind, JointOrigin, OriginAt};
@@ -136,6 +138,12 @@ use thiserror::Error;
 ///   `vertical_points` constraints; `horizontal_distance`, `vertical_distance` and
 ///   `arc_length` dimensions; and driven (reference) dimensions, marked `driven: true` on
 ///   their constraint record. Older files open unchanged.
+/// - 38: solid modelling options: fillets and chamfers that follow tangent chains
+///   (`tangent_chain`), chamfers with two distances (`distance2`) or a distance and an
+///   angle (`angle`) from a reference face (`reference_face`, `flip`); thin extrudes
+///   (`thin`: thickness, side and an optional open chain of `curves`); holes that go to a
+///   face (`to`); and cosmetic threads (`kind: thread`). Older files open unchanged: every
+///   new field is optional.
 /// - 39: drawings version 3: ordinate dimensions (`ordinate_x`, `ordinate_y`), hole
 ///   callouts (`hole_callout` annotations, their text worked out from the hole feature),
 ///   and more title block fields (`drawing_number`, `revision`, `material`,

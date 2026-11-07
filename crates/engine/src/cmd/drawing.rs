@@ -133,7 +133,8 @@ pub static COMMANDS: &[CommandSpec] = &[
         label: "Leader",
         params: "points: [{x, y}] (required) - 2 to 16 sheet points: the arrow's tip first, the \
                  text at the last\n\
-                 text: string (required) - 1 to 256 characters\n\
+                 text: string (required unless thread) - 1 to 256 characters\n\
+                 thread: integer (optional) - a cosmetic thread feature: its callout (such as \"M6x1 - 10 deep\") is the text\n\
                  sheet: id (optional) - default the last sheet",
         mutates: true,
         run: annot::add_leader,

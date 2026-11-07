@@ -16,7 +16,7 @@
 //! faces that share one find the same entity.
 
 use super::rim::{AXIS_PARALLEL_TOLERANCE, RimBlend};
-use super::{Kind, bounded, ruled};
+use super::{ChamferSpec, Kind, bounded, ruled};
 use crate::topology::{ListEdge, ListFace, ListVertex};
 use crate::{
     Body, Circle3, Curve, EdgeId, Ellipse3, FaceId, HalfEdgeId, KernelError, KernelResult,
@@ -216,6 +216,8 @@ pub(super) struct Blend<'a> {
     size: f64,
     /// The radii at the first and last vertex of the one edge of a variable-radius fillet.
     variable: Option<[f64; 2]>,
+    /// How a chamfer cuts each edge (`None` for fillets).
+    chamfer: Option<ChamferSpec>,
     edges: BTreeMap<EdgeId, EdgeBlend>,
     planes: HashMap<FaceId, FacePlane>,
     vertices: BTreeMap<VertexId, VertexBlend>,
@@ -361,12 +363,14 @@ impl<'a> Blend<'a> {
         size: f64,
         kind: Kind,
         variable: Option<[f64; 2]>,
+        chamfer: Option<ChamferSpec>,
     ) -> KernelResult<Blend<'a>> {
         let mut b = Blend {
             body,
             kind,
             size,
             variable,
+            chamfer,
             edges: BTreeMap::new(),
             planes: HashMap::new(),
             vertices: BTreeMap::new(),
@@ -429,7 +433,11 @@ impl<'a> Blend<'a> {
                     )));
                 }
                 return Ok(EdgeBlend::Rim(RimBlend::analyse(
-                    body, e, self.kind, self.size,
+                    body,
+                    e,
+                    self.kind,
+                    self.size,
+                    self.chamfer,
                 )?));
             }
             Curve::Ellipse(_) | Curve::EllipticalArc(_) | Curve::BSpline(_)
@@ -452,14 +460,33 @@ impl<'a> Blend<'a> {
         let points = [body.vertex_point(ends[0])?, body.vertex_point(ends[1])?];
         let dir = unit(points[1] - points[0], "a straight edge")?;
         let radii = self.variable.unwrap_or([self.size; 2]);
-        let first = ruled::analyse(body, &label, [fa, fb], points[0], dir, self.kind, radii[0])?;
+        let chamfer = self.chamfer;
+        let first = ruled::analyse(
+            body,
+            &label,
+            [fa, fb],
+            points[0],
+            dir,
+            self.kind,
+            radii[0],
+            chamfer,
+        )?;
         let r = if (radii[0] - radii[1]).abs() > LINEAR_TOLERANCE {
             if !first.planar {
                 return Err(unsupported(format!(
                     "{label}: variable-radius fillets are supported between two planar faces only"
                 )));
             }
-            ruled::analyse(body, &label, [fa, fb], points[1], dir, self.kind, radii[1])?
+            ruled::analyse(
+                body,
+                &label,
+                [fa, fb],
+                points[1],
+                dir,
+                self.kind,
+                radii[1],
+                chamfer,
+            )?
         } else {
             first
         };

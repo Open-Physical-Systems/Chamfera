@@ -329,11 +329,11 @@ fn press_pull_plan(s: &Session, p: &Value) -> Result<(PressPull, Change), Comman
             faces: vec![face.clone()],
             distance: value,
         })),
-        PressPull::Fillet { edge } => Change::Add(FeatureKind::Blend(Blend {
-            blend: BlendKind::Fillet,
-            edges: vec![edge.clone()],
-            size: value,
-        })),
+        PressPull::Fillet { edge } => Change::Add(FeatureKind::Blend(Blend::new(
+            BlendKind::Fillet,
+            vec![edge.clone()],
+            value,
+        ))),
         PressPull::FilletRadius { feature, .. } => {
             let mut kind = s.doc.feature(*feature)?.kind.clone();
             if let FeatureKind::Blend(b) = &mut kind {

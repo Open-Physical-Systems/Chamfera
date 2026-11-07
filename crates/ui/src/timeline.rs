@@ -176,6 +176,23 @@ impl ChamferaApp {
                     ),
                 ),
                 FeatureKind::Hole(h) => (Icon::Hole, crate::hole_ui::hole_details(h)),
+                FeatureKind::Thread(t) => (
+                    Icon::Hole,
+                    format!(
+                        "Thread {}pitch {}{} on {}",
+                        if t.size.is_empty() {
+                            String::new()
+                        } else {
+                            format!("{} · ", t.size)
+                        },
+                        t.pitch,
+                        t.length
+                            .as_ref()
+                            .map(|l| format!(" · {l} long"))
+                            .unwrap_or_default(),
+                        t.face.face
+                    ),
+                ),
                 FeatureKind::Construct(c) => (crate::construct_ui::feature_icon(c), c.describe()),
                 FeatureKind::Blend(b) => (
                     match b.blend {
@@ -1058,6 +1075,7 @@ impl ChamferaApp {
             FeatureKind::Construct(_) => return self.edit_construct(id),
             FeatureKind::Blend(b) => (b.size.clone(), None),
             FeatureKind::Hole(h) => (h.diameter.clone(), None),
+            FeatureKind::Thread(t) => (t.pitch.clone(), None),
             FeatureKind::Mirror(m) => (crate::transform_ui::mirror_details(m), None),
             FeatureKind::Move(m) => (crate::transform_ui::move_details(m), None),
             FeatureKind::Shell(sh) => (sh.thickness.clone(), None),
@@ -1101,6 +1119,7 @@ impl ChamferaApp {
             FeatureKind::Revolve(_)
             | FeatureKind::Surface(chamfera_doc::SurfaceFeature::Revolve(_)) => Some("angle"),
             FeatureKind::Blend(_) => Some("size"),
+            FeatureKind::Thread(_) => Some("pitch"),
             _ => None,
         };
         let mut params = json!({ "feature": edit.feature, "suppressed": edit.suppressed });

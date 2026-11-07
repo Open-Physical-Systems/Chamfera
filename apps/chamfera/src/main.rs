@@ -4,7 +4,7 @@
 //! chamfera [part.stl ...] [--sample] [--theme light|dark] [--script steps.json]
 //!          [--parameters] [--configurations] [--tool-library] [--preferences PAGE] [--drawing] [--sheet-settings] [--extrude] [--extrude-with JSON]
 //!          [--render] [--render-window WxH,SAMPLES]
-//!          [--hole] [--box X1,Y1,X2,Y2] [--drawing-drag X1,Y1,X2,Y2] [--search QUERY] [--context-menu X,Y]
+//!          [--hole] [--chamfer] [--box X1,Y1,X2,Y2] [--drawing-drag X1,Y1,X2,Y2] [--search QUERY] [--context-menu X,Y]
 //!          [--press-pull X,Y,D] [--ribbon-menu GROUP] [--assistant-demo]
 //!          [--assistant-ask REQUEST] [--about] [--size WxH]
 //!          [--history] [--recovery-demo] [--tutorial ID]
@@ -19,7 +19,7 @@ use std::process::ExitCode;
 
 const USAGE: &str = "usage: chamfera [part.stl ...] [--sample] [--theme light|dark] \
 [--script steps.json] [--parameters] [--configurations] [--tool-library] [--preferences PAGE] [--drawing] [--sheet-settings] [--extrude] \
-[--extrude-with JSON] [--hole] \
+[--extrude-with JSON] [--hole] [--chamfer] \
 [--box X1,Y1,X2,Y2] [--drawing-drag X1,Y1,X2,Y2] [--search QUERY] [--context-menu X,Y] [--press-pull X,Y,D] \
 [--ribbon-menu GROUP] [--assistant-demo] [--assistant-ask REQUEST] [--about] [--history] [--recovery-demo] [--tutorial ID] [--render] [--render-window WxH,SAMPLES] [--size WxH] \
 [--zoom F] [--dialog NAME:ARG] \
@@ -105,6 +105,7 @@ fn main() -> ExitCode {
                 _ => return fail("--extrude-with takes a JSON object of solid.extrude options"),
             },
             "--hole" => options.hole = true,
+            "--chamfer" => options.chamfer = true,
             "--box" => match args.next().as_deref().and_then(parse_box) {
                 Some(b) => options.select_box = Some(b),
                 None => return fail("--box takes X1,Y1,X2,Y2: viewport pixels, finite"),

@@ -193,8 +193,8 @@ pub(super) fn edit_transform(kind: &mut FeatureKind, p: &Value) -> Result<(), Co
     if !matches!(kind, FeatureKind::Mirror(_) | FeatureKind::Move(_)) {
         // `angle` is shared with planes at an angle, which feature.edit handles itself.
         let given = |k: &str| p.get(k).is_some_and(|v| !v.is_null());
-        // So is `to`, which an extrude's options use.
-        let extrude = matches!(kind, FeatureKind::Extrude(_));
+        // So is `to`, which an extrude's options and a hole use.
+        let extrude = matches!(kind, FeatureKind::Extrude(_) | FeatureKind::Hole(_));
         // And `plane`, which splits use (body_tools handles it).
         let split = matches!(kind, FeatureKind::SplitBody(_) | FeatureKind::SplitFace(_));
         if [

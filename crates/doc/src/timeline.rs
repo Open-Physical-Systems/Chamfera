@@ -91,7 +91,12 @@ pub fn kind_dependencies(kind: &FeatureKind) -> Vec<u32> {
                 deps.push(a);
             }
         }
-        FeatureKind::Blend(b) => deps.extend(b.edges.iter().flat_map(|e| edge_features(e))),
+        FeatureKind::Blend(b) => deps.extend(
+            b.edges
+                .iter()
+                .chain(b.reference_face.as_ref())
+                .flat_map(|e| edge_features(e)),
+        ),
         // Open faces are named like edges: `2:top`.
         FeatureKind::Shell(sh) => deps.extend(sh.faces.iter().flat_map(|f| edge_features(f))),
         // Direct face edits name their faces the same way.
@@ -105,7 +110,11 @@ pub fn kind_dependencies(kind: &FeatureKind) -> Vec<u32> {
         }
         FeatureKind::Revolve(r) => deps.extend(r.axis_feature),
         FeatureKind::Construct(c) => deps.extend(c.features_used()),
-        FeatureKind::Hole(h) => deps.push(h.face.feature),
+        FeatureKind::Thread(t) => deps.push(t.face.feature),
+        FeatureKind::Hole(h) => {
+            deps.push(h.face.feature);
+            deps.extend(h.to.as_ref().map(|t| t.feature));
+        }
         FeatureKind::Mirror(m) => {
             deps.extend(m.features.iter().copied());
             if let crate::MirrorPlane::Face { feature, .. } = &m.plane {

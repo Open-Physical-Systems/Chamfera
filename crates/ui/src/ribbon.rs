@@ -2602,8 +2602,11 @@ mod tests {
             "solid.move_face", // Press Pull drags faces with it
             "solid.path_at",
             "solid.profile_at",
-            "sheet.rule",   // the Sheet Metal Rules dialog
-            "render.image", // scripts and agents; the Render tool uses render.start
+            "solid.tangent_chain", // the Fillet and Chamfer dialogs' highlight
+            "solid.thread",        // scripts and agents for now; a Thread dialog comes later
+            "solid.threads",       // scripts, agents and drawing callouts
+            "sheet.rule",          // the Sheet Metal Rules dialog
+            "render.image",        // scripts and agents; the Render tool uses render.start
             "render.image_bytes",
             "render.save", // the Render window's Save PNG
             "render.save_bytes",

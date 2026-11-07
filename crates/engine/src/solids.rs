@@ -95,14 +95,54 @@ fn build_blend(
             }
         }
     }
+    // The reference face of an unequal chamfer, per body: its first piece there.
+    let second = doc.blend_second(b).map_err(|x| x.to_string())?;
+    let mut reference: BTreeMap<usize, chamfera_kernel::FaceId> = BTreeMap::new();
+    if let Some(r) = &b.reference_face {
+        let bodies = crate::naming::bodies(made);
+        let found = crate::naming::resolve(
+            doc,
+            feature,
+            &bodies,
+            crate::naming::Kind::Face,
+            r,
+            crate::naming::Want::All,
+        )
+        .map_err(|x| format!("{word}: the reference face: {x}"))?;
+        for f in found {
+            if let Some(face) = f.face() {
+                reference.entry(f.body).or_insert(face);
+            }
+        }
+    }
     let mut next = made.to_vec();
     for (i, (_, _, body)) in next.iter_mut().enumerate() {
-        let Some(edges) = per_body.remove(&i) else {
+        let Some(mut edges) = per_body.remove(&i) else {
             continue;
         };
+        if b.tangent_chain {
+            edges =
+                chamfera_kernel::tangent_chain(body, &edges).map_err(|x| format!("{word}: {x}"))?;
+        }
         let mut out = match b.blend {
             BlendKind::Fillet => chamfera_kernel::fillet(body, &edges, size),
-            BlendKind::Chamfer => chamfera_kernel::chamfer(body, &edges, size),
+            BlendKind::Chamfer => {
+                let spec = chamfera_kernel::ChamferSpec {
+                    distance: size,
+                    second: match second {
+                        None => chamfera_kernel::ChamferSecond::Equal,
+                        Some(chamfera_doc::BlendSecond::Distance(d)) => {
+                            chamfera_kernel::ChamferSecond::Distance(d)
+                        }
+                        Some(chamfera_doc::BlendSecond::Angle(a)) => {
+                            chamfera_kernel::ChamferSecond::Angle(a)
+                        }
+                    },
+                    reference: reference.get(&i).copied(),
+                    flip: b.flip,
+                };
+                chamfera_kernel::chamfer_with(body, &edges, &spec)
+            }
         }
         .map_err(|x| format!("{word}: {x}"))?;
         name_faces(&mut out, feature);
@@ -299,6 +339,8 @@ pub struct Built {
     pub edited: BTreeMap<u32, Vec<String>>,
     /// Exploded components: where each sits and how far it is shown moved.
     pub exploded: BTreeMap<u32, crate::motion::Exploded>,
+    /// Cosmetic threads, by feature id.
+    pub threads: BTreeMap<u32, crate::thread::BuiltThread>,
 }
 
 /// An ellipse or elliptical arc of a sketch as exact profile edges: its rational
@@ -448,6 +490,104 @@ pub(crate) fn feature_profiles(
             region_profile(&f.sketch, &region)
         })
         .collect()
+}
+
+/// The lines and arcs `curves` of `sketch` as one chain of profile edges, each turned to
+/// continue from the one before (the first so that it leads into the second).
+pub(crate) fn chain_edges(
+    f: &chamfera_doc::SketchFeature,
+    curves: &[u32],
+) -> Result<Vec<ProfileEdge>, String> {
+    let gone = |id: u32| format!("curve {id} of {} is gone", f.name);
+    let tol = chamfera_kernel::PROFILE_JOIN_TOLERANCE;
+    let mut out: Vec<ProfileEdge> = Vec::with_capacity(curves.len());
+    for (k, id) in curves.iter().enumerate() {
+        let sketch = &f.sketch;
+        let edge = match sketch.curve(chamfera_sketch::CurveId(*id)) {
+            Some(Curve::Line { start, end, .. }) => ProfileEdge::line(
+                sketch.point(*start).ok_or_else(|| gone(*id))?,
+                sketch.point(*end).ok_or_else(|| gone(*id))?,
+            ),
+            Some(Curve::Arc {
+                centre, start, end, ..
+            }) => ProfileEdge::arc_from_points(
+                sketch.point(*centre).ok_or_else(|| gone(*id))?,
+                sketch.point(*start).ok_or_else(|| gone(*id))?,
+                sketch.point(*end).ok_or_else(|| gone(*id))?,
+            )
+            .map_err(|e| format!("arc {id} of {}: {e}", f.name))?,
+            Some(_) => return Err(format!("curve {id} of {} is not a line or an arc", f.name)),
+            None => return Err(gone(*id)),
+        };
+        match out.last_mut() {
+            None => out.push(edge),
+            Some(prev) => {
+                let at = prev.end();
+                let edge = if edge.start().distance(at) <= tol {
+                    edge
+                } else if edge.end().distance(at) <= tol {
+                    edge.reversed()
+                } else if k == 1
+                    && (edge.start().distance(prev.start()) <= tol
+                        || edge.end().distance(prev.start()) <= tol)
+                {
+                    // The first curve runs the other way along the chain.
+                    *prev = prev.reversed();
+                    let at = prev.end();
+                    if edge.start().distance(at) <= tol {
+                        edge
+                    } else {
+                        edge.reversed()
+                    }
+                } else {
+                    return Err(format!(
+                        "curve {id} of {} does not join the curve before it; give the chain's curves in order",
+                        f.name
+                    ));
+                };
+                out.push(edge);
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// The profiles an extrude sweeps: its regions, or for a thin extrude the wall along
+/// each loop of them (or along its chain of curves).
+fn extrude_profiles(
+    doc: &chamfera_doc::Document,
+    f: &chamfera_doc::SketchFeature,
+    e: &Extrude,
+) -> Result<Vec<Profile>, String> {
+    let Some(thin) = &e.thin else {
+        return feature_profiles(f, &e.profiles);
+    };
+    let t = doc.thin_thickness(thin).map_err(|x| x.to_string())?;
+    let side = match thin.side {
+        chamfera_doc::ThinSide::Inside => chamfera_kernel::ThinSide::Inside,
+        chamfera_doc::ThinSide::Outside => chamfera_kernel::ThinSide::Outside,
+        chamfera_doc::ThinSide::Both => chamfera_kernel::ThinSide::Both,
+    };
+    let wall = |chain: &[ProfileEdge], side| {
+        chamfera_kernel::thin_profile(chain, side, t).map_err(|x| format!("thin extrude: {x}"))
+    };
+    if !thin.curves.is_empty() {
+        return Ok(vec![wall(&chain_edges(f, &thin.curves)?, side)?]);
+    }
+    // Inside the profile is outside its holes.
+    let hole_side = match side {
+        chamfera_kernel::ThinSide::Inside => chamfera_kernel::ThinSide::Outside,
+        chamfera_kernel::ThinSide::Outside => chamfera_kernel::ThinSide::Inside,
+        chamfera_kernel::ThinSide::Both => chamfera_kernel::ThinSide::Both,
+    };
+    let mut out = Vec::new();
+    for p in feature_profiles(f, &e.profiles)? {
+        out.push(wall(&p.outer, side)?);
+        for h in &p.holes {
+            out.push(wall(h, hole_side)?);
+        }
+    }
+    Ok(out)
 }
 
 /// Boolean operations on kernel bodies. The engine calls these only; kernel rung K7
@@ -915,7 +1055,7 @@ fn build_extrude(
     let tol = chamfera_geom::LINEAR_TOLERANCE;
     let taper = values.taper;
     let tapered = taper.abs() > chamfera_geom::ANGULAR_TOLERANCE;
-    feature_profiles(f, &e.profiles)?
+    extrude_profiles(doc, f, e)?
         .iter()
         .map(|profile| {
             let k = |x: chamfera_kernel::KernelError| format!("extrude: {x}");
@@ -1561,6 +1701,17 @@ impl Session {
             }
             return;
         }
+        if let FeatureKind::Thread(t) = &feature.kind {
+            match crate::thread::build_thread(&self.doc, t, feature.id, made) {
+                Ok(b) => {
+                    built.threads.insert(feature.id, b);
+                }
+                Err(e) => {
+                    built.errors.insert(feature.id, e);
+                }
+            }
+            return;
+        }
         if let FeatureKind::Hole(h) = &feature.kind {
             match crate::hole::build_hole(&self.doc, h, feature.id, made) {
                 Ok((next, cuts)) => {
@@ -1654,6 +1805,7 @@ impl Session {
             | FeatureKind::Thicken(_)
             | FeatureKind::Remove(_)
             | FeatureKind::Surface(_)
+            | FeatureKind::Thread(_)
             | FeatureKind::Hole(_)
             | FeatureKind::SheetBase(_)
             | FeatureKind::SheetFlange(_)
