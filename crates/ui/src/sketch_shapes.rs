@@ -413,6 +413,8 @@ impl ChamferaApp {
             at,
             point: None,
             snap: None,
+            track: None,
+            free: true,
         });
         if self.sketch.clicks.len() < clicks_needed(tool, &self.sketch.shapes) {
             return;
