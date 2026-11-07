@@ -306,7 +306,26 @@ pub(super) fn add_leader(s: &mut Session, p: &Value) -> CmdResult {
         .iter()
         .map(|q| point(q, "x", "y"))
         .collect::<Result<Vec<_>, _>>()?;
-    let text = text_param(p, "text")?;
+    let text = match (p.get("thread"), p.get("text")) {
+        (Some(t), None | Some(Value::Null)) if !t.is_null() => {
+            let id = params::req_id(p, "thread")?;
+            if !matches!(
+                s.doc.feature(id)?.kind,
+                chamfera_doc::FeatureKind::Thread(_)
+            ) {
+                return Err(bad(format!("feature {id} is not a thread")));
+            }
+            s.threads()
+                .get(&id)
+                .map(|t| t.callout.clone())
+                .ok_or_else(|| {
+                    CommandError::Unavailable(format!(
+                        "thread {id} is not built (suppressed, rolled back or failed)"
+                    ))
+                })?
+        }
+        _ => text_param(p, "text")?,
+    };
     let id = push(s, sheet, AnnotationKind::Leader { points, text })?;
     Ok(json!({ "sheet": sheet, "annotation": id }))
 }

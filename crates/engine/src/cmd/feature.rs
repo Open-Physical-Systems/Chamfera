@@ -24,9 +24,11 @@ pub static COMMANDS: &[CommandSpec] = &[
                  distance: string or number (optional) - new extrude or offset plane distance\n\
                  angle: string or number (optional) - new angle of a plane at an angle\n\
                  direction: string (optional) - normal, reversed, symmetric or two_sides\n\
-                 extent, distance2, to, start_offset, taper: (optional) - extrude options as for solid.extrude (0 removes an offset or taper)\n\
+                 extent, distance2, to, start_offset, taper, thin: (optional) - extrude options as for solid.extrude (0 removes an offset or taper, thin: false a wall)\n\
                  operation: string (optional) - new_body, join, cut or intersect\n\
                  size: string or number (optional) - new fillet radius or chamfer distance\n\
+                 size2, chamfer_angle (optional) - a chamfer's new second distance or angle (\"none\" removes it)\n\
+                 reference_face: string, flip: boolean, tangent_chain: boolean (optional) - a blend's options\n\
                  path_curves: list of integers (optional) - new sweep path curves\n\
                  sections: list of {sketch, x, y} (optional) - new loft profiles, in order\n\
                  points, kind, diameter, depth, through_all, cb_diameter, cb_depth, cs_diameter,\n\
@@ -69,7 +71,12 @@ pub static COMMANDS: &[CommandSpec] = &[
         label: "Chamfer",
         params: "edges: list of strings (optional) - edge names from solid.edges or solid.edge_at\n\
                  pick: {x, y, width, height} (optional) - the edge under this pixel, instead\n\
-                 distance: string or number (required) - such as 1 or \"1 mm\"",
+                 distance: string or number (required) - such as 1 or \"1 mm\"; on each edge's reference face\n\
+                 distance2: string or number (optional) - a different distance on each edge's other face\n\
+                 angle: string or number (optional) - instead, the bevel's angle from the reference face (plain = degrees)\n\
+                 reference_face: string (optional) - the face, such as \"1:top\", that takes `distance` on the edges bounding it\n\
+                 flip: boolean (optional) - swap each edge's reference face and other face\n\
+                 tangent_chain: boolean (optional) - also chamfer every edge that continues one tangentially",
         mutates: true,
         run: chamfer,
     },
@@ -99,6 +106,9 @@ pub static COMMANDS: &[CommandSpec] = &[
                  to: object (optional) - for to_object: {feature, face}, {plane: {origin, normal}} or {pick: {x, y, width, height}}; a parallel flat face or plane\n\
                  start_offset: string or number (optional) - start this far from the sketch plane along its normal\n\
                  taper: string or number (optional) - draft angle, a plain number is degrees; positive narrows\n\
+                 thin: {thickness, side, curves} (optional) - a wall of this thickness instead of the solid profile: \
+                 side inside (default), outside or both; curves: an open (or closed) chain of the sketch's lines and \
+                 arcs in order, instead of profiles (inside is then left of the chain)\n\
                  operation: string (optional) - new_body (default), join, cut or intersect",
         mutates: true,
         run: extrude,
@@ -128,7 +138,8 @@ pub static COMMANDS: &[CommandSpec] = &[
         label: "Fillet",
         params: "edges: list of strings (optional) - edge names from solid.edges or solid.edge_at\n\
                  pick: {x, y, width, height} (optional) - the edge under this pixel, instead\n\
-                 radius: string or number (required) - such as 2 or \"2 mm\"",
+                 radius: string or number (required) - such as 2 or \"2 mm\"\n\
+                 tangent_chain: boolean (optional) - also fillet every edge that continues one tangentially",
         mutates: true,
         run: fillet,
     },
@@ -185,6 +196,13 @@ pub static COMMANDS: &[CommandSpec] = &[
         params: "x, y, width, height: number (required) - pixel and viewport size",
         mutates: false,
         run: profile_at,
+    },
+    CommandSpec {
+        id: "solid.tangent_chain",
+        label: "Tangent Chain",
+        params: "edges: list of strings (required) - edge names; replies with them and every edge that continues one tangentially",
+        mutates: false,
+        run: tangent_chain,
     },
     CommandSpec {
         id: "solid.sweep",
@@ -299,7 +317,7 @@ pub(super) fn feature_reply(s: &Session, id: u32) -> Value {
 
 /// The parameter names the extrude options use (besides `sketch`, `profiles`,
 /// `distance`, `direction` and `operation`).
-const EXTRUDE_OPTIONS: [&str; 5] = ["extent", "distance2", "start_offset", "taper", "to"];
+const EXTRUDE_OPTIONS: [&str; 6] = ["extent", "distance2", "start_offset", "taper", "to", "thin"];
 
 /// What a to-object extrude goes up to: `{feature, face}`, `{plane: {origin, normal}}`
 /// or `{pick: {x, y, width, height}}` (the flat face under that pixel).
@@ -375,14 +393,59 @@ fn extrude_options(s: &Session, p: &Value, e: &mut Extrude) -> Result<(), Comman
     if let Some(t) = expression(p, "taper", "deg")? {
         e.taper = (!zero(&t)).then_some(t);
     }
+    match p.get("thin") {
+        None | Some(Value::Null) => {}
+        Some(Value::Bool(false)) => e.thin = None,
+        Some(v) if v.is_object() => e.thin = Some(thin(v, e.thin.as_ref())?),
+        Some(_) => return Err(bad("`thin` must be {thickness, side, curves} or false")),
+    }
     Ok(())
+}
+
+/// A thin extrude's wall from `{thickness, side, curves}`; missing keys keep `old`'s.
+fn thin(v: &Value, old: Option<&chamfera_doc::Thin>) -> Result<chamfera_doc::Thin, CommandError> {
+    let thickness = match (expression(v, "thickness", "mm")?, old) {
+        (Some(t), _) => t,
+        (None, Some(o)) => o.thickness.clone(),
+        (None, None) => return Err(bad("`thin` needs a `thickness`")),
+    };
+    let side = match params::opt_str(v, "side")? {
+        Some(s) => chamfera_doc::ThinSide::parse(s)
+            .ok_or_else(|| bad(format!("unknown side {s:?}: use inside, outside or both")))?,
+        None => old.map(|o| o.side).unwrap_or_default(),
+    };
+    let curves = match v.get("curves") {
+        None | Some(Value::Null) => old.map(|o| o.curves.clone()).unwrap_or_default(),
+        Some(_) => {
+            let c = ids(v, "curves")?;
+            if c.len() > chamfera_doc::feature::MAX_THIN_CURVES {
+                return Err(bad("`curves` has too many curves"));
+            }
+            c
+        }
+    };
+    Ok(chamfera_doc::Thin {
+        thickness,
+        side,
+        curves,
+    })
 }
 
 /// The extrude `solid.extrude` and `solid.extrude_preview` describe.
 pub(super) fn new_extrude(s: &Session, p: &Value) -> Result<Extrude, CommandError> {
+    // A thin extrude along a chain of curves takes no profiles.
+    let chain = p
+        .get("thin")
+        .and_then(|t| t.get("curves"))
+        .is_some_and(|c| !c.is_null());
+    let profiles = if chain && matches!(p.get("profiles"), None | Some(Value::Null)) {
+        Vec::new()
+    } else {
+        seeds(p)?
+    };
     let mut e = Extrude {
         sketch: params::req_id(p, "sketch")?,
-        profiles: seeds(p)?,
+        profiles,
         ..Extrude::default()
     };
     extrude_options(s, p, &mut e)?;
@@ -577,24 +640,109 @@ fn blend_edges(s: &Session, p: &Value) -> Result<Vec<String>, CommandError> {
     }
 }
 
+/// The options of a fillet or chamfer present in `p`, applied to `b` (for the blend
+/// commands and `feature.edit`, where the second distance is `size2` and the angle
+/// `chamfer_angle`, since extrudes and planes use `distance2` and `angle`).
+pub(super) fn blend_options(
+    b: &mut Blend,
+    p: &Value,
+    distance2: &str,
+    angle: &str,
+) -> Result<(), CommandError> {
+    if let Some(v) = opt_bool(p, "tangent_chain")? {
+        b.tangent_chain = v;
+    }
+    if let Some(v) = opt_bool(p, "flip")? {
+        b.flip = v;
+    }
+    let none = |x: &str| matches!(x.trim(), "" | "none" | "0" | "0 mm" | "0 deg");
+    if let Some(d) = expression(p, distance2, "mm")? {
+        b.distance2 = (!none(&d)).then_some(d);
+        if b.distance2.is_some() {
+            b.angle = None;
+        }
+    }
+    if let Some(a) = expression(p, angle, "deg")? {
+        b.angle = (!none(&a)).then_some(a);
+        if b.angle.is_some() {
+            b.distance2 = None;
+        }
+    }
+    match p.get("reference_face") {
+        None => {}
+        Some(Value::Null) => b.reference_face = None,
+        Some(Value::String(f)) if f.is_empty() => b.reference_face = None,
+        Some(Value::String(f)) => {
+            if crate::solids::split_face_key(f).is_none() {
+                return Err(bad(
+                    "`reference_face` must be a face name such as \"1:top\" (feature:role)",
+                ));
+            }
+            b.reference_face = Some(f.clone());
+        }
+        Some(_) => return Err(bad("`reference_face` must be a face name")),
+    }
+    Ok(())
+}
+
+fn opt_bool(p: &Value, key: &str) -> Result<Option<bool>, CommandError> {
+    match p.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(_) => params::req_bool(p, key).map(Some),
+    }
+}
+
 fn blend(s: &mut Session, p: &Value, kind: BlendKind, key: &str) -> CmdResult {
     let edges = blend_edges(s, p)?;
     let size = expression(p, key, "mm")?.ok_or_else(|| bad(format!("`{key}` is required")))?;
-    let id = s.doc.add_feature(FeatureKind::Blend(Blend {
-        blend: kind,
-        edges: edges.clone(),
-        size,
-    }))?;
+    let mut b = Blend::new(kind, edges.clone(), size);
+    blend_options(&mut b, p, "distance2", "angle")?;
+    if kind == BlendKind::Fillet
+        && ["distance2", "angle", "reference_face", "flip"]
+            .iter()
+            .any(|k| !matches!(p.get(*k), None | Some(Value::Null)))
+    {
+        return Err(bad(
+            "distance2, angle, reference_face and flip belong to chamfers",
+        ));
+    }
+    let reference = b.reference_face.clone();
+    let id = s.doc.add_feature(FeatureKind::Blend(b))?;
     // What each edge is now, so that the fillet keeps to the piece it names when the
     // edge splits, and finds the edge again if a boolean renames it (rung K8).
     for e in &edges {
         s.record_signature(id, crate::naming::Kind::Edge, e, None);
+    }
+    if let Some(f) = reference {
+        s.record_signature(id, crate::naming::Kind::Face, &f, None);
     }
     s.rebuild();
     if let Some(e) = s.feature_errors().get(&id) {
         return Err(CommandError::Unavailable(e.clone()));
     }
     Ok(feature_reply(s, id))
+}
+
+fn tangent_chain(s: &mut Session, p: &Value) -> CmdResult {
+    let list = p
+        .get("edges")
+        .and_then(Value::as_array)
+        .ok_or_else(|| bad("`edges` must be a list of edge names"))?;
+    if list.len() > chamfera_doc::feature::MAX_BLEND_EDGES {
+        return Err(bad("too many edges"));
+    }
+    let names = list
+        .iter()
+        .map(|e| {
+            e.as_str()
+                .map(str::to_owned)
+                .ok_or_else(|| bad("`edges` must be a list of edge names"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let chain = s
+        .tangent_chain_names(&names)
+        .map_err(CommandError::Unavailable)?;
+    Ok(json!({ "edges": chain }))
 }
 
 fn fillet(s: &mut Session, p: &Value) -> CmdResult {
@@ -796,6 +944,9 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
     if matches!(s.doc.feature(id)?.kind, FeatureKind::Surface(_)) {
         return super::surface::edit(s, id, p);
     }
+    if matches!(s.doc.feature(id)?.kind, FeatureKind::Thread(_)) {
+        return super::thread::edit(s, id, p);
+    }
     refuse_unknown_edit_keys(p)?;
     let new_distance = distance(p)?;
     let new_direction = direction(p)?;
@@ -843,11 +994,14 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
             FeatureKind::SplitBody(_) | FeatureKind::SplitFace(_) | FeatureKind::Remove(_) => {
                 return Err(bad("a split or remove has no operation"));
             }
+            FeatureKind::Thread(_) => return Err(bad("a thread has no operation")),
         }
     }
     super::sheet::edit(s, &mut kind, p)?;
+    // `to` is shared with extrudes and moves.
     let hole_keys = super::hole::EDIT_KEYS
         .iter()
+        .filter(|k| **k != "to")
         .any(|k| p.get(*k).is_some_and(|v| !v.is_null()));
     if let FeatureKind::Hole(h) = &mut kind {
         super::hole::apply(s, h, p)?;
@@ -862,6 +1016,20 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
             return Err(bad("size belongs to fillets and chamfers"));
         };
         b.size = size;
+    }
+    if BLEND_EDIT_KEYS
+        .iter()
+        .any(|k| !matches!(p.get(*k), None | Some(Value::Null)))
+    {
+        let FeatureKind::Blend(b) = &mut kind else {
+            return Err(bad(
+                "tangent_chain, size2, chamfer_angle, reference_face and flip belong to fillets and chamfers",
+            ));
+        };
+        blend_options(b, p, "size2", "chamfer_angle")?;
+        if let Some(f) = b.reference_face.clone() {
+            s.record_signature(id, crate::naming::Kind::Face, &f, None);
+        }
     }
     let new_thickness = expression(p, "thickness", "mm")?;
     let new_faces = match p.get("faces") {
@@ -912,8 +1080,11 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
             }
         }
     }
+    // A hole's `to` was applied with its other values above.
+    let hole = matches!(kind, FeatureKind::Hole(_));
     let extrude_keys = EXTRUDE_OPTIONS
         .iter()
+        .filter(|k| !(hole && **k == "to"))
         .any(|k| !matches!(p.get(*k), None | Some(Value::Null)));
     match &mut kind {
         FeatureKind::Extrude(e) => extrude_options(s, p, e)?,
@@ -929,7 +1100,7 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
         _ if new_distance.is_some() || new_direction.is_some() || extrude_keys => {
             return Err(bad(
                 "distance belongs to extrudes and offset planes; direction, extent, distance2, \
-                 start_offset, taper and to to extrudes",
+                 start_offset, taper, to and thin to extrudes",
             ));
         }
         _ => {}
@@ -988,6 +1159,15 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
     Ok(feature_reply(s, id))
 }
 
+/// The keys `feature.edit` hands to [`blend_options`].
+const BLEND_EDIT_KEYS: &[&str] = &[
+    "tangent_chain",
+    "size2",
+    "chamfer_angle",
+    "reference_face",
+    "flip",
+];
+
 /// Every key `feature.edit` reads (outside face edits and surfaces, which have their own). A key not
 /// in it is refused: a misspelt or unsupported key used to succeed without changing
 /// anything and without an undo step, so the next undo removed an earlier change.
@@ -1001,6 +1181,7 @@ const EDIT_KEYS: &[&str] = &[
     "to",
     "start_offset",
     "taper",
+    "thin",
     "operation",
     "size",
     "path_curves",
@@ -1034,6 +1215,7 @@ fn refuse_unknown_edit_keys(p: &Value) -> Result<(), CommandError> {
     };
     for k in obj.keys() {
         let known = EDIT_KEYS.contains(&k.as_str())
+            || BLEND_EDIT_KEYS.contains(&k.as_str())
             || super::hole::EDIT_KEYS.contains(&k.as_str())
             || super::sheet::EDIT_KEYS.contains(&k.as_str());
         if !known {

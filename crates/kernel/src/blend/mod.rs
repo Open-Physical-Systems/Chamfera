@@ -66,6 +66,24 @@
 //! | ellipse or spline where a plane meets a cylinder or extrusion obliquely | | refused: the rolling-ball surface is free-form and needs NURBS blend surfaces | | |
 //! | curve between two curved faces (pipes in a T) | | refused: no exact surface (needs NURBS blend surfaces); equal pipes also touch at two points where the blend would pinch | | |
 //!
+//! # Unequal chamfers
+//! [`chamfer_with`] cuts each edge by the plane through two lines at different setbacks:
+//! `d1` on the edge's *reference face* and `d2` on the other. Given a distance `d` and an
+//! angle `θ` instead (the angle between the reference face and the bevel), the second
+//! setback follows from the triangle in the edge's cross-section, whose corner angle is
+//! `β` (the angle between the faces on the side the bevel cuts): its angles are `β` at
+//! the edge, `θ` at the reference face's contact and `π - β - θ` at the other, so by the
+//! law of sines `d2 = d sin θ / sin(β + θ)` (`d tan θ` for a right angle). A rim between
+//! a plane and a perpendicular cylinder is a right angle in every meridian section, so
+//! its bevel is still an exact cone. Curved faces ruled along the edge take two distances
+//! (each a straight distance from the edge, as for the equal chamfer) but not an angle,
+//! whose bevel would need the faces' tangent planes rather than their sections.
+//!
+//! # Tangent chains
+//! [`tangent_chain`] grows a set of edges by every edge that continues one of them
+//! smoothly: at a shared vertex the two edges' tangents leaving the vertex point in
+//! opposite directions (within [`TANGENT_CHAIN_TOLERANCE`]). Seams are never added.
+//!
 //! Nothing is approximated: every blend surface above is exact. Refused with
 //! [`KernelError::Unsupported`]: the rows marked refused, seams, vertices with more than
 //! three edges, a blend ending on a curved face (rather than continuing tangentially),
@@ -101,13 +119,98 @@ mod ruled;
 #[cfg(test)]
 mod tests;
 
-use crate::topology::{Body, EdgeId, MAX_NAME_LENGTH};
+use crate::topology::{Body, EdgeId, FaceId, MAX_NAME_LENGTH, VertexId};
 use crate::{KernelError, KernelResult};
-use chamfera_geom::{LINEAR_TOLERANCE, MAX_COORDINATE};
+use chamfera_geom::{ANGULAR_TOLERANCE, LINEAR_TOLERANCE, MAX_COORDINATE, Vec3};
 use std::collections::BTreeSet;
 
 /// Most edges one blend may take (hostile-input limit).
 pub const MAX_BLEND_EDGES: usize = 10_000;
+
+/// Largest sine of the angle between two edges' tangents at a shared vertex for
+/// [`tangent_chain`] to count them as continuing each other. Sketch tangency is solved to
+/// about 1e-9 mm over a part's size, which leaves directions parallel to well under this.
+pub const TANGENT_CHAIN_TOLERANCE: f64 = 1e-6;
+
+/// The second size of a chamfer, besides its distance on the reference face.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ChamferSecond {
+    /// The same distance on both faces.
+    Equal,
+    /// This distance (mm) on the other face.
+    Distance(f64),
+    /// The bevel makes this angle (radians, `0 < θ < π`) with the reference face.
+    Angle(f64),
+}
+
+/// How a chamfer cuts each of its edges.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ChamferSpec {
+    /// The setback (mm) on each edge's reference face.
+    pub distance: f64,
+    pub second: ChamferSecond,
+    /// The reference face of every edge that bounds it; an edge that does not uses the
+    /// face holding its first half-edge.
+    pub reference: Option<FaceId>,
+    /// Swap each edge's reference face for its other face.
+    pub flip: bool,
+}
+
+impl ChamferSpec {
+    /// An equal-distance chamfer.
+    pub fn equal(distance: f64) -> ChamferSpec {
+        ChamferSpec {
+            distance,
+            second: ChamferSecond::Equal,
+            reference: None,
+            flip: false,
+        }
+    }
+
+    /// The index (0 or 1, into `body.edge_faces(e)`) of the reference face of an edge
+    /// between `faces`.
+    pub(super) fn reference_index(&self, faces: [FaceId; 2]) -> usize {
+        let i = usize::from(
+            self.reference
+                .is_some_and(|r| r == faces[1] && r != faces[0]),
+        );
+        if self.flip { 1 - i } else { i }
+    }
+
+    /// The setbacks on the faces `[0]` and `[1]` of an edge whose reference face is
+    /// `reference` and whose faces meet at `beta` (radians) on the side the bevel cuts.
+    pub(super) fn setbacks(
+        &self,
+        reference: usize,
+        beta: f64,
+        label: &str,
+    ) -> KernelResult<[f64; 2]> {
+        let d = self.distance;
+        let other = match self.second {
+            ChamferSecond::Equal => d,
+            ChamferSecond::Distance(d2) => d2,
+            ChamferSecond::Angle(theta) => {
+                let den = (beta + theta).sin();
+                if beta + theta >= std::f64::consts::PI - ANGULAR_TOLERANCE.sqrt()
+                    || den <= ANGULAR_TOLERANCE.sqrt()
+                {
+                    return Err(KernelError::InvalidInput(format!(
+                        "the chamfer angle is too steep for {label}: with its faces at {:.3} degrees the bevel would never reach the other face; use an angle below {:.3} degrees",
+                        beta.to_degrees(),
+                        (std::f64::consts::PI - beta).to_degrees()
+                    )));
+                }
+                d * theta.sin() / den
+            }
+        };
+        check_size(other, Kind::Chamfer)?;
+        Ok(if reference == 0 {
+            [d, other]
+        } else {
+            [other, d]
+        })
+    }
+}
 
 /// Which blend to make.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -129,14 +232,101 @@ impl Kind {
 /// lines at `distance` from the edge on each of its faces. See the module documentation
 /// for what is supported and how faces are named.
 pub fn chamfer(body: &Body, edges: &[EdgeId], distance: f64) -> KernelResult<Body> {
-    blend(body, edges, distance, Kind::Chamfer, None)
+    chamfer_with(body, edges, &ChamferSpec::equal(distance))
+}
+
+/// `body` with each of `edges` cut by a chamfer as `spec` describes: equal distances, two
+/// distances, or a distance and an angle (see the module documentation).
+pub fn chamfer_with(body: &Body, edges: &[EdgeId], spec: &ChamferSpec) -> KernelResult<Body> {
+    check_size(spec.distance, Kind::Chamfer)?;
+    match spec.second {
+        ChamferSecond::Equal => {}
+        ChamferSecond::Distance(d) => check_size(d, Kind::Chamfer)?,
+        ChamferSecond::Angle(a) => {
+            if !(a.is_finite()
+                && a > ANGULAR_TOLERANCE.sqrt()
+                && a < std::f64::consts::PI - ANGULAR_TOLERANCE.sqrt())
+            {
+                return Err(KernelError::InvalidInput(
+                    "the chamfer angle must be above 0 and below 180 degrees".into(),
+                ));
+            }
+        }
+    }
+    if let Some(f) = spec.reference {
+        body.face_surface(f)?;
+    }
+    blend_with(body, edges, spec.distance, Kind::Chamfer, None, Some(*spec))
+}
+
+/// `seeds` and every edge of `body` that continues one of them tangentially, directly
+/// or through others (see the module documentation), in the order found: the seeds
+/// first. Seams are never added. At most [`MAX_BLEND_EDGES`] edges.
+pub fn tangent_chain(body: &Body, seeds: &[EdgeId]) -> KernelResult<Vec<EdgeId>> {
+    let mut out: Vec<EdgeId> = Vec::new();
+    let mut seen = BTreeSet::new();
+    for e in seeds {
+        body.edge_vertices(*e)?;
+        if seen.insert(*e) {
+            out.push(*e);
+        }
+    }
+    let mut next = 0;
+    while let Some(&e) = out.get(next) {
+        next += 1;
+        let [v0, v1] = body.edge_vertices(e)?;
+        for v in [v0, v1] {
+            let Some(te) = leaving_tangent(body, e, v)? else {
+                continue;
+            };
+            for f in body.vertex_edges(v)? {
+                if seen.contains(&f) {
+                    continue;
+                }
+                let [fa, fb] = body.edge_faces(f)?;
+                if fa == fb {
+                    continue;
+                }
+                let Some(tf) = leaving_tangent(body, f, v)? else {
+                    continue;
+                };
+                if te.dot(tf) < 0.0 && te.cross(tf).length() <= TANGENT_CHAIN_TOLERANCE {
+                    if out.len() >= MAX_BLEND_EDGES {
+                        return Err(KernelError::InvalidInput(format!(
+                            "the tangent chain has more than {MAX_BLEND_EDGES} edges"
+                        )));
+                    }
+                    seen.insert(f);
+                    out.push(f);
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// The unit tangent of edge `e` leaving its end vertex `v` (into the edge), or `None`
+/// when it has none there.
+fn leaving_tangent(body: &Body, e: EdgeId, v: VertexId) -> KernelResult<Option<Vec3>> {
+    let [v0, v1] = body.edge_vertices(e)?;
+    let Some((c, t0, t1)) = body.edge_curve(e)? else {
+        return Ok(None);
+    };
+    // A closed edge leaves its vertex both ways; its start direction stands for it.
+    Ok(if v == v0 {
+        c.d1(t0).normalized()
+    } else if v == v1 {
+        c.d1(t1).normalized().map(|t| -t)
+    } else {
+        None
+    })
 }
 
 /// `body` with each of `edges` rounded by a constant-radius fillet of `radius`
 /// (cylinders, spherical corners, tori on rims). See the module documentation for what is
 /// supported and how faces are named.
 pub fn fillet(body: &Body, edges: &[EdgeId], radius: f64) -> KernelResult<Body> {
-    blend(body, edges, radius, Kind::Fillet, None)
+    blend_with(body, edges, radius, Kind::Fillet, None, None)
 }
 
 /// `body` with the straight `edge` between two planar faces rounded by a fillet whose
@@ -148,12 +338,13 @@ pub fn fillet_variable(body: &Body, edge: EdgeId, start: f64, end: f64) -> Kerne
     for r in [start, end] {
         check_size(r, Kind::Fillet)?;
     }
-    blend(
+    blend_with(
         body,
         &[edge],
         start.max(end),
         Kind::Fillet,
         Some([start, end]),
+        None,
     )
 }
 
@@ -171,12 +362,13 @@ fn check_size(size: f64, kind: Kind) -> KernelResult<()> {
     Ok(())
 }
 
-fn blend(
+fn blend_with(
     body: &Body,
     edges: &[EdgeId],
     size: f64,
     kind: Kind,
     variable: Option<[f64; 2]>,
+    chamfer: Option<ChamferSpec>,
 ) -> KernelResult<Body> {
     check_size(size, kind)?;
     if edges.is_empty() {
@@ -200,7 +392,7 @@ fn blend(
     })?;
     // Equal radii are a constant-radius fillet.
     let variable = variable.filter(|[a, b]| (a - b).abs() > LINEAR_TOLERANCE);
-    build::Blend::new(body, &selected, size, kind, variable)?.run()
+    build::Blend::new(body, &selected, size, kind, variable, chamfer)?.run()
 }
 
 /// `name` cut to at most [`MAX_NAME_LENGTH`] bytes on a character boundary.

@@ -218,6 +218,15 @@ fn hostile_params_never_panic() {
         json!({"edges": [long], "radius": -1, "distance": "0 mm", "size": "q"}),
         json!({"edges": [], "pick": {"x": 1e300, "y": "a"}, "radius": 1}),
         json!({"pick": {"x": 400, "y": 300, "width": 800, "height": 600}, "radius": 1e9}),
+        json!({"edges": ["2:top 0"], "distance": 1, "distance2": 1e308, "angle": f64::NAN, "reference_face": long, "flip": 7, "tangent_chain": "yes"}),
+        json!({"edges": ["2:top 0"], "distance": 1, "angle": "-90 deg", "reference_face": ":", "flip": true, "tangent_chain": true, "size2": [1], "chamfer_angle": {"a": 1}}),
+        json!({"sketch": 1, "profiles": [{"x": 10, "y": 10}], "distance": 5, "thin": {"thickness": f64::NAN, "side": 5, "curves": [-1, 1e300]}}),
+        json!({"sketch": 1, "distance": 5, "thin": {"thickness": "1e7", "side": "both", "curves": vec![1; 20_000]}, "feature": 2}),
+        json!({"sketch": 1, "distance": 5, "thin": {"thickness": long, "curves": [1, 1, 1]}, "feature": 2}),
+        json!({"edges": vec!["2:top 0"; 20_000],"feature": 3, "size2": "none", "chamfer_angle": "1e300 deg", "reference_face": null}),
+        json!({"face": "2:side 0", "pitch": 1e308, "length": f64::NAN, "size": long, "flip": 3, "thread": -1}),
+        json!({"face": "2:top", "pitch": "-1 mm", "length": "full", "size": "M6", "flip": true, "thread": 2}),
+        json!({"pick": {"x": 400, "y": 300, "width": 800, "height": 600}, "pitch": [1], "length": {"a": 1}, "size": 5}),
         json!({"points": [{"x": 0, "y": 0}, {"x": 10, "y": 5}, {"x": 20, "y": 0}], "kind": "fit"}),
         json!({"points": [{"point": 1}, {"point": 1}, {"x": f64::NAN, "y": 0}], "closed": true}),
         json!({"points": [{"x": 1e300}, nested, {"point": -1}], "kind": "control", "closed": 1}),
@@ -1829,6 +1838,264 @@ fn a_chamfer_bevels_an_edge_by_its_exact_volume() {
         (v - (15_000.0 - 1.5 * 1.5 / 2.0 * 10.0)).abs() < 1e-6,
         "{v}"
     );
+}
+
+#[test]
+fn an_unequal_chamfer_follows_its_reference_face_through_edits_and_saves() {
+    let mut s = Session::new();
+    extruded_plate(&mut s, json!(10));
+    let edge = edge_between(&mut s, [0.0, 0.0, 10.0], [50.0, 0.0, 10.0]);
+    // 2 across the top, 3 down the front: a right triangle 2 x 3 / 2 along 50 mm.
+    let r = s
+        .execute(
+            "solid.chamfer",
+            &json!({"edges": [edge], "distance": 2, "distance2": 3, "reference_face": "2:top"}),
+        )
+        .unwrap();
+    assert!((exact_volume(&r) - (15_000.0 - 150.0)).abs() < 1e-6);
+    let id = r["feature"].as_u64().unwrap();
+    let top = |s: &Session| {
+        let b = &s.solids()[0].body;
+        let f = b
+            .faces()
+            .into_iter()
+            .find(|f| b.face_name(*f).unwrap() == Some("2:top"))
+            .unwrap();
+        b.face_area(f).unwrap()
+    };
+    assert!((top(&s) - (1500.0 - 2.0 * 50.0)).abs() < 1e-6);
+    // A thicker plate keeps the same bevel.
+    s.execute("feature.edit", &json!({"feature": 2, "distance": 20}))
+        .unwrap();
+    let v = s.solids()[0].body.volume().unwrap();
+    assert!((v - (30_000.0 - 150.0)).abs() < 1e-6, "{v}");
+    // Flipped: 3 across the top.
+    s.execute("feature.edit", &json!({"feature": id, "flip": true}))
+        .unwrap();
+    assert!((top(&s) - (1500.0 - 3.0 * 50.0)).abs() < 1e-6);
+    // Distance and angle: 2 on the front at 30 degrees from it, so 2 tan 30° on the top.
+    let r = s
+        .execute("feature.edit", &json!({"feature": id, "chamfer_angle": 30}))
+        .unwrap();
+    let leg = 2.0 * 30f64.to_radians().tan();
+    assert!((exact_volume(&r) - (30_000.0 - leg * 50.0)).abs() < 1e-6);
+    assert!((top(&s) - (1500.0 - leg * 50.0)).abs() < 1e-6);
+    // Undo goes back to two distances, flipped.
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!((top(&s) - (1500.0 - 3.0 * 50.0)).abs() < 1e-6);
+    // It saves and opens with the options.
+    let dir = std::env::temp_dir().join(format!("chamfera-chamfer2-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("c.chamfera");
+    s.execute("design.save", &json!({"path": path.to_string_lossy()}))
+        .unwrap();
+    let mut t = Session::new();
+    t.execute("design.open", &json!({"path": path.to_string_lossy()}))
+        .unwrap();
+    assert!((top(&t) - (1500.0 - 3.0 * 50.0)).abs() < 1e-6);
+    let _ = std::fs::remove_dir_all(&dir);
+    // Bad combinations are refused and change nothing.
+    let n = s.doc.features.len();
+    for bad in [
+        json!({"edges": [edge], "distance": 2, "distance2": 3, "angle": 30}),
+        json!({"edges": [edge], "distance": 2, "distance2": -3}),
+        json!({"edges": [edge], "distance": 2, "angle": 180}),
+        json!({"edges": [edge], "distance": 2, "angle": "q"}),
+        json!({"edges": [edge], "distance": 2, "reference_face": "top"}),
+        json!({"edges": [edge], "distance": 2, "reference_face": 5}),
+        json!({"edges": [edge], "distance": 2, "flip": "yes"}),
+        json!({"edges": [edge], "distance": 2, "angle": 100, "reference_face": "2:top"}),
+    ] {
+        assert!(s.execute("solid.chamfer", &bad).is_err(), "{bad}");
+    }
+    assert!(
+        s.execute(
+            "solid.fillet",
+            &json!({"edges": [edge], "radius": 1, "distance2": 2})
+        )
+        .is_err()
+    );
+    assert_eq!(s.doc.features.len(), n);
+}
+
+#[test]
+fn a_tangent_chain_fillet_rounds_the_whole_slot_rim_and_follows_edits() {
+    // The slot of R = 10 with 20 mm straight sides, 10 high.
+    let mut s = Session::new();
+    s.execute("sketch.create", &json!({"plane": "xy"})).unwrap();
+    s.execute(
+        "sketch.slot",
+        &json!({"x1": -10, "y1": 0, "x2": 10, "y2": 0, "width": 20}),
+    )
+    .unwrap();
+    s.execute("sketch.finish", &json!({})).unwrap();
+    let pi = std::f64::consts::PI;
+    let (l, rr) = (20.0, 10.0);
+    let slot = |h: f64| (2.0 * rr * l + pi * rr * rr) * h;
+    s.execute(
+        "solid.extrude",
+        &json!({"sketch": 1, "profiles": [{"x": 0, "y": 0}], "distance": 10}),
+    )
+    .unwrap();
+    let line = edge_between(&mut s, [-10.0, -10.0, 10.0], [10.0, -10.0, 10.0]);
+    // The chain of one straight edge is the whole top rim: two lines and two arcs.
+    let chain = s
+        .execute("solid.tangent_chain", &json!({"edges": [line]}))
+        .unwrap();
+    assert_eq!(chain["edges"].as_array().unwrap().len(), 4);
+    assert_eq!(chain["edges"][0], json!(line));
+    // Alone, the line's fillet would end on the curved side: refused.
+    assert!(
+        s.execute("solid.fillet", &json!({"edges": [line], "radius": 2}))
+            .is_err()
+    );
+    let r = 2.0;
+    // Along each line (1 - π/4) r²; around the two half turns together, one turn of the
+    // boss rim's corner: Pappus 2π ((R - r)(1 - π/4) r² + r³/6) (see the kernel's slot
+    // test for the derivation).
+    let removed = 2.0 * l * (1.0 - pi / 4.0) * r * r
+        + 2.0 * pi * ((rr - r) * (1.0 - pi / 4.0) * r * r + r.powi(3) / 6.0);
+    let out = s
+        .execute(
+            "solid.fillet",
+            &json!({"edges": [line], "radius": r, "tangent_chain": true}),
+        )
+        .unwrap();
+    assert!((exact_volume(&out) - (slot(10.0) - removed)).abs() < 1e-6);
+    // A taller slot: the chain is found again on the new top rim.
+    s.execute("feature.edit", &json!({"feature": 2, "distance": 15}))
+        .unwrap();
+    let v = s.solids()[0].body.volume().unwrap();
+    assert!((v - (slot(15.0) - removed)).abs() < 1e-6, "{v}");
+    // Switched off, the fillet fails again and says why.
+    let id = out["feature"].as_u64().unwrap();
+    assert!(
+        s.execute(
+            "feature.edit",
+            &json!({"feature": id, "tangent_chain": false})
+        )
+        .is_err()
+    );
+    assert!(
+        s.execute("solid.tangent_chain", &json!({"edges": "all"}))
+            .is_err()
+    );
+    assert!(
+        s.execute("solid.tangent_chain", &json!({"edges": ["9:nothing"]}))
+            .is_err()
+    );
+}
+
+#[test]
+fn a_thin_extrude_of_a_rectangle_is_a_tube_that_follows_its_thickness_and_side() {
+    let mut s = Session::new();
+    dimensioned_rectangle(&mut s);
+    s.execute("sketch.finish", &json!({})).unwrap();
+    s.execute("param.set", &json!({"name": "wall", "expression": "2 mm"}))
+        .unwrap();
+    // Inside, t = 2, 10 high: (50 x 30 - 46 x 26) x 10 = 3040.
+    let r = s
+        .execute(
+            "solid.extrude",
+            &json!({"sketch": 1, "profiles": [{"x": 25, "y": 15}], "distance": 10,
+                    "thin": {"thickness": "wall"}}),
+        )
+        .unwrap();
+    assert!((exact_volume(&r) - 3040.0).abs() < 1e-6);
+    let id = r["feature"].as_u64().unwrap();
+    // A tube: one through hole.
+    assert_eq!(s.solids()[0].body.validate().unwrap().genus, 1);
+    // A thicker wall through the parameter: (1500 - 44 x 24) x 10 = 4440.
+    s.execute("param.set", &json!({"name": "wall", "expression": "3 mm"}))
+        .unwrap();
+    let v = s.solids()[0].body.volume().unwrap();
+    assert!((v - 4440.0).abs() < 1e-6, "{v}");
+    // Outside: (56 x 36 - 1500) x 10 = 5160; both: (53 x 33 - 47 x 27) x 10 = 4800.
+    for (side, want) in [("outside", 5160.0), ("both", 4800.0)] {
+        let r = s
+            .execute(
+                "feature.edit",
+                &json!({"feature": id, "thin": {"side": side}}),
+            )
+            .unwrap();
+        assert!((exact_volume(&r) - want).abs() < 1e-6, "{side}");
+    }
+    // Switched off, the solid plate comes back.
+    let r = s
+        .execute("feature.edit", &json!({"feature": id, "thin": false}))
+        .unwrap();
+    assert!((exact_volume(&r) - 15_000.0).abs() < 1e-6);
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!((s.solids()[0].body.volume().unwrap() - 4800.0).abs() < 1e-6);
+    // Too thick to fit inside: refused, the design unchanged.
+    assert!(
+        s.execute(
+            "feature.edit",
+            &json!({"feature": id, "thin": {"thickness": 40, "side": "inside"}})
+        )
+        .is_err()
+    );
+    assert!((s.solids()[0].body.volume().unwrap() - 4800.0).abs() < 1e-6);
+}
+
+#[test]
+fn a_thin_extrude_of_an_open_chain_is_a_wall_along_it() {
+    let mut s = Session::new();
+    s.execute("sketch.create", &json!({"plane": "xy"})).unwrap();
+    let a = s
+        .execute("sketch.line", &json!({"x1": 0, "y1": 0, "x2": 40, "y2": 0}))
+        .unwrap()["curve"]
+        .clone();
+    let b = s
+        .execute(
+            "sketch.line",
+            &json!({"x1": 40, "y1": 0, "x2": 40, "y2": 20}),
+        )
+        .unwrap()["curve"]
+        .clone();
+    s.execute("sketch.finish", &json!({})).unwrap();
+    // Centred on the L, t = 2: the centre line's 60 mm times 2 (miter corner), 10 high.
+    let r = s
+        .execute(
+            "solid.extrude",
+            &json!({"sketch": 1, "distance": 10,
+                    "thin": {"thickness": 2, "side": "both", "curves": [a, b]}}),
+        )
+        .unwrap();
+    assert!((exact_volume(&r) - 1200.0).abs() < 1e-6);
+    let id = r["feature"].as_u64().unwrap();
+    // Given the other way round, the chain is the same L.
+    let r = s
+        .execute(
+            "feature.edit",
+            &json!({"feature": id, "thin": {"curves": [b, a]}}),
+        )
+        .unwrap();
+    assert!((exact_volume(&r) - 1200.0).abs() < 1e-6);
+    // To the left of the first curve (inside the turn): (40 x 2 + 2 x 18) x 10 = 1160.
+    let r = s
+        .execute(
+            "feature.edit",
+            &json!({"feature": id, "thin": {"curves": [a, b], "side": "inside"}}),
+        )
+        .unwrap();
+    assert!((exact_volume(&r) - 1160.0).abs() < 1e-6);
+    let n = s.doc.features.len();
+    for bad in [
+        json!({"sketch": 1, "distance": 10, "thin": {"thickness": 0, "curves": [a]}}),
+        json!({"sketch": 1, "distance": 10, "thin": {"thickness": 2, "side": "middle", "curves": [a]}}),
+        json!({"sketch": 1, "distance": 10, "thin": {"thickness": 2, "curves": [99]}}),
+        json!({"sketch": 1, "distance": 10, "thin": {"curves": [a]}}),
+        json!({"sketch": 1, "distance": 10, "thin": {"thickness": 2, "curves": []}}),
+        json!({"sketch": 1, "distance": 10, "thin": {"thickness": 2, "curves": "all"}}),
+        json!({"sketch": 1, "distance": 10, "thin": 5}),
+        json!({"sketch": 1, "distance": 10, "thin": {"thickness": 1e9, "curves": [a, b]}}),
+        json!({"sketch": 1, "profiles": [{"x": 1, "y": 1}], "distance": 10,
+               "thin": {"thickness": 2, "curves": [a, b]}}),
+    ] {
+        assert!(s.execute("solid.extrude", &bad).is_err(), "{bad}");
+    }
+    assert_eq!(s.doc.features.len(), n);
 }
 
 #[test]

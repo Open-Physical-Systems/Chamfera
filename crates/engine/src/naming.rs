@@ -124,6 +124,50 @@ impl crate::Session {
         chamfera_doc::naming::reference_names(&self.built_bodies(), kind)
     }
 
+    /// The named edges and every edge of the solids built last that continues one of
+    /// them tangentially ([`chamfera_kernel::tangent_chain`]), by their unique names: the
+    /// given names first, then the rest in the order found.
+    pub fn tangent_chain_names(&self, names: &[String]) -> Result<Vec<String>, String> {
+        let bodies = self.built_bodies();
+        let mut per_body: std::collections::BTreeMap<usize, Vec<chamfera_kernel::EdgeId>> =
+            std::collections::BTreeMap::new();
+        for n in names {
+            let found = self
+                .resolve_reference(None, Kind::Edge, n, Want::All)
+                .map_err(|e| e.to_string())?;
+            for f in found {
+                if let Some(e) = f.edge() {
+                    let list = per_body.entry(f.body).or_default();
+                    if !list.contains(&e) {
+                        list.push(e);
+                    }
+                }
+            }
+        }
+        let mut out: Vec<String> = names.to_vec();
+        for (i, edges) in per_body {
+            let Some(body) = bodies.get(i) else {
+                continue;
+            };
+            let chain = chamfera_kernel::tangent_chain(body, &edges).map_err(|e| e.to_string())?;
+            for e in chain.into_iter().filter(|e| !edges.contains(e)) {
+                let Some(name) = chamfera_doc::naming::reference_name(
+                    &bodies,
+                    Found {
+                        body: i,
+                        entity: Entity::Edge(e),
+                    },
+                ) else {
+                    continue;
+                };
+                if !out.contains(&name) {
+                    out.push(name);
+                }
+            }
+        }
+        Ok(out)
+    }
+
     /// Records what `reference` of item `owner` names now, with `point` (where it was
     /// picked) when it lies on it. A reference that does not resolve to one entity (a
     /// whole name of a split face, or a name not built yet) keeps only the point.

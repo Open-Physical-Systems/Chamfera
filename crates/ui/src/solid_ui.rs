@@ -5,7 +5,9 @@
 use crate::icons::Icon;
 use crate::widgets::{self, Look};
 use crate::{ChamferaApp, label};
-use chamfera_doc::{Extrude, ExtrudeDirection, ExtrudeExtent, ExtrudeTo, FaceRef, Operation};
+use chamfera_doc::{
+    Extrude, ExtrudeDirection, ExtrudeExtent, ExtrudeTo, FaceRef, Operation, ThinSide,
+};
 use chamfera_geom::Point2;
 use chamfera_render::{Overlay, OverlayStyle};
 use serde_json::{Value, json};
@@ -24,6 +26,10 @@ pub struct ExtrudeForm {
     pub to: Option<ExtrudeTo>,
     /// Waiting for a click on the face to extrude up to.
     pub picking_to: bool,
+    /// A thin extrude: a wall along the profile's loops.
+    pub thin: bool,
+    pub thickness: String,
+    pub thin_side: ThinSide,
 }
 
 impl Default for ExtrudeForm {
@@ -37,6 +43,9 @@ impl Default for ExtrudeForm {
             taper: "0 deg".into(),
             to: None,
             picking_to: false,
+            thin: false,
+            thickness: "2 mm".into(),
+            thin_side: ThinSide::Inside,
         }
     }
 }
@@ -56,6 +65,9 @@ impl ExtrudeForm {
             taper: e.taper.clone().unwrap_or(d.taper),
             to: e.to.clone(),
             picking_to: false,
+            thin: e.thin.is_some(),
+            thickness: e.thin.as_ref().map_or(d.thickness, |t| t.thickness.clone()),
+            thin_side: e.thin.as_ref().map_or(d.thin_side, |t| t.side),
         }
     }
 
@@ -96,6 +108,11 @@ impl ExtrudeForm {
                 None => {}
             }
         }
+        p["thin"] = if self.thin {
+            json!({ "thickness": self.thickness.trim(), "side": self.thin_side.key() })
+        } else {
+            json!(false)
+        };
         p
     }
 
@@ -222,7 +239,34 @@ impl ExtrudeForm {
             "Draft angle of the sides: positive narrows away from the start",
         );
         ui.end_row();
+        widgets::field_label(ui, look, "Thin");
+        ui.checkbox(&mut self.thin, "")
+            .on_hover_text("Extrude a wall of the given thickness along the profile instead");
+        ui.end_row();
+        if self.thin {
+            widgets::field_label(ui, look, "Thickness");
+            field(ui, &mut self.thickness, "2 mm", "The wall thickness");
+            ui.end_row();
+            widgets::field_label(ui, look, "Wall side");
+            egui::ComboBox::from_id_salt("thin side")
+                .selected_text(thin_side_name(self.thin_side))
+                .width(FIELD[0])
+                .show_ui(ui, |ui| {
+                    for s in [ThinSide::Inside, ThinSide::Outside, ThinSide::Both] {
+                        ui.selectable_value(&mut self.thin_side, s, thin_side_name(s));
+                    }
+                });
+            ui.end_row();
+        }
         enter
+    }
+}
+
+fn thin_side_name(s: ThinSide) -> &'static str {
+    match s {
+        ThinSide::Inside => "Inside",
+        ThinSide::Outside => "Outside",
+        ThinSide::Both => "Both sides",
     }
 }
 
@@ -251,6 +295,13 @@ pub(crate) fn extrude_summary(e: &Extrude) -> String {
     }
     if let Some(t) = &e.taper {
         parts.push(format!("taper {t}"));
+    }
+    if let Some(t) = &e.thin {
+        parts.push(format!(
+            "thin {} {}",
+            t.thickness,
+            thin_side_name(t.side).to_lowercase()
+        ));
     }
     parts.join(" · ")
 }
@@ -1029,5 +1080,43 @@ mod tests {
                 face: "top".into()
             }))
         );
+    }
+
+    /// A thin wall previews and extrudes like any profile, and the timeline form keeps it.
+    #[test]
+    fn a_thin_extrude_previews_and_builds_a_tube() {
+        let mut app = ChamferaApp::headless();
+        app.create_sketch("xy", "top");
+        app.run(
+            "sketch.rectangle",
+            json!({ "x1": 0, "y1": 0, "x2": 40, "y2": 20 }),
+        );
+        app.finish_sketch();
+        app.session.camera.target = chamfera_geom::Point3::new(20.0, 10.0, 0.0);
+        let mut tool = ExtrudeTool::default();
+        tool.apply(&json!({"distance": 10}));
+        tool.form.thin = true;
+        tool.form.thickness = "2 mm".into();
+        tool.form.thin_side = ThinSide::Outside;
+        app.solid.extrude = Some(tool);
+        app.extrude_click(400.0, 300.0, 800.0, 600.0);
+        // Outside, t = 2: (44 x 24 - 40 x 20) x 10 = 2560.
+        assert!(app.update_extrude_preview());
+        let shown = app.solid.extrude.as_ref().unwrap().preview.clone();
+        assert!(
+            shown.as_ref().is_ok_and(|v| (*v - 2560.0).abs() < 1e-6),
+            "{shown:?}"
+        );
+        let params = app.solid.extrude.as_ref().unwrap().params().unwrap();
+        let r = app.run("solid.extrude", params).unwrap();
+        assert!((r["solids"][0]["volume"].as_f64().unwrap() - 2560.0).abs() < 1e-6);
+        let id = r["feature"].as_u64().unwrap() as u32;
+        let chamfera_doc::FeatureKind::Extrude(e) = &app.session.doc.feature(id).unwrap().kind
+        else {
+            panic!("not an extrude");
+        };
+        let form = ExtrudeForm::from_extrude(e);
+        assert!(form.thin && form.thin_side == ThinSide::Outside);
+        assert!(extrude_summary(e).contains("thin 2 mm outside"));
     }
 }

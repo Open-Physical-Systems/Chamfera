@@ -100,6 +100,9 @@ pub struct Options {
     pub extrude_with: Option<Value>,
     /// Open the Hole tool at start, on the design's last hole feature if it has one.
     pub hole: bool,
+    /// Open the Chamfer tool at start with the edges and options of the design's last
+    /// chamfer (or empty).
+    pub chamfer: bool,
     /// The window's inner size in points, instead of the default 1400 x 900.
     pub window_size: Option<[f32; 2]>,
     /// Interface zoom (pixels per point multiplier), for checking crispness at 2x.
@@ -481,6 +484,9 @@ impl ChamferaApp {
         }
         if options.hole {
             app.open_hole_on_last();
+        }
+        if options.chamfer {
+            app.open_chamfer_on_last();
         }
         app.zoom = options
             .zoom

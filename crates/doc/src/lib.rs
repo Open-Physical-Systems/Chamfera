@@ -17,6 +17,7 @@ pub mod motion;
 pub mod naming;
 pub mod sheet;
 pub mod surface;
+pub mod thread;
 pub mod timeline;
 pub mod units;
 
@@ -32,9 +33,10 @@ pub use construct::{
 pub use drawing::Drawing;
 pub use face_edit::{DeleteFace, FaceTurn, MoveFace, OffsetFace};
 pub use feature::{
-    Blend, BlendKind, Extrude, ExtrudeDirection, ExtrudeExtent, ExtrudeTo, ExtrudeValues, Feature,
-    FeatureKind, Hole, HoleKind, HoleSizes, Loft, LoftSection, Mirror, MirrorPlane, Move,
-    MoveTransform, Operation, Pattern, PatternLayout, Revolve, Shell, Sweep,
+    Blend, BlendKind, BlendSecond, Extrude, ExtrudeDirection, ExtrudeExtent, ExtrudeTo,
+    ExtrudeValues, Feature, FeatureKind, Hole, HoleKind, HoleSizes, Loft, LoftSection, Mirror,
+    MirrorPlane, Move, MoveTransform, Operation, Pattern, PatternLayout, Revolve, Shell, Sweep,
+    Thin, ThinSide,
 };
 pub use imported::{ImportedBody, ImportedMesh, SharedMesh};
 pub use joint::{EdgeEnd, Joint, JointKind, JointOrigin, OriginAt};
@@ -132,7 +134,13 @@ use thiserror::Error;
 ///   cylinders and cones), the holder check of parallel and adaptive operations
 ///   (`holder_check`), and the `pencil` and `scallop` (experimental) finishing
 ///   operations. Older files open unchanged: every new field is optional.
-pub const FORMAT_VERSION: u32 = 36;
+/// - 37: solid modelling options: fillets and chamfers that follow tangent chains
+///   (`tangent_chain`), chamfers with two distances (`distance2`) or a distance and an
+///   angle (`angle`) from a reference face (`reference_face`, `flip`); thin extrudes
+///   (`thin`: thickness, side and an optional open chain of `curves`); holes that go to a
+///   face (`to`); and cosmetic threads (`kind: thread`). Older files open unchanged: every
+///   new field is optional.
+pub const FORMAT_VERSION: u32 = 37;
 /// The tag every design file starts with, so other JSON is not mistaken for a design.
 pub const FORMAT_TAG: &str = "chamfera";
 /// Longest parameter name.

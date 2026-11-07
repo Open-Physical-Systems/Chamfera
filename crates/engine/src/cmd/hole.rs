@@ -17,7 +17,9 @@ pub static COMMANDS: &[CommandSpec] = &[CommandSpec {
              kind: string (optional) - simple (default), counterbore or countersink\n\
              diameter: string or number (required) - such as 6 or \"6 mm\"\n\
              depth: string or number (optional) - the drilled depth; or\n\
-             through_all: boolean (optional) - through the whole body instead\n\
+             through_all: boolean (optional) - through the whole body instead; or\n\
+             to: string or {pick: {x, y, width, height}} (optional) - down to this flat face, parallel \
+             to the hole's face, such as \"1:bottom\"; the hole ends flat on it\n\
              cb_diameter, cb_depth: string or number (counterbore) - its diameter and depth\n\
              cs_diameter: string or number (countersink) - its diameter at the face\n\
              cs_angle: string or number (optional) - countersink angle, default 90 deg\n\
@@ -120,6 +122,33 @@ fn depth(p: &Value) -> Result<Option<Option<String>>, CommandError> {
     }
 }
 
+/// The face a hole goes to: a name, or the flat face under `{pick}`.
+fn to_face(s: &Session, p: &Value) -> Result<Option<FaceRef>, CommandError> {
+    match p.get("to") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(name)) => {
+            let (feature, role) = crate::solids::split_face_key(name).ok_or_else(|| {
+                bad("`to` must be a face name such as \"1:bottom\" (feature:role)")
+            })?;
+            Ok(Some(FaceRef {
+                feature,
+                face: role.to_owned(),
+            }))
+        }
+        Some(v) if v.get("pick").is_some() => {
+            let pick = v.get("pick").unwrap_or(&Value::Null);
+            let (x, y, w, h) = params::pixel(pick)?;
+            let (feature, face, _) = s.face_at(x, y, w, h).ok_or_else(|| {
+                CommandError::Unavailable("no flat face of a solid is under that pixel".into())
+            })?;
+            Ok(Some(FaceRef { feature, face }))
+        }
+        Some(_) => Err(bad(
+            "`to` must be a face name or {pick: {x, y, width, height}}",
+        )),
+    }
+}
+
 fn kind(p: &Value) -> Result<Option<HoleKind>, CommandError> {
     match params::opt_str(p, "kind")? {
         None => Ok(None),
@@ -153,8 +182,17 @@ pub(super) fn apply(s: &Session, h: &mut Hole, p: &Value) -> Result<(), CommandE
     if let Some(d) = expression(p, "diameter", "mm")? {
         h.diameter = d;
     }
+    let to = to_face(s, p)?;
+    if to.is_some() && depth(p)?.is_some() {
+        return Err(bad("give `depth`, `through_all` or `to`, only one"));
+    }
     if let Some(d) = depth(p)? {
         h.depth = d;
+        h.to = None;
+    }
+    if let Some(t) = to {
+        h.depth = None;
+        h.to = Some(t);
     }
     for (key, unit, slot) in [
         ("cb_diameter", "mm", &mut h.cb_diameter),
@@ -179,6 +217,7 @@ pub(super) const EDIT_KEYS: &[&str] = &[
     "diameter",
     "depth",
     "through_all",
+    "to",
     "cb_diameter",
     "cb_depth",
     "cs_diameter",
@@ -200,17 +239,22 @@ fn hole(s: &mut Session, p: &Value) -> CmdResult {
         cs_diameter: None,
         cs_angle: None,
         tip_angle: Some("118 deg".into()),
+        to: None,
     };
     if expression(p, "diameter", "mm")?.is_none() {
         return Err(bad("`diameter` is required"));
     }
-    if depth(p)?.is_none() {
-        return Err(bad("give `depth` or `through_all: true`"));
+    if depth(p)?.is_none() && p.get("to").is_none_or(Value::is_null) {
+        return Err(bad("give `depth`, `through_all: true` or `to`"));
     }
     apply(s, &mut h, p)?;
     let on = h.face.clone();
+    let to = h.to.clone();
     let id = s.doc.add_feature(FeatureKind::Hole(h))?;
     s.record_face_signature(id, &on, None);
+    if let Some(t) = to {
+        s.record_face_signature(id, &t, None);
+    }
     s.rebuild();
     if let Some(e) = s.feature_errors().get(&id) {
         return Err(CommandError::Unavailable(e.clone()));

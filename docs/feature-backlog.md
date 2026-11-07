@@ -135,20 +135,20 @@ Close runners-up: selection filters and box selection (UI and NAV), splines (nee
 | Extrude (one side, flipped, symmetric) | Sweep a profile along its normal; distance as an expression | done | P0 | M | kernel, doc, engine |
 | Extrude extents | Through all, to a face or object, start offset, two different sides | done (to object: parallel flat faces and planes only) | P0 | M | engine, doc, kernel |
 | Extrude taper | Draft angle on the extrude sides | done (planar profiles; sharp corners at arcs refused) | P0 | M | kernel |
-| Thin extrude | Extrude an open or closed profile as a wall of given thickness | missing | P1 | M | kernel, engine |
+| Thin extrude | Extrude an open or closed profile as a wall of given thickness | done (`thin`: inside, outside or both; closed profiles or an open chain of lines and arcs; sharp corners at arcs refused) | P1 | M | kernel, engine |
 | Revolve | Profile around an axis, partial or full | done | P0 | M | kernel, engine |
 | Boolean operation choice | New body, join, cut, intersect for each feature | done | P0 | M | kernel (K7), engine |
 | Combine bodies | Boolean between existing bodies, keep tools option | branch `solid/body-tools` (`solid.combine`: join, cut, intersect, keep tools; `solid.remove` takes bodies out of the result) | P0 | S | engine |
 | Fillet (constant radius) | Round straight edges between planes, and hole/boss rims | branch (`engine/blends`) | P0 | L | kernel (K11), engine, ui |
 | Chamfer (equal distance) | Bevel the same edges | branch (`engine/blends`) | P0 | M | kernel (K11), engine |
-| Chamfer: two distances, distance and angle | Unequal bevels | missing | P1 | M | kernel |
+| Chamfer: two distances, distance and angle | Unequal bevels | done (`distance2` or `angle` from a reference face, `flip`; angle on planar faces and plane-cylinder rims) | P1 | M | kernel |
 | Fillet on curved faces in general | Rolling-ball blends between any analytic or NURBS faces | missing | P1 | L | kernel (K11, K10) |
 | Variable-radius fillet | Radius changes along the edge | missing | P2 | L | kernel |
 | Rule fillet / full round | Round all edges of a face, or a full round between three faces | missing | P2 | M | kernel |
-| Tangent chain selection | Picking one edge selects its tangent-connected chain | missing | P0 | S | engine, ui |
+| Tangent chain selection | Picking one edge selects its tangent-connected chain | done (`tangent_chain` on fillet and chamfer, found again at every rebuild; `solid.tangent_chain`; dialog checkbox) | P0 | S | engine, ui |
 | Shell | Hollow a body with chosen faces removed | branch `kernel/k12-shell` (planes, cylinders, cones; inward or outward; closed hollow) | P0 | L | kernel (K12), engine |
-| Hole | Simple, counterbore, countersink; blind, to a face, through all | branch (`solid/hole`: simple, counterbore, countersink, blind or through all, drill point; not yet "to a face") | P0 | M | engine, doc, kernel |
-| Thread | Cosmetic thread (attribute + drawing note), later modelled thread | missing | P1 | M | doc, kernel |
+| Hole | Simple, counterbore, countersink; blind, to a face, through all | done (simple, counterbore, countersink; blind, through all or to a parallel flat face; drill point) | P0 | M | engine, doc, kernel |
+| Thread | Cosmetic thread (attribute + drawing note), later modelled thread | partial: cosmetic thread done (`solid.thread`: size, pitch, length; rings in the viewport; callout in `solid.threads` and drawing leaders); modelled thread missing | P1 | M | doc, kernel |
 | Linear (rectangular) pattern | Features repeated in one or two directions | done | P0 | M | engine, doc |
 | Circular pattern | Features repeated around an axis | done | P0 | M | engine, doc |
 | Pattern buttons in the ribbon | UI for the pattern commands | branch (`solid/mirror-move`) | P0 | S | ui |

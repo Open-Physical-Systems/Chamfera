@@ -40,6 +40,7 @@ pub mod sheet;
 pub mod sketching;
 pub mod solids;
 pub mod surface;
+pub mod thread;
 pub mod versions;
 
 use chamfera_doc::{DocError, Document};

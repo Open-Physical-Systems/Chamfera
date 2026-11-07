@@ -83,9 +83,13 @@ mod surfacing;
 mod sweep;
 mod sweep_path;
 mod tessellate;
+mod thin;
 mod topology;
 
-pub use blend::{MAX_BLEND_EDGES, chamfer, fillet, fillet_variable};
+pub use blend::{
+    ChamferSecond, ChamferSpec, MAX_BLEND_EDGES, TANGENT_CHAIN_TOLERANCE, chamfer, chamfer_with,
+    fillet, fillet_variable, tangent_chain,
+};
 pub use boolean::{
     BooleanOp, MAX_BOOLEAN_ENTITIES, MAX_BOOLEAN_FACES, boolean, intersect, subtract, union,
 };
@@ -122,6 +126,7 @@ pub use surfacing::{
 pub use sweep::{MAX_TAPER, extrude, extrude_symmetric, extrude_tapered, revolve};
 pub use sweep_path::{MAX_PATH_SEGMENTS, PATH_TANGENT_TOLERANCE, PathSegment, sweep_path};
 pub use tessellate::{BodyMesh, TessOptions, tessellate};
+pub use thin::{MAX_THIN_EDGES, ThinSide, thin_profile};
 pub use topology::{
     Body, Curve, CurveId, EdgeCurve, EdgeId, FaceId, HalfEdgeId, LoopId, MAX_NAME_LENGTH,
     MAX_PROFILE_VERTICES, MAX_TOPOLOGY_ENTITIES, Mvfs, PointId, PointOnFace,

@@ -1072,3 +1072,244 @@ fn blends_without_an_exact_surface_are_refused_and_leave_the_body_alone() {
         Err(KernelError::Unsupported(_))
     ));
 }
+
+fn spec(
+    distance: f64,
+    second: ChamferSecond,
+    reference: Option<FaceId>,
+    flip: bool,
+) -> ChamferSpec {
+    ChamferSpec {
+        distance,
+        second,
+        reference,
+        flip,
+    }
+}
+
+#[test]
+fn a_two_distance_chamfer_cuts_a_right_triangle_of_unequal_legs() {
+    let b = block();
+    let top = face(&b, "top");
+    let e = edge(&b, "top 0");
+    let out = chamfer_with(
+        &b,
+        &[e],
+        &spec(2.0, ChamferSecond::Distance(3.0), Some(top), false),
+    )
+    .unwrap();
+    // Legs 2 on the top and 3 down side 0, along the whole 50 mm edge.
+    assert_close("volume", check(&out, 0), 15000.0 - 0.5 * 2.0 * 3.0 * 50.0);
+    assert_close(
+        "top",
+        out.face_area(face(&out, "top")).unwrap(),
+        1500.0 - 2.0 * 50.0,
+    );
+    assert_close(
+        "side 0",
+        out.face_area(face(&out, "side 0")).unwrap(),
+        500.0 - 3.0 * 50.0,
+    );
+    // Flipped, the 2 goes down the side and the 3 on the top.
+    let out = chamfer_with(
+        &b,
+        &[e],
+        &spec(2.0, ChamferSecond::Distance(3.0), Some(top), true),
+    )
+    .unwrap();
+    assert_close(
+        "top",
+        out.face_area(face(&out, "top")).unwrap(),
+        1500.0 - 3.0 * 50.0,
+    );
+    // An equal second distance is the equal chamfer: 15000 - 2²/2 · 50.
+    let a = chamfer_with(
+        &b,
+        &[e],
+        &spec(2.0, ChamferSecond::Distance(2.0), None, false),
+    )
+    .unwrap();
+    assert_close("equal", a.volume().unwrap(), 15000.0 - 2.0 * 50.0);
+}
+
+#[test]
+fn a_distance_and_angle_chamfer_follows_the_law_of_sines() {
+    let b = block();
+    let top = face(&b, "top");
+    let e = edge(&b, "top 0");
+    // A right angle: the other leg is d tan θ.
+    let theta = 30f64.to_radians();
+    let out = chamfer_with(
+        &b,
+        &[e],
+        &spec(2.0, ChamferSecond::Angle(theta), Some(top), false),
+    )
+    .unwrap();
+    let leg = 2.0 * theta.tan();
+    assert_close("volume", check(&out, 0), 15000.0 - 0.5 * 2.0 * leg * 50.0);
+    assert_close(
+        "side 0",
+        out.face_area(face(&out, "side 0")).unwrap(),
+        500.0 - leg * 50.0,
+    );
+    // Faces at 60 degrees: the equilateral prism of side 10, 20 high. Its edge at the
+    // origin, d = 2 on side 0 at θ = 90°: d2 = 2 sin 90° / sin 150° = 4, so the cut-off
+    // triangle has sides 2 and 4 at 60°, area ½·2·4·sin 60° = 2√3, over 20 mm.
+    let tri = vec![
+        Point2::new(0.0, 0.0),
+        Point2::new(10.0, 0.0),
+        Point2::new(5.0, 5.0 * 3f64.sqrt()),
+    ];
+    let p = extrude(&Frame::XY, &Profile::polygon(&tri), 20.0).unwrap();
+    let v0 = 25.0 * 3f64.sqrt() * 20.0;
+    let corner = edge_at(&p, Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 0.0, 20.0));
+    let side0 = face(&p, "side 0");
+    let out = chamfer_with(
+        &p,
+        &[corner],
+        &spec(2.0, ChamferSecond::Angle(PI / 2.0), Some(side0), false),
+    )
+    .unwrap();
+    assert_close("volume", check(&out, 0), v0 - 2.0 * 3f64.sqrt() * 20.0);
+    // The bevel stands at right angles to side 0 (the plane x = 2), from y = 0 to the
+    // point 4 along the other side, (2, 2√3): 2√3 wide, 20 high.
+    let bevel = out
+        .faces()
+        .into_iter()
+        .find(|f| {
+            out.face_name(*f)
+                .unwrap()
+                .is_some_and(|n| n.starts_with("chamfer of"))
+        })
+        .unwrap();
+    assert_close(
+        "bevel",
+        out.face_area(bevel).unwrap(),
+        2.0 * 3f64.sqrt() * 20.0,
+    );
+    // An angle the corner cannot take (60° + 130° > 180°) is refused.
+    assert!(matches!(
+        chamfer_with(
+            &p,
+            &[corner],
+            &spec(
+                2.0,
+                ChamferSecond::Angle(130f64.to_radians()),
+                Some(side0),
+                false
+            )
+        ),
+        Err(KernelError::InvalidInput(_))
+    ));
+}
+
+#[test]
+fn an_unequal_rim_chamfer_is_a_cone_by_pappus() {
+    let b = plate_with_hole();
+    let rim = edge(&b, "hole 0 top 0");
+    let top = face(&b, "top");
+    let (rc, a, c) = (5.0, 1.0, 2.0);
+    let out = chamfer_with(
+        &b,
+        &[rim],
+        &spec(a, ChamferSecond::Distance(c), Some(top), false),
+    )
+    .unwrap();
+    // The meridian triangle has legs a across the top and c down the hole; its centroid
+    // is at ρ = Rc + a/3, so it sweeps 2π (Rc + a/3) a c / 2.
+    let v0 = 15000.0 - 250.0 * PI;
+    assert_close("volume", check(&out, 1), v0 - PI * a * c * (rc + a / 3.0));
+    assert!(surfaces(&out).iter().any(|s| matches!(s, Surface::Cone(_))));
+    // Flipped: c across the top, a down the hole, centroid at ρ = Rc + c/3.
+    let out = chamfer_with(
+        &b,
+        &[rim],
+        &spec(a, ChamferSecond::Distance(c), Some(top), true),
+    )
+    .unwrap();
+    assert_close("flipped", check(&out, 1), v0 - PI * a * c * (rc + c / 3.0));
+    // 45 degrees from the top is the equal chamfer.
+    let out = chamfer_with(
+        &b,
+        &[rim],
+        &spec(a, ChamferSecond::Angle(PI / 4.0), Some(top), false),
+    )
+    .unwrap();
+    assert_close("volume", check(&out, 1), v0 - PI * a * a * (rc + a / 3.0));
+}
+
+#[test]
+fn hostile_chamfer_specs_are_refused() {
+    let b = block();
+    let e = edge(&b, "top 0");
+    for second in [
+        ChamferSecond::Distance(-1.0),
+        ChamferSecond::Distance(f64::NAN),
+        ChamferSecond::Distance(0.0),
+        ChamferSecond::Angle(0.0),
+        ChamferSecond::Angle(PI),
+        ChamferSecond::Angle(f64::INFINITY),
+        ChamferSecond::Angle(-0.5),
+    ] {
+        assert!(
+            chamfer_with(&b, &[e], &spec(2.0, second, None, false)).is_err(),
+            "{second:?}"
+        );
+    }
+    assert!(chamfer_with(&b, &[e], &spec(f64::NAN, ChamferSecond::Equal, None, false)).is_err());
+    // Too big for the 10 mm side.
+    assert!(
+        chamfer_with(
+            &b,
+            &[e],
+            &spec(2.0, ChamferSecond::Distance(11.0), None, false)
+        )
+        .is_err()
+    );
+    // A reference face of another body with more faces does not exist here.
+    let p = Profile::polygon(
+        &(0..12)
+            .map(|i| {
+                let t = i as f64 / 12.0 * std::f64::consts::TAU;
+                Point2::new(t.cos(), t.sin())
+            })
+            .collect::<Vec<_>>(),
+    );
+    let big = extrude(&Frame::XY, &p, 1.0).unwrap();
+    let alien = *big.faces().last().unwrap();
+    assert!(
+        chamfer_with(
+            &b,
+            &[e],
+            &spec(2.0, ChamferSecond::Equal, Some(alien), false)
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn the_tangent_chain_of_a_slot_line_is_its_whole_rim() {
+    let (l, rr, h) = (20.0, 10.0, 10.0);
+    let b = extrude(
+        &Frame::XY,
+        &Profile::new(slot_edges(l / 2.0, rr), vec![]),
+        h,
+    )
+    .unwrap();
+    let rim = loop_edges(&b, "top", 0);
+    let chain = tangent_chain(&b, &rim[..1]).unwrap();
+    assert_eq!(chain.len(), 4);
+    assert_eq!(chain[0], rim[0]);
+    for e in &rim {
+        assert!(chain.contains(e));
+    }
+    // The bottom rim meets the top one only through vertical edges at right angles.
+    let bottom = loop_edges(&b, "bottom", 0);
+    assert!(bottom.iter().all(|e| !chain.contains(e)));
+    // A box edge meets its neighbours at right angles: it is its own chain.
+    let bx = block();
+    let e = edge(&bx, "top 0");
+    assert_eq!(tangent_chain(&bx, &[e]).unwrap(), vec![e]);
+    // And the whole slot rim, filleted as a chain, is the slot fillet.
+    assert!(fillet(&b, &chain, 1.0).is_ok());
+}

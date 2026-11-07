@@ -184,11 +184,17 @@ impl FeatureKind {
                         .into_iter()
                         .flatten(),
                 )
+                .chain(e.thin.as_mut().map(|t| &mut t.thickness))
                 .collect(),
             FeatureKind::Revolve(_) => Vec::new(),
+            FeatureKind::Thread(t) => std::iter::once(&mut t.pitch)
+                .chain(t.length.as_mut())
+                .collect(),
             // Sweeps and lofts take their sizes from their sketches.
             FeatureKind::Sweep(_) | FeatureKind::Loft(_) => Vec::new(),
-            FeatureKind::Blend(b) => vec![&mut b.size],
+            FeatureKind::Blend(b) => std::iter::once(&mut b.size)
+                .chain(b.distance2.as_mut())
+                .collect(),
             FeatureKind::Hole(h) => std::iter::once(&mut h.diameter)
                 .chain(
                     [
