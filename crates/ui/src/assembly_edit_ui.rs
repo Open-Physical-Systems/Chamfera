@@ -164,7 +164,7 @@ impl ChamferaApp {
                     "absolute": absolute,
                 });
                 let angle = angle.trim();
-                let turns = !angle.is_empty() && angle.parse::<f64>().map_or(true, |a| a != 0.0);
+                let turns = !angle.is_empty() && !angle.parse::<f64>().is_ok_and(|a| a == 0.0);
                 if turns {
                     let [ax, ay, az] = TURN_AXES.get(*axis).map_or([0.0, 0.0, 1.0], |a| a.1);
                     transform["rotate"] = json!({
