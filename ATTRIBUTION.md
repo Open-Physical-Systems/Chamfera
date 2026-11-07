@@ -28,6 +28,7 @@ GPL-2.0, `r-efi` LGPL-2.1).
 | rustls-webpki | Certificate checks | ISC |
 | ring | Cryptography under rustls; contains code from BoringSSL and once_cell | Apache-2.0 AND ISC (once_cell parts MIT OR Apache-2.0) |
 | rustls-native-certs, schannel, security-framework | Read the operating system's root certificates (no list is bundled) | Apache-2.0 OR ISC OR MIT; MIT; MIT OR Apache-2.0 |
+| jiff, jiff-tzdb-platform, jiff-tzdb | The local date in drawing title blocks (desktop; the zone database only on Windows) | Unlicense OR MIT |
 | serde, serde_json | Design files, commands and settings | MIT OR Apache-2.0 |
 | wasm-bindgen, js-sys, web-sys | The browser app | MIT OR Apache-2.0 |
 

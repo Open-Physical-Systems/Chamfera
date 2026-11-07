@@ -43,11 +43,15 @@ impl Default for JointTool {
 #[derive(Default)]
 pub struct AssemblyUi {
     pub joint: Option<JointTool>,
+    /// The Edit Joint, Move Component or Rename Component dialog, when open.
+    pub edit: Option<crate::assembly_edit_ui::AssemblyDialog>,
+    /// Why the open dialog's command was refused, shown under its fields.
+    pub edit_error: Option<String>,
     /// The Components section of the Browser is folded.
     folded: bool,
 }
 
-fn kind_text(k: JointKind) -> &'static str {
+pub(crate) fn kind_text(k: JointKind) -> &'static str {
     match k {
         JointKind::Rigid => "Rigid",
         JointKind::Revolute => "Revolute",
@@ -74,7 +78,7 @@ fn origin_text(app: &ChamferaApp, o: &JointOrigin) -> String {
 }
 
 /// A Browser row for a component or a body, at a depth in the tree with an icon.
-fn row(
+pub(crate) fn row(
     ui: &mut Ui,
     look: Look,
     id: egui::Id,
@@ -456,6 +460,7 @@ impl ChamferaApp {
                 .collect();
             stack.extend(children.into_iter().map(|c| (c, depth + 1)));
         }
+        self.browser_joints(ui, 2);
     }
 
     /// One component's row, its context menu, and its bodies under it.
@@ -478,7 +483,8 @@ impl ChamferaApp {
         if c.as_ref().is_some_and(|c| c.occurrence_of.is_some()) {
             notes.push("copy");
         }
-        if asm.driver_of(id).is_some() {
+        let jointed = asm.driver_of(id).is_some();
+        if jointed {
             notes.push("jointed");
         }
         let note = notes.join(" · ");
@@ -501,6 +507,8 @@ impl ChamferaApp {
         .on_hover_text("Double-click to activate: new features go into the active component");
         let copy = c.as_ref().is_some_and(|c| c.occurrence_of.is_some());
         let mut run: Option<(&str, serde_json::Value)> = None;
+        // Move (true) or Rename (false) opens its dialog.
+        let mut open: Option<bool> = None;
         if r.double_clicked() && !copy {
             run = Some(("component.activate", json!({ "component": id })));
         }
@@ -526,6 +534,29 @@ impl ChamferaApp {
                         json!({ "component": id, "tint": !tinted }),
                     ));
                 }
+                if widgets::menu_item(
+                    ui,
+                    look,
+                    Icon::Move,
+                    &format!("{}…", label("component.move")),
+                    !jointed,
+                )
+                .on_disabled_hover_text("A joint places this component: drive or delete the joint")
+                .clicked()
+                {
+                    open = Some(true);
+                }
+                if widgets::menu_item(
+                    ui,
+                    look,
+                    Icon::Edit,
+                    &format!("{}…", label("component.rename")),
+                    true,
+                )
+                .clicked()
+                {
+                    open = Some(false);
+                }
                 if widgets::menu_item(ui, look, Icon::Component, label("component.copy"), true)
                     .clicked()
                 {
@@ -536,7 +567,7 @@ impl ChamferaApp {
                 {
                     run = Some(("component.delete", json!({ "component": id })));
                 }
-                if run.is_some() {
+                if run.is_some() || open.is_some() {
                     ui.close();
                 }
             });
@@ -562,6 +593,11 @@ impl ChamferaApp {
         }
         if let Some((cmd, p)) = run {
             self.run(cmd, p);
+        }
+        match open {
+            Some(true) => self.open_component_move(id),
+            Some(false) => self.open_component_rename(id),
+            None => {}
         }
     }
 }

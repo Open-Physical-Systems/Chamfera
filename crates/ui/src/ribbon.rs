@@ -1237,10 +1237,19 @@ pub const TOOLS: &[RibbonTool] = &[
         Action::Tool("cam.post"),
         Icon::CamPost,
         "Post G-code",
-        "Write the setup's toolpaths as LinuxCNC G-code (GRBL: File > Post G-code (GRBL))",
+        "Write the setup's toolpaths as LinuxCNC G-code (Post GRBL writes GRBL)",
     )
     .primary()
     .short("Post"),
+    tool(
+        M,
+        "ACTIONS",
+        Action::Tool("cam.post.grbl"),
+        Icon::CamPost,
+        "Post GRBL",
+        "Write the setup's toolpaths as GRBL G-code: no tool changes, no canned cycles",
+    )
+    .primary(),
     tool(
         M,
         "ACTIONS",
@@ -1916,7 +1925,9 @@ impl ChamferaApp {
                     _ if cam_op(id).is_some() && cam.tools.is_empty() => {
                         format!("{name}: add a tool first")
                     }
-                    "cam.generate" | "cam.post" | "cam.simulate" if cam.operations.is_empty() => {
+                    "cam.generate" | "cam.post" | "cam.post.grbl" | "cam.simulate"
+                        if cam.operations.is_empty() =>
+                    {
                         format!("{name}: add an operation first")
                     }
                     _ => return None,
@@ -1977,6 +1988,7 @@ impl ChamferaApp {
             "cam.tool_library" => self.cam.library_open = !self.cam.library_open,
             "cam.generate" => self.generate_toolpaths(),
             "cam.post" => self.post_dialog("linuxcnc"),
+            "cam.post.grbl" => self.post_dialog("grbl"),
             "cam.simulate" => self.toggle_simulation(),
             "solid.remove" => {
                 self.run("solid.remove", json!({}));
@@ -2508,7 +2520,8 @@ mod tests {
             "drawing.move", // a drag on the sheet canvas
             "drawing.pick", // a click on the sheet canvas
             "inspect.measure_at",
-            "joint.delete",
+            "joint.delete", // the Browser's joint rows
+            "joint.edit",
             "joint.origin_at",
             "joint.set_value",
             "solid.edge_at",

@@ -287,17 +287,13 @@ fn sheet_id(s: &Session, p: &Value) -> Result<u32, CommandError> {
     }
 }
 
-/// Today as `YYYY-MM-DD` (UTC), from the system clock; empty in the browser.
+/// Today as `YYYY-MM-DD` where the computer is: the date in the time zone the system is
+/// set to (UTC when it has none); empty in the browser.
 fn today() -> String {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let secs = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        let days = i64::try_from(secs / 86_400).unwrap_or(0);
-        let (y, m, d) = civil_from_days(days);
-        format!("{y:04}-{m:02}-{d:02}")
+        let zone = jiff::tz::TimeZone::try_system().unwrap_or(jiff::tz::TimeZone::UTC);
+        date_in(jiff::Timestamp::now(), zone)
     }
     #[cfg(target_arch = "wasm32")]
     {
@@ -305,25 +301,11 @@ fn today() -> String {
     }
 }
 
-/// The proleptic Gregorian date of a day count from 1970-01-01 (the well-known
-/// era-based conversion: 400-year eras of 146097 days).
-#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
-fn civil_from_days(z: i64) -> (i64, u32, u32) {
-    let z = z + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z.rem_euclid(146_097);
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if m <= 2 { y + 1 } else { y };
-    (
-        y,
-        u32::try_from(m).unwrap_or(1),
-        u32::try_from(d).unwrap_or(1),
-    )
+/// The calendar date of an instant in a time zone, as `YYYY-MM-DD`.
+#[cfg(not(target_arch = "wasm32"))]
+fn date_in(at: jiff::Timestamp, zone: jiff::tz::TimeZone) -> String {
+    let d = at.to_zoned(zone).date();
+    format!("{:04}-{:02}-{:02}", d.year(), d.month(), d.day())
 }
 
 /// Applies the sheet settings in `p` to `sheet`.
@@ -919,14 +901,20 @@ fn list(s: &mut Session, p: &Value) -> CmdResult {
 
 #[cfg(test)]
 mod tests {
-    use super::civil_from_days;
+    use super::date_in;
 
     #[test]
-    fn day_counts_become_dates() {
-        // 1970-01-01 is day 0; 2000-03-01 is day 11017 (30 years of 365 days, 7 leap
-        // days 1972..1996, plus 31 + 29 days of 2000); 2026-11-06 is day 20763.
-        assert_eq!(civil_from_days(0), (1970, 1, 1));
-        assert_eq!(civil_from_days(11_017), (2000, 3, 1));
-        assert_eq!(civil_from_days(20_763), (2026, 11, 6));
+    fn the_title_block_date_is_the_local_date() {
+        // QA user guide pass: a sheet made at 02:13 on 2026-11-07 at UTC+7 was dated
+        // 2026-11-06, the UTC date. 02:13 at UTC+7 is 19:13 UTC the day before.
+        let at: jiff::Timestamp = "2026-11-06T19:13:00Z".parse().unwrap();
+        let plus7 = jiff::tz::TimeZone::fixed(jiff::tz::offset(7));
+        assert_eq!(date_in(at, plus7), "2026-11-07");
+        assert_eq!(date_in(at, jiff::tz::TimeZone::UTC), "2026-11-06");
+        // West of Greenwich the date can be a day behind UTC: 03:00 UTC on 1 January
+        // is still 31 December at UTC-5.
+        let at: jiff::Timestamp = "2027-01-01T03:00:00Z".parse().unwrap();
+        let minus5 = jiff::tz::TimeZone::fixed(jiff::tz::offset(-5));
+        assert_eq!(date_in(at, minus5), "2026-12-31");
     }
 }

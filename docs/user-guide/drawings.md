@@ -205,7 +205,8 @@ of an 80 x 50 x 12 plate with a Ø8 x 20 pin replies `hatched_area` 928: 80 x 12
   detail or isometric view); there are no stepped, aligned or broken-out sections.
 - Notes, leaders, feature control frames and surface texture symbols are fixed on the
   paper and do not follow the model.
-- The date in the title block is the UTC date, which can be a day off your local date.
+- The browser app leaves the title block date empty (the desktop app fills in today's
+  local date).
 - Export PDF, SVG and DXF only; the sheet is exported at its paper size, not scaled to fit.
 
 See also: file-formats.md (other export formats), parameters-and-configurations.md

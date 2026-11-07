@@ -42,6 +42,16 @@ pub static COMMANDS: &[CommandSpec] = &[
         run: super::motion::joint_drag,
     },
     CommandSpec {
+        id: "joint.edit",
+        label: "Edit Joint",
+        params: "joint: integer (required)\n\
+                 name: string (optional) - the joint's new name\n\
+                 min, max: number or expression (optional) - new limits for the value, degrees or mm; give both. A value outside them moves to the nearer limit\n\
+                 limits: boolean (optional) - false removes the limits",
+        mutates: true,
+        run: edit,
+    },
+    CommandSpec {
         id: "joint.origin_at",
         label: "Joint Origin at Pixel",
         params: "x, y: number (required) - pixel, origin top-left\n\
@@ -320,6 +330,62 @@ fn set_value(s: &mut Session, p: &Value) -> CmdResult {
     if let Some(o) = offset {
         j.offset = o;
     }
+    s.rebuild();
+    if let Some(e) = s.placements().errors.get(&id) {
+        return Err(CommandError::Unavailable(format!(
+            "the joint cannot be solved: {e}"
+        )));
+    }
+    Ok(reply(s, id))
+}
+
+fn edit(s: &mut Session, p: &Value) -> CmdResult {
+    let id = params::req_id(p, "joint")?;
+    let kind = s.doc.assembly.joint(id)?.kind;
+    let name = params::opt_str(p, "name")?.map(str::to_owned);
+    let limit = |k: &str| -> Result<Option<f64>, CommandError> {
+        match p.get(k) {
+            None | Some(Value::Null) => Ok(None),
+            v => joint_value(s, kind, v, &format!("`{k}`")).map(Some),
+        }
+    };
+    let new_limits = match (limit("min")?, limit("max")?) {
+        (None, None) => None,
+        (Some(lo), Some(hi)) => {
+            if kind == JointKind::Rigid {
+                return Err(bad("a rigid joint has no value to limit"));
+            }
+            if lo > hi {
+                return Err(bad("`min` must not be above `max`"));
+            }
+            Some(Some([lo, hi]))
+        }
+        _ => return Err(bad("give both `min` and `max`")),
+    };
+    let remove = match p.get("limits") {
+        None | Some(Value::Null) => false,
+        Some(_) => !params::req_bool(p, "limits")?,
+    };
+    if remove && new_limits.is_some() {
+        return Err(bad("give `min` and `max`, or `limits: false`, not both"));
+    }
+    let limits = if remove { Some(None) } else { new_limits };
+    if name.is_none() && limits.is_none() {
+        return Err(bad("give a `name`, `min` and `max`, or `limits: false`"));
+    }
+    s.view_state.drag.remove(&id);
+    let j = s.doc.assembly.joint_mut(id)?;
+    if let Some(n) = name {
+        j.name = n;
+    }
+    if let Some(l) = limits {
+        j.limits = l;
+        if let Some([lo, hi]) = l {
+            j.value = j.value.clamp(lo, hi);
+        }
+    }
+    let checked = j.clone();
+    checked.check(&s.doc.assembly)?;
     s.rebuild();
     if let Some(e) = s.placements().errors.get(&id) {
         return Err(CommandError::Unavailable(format!(
