@@ -49,6 +49,13 @@ The user interface uses the default fonts bundled by egui (`epaint_default_fonts
 
 Their licence texts are in THIRD-PARTY-LICENSES.txt (from `fonts/*.txt` in `epaint_default_fonts`).
 
+Sketch text (`sketch.text`) draws its letters from a font Chamfera bundles itself, read with
+`skrifa` (MIT OR Apache-2.0, Google's fontations, also used by egui):
+
+| Font | File | Licence |
+|---|---|---|
+| Lato Regular 2.015, unmodified | `assets/fonts/Lato-Regular.ttf` | SIL Open Font License 1.1. Copyright (c) 2011-2015 by tyPoland Lukasz Dziedzic, with Reserved Font Name "Lato". Full text: `assets/fonts/OFL-Lato.txt`, also appended to THIRD-PARTY-LICENSES.txt |
+
 ## Build tools
 Used at build time only; none of them ship inside the packages:
 - [appimagetool](https://github.com/AppImage/appimagetool) assembles the Linux AppImage.

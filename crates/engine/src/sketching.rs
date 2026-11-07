@@ -353,6 +353,80 @@ impl Session {
             })
             .collect()
     }
+
+    /// The markers of the active sketch's geometric constraints (not dimensions), each at
+    /// the place in the model it is about (`Sketch::constraint_markers`). A projected
+    /// curve's fixing constraints are not the user's, so they have none.
+    pub fn constraint_glyphs(&self) -> Vec<ConstraintGlyph> {
+        let Some(f) = self.active_sketch() else {
+            return Vec::new();
+        };
+        let s = &f.sketch;
+        s.constraint_markers()
+            .into_iter()
+            .filter(|m| {
+                s.constraint(m.constraint).is_some_and(|c| {
+                    !c.curve_refs()
+                        .iter()
+                        .any(|k| f.projection_of(k.0).is_some())
+                        && !c.point_refs().iter().any(|p| {
+                            s.curves().any(|(id, k)| {
+                                f.projection_of(id.0).is_some() && k.points().contains(p)
+                            })
+                        })
+                })
+            })
+            .map(|m| ConstraintGlyph {
+                constraint: m.constraint.0,
+                kind: m.kind.to_owned(),
+                at: m.at,
+                anchor: f.plane.from_plane(m.at),
+            })
+            .collect()
+    }
+}
+
+/// Where a constraint's marker is shown.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ConstraintGlyph {
+    pub constraint: u32,
+    /// The constraint's kind, as in `sketch.get`.
+    pub kind: String,
+    /// The sketch point it is shown at.
+    pub at: Point2,
+    /// The same place in the model.
+    pub anchor: Point3,
+}
+
+/// A constraint's kind in words, for markers and lists: "Horizontal", "Point on Curve".
+pub fn constraint_title(kind: &str) -> &'static str {
+    match kind {
+        "coincident" => "Coincident",
+        "point_on_line" | "point_on_circle" => "Point on Curve",
+        "horizontal" => "Horizontal",
+        "vertical" => "Vertical",
+        "parallel" => "Parallel",
+        "perpendicular" => "Perpendicular",
+        "tangent" => "Tangent",
+        "equal" => "Equal",
+        "fix" => "Fix",
+        "midpoint" => "Midpoint",
+        "symmetric" => "Symmetric",
+        "concentric" => "Concentric",
+        "collinear" => "Collinear",
+        "horizontal_points" => "Horizontal (points)",
+        "vertical_points" => "Vertical (points)",
+        "distance" => "Distance",
+        "horizontal_distance" => "Horizontal Distance",
+        "vertical_distance" => "Vertical Distance",
+        "arc_length" => "Arc Length",
+        "point_line_distance" => "Point to Line Distance",
+        "length" => "Length",
+        "radius" => "Radius",
+        "diameter" => "Diameter",
+        "angle" => "Angle",
+        _ => "Constraint",
+    }
 }
 
 /// Distance from `p` to the segment `a b` in screen pixels.

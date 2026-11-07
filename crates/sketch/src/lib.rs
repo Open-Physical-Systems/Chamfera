@@ -38,10 +38,11 @@
 //!
 //! # Profiles
 //! [`Sketch::profiles`] finds the closed regions bounded by non-construction curves: outer
-//! loops counter-clockwise, holes clockwise, with exact signed areas. Lines, arcs and
-//! circles are cut where they cross, meet in a T-junction or overlap, so overlapping shapes
-//! give their regions without splitting first (`profile.rs`); the split tool below makes
-//! those pieces real curves.
+//! loops counter-clockwise, holes clockwise, with exact signed areas. Curves are cut
+//! where they cross, meet in a T-junction or overlap, so overlapping shapes give their
+//! regions without splitting first (`profile.rs`; ellipse and spline crossings in
+//! `crossing.rs`); the split tool below makes the pieces of lines, arcs and circles real
+//! curves.
 //!
 //! # Tools
 //! [`Sketch::apply_tool`] runs a [`ToolOp`]: trim, extend, split at crossings, fillet,
@@ -65,9 +66,11 @@
 //! them.
 
 mod constraint;
+mod crossing;
 mod ellipse;
 mod entity;
 mod equations;
+mod glyphs;
 mod intersect;
 mod linalg;
 mod placed;
@@ -88,8 +91,9 @@ pub use chamfera_geom as geom;
 pub use constraint::Constraint;
 pub use ellipse::EllipseArc;
 pub use entity::{ConstraintId, Curve, CurveId, PointId};
+pub use glyphs::{ConstraintMarker, MAX_CONFLICT_CANDIDATES};
 pub use placed::SketchTransform;
-pub use profile::{LoopSegment, MAX_SPLIT_CURVES, ProfileLoop, Region};
+pub use profile::{LoopSegment, MAX_SPLIT_CURVES, PieceCurve, ProfileLoop, Region};
 pub use shapes::{FixedCurve, MAX_POLYGON_SIDES, MIN_POLYGON_SIDES};
 pub use sketch::{MAX_CONSTRAINTS, MAX_CURVES, MAX_POINTS, Sketch, SketchError};
 pub use snap::{

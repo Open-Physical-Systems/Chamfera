@@ -18,18 +18,21 @@
 //! its area (outer area minus holes). A circle inside a rectangle gives two regions: the
 //! rectangle with a circular hole, and the disc.
 //!
-//! **Crossings.** Lines, arcs and circles are cut, for profile detection only, where they
-//! cross each other, where one ends in the middle of another (a T-junction) and where two
-//! lines overlap on one line, so overlapping shapes give the regions the drawing shows
-//! without trimming or splitting first. The cuts are the exact intersections of
-//! `intersect.rs`; each cut is a vertex of the graph, and a [`LoopSegment`] that uses a
-//! piece of a curve names the piece's ends. A circle cut in fewer than two places stays a
-//! loop of its own. Ellipses and splines are joined only at shared endpoints, and above
+//! **Crossings.** Curves are cut, for profile detection only, where they cross each
+//! other, where one ends in the middle of another (a T-junction) and where two lines
+//! overlap on one line, so overlapping shapes give the regions the drawing shows without
+//! trimming or splitting first. Lines, arcs and circles meet at the exact intersections of
+//! `intersect.rs`; ellipses and splines at the converged crossings of `crossing.rs`. Each
+//! cut is a vertex of the graph, and a [`LoopSegment`] that uses a piece of a curve names
+//! the piece's ends ([`Sketch::piece_curve`] gives an ellipse's or spline's piece as an
+//! exact curve). A circle, ellipse or closed spline cut in fewer than two places stays a
+//! loop of its own; a closed spline cut in two or more is also cut at its seam. Above
 //! [`MAX_SPLIT_CURVES`] curves nothing is cut. The split tool (`ToolOp::Split`,
 //! `sketch.split`) makes the pieces real curves. Arcs are measured exactly; signed areas
 //! use Green's theorem on each line, arc and elliptical arc.
 
 use crate::constraint::Constraint;
+use crate::crossing::{self, Path};
 use crate::ellipse::EllipseArc;
 use crate::entity::Curve;
 use crate::entity::{CurveId, PointId};
@@ -404,17 +407,51 @@ fn mutual_cuts(s1: &Shape, s2: &Shape) -> (Vec<CutAt>, Vec<CutAt>) {
     (c1, c2)
 }
 
+/// Where two curves cut each other inside, when one is an ellipse or a spline: the
+/// converged crossings of `crossing.rs` (ends included, so a T-junction cuts the curve
+/// it ends on). Returns the cuts on `p1` and on `p2`.
+fn path_cuts(p1: &Path, p2: &Path) -> (Vec<CutAt>, Vec<CutAt>) {
+    let (mut c1, mut c2) = (Vec::new(), Vec::new());
+    for (t1, t2, x) in crossing::crossings(p1, p2) {
+        if p1.interior(x) {
+            c1.push((t1, x));
+        }
+        if p2.interior(x) {
+            c2.push((t2, x));
+        }
+    }
+    (c1, c2)
+}
+
 impl Sketch {
-    /// Where the non-construction lines, arcs and circles cross each other, end on one
-    /// another (a T-junction) or overlap on one line, for each curve cut inside: its cuts in
+    /// A curve as a [`Path`] for crossings; `None` when it has no geometry.
+    pub(crate) fn path_of(&self, c: &Curve) -> Option<Path> {
+        match c {
+            Curve::Ellipse { .. } | Curve::EllipticalArc { .. } => {
+                self.ellipse_arc_of(c).map(Path::Ellipse)
+            }
+            Curve::Spline { closed, .. } => self.spline_of(c).map(|curve| Path::Spline {
+                curve: Arc::new(curve),
+                closed: *closed,
+            }),
+            _ => self.shape_of(c).map(Path::Shape),
+        }
+    }
+
+    /// Where the non-construction curves cross each other, end on one another (a
+    /// T-junction) or (lines) overlap on one line, for each curve cut inside: its cuts in
     /// parameter order, one per place. Empty above [`MAX_SPLIT_CURVES`] curves.
     fn crossing_cuts(&self) -> BTreeMap<CurveId, Vec<CutAt>> {
-        let shapes: Vec<(CurveId, Shape, (Point2, Point2))> = self
+        let shapes: Vec<(CurveId, Path, (Point2, Point2))> = self
             .curves()
             .filter(|(_, c)| !c.is_construction())
             .filter_map(|(id, c)| {
-                let s = self.shape_of(c)?;
-                Some((id, s, shape_box(&s)))
+                let p = self.path_of(c)?;
+                let b = match &p {
+                    Path::Shape(s) => shape_box(s),
+                    other => other.bounds(),
+                };
+                Some((id, p, b))
             })
             .collect();
         let mut out: BTreeMap<CurveId, Vec<CutAt>> = BTreeMap::new();
@@ -441,7 +478,10 @@ impl Sketch {
                 if bj.0.y > bi.1.y || bj.1.y < bi.0.y {
                     continue;
                 }
-                let (ci, cj) = mutual_cuts(si, sj);
+                let (ci, cj) = match (si, sj) {
+                    (Path::Shape(a), Path::Shape(b)) => mutual_cuts(a, b),
+                    _ => path_cuts(si, sj),
+                };
                 if !ci.is_empty() {
                     out.entry(*ki).or_default().extend(ci);
                 }
@@ -453,7 +493,8 @@ impl Sketch {
         for list in out.values_mut() {
             list.sort_by(|a, b| a.0.total_cmp(&b.0));
             list.dedup_by(|a, b| a.1.coincident(b.1));
-            // A circle's cuts near angle 0 and near 2π can be the same place.
+            // A closed curve's cuts near the start and near the end of its parameter can
+            // be the same place.
             if list.len() > 1
                 && let (Some(first), Some(last)) = (list.first(), list.last())
                 && first.1.coincident(last.1)
@@ -602,7 +643,21 @@ impl Sketch {
             endpoints.iter().enumerate().map(|(i, p)| (*p, i)).collect();
         // Vertices: the endpoints, then one for each place a curve is cut, merged below
         // with the endpoints and cuts at the same place.
-        let cuts = self.crossing_cuts();
+        let mut cuts = self.crossing_cuts();
+        // A closed spline cut in two or more places is also cut at its seam (the start
+        // and end of its parameter), so no piece runs across it.
+        for (id, c) in self.curves() {
+            if let (Curve::Spline { closed: true, .. }, Some(list)) = (c, cuts.get_mut(&id))
+                && list.len() >= 2
+                && let Some(curve) = self.spline_of(c)
+            {
+                let (lo, _) = curve.domain();
+                let seam = curve.point_at(lo);
+                if !list.iter().any(|(_, p)| p.coincident(seam)) {
+                    list.insert(0, (lo, seam));
+                }
+            }
+        }
         let mut positions: Vec<Point2> = endpoints
             .iter()
             .map(|id| self.point(*id).unwrap_or(Point2::ORIGIN))
@@ -761,14 +816,57 @@ impl Sketch {
                     ) else {
                         continue;
                     };
-                    if u != v {
-                        edges.push(Edge {
-                            curve: id,
-                            u,
-                            v,
-                            geo: Geo::Ellipse(geo),
-                            piece: None,
-                        });
+                    let (Some(s), Some(e)) = (self.point(*start), self.point(*end)) else {
+                        continue;
+                    };
+                    let mut chain = vec![(u, s, 0.0)];
+                    chain.extend(inner.iter().copied());
+                    chain.push((v, e, geo.sweep));
+                    for w in chain.windows(2) {
+                        let (Some(&(u, p, t0)), Some(&(v, q, t1))) = (w.first(), w.get(1)) else {
+                            continue;
+                        };
+                        if u != v {
+                            edges.push(Edge {
+                                curve: id,
+                                u,
+                                v,
+                                geo: Geo::Ellipse(EllipseArc {
+                                    t0: geo.t0 + t0,
+                                    sweep: t1 - t0,
+                                    ..geo
+                                }),
+                                piece: split.then_some([p, q]),
+                            });
+                        }
+                    }
+                }
+                Curve::Ellipse { .. } if inner.len() >= 2 => {
+                    // Cut in two or more places: the elliptical arcs between the cuts.
+                    let Some(geo) = self.ellipse_arc_of(c) else {
+                        continue;
+                    };
+                    let n = inner.len();
+                    for k in 0..n {
+                        let (Some(&(u, p, t0)), Some(&(v, q, t1))) =
+                            (inner.get(k), inner.get((k + 1) % n))
+                        else {
+                            continue;
+                        };
+                        let sweep = if k + 1 == n { t1 + TAU - t0 } else { t1 - t0 };
+                        if u != v {
+                            edges.push(Edge {
+                                curve: id,
+                                u,
+                                v,
+                                geo: Geo::Ellipse(EllipseArc {
+                                    t0: geo.t0 + t0,
+                                    sweep,
+                                    ..geo
+                                }),
+                                piece: Some([p, q]),
+                            });
+                        }
                     }
                 }
                 Curve::Ellipse { .. } => {
@@ -786,22 +884,69 @@ impl Sketch {
                     let (Some(a), Some(b)) = (self.point(*first), self.point(*last)) else {
                         continue;
                     };
-                    let curve = Arc::new(curve);
-                    if *closed {
-                        // A closed spline is a loop of its own, like a circle; both its
-                        // ends are the curve's start.
-                        let s = curve.point_at(curve.domain().0);
-                        circles.push((id, Geo::Spline { curve, a: s, b: s }));
-                    } else if let (Some(u), Some(v)) =
-                        (vertex(&mut parent, *first), vertex(&mut parent, *last))
-                        && u != v
-                    {
+                    let (lo, hi) = curve.domain();
+                    // The places along it (vertex, point, parameter) between its pieces.
+                    let chain: Vec<(usize, Point2, f64)> = if *closed && inner.len() >= 2 {
+                        // The cuts include the seam (see above); the last piece runs on
+                        // to the end of the parameter, back at the first cut's place.
+                        let mut ch = inner.clone();
+                        if let Some(&(v0, p0, _)) = inner.first() {
+                            ch.push((v0, p0, hi));
+                        }
+                        ch
+                    } else if *closed {
+                        Vec::new()
+                    } else {
+                        let (Some(u), Some(v)) =
+                            (vertex(&mut parent, *first), vertex(&mut parent, *last))
+                        else {
+                            continue;
+                        };
+                        let mut ch = vec![(u, a, lo)];
+                        ch.extend(inner.iter().copied());
+                        ch.push((v, b, hi));
+                        ch
+                    };
+                    if chain.is_empty() {
+                        // A closed spline cut fewer than twice is a loop of its own, like
+                        // a circle; both its ends are the curve's start.
+                        let s = curve.point_at(lo);
+                        circles.push((
+                            id,
+                            Geo::Spline {
+                                curve: Arc::new(curve),
+                                a: s,
+                                b: s,
+                            },
+                        ));
+                        continue;
+                    }
+                    let whole = Arc::new(curve);
+                    for w in chain.windows(2) {
+                        let (Some(&(u, p, t0)), Some(&(v, q, t1))) = (w.first(), w.get(1)) else {
+                            continue;
+                        };
+                        if u == v {
+                            continue;
+                        }
+                        let piece_curve = if split {
+                            match whole.segment(t0, t1) {
+                                Ok(seg) => Arc::new(seg),
+                                Err(_) => continue,
+                            }
+                        } else {
+                            whole.clone()
+                        };
                         edges.push(Edge {
                             curve: id,
                             u,
                             v,
-                            geo: Geo::Spline { curve, a, b },
-                            piece: None,
+                            geo: Geo::Spline {
+                                curve: piece_curve,
+                                a: p,
+                                b: q,
+                            },
+                            piece: split.then_some([p, q]),
                         });
                     }
                 }
@@ -1074,6 +1219,119 @@ mod tests {
         s.add_line(a, b).unwrap();
         let cap = 25.0 * 0.6f64.acos() - 12.0;
         assert_areas(&s, &[cap, 25.0 * PI - cap]);
+    }
+
+    fn ellipse(s: &mut Sketch, a: f64, b: f64) -> CurveId {
+        let c = pt(s, 0.0, 0.0);
+        let m = pt(s, a, 0.0);
+        let n = pt(s, 0.0, b);
+        s.add_ellipse(c, m, n).unwrap()
+    }
+
+    /// A line y = 3 across the ellipse x²/100 + y²/25 = 1. Scaling x by b/a = 1/2 turns
+    /// the ellipse into the circle r = 5 and every area by 1/2, so the cap above y = 3 is
+    /// twice the circle's cap, 2 (25 acos(0.6) - 12), and the rest π a b = 50π less it.
+    #[test]
+    fn a_line_across_an_ellipse_cuts_off_a_cap() {
+        let mut s = Sketch::new();
+        let e = ellipse(&mut s, 10.0, 5.0);
+        let a = pt(&mut s, -20.0, 3.0);
+        let b = pt(&mut s, 20.0, 3.0);
+        s.add_line(a, b).unwrap();
+        let cap = 2.0 * (25.0 * 0.6f64.acos() - 12.0);
+        assert_areas(&s, &[cap, 50.0 * PI - cap]);
+        // The cap's ellipse piece runs from (8, 3) to (-8, 3), and its exact curve is the
+        // arc of the ellipse between them.
+        let region = s.region_at(Point2::new(0.0, 4.0)).unwrap();
+        let seg = region.outer.segments.iter().find(|g| g.curve == e).unwrap();
+        let [p, q] = seg.piece.unwrap();
+        assert!(p.distance(Point2::new(8.0, 3.0)) < 1e-12, "{p:?}");
+        assert!(q.distance(Point2::new(-8.0, 3.0)) < 1e-12, "{q:?}");
+        let Some(PieceCurve::Ellipse(arc)) = s.piece_curve(e, [p, q]) else {
+            panic!("no piece");
+        };
+        assert!(
+            arc.point_at(arc.t0 + 0.5 * arc.sweep)
+                .distance(Point2::new(0.0, 5.0))
+                < 1e-12
+        );
+    }
+
+    /// The ellipse x²/100 + y²/25 = 1 over the rectangle (0..20, -10..10): the left side
+    /// x = 0 crosses it at (0, ±5), cutting it into halves of π a b / 2 = 25π each; the
+    /// rectangle outside the ellipse is 400 - 25π.
+    #[test]
+    fn an_ellipse_over_a_rectangle_edge_splits_into_halves() {
+        let mut s = Sketch::new();
+        ellipse(&mut s, 10.0, 5.0);
+        polygon(
+            &mut s,
+            &[(0.0, -10.0), (20.0, -10.0), (20.0, 10.0), (0.0, 10.0)],
+        );
+        let half = 25.0 * PI;
+        assert_areas(&s, &[half, half, 400.0 - half]);
+    }
+
+    /// Two ellipses x²/100 + y²/25 = 1 and x²/25 + y²/100 = 1 cross where x² = y² = 20,
+    /// giving five regions: the overlap and four equal lobes, two of each ellipse, so
+    /// overlap + 2 lobes = π a b = 50π.
+    #[test]
+    fn two_crossing_ellipses_give_five_regions_that_add_up() {
+        let mut s = Sketch::new();
+        ellipse(&mut s, 10.0, 5.0);
+        let c = pt(&mut s, 0.0, 0.0);
+        let m = pt(&mut s, 0.0, 10.0);
+        let n = pt(&mut s, -5.0, 0.0);
+        s.add_ellipse(c, m, n).unwrap();
+        let areas = sorted_areas(&s);
+        assert_eq!(areas.len(), 5, "{areas:?}");
+        // The overlap is 4 ∫ over the first quadrant; in polar form each ellipse is
+        // r² = 1 / (cos²θ / A² + sin²θ / B²), and below θ = π/4 the second (A = 5,
+        // B = 10) is the inner one: overlap = 8 · ½ ∫₀^{π/4} r₂² dθ
+        // = 4 · 50 · atan(tan(π/4) · 5 / 10) = 200 atan(1/2), using
+        // ∫ dθ / (cos²θ/A² + sin²θ/B²) = A B atan(A tan θ / B).
+        let overlap = 200.0 * 0.5f64.atan();
+        let lobe = (50.0 * PI - overlap) / 2.0;
+        let want = [lobe, lobe, lobe, lobe, overlap];
+        let mut w = want;
+        w.sort_by(f64::total_cmp);
+        for (a, b) in areas.iter().zip(w) {
+            assert!((a - b).abs() < 1e-9, "{areas:?} vs {w:?}");
+        }
+    }
+
+    /// The closed uniform cubic on the square (±10, ±10) encloses 2440/9 mm² (see
+    /// `spline.rs`) and is symmetric about the x axis, so the line y = 0 across it cuts it
+    /// into two halves of 1220/9 each, one of them across the spline's seam.
+    #[test]
+    fn a_line_across_a_closed_spline_cuts_it_in_halves() {
+        let mut s = Sketch::new();
+        let ids: Vec<PointId> = [(10.0, -10.0), (10.0, 10.0), (-10.0, 10.0), (-10.0, -10.0)]
+            .iter()
+            .map(|(x, y)| pt(&mut s, *x, *y))
+            .collect();
+        let sp = s
+            .add_spline(ids, crate::spline::SplineForm::Control, true)
+            .unwrap();
+        let a = pt(&mut s, -20.0, 0.0);
+        let b = pt(&mut s, 20.0, 0.0);
+        s.add_line(a, b).unwrap();
+        let half = 1220.0 / 9.0;
+        assert_areas(&s, &[half, half]);
+        // Every piece has an exact curve whose ends are the piece's ends.
+        for r in s.profiles() {
+            for g in r.outer.segments.iter().filter(|g| g.curve == sp) {
+                let [p, q] = g.piece.unwrap();
+                let Some(PieceCurve::Spline(c)) = s.piece_curve(sp, [p, q]) else {
+                    panic!("no piece");
+                };
+                let (lo, hi) = c.domain();
+                assert!(c.point_at(lo).distance(p) < 1e-9 && c.point_at(hi).distance(q) < 1e-9);
+            }
+            // The polyline closes and finds an interior point again.
+            let inside = s.region_interior_point(&r).unwrap();
+            assert!(s.region_contains(&r, inside));
+        }
     }
 
     /// A 40 x 20 rectangle with a line from the middle of its bottom up to the middle of
@@ -1384,7 +1642,66 @@ mod hole_tests {
 /// Segments per full turn when a loop is turned into a polyline for containment tests.
 const LOOP_SEGMENTS_PER_TURN: f64 = 128.0;
 
+/// The exact piece of an ellipse or spline between two places where other curves cut it
+/// ([`Sketch::piece_curve`]).
+#[derive(Debug, Clone, PartialEq)]
+pub enum PieceCurve {
+    /// An arc of the ellipse, counter-clockwise from the first end to the second.
+    Ellipse(EllipseArc),
+    /// The part of the spline between the two ends, in the spline's direction.
+    Spline(BSplineCurve2),
+}
+
 impl Sketch {
+    /// The exact piece of an ellipse, elliptical arc or spline between the two ends of a
+    /// [`LoopSegment::piece`] (in the curve's own direction). `None` for another curve, a
+    /// curve with no geometry, or ends that are not on it.
+    ///
+    /// The ends are points of the curve, so their parameters are exact: an ellipse's from
+    /// `EllipseArc::param_of`, a spline's from its closest point (Newton, The NURBS Book
+    /// §6.1). On a closed spline the seam has two parameters; the piece runs forward, so
+    /// an end at the seam takes the start of the domain when it begins the piece and the
+    /// end of the domain when it ends it.
+    pub fn piece_curve(&self, curve: CurveId, piece: [Point2; 2]) -> Option<PieceCurve> {
+        let c = self.curve(curve)?;
+        let [a, b] = piece;
+        match c {
+            Curve::Ellipse { .. } | Curve::EllipticalArc { .. } => {
+                let e = self.ellipse_arc_of(c)?;
+                let t0 = e.param_of(a);
+                let mut sweep = crate::intersect::wrap(e.param_of(b) - t0);
+                if sweep <= 0.0 {
+                    sweep = TAU;
+                }
+                let arc = EllipseArc { t0, sweep, ..e };
+                (arc.point_at(t0).distance(a) <= LINEAR_TOLERANCE
+                    && arc.point_at(t0 + sweep).distance(b) <= LINEAR_TOLERANCE)
+                    .then_some(PieceCurve::Ellipse(arc))
+            }
+            Curve::Spline { closed, .. } => {
+                let s = self.spline_of(c)?;
+                let (lo, hi) = s.domain();
+                let (pa, pb) = (s.closest_point(a), s.closest_point(b));
+                if pa.distance > LINEAR_TOLERANCE || pb.distance > LINEAR_TOLERANCE {
+                    return None;
+                }
+                let (mut ua, mut ub) = (pa.u, pb.u);
+                if *closed && ub <= ua {
+                    if s.point_at(hi).coincident(a) {
+                        ua = lo;
+                    } else {
+                        ub = hi;
+                    }
+                }
+                if ub <= ua {
+                    return None;
+                }
+                s.segment(ua, ub).ok().map(PieceCurve::Spline)
+            }
+            _ => None,
+        }
+    }
+
     /// A loop as a closed polyline (first point not repeated), arcs subdivided. Returns an
     /// empty list if a curve of the loop is gone.
     pub fn loop_polyline(&self, l: &ProfileLoop) -> Vec<Point2> {
@@ -1406,6 +1723,27 @@ impl Sketch {
                         })
                         .collect();
                     // The ends exactly where the pieces meet.
+                    if let Some(f) = v.first_mut() {
+                        *f = s;
+                    }
+                    if let Some(l) = v.last_mut() {
+                        *l = e;
+                    }
+                    v
+                }
+                (
+                    Some(
+                        Curve::Ellipse { .. } | Curve::EllipticalArc { .. } | Curve::Spline { .. },
+                    ),
+                    Some([s, e]),
+                ) => {
+                    let mut v = match self.piece_curve(seg.curve, [s, e]) {
+                        Some(PieceCurve::Ellipse(arc)) => {
+                            arc.polyline(LOOP_SEGMENTS_PER_TURN as usize)
+                        }
+                        Some(PieceCurve::Spline(c)) => spline_polyline(&c),
+                        None => return Vec::new(),
+                    };
                     if let Some(f) = v.first_mut() {
                         *f = s;
                     }

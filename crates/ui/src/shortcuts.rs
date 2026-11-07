@@ -154,7 +154,7 @@ const fn row(action: Action, keys: Keys, context: &'static str, handler: Handler
 }
 
 /// Every default shortcut. Keys are unique (`no_two_shortcuts_share_a_key`).
-pub const SHORTCUTS: [Shortcut; 27] = [
+pub const SHORTCUTS: [Shortcut; 29] = [
     row(
         Action::Search,
         Keys::CtrlSpaceThen(Key::F),
@@ -188,6 +188,18 @@ pub const SHORTCUTS: [Shortcut; 27] = [
     row(
         Action::SketchTool(Tool::Trim),
         Keys::key(Key::T),
+        "Sketch",
+        Handler::Here,
+    ),
+    row(
+        Action::SketchTool(Tool::Point),
+        Keys::key(Key::P),
+        "Sketch",
+        Handler::Here,
+    ),
+    row(
+        Action::Tool("sketch.ortho"),
+        Keys::key(Key::F8),
         "Sketch",
         Handler::Here,
     ),

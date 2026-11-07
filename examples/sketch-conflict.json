@@ -1,0 +1,13 @@
+[
+  { "command": "sketch.create", "params": { "plane": "xy" } },
+  { "command": "sketch.point", "params": { "x": 0, "y": 0 }, "as": "p" },
+  { "command": "sketch.point", "params": { "x": 40, "y": 0 }, "as": "q" },
+  { "command": "sketch.line", "params": { "x1": 0, "y1": 0, "x2": 40, "y2": 0, "start": "$p.point", "end": "$q.point" } },
+  { "command": "sketch.constrain", "params": { "constraint": { "kind": "fix", "point": "$p.point", "at": { "x": 0, "y": 0 } } } },
+  { "command": "sketch.constrain", "params": { "constraint": { "kind": "horizontal_points", "a": "$p.point", "b": "$q.point" } } },
+  { "command": "sketch.constrain", "params": { "constraint": { "kind": "distance", "a": "$p.point", "b": "$q.point", "value": 40 } } },
+  { "command": "sketch.conflicts", "params": { "constraint": { "kind": "fix", "point": "$q.point", "at": { "x": 24, "y": 32 } } } },
+  { "command": "view.standard", "params": { "view": "top" } },
+  { "command": "view.fit", "params": { "width": 1180, "height": 640 } },
+  { "command": "view.zoom", "params": { "factor": 2.5 } }
+]

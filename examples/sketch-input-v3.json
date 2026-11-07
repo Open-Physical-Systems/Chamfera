@@ -1,0 +1,11 @@
+[
+  { "command": "sketch.create", "params": { "plane": "xy" } },
+  { "command": "sketch.rectangle", "params": { "x1": 0, "y1": 0, "x2": 80, "y2": 50 }, "as": "plate" },
+  { "command": "sketch.constrain", "params": { "constraint": { "kind": "fix", "point": "$plate.points.0", "at": { "x": 0, "y": 0 } } } },
+  { "command": "sketch.circle", "params": { "cx": 40, "cy": 25, "radius": 8 }, "as": "bore" },
+  { "command": "sketch.point", "params": { "x": 15, "y": 25 }, "as": "hole" },
+  { "command": "sketch.constrain", "params": { "constraint": { "kind": "horizontal_points", "a": "$hole.point", "b": "$bore.centre" } } },
+  { "command": "view.standard", "params": { "view": "top" } },
+  { "command": "view.fit", "params": { "width": 1180, "height": 640 } },
+  { "command": "view.zoom", "params": { "factor": 1.4 } }
+]

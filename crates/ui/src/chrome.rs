@@ -363,6 +363,11 @@ impl ChamferaApp {
                 r.union(text_r).on_hover_text(tip);
                 widgets::bar_divider(ui, look, 14.0);
             }
+            if self.sketch.ortho {
+                ui.label(small("Ortho", look.c(|t| t.accent)))
+                    .on_hover_text("Ortho mode (F8): lines go horizontal or vertical");
+                widgets::bar_divider(ui, look, 14.0);
+            }
             ui.label(small(crate::sketch_ui::tool_hint(self), muted));
         } else if self.drawing.active {
             ui.label(small(self.drawing_hint(), muted));

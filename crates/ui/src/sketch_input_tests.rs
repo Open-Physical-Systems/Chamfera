@@ -474,3 +474,194 @@ fn polar_guides_hold_a_line_on_whole_steps() {
     let angle = (q - p).angle().to_degrees();
     assert!((angle - 45.0).abs() < 1e-9, "{angle}");
 }
+
+/// The standalone points of the sketch (points no curve uses).
+fn loose_points(d: &Driver) -> Vec<Point2> {
+    let s = d.sketch();
+    s.points()
+        .filter(|(id, _)| !s.curves().any(|(_, c)| c.points().contains(id)))
+        .map(|(_, p)| p)
+        .collect()
+}
+
+#[test]
+fn the_point_tool_places_typed_and_snapped_points() {
+    let mut d = Driver::new();
+    d.key(Key::P);
+    assert_eq!(d.app.sketch.tool(), Tool::Point);
+    // Typed: exactly (15, 10), then @5,-3 from it: (20, 7).
+    d.text("15,10");
+    d.key(Key::Enter);
+    d.text("@5,-3");
+    d.key(Key::Enter);
+    let pts = loose_points(&d);
+    assert_eq!(pts, vec![Point2::new(15.0, 10.0), Point2::new(20.0, 7.0)]);
+    // A click on the midpoint of a line places a point held at its middle.
+    let r = d
+        .app
+        .run_sketch(
+            "sketch.line",
+            json!({ "x1": 40, "y1": 0, "x2": 80, "y2": 20 }),
+        )
+        .unwrap();
+    let line = CurveId(r["curve"].as_u64().unwrap() as u32);
+    d.click(d.screen(60.0, 10.0), Modifiers::NONE);
+    let held = d
+        .sketch()
+        .constraints()
+        .find_map(|(_, c)| match c {
+            Constraint::Midpoint { point, line: l } if *l == line => Some(*point),
+            _ => None,
+        })
+        .expect("no midpoint constraint");
+    assert_eq!(d.sketch().point(held), Some(Point2::new(60.0, 10.0)));
+}
+
+#[test]
+fn typed_points_draw_a_line_by_relative_and_polar_entries() {
+    let mut d = Driver::new();
+    d.key(Key::L);
+    // Start at (10, 10), then @30<0: (40, 10), then @0,20: (40, 30).
+    d.text("10,10");
+    d.key(Key::Enter);
+    d.text("@30<0");
+    d.key(Key::Enter);
+    d.text("@0,20");
+    d.key(Key::Enter);
+    let s = d.sketch();
+    let mut ends: Vec<(Point2, Point2)> = s
+        .curves()
+        .filter_map(|(_, c)| match c {
+            Curve::Line { start, end, .. } => Some((s.point(*start)?, s.point(*end)?)),
+            _ => None,
+        })
+        .collect();
+    ends.sort_by(|a, b| a.0.x.total_cmp(&b.0.x));
+    assert_eq!(
+        ends,
+        vec![
+            (Point2::new(10.0, 10.0), Point2::new(40.0, 10.0)),
+            (Point2::new(40.0, 10.0), Point2::new(40.0, 30.0)),
+        ]
+    );
+    // A bad entry places nothing and says why.
+    d.text("@abc");
+    d.key(Key::Enter);
+    d.text("@1");
+    d.key(Key::Enter);
+    assert_eq!(d.sketch().curves().count(), 2);
+    assert!(
+        d.app
+            .message
+            .as_ref()
+            .is_some_and(|m| m.0.contains("Typed point"))
+    );
+}
+
+#[test]
+fn ortho_mode_keeps_lines_straight_until_shift_frees_them() {
+    let mut d = Driver::new();
+    d.app.prefs.snaps.alignment = false;
+    d.app.prefs.snaps.polar = false;
+    d.key(Key::F8);
+    assert!(d.app.sketch.ortho);
+    d.key(Key::L);
+    d.click(d.screen(10.0, 10.0), Modifiers::NONE);
+    // 40 right and 7 up: Ortho makes it level, (50, 10).
+    d.click(d.screen(50.0, 17.0), Modifiers::NONE);
+    let (first, p, q) = d.new_line(&[]);
+    assert!(p.distance(Point2::new(10.0, 10.0)) < 0.01, "{p:?}");
+    assert!(
+        (q.y - p.y).abs() < 1e-9 && (q.x - 50.0).abs() < 0.5,
+        "{q:?}"
+    );
+    // Shift frees the next one: it goes where clicked, up and to the right.
+    d.click(d.screen(70.0, 37.0), Modifiers::SHIFT);
+    let (_, a, b) = d.new_line(&[first]);
+    assert!(b.y - a.y > 20.0 && b.x - a.x > 15.0, "{a:?} {b:?}");
+    d.key(Key::F8);
+    assert!(!d.app.sketch.ortho);
+}
+
+#[test]
+fn a_constraint_marker_selects_and_del_deletes_its_constraint() {
+    let mut d = Driver::new();
+    let r = d
+        .app
+        .run_sketch(
+            "sketch.line",
+            json!({ "x1": 0, "y1": 0, "x2": 40, "y2": 0 }),
+        )
+        .unwrap();
+    let line = r["curve"].as_u64().unwrap();
+    d.app
+        .run_sketch(
+            "sketch.constrain",
+            json!({ "constraint": {"kind": "horizontal", "line": line} }),
+        )
+        .unwrap();
+    d.app.sketch.tool = Some(Tool::Select);
+    d.frame(vec![]);
+    // The marker sits 13 px right of and above the middle of the line, (20, 0).
+    let marker = d.screen(20.0, 0.0) + Vec2::new(13.0, -13.0);
+    d.click(marker, Modifiers::NONE);
+    let horizontal = d
+        .sketch()
+        .constraints()
+        .find(|(_, c)| matches!(c, Constraint::Horizontal { .. }))
+        .map(|(id, _)| id.0)
+        .unwrap();
+    assert_eq!(d.app.sketch.glyph_selected, Some(horizontal));
+    d.key(Key::Delete);
+    assert!(
+        !d.sketch()
+            .constraints()
+            .any(|(_, c)| matches!(c, Constraint::Horizontal { .. }))
+    );
+    // The line itself stays.
+    assert_eq!(d.sketch().curves().count(), 1);
+}
+
+#[test]
+fn a_conflicting_constraint_opens_the_dialog_and_replace_swaps_it() {
+    let mut d = Driver::new();
+    // p fixed at (0, 0), q level with it 10 away; fixing q at (6, 8) conflicts with p's
+    // fix and with "level" (see the sketch crate's conflict test).
+    let p = d
+        .app
+        .run_sketch("sketch.point", json!({"x": 0, "y": 0}))
+        .unwrap()["point"]
+        .clone();
+    let q = d
+        .app
+        .run_sketch("sketch.point", json!({"x": 10, "y": 0}))
+        .unwrap()["point"]
+        .clone();
+    for c in [
+        json!({"kind": "fix", "point": p, "at": {"x": 0, "y": 0}}),
+        json!({"kind": "horizontal_points", "a": p, "b": q}),
+        json!({"kind": "distance", "a": p, "b": q, "value": 10}),
+    ] {
+        d.app
+            .run_sketch("sketch.constrain", json!({ "constraint": c }))
+            .unwrap();
+    }
+    let fix_q = json!({"kind": "fix", "point": q, "at": {"x": 6, "y": 8}});
+    d.app.open_conflict_for(&fix_q).unwrap();
+    let dialog = d.app.sketch.conflict.clone().unwrap();
+    assert_eq!(dialog.involved.len(), 2, "{dialog:?}");
+    assert!(dialog.involved[1].1.starts_with("Horizontal (points)"));
+    d.frame(vec![]);
+    let level = dialog.involved[1].0;
+    d.app.conflict_replace(level);
+    assert!(d.app.sketch.conflict.is_none());
+    let q = PointId(q.as_u64().unwrap() as u32);
+    let at = d.sketch().point(q).unwrap();
+    assert!(at.distance(Point2::new(6.0, 8.0)) < 1e-9, "{at:?}");
+    // A constraint that fits opens nothing.
+    assert!(
+        d.app
+            .open_conflict_for(&json!({"kind": "fix", "point": p, "at": {"x": 0, "y": 0}}))
+            .is_err()
+    );
+}

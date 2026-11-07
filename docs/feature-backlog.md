@@ -46,7 +46,7 @@ Close runners-up: selection filters and box selection (UI and NAV), splines (nee
 | Centre-point arc | Arc from centre, start, end | done | P0 | S | sketch, ui |
 | Three-point arc | Arc through start, a middle point, end | done | P0 | S | sketch, ui |
 | Tangent arc | Arc that continues tangentially from a line end | done | P0 | S | sketch, ui |
-| Point | A free sketch point | done | P0 | S | sketch |
+| Point | A free sketch point | done (Point tool, P key: snaps and keeps the snap's constraint; standalone points are hole centres) | P0 | S | sketch, ui |
 | Construction toggle | Mark a curve as construction (not part of profiles) | done | P0 | S | sketch, ui |
 | Polygon | Regular polygon, inscribed or circumscribed, by centre or edge | done (by centre; not by edge) | P0 | S | sketch, ui |
 | Slot | Straight slot by centres or overall length, arc slot | done (straight; no arc slot) | P0 | S | sketch, ui |
@@ -55,7 +55,7 @@ Close runners-up: selection filters and box selection (UI and NAV), splines (nee
 | Conic curve | A conic with a shape value (rho) between two ends | missing | P2 | M | sketch, geom |
 | Fit-point spline | Smooth curve through clicked points, with tangent handles | done (`sketch.spline`, Spline tool, open and closed, extrudes; tangent handles and end-tangent constraints not yet) | P1 | L | sketch, geom (needs K10) |
 | Control-point spline | Spline edited by its control polygon | done (`sketch.spline {kind: control}`; no UI tool of its own yet) | P1 | M | sketch, geom (needs K10) |
-| Sketch text | Text as closed profiles, with a font, height and alignment on a path | missing | P2 | L | sketch, io (font parsing) |
+| Sketch text | Text as closed profiles, with a font, height and alignment on a path | done (`sketch.text`, Text dialog: lines and cubic splines from the bundled Lato or a given font, cap height, left/centre/right; not on a path, not one editable entity) | P2 | L | sketch, io (font parsing) |
 | Trim | Delete the piece of a curve between crossings | done | P0 | M | sketch, engine, ui |
 | Extend | Lengthen a curve to the next one it meets | done | P0 | S | sketch, engine, ui |
 | Split / break | Cut a curve at a point or at its crossings | done | P0 | S | sketch, engine |
@@ -70,7 +70,7 @@ Close runners-up: selection filters and box selection (UI and NAV), splines (nee
 | Project to surface / wrap | Project curves onto a curved face | missing | P2 | L | kernel |
 | 3D sketch | Curves in space, not on one plane (paths for sweeps) | missing | P2 | L | sketch, doc |
 | Profile detection | Closed regions, holes, nested profiles found automatically | done | P0 | M | sketch |
-| Splitting curves at crossings for profiles | Overlapping curves form regions without trimming first | done (lines, arcs and circles: crossings, T-junctions and overlaps on one line; not ellipses or splines) | P0 | M | sketch |
+| Splitting curves at crossings for profiles | Overlapping curves form regions without trimming first | done (lines, arcs and circles in closed form; ellipses and splines at converged crossings, `crossing.rs`; the pieces extrude exactly. Split All still cuts only lines, arcs and circles into real curves) | P0 | M | sketch |
 | Large sketches | Sparse solver for sketches with thousands of entities | missing | P2 | L | sketch |
 | Import DXF into a sketch | Bring 2D drawings in as sketch curves (`sketch.import_dxf`) | done | P1 | M | io, sketch |
 | Import SVG into a sketch | Bring vector drawings in as sketch curves | missing | P1 | M | io, sketch |
@@ -102,12 +102,12 @@ Close runners-up: selection filters and box selection (UI and NAV), splines (nee
 | Dimensions as expressions | Type `width/2` or a parameter name into a dimension | done | P0 | S | doc, sketch |
 | Inline dimension editing | Edit a value in place on the canvas | done | P0 | S | ui |
 | DOF analysis and colour feedback | Under, fully and over-constrained shown; redundant and conflicting constraints reported | done | P0 | M | sketch, ui |
-| Constraint glyphs on canvas | Small markers showing each constraint; click to select or delete | missing | P0 | M | ui, render |
+| Constraint glyphs on canvas | Small markers showing each constraint; click to select or delete | done (`constraint_ui.rs`: the constraint's icon beside its geometry; click selects, Del deletes) | P0 | M | ui, render |
 | Automatic constraints while drawing | Horizontal/vertical, coincident, tangent, perpendicular added as you draw (H/V and coincident done) | done (H/V, coincident and the snap constraints; a line started on the end of a line or arc is held at right angles or along the tangent and gets that constraint, `crates/sketch/src/track.rs`) | P0 | M | engine, ui |
 | Auto-constrain / auto-dimension | Fully constrain a sketch in one step | missing | P2 | M | sketch |
 | Drag with constraints | Drag a point; the sketch follows its constraints | done | P0 | S | sketch, ui |
 | Show unconstrained geometry | Highlight what can still move | done | P0 | S | ui |
-| Conflict dialog | When a new constraint conflicts, list the constraints involved and offer to remove one | missing | P1 | S | ui |
+| Conflict dialog | When a new constraint conflicts, list the constraints involved and offer to remove one | done (`sketch.conflicts` lists the constraints whose removal lets it in; Replace is `sketch.constrain {replace}`) | P1 | S | ui |
 
 ## 3. Drawing input: snaps, inference, ortho and typed values
 
@@ -120,10 +120,10 @@ Close runners-up: selection filters and box selection (UI and NAV), splines (nee
 | Snap settings | Choose which snaps are active, and a snap radius in pixels | done (Preferences > Grid and Snap: each snap kind, radius, tracking) | P1 | S | ui |
 | Alignment (tracking) lines | Dashed guide when the cursor lines up with another point horizontally or vertically | done (through every sketch point and the origin; two guides meet at their corner) | P1 | M | ui |
 | Polar tracking | Guides at a chosen angle step (for example every 15 degrees) | done (off by default; step in Preferences) | P1 | S | ui |
-| Ortho mode | Force lines horizontal or vertical while held or toggled | done while held (Shift); no toggle yet | P1 | S | ui |
+| Ortho mode | Force lines horizontal or vertical while held or toggled | done (Shift while held; F8 or SKETCH > SELECT > Ortho toggles it, Shift then frees; point snaps still win) | P1 | S | ui |
 | Hold a modifier to suspend snapping | Draw freely without inference | done (Ctrl: no snap, guide, grid or H/V inference) | P0 | S | ui |
 | Typed length and angle while drawing | Fields next to the cursor; Tab moves between them; Enter places | done (line, rectangle, circle) | P0 | M | ui |
-| Typed coordinates | Absolute, relative and polar coordinate entry, AutoCAD style | missing | P1 | M | ui, engine |
+| Typed coordinates | Absolute, relative and polar coordinate entry, AutoCAD style | done (`x,y`, `#x,y`, `@dx,dy`, `@length<angle` then Enter, for every point-placing tool; `sketch_entry.rs`) | P1 | M | ui, engine |
 | Sketch grid snap | Snap to a visible sketch grid with a chosen spacing | done (Preferences > Grid and Snap) | P1 | S | ui, render |
 | Rubber-band preview | Show the curve being drawn before the click | done | P0 | S | ui |
 | Dimensions shown while drawing | Live length/angle readout | done (live values in the heads-up fields) | P0 | S | ui |

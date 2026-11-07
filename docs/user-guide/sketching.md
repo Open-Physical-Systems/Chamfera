@@ -61,11 +61,15 @@ line"). **Esc** ends or cancels the tool.
 | 3-Point Circle | | Three clicks: points the circle passes through. |
 | Tangent Circle | | Click three lines, circles or arcs, near where the circle should touch them; or, with **Two and a radius** in the tool box, two of them. |
 | Spline | | Click the points the curve passes through. Double-click or press Enter to finish; click the first point to close it. |
+| Point | P | Click to place a point. It snaps like the other tools and keeps the snap's constraint (a point clicked on a line's middle stays there). Standalone points are where the Hole tool drills when it uses the sketch, and things to constrain and dimension to. |
+| Text | | Opens the Text dialog: the words, the **Height** of the capitals, **Align** (left, centre or right of the start) and the start on the baseline. Each letter becomes closed profiles (lines and splines) to extrude or cut. The font is Lato Regular; `sketch.text {font}` takes another TrueType or OpenType file. |
 
 ![A hexagon, a slot, an ellipse and a projected face outline in a sketch on a plate's top face](images/sketching-shapes-and-project.png)
 
 The spline's points are ordinary sketch points: drag them with Select to reshape it, or
 constrain them.
+
+![Text "Chamfera", 10 mm capitals centred on a 76 x 22 plate, the plate extruded 3 mm with the letters cut through](images/sketching-text.png)
 
 ### Snaps
 
@@ -91,10 +95,17 @@ Hold **Ctrl** while drawing to place a point exactly where you click: no snap, g
 or automatic horizontal and vertical. Which snaps and guides are on, and how near the
 cursor they reach, are in Preferences > Grid and Snap.
 
-### Shift lock
+### Shift lock and Ortho
 
 Hold **Shift** while drawing a line to keep it horizontal or vertical (the marker says
 which). **Shift+Alt** steps the angle by 15 degrees.
+
+**Ortho** (press **F8**, or SKETCH > SELECT > Ortho) keeps every line and arc point
+horizontal or vertical from the last point without holding anything; the status bar shows
+"Ortho" while it is on. Hold **Shift** to draw one segment freely. Point snaps (ends,
+midpoints, centres, crossings) still win, so a segment can end on an existing point.
+
+![Ortho on: the line from the hole point stays level while the cursor is above it](images/sketching-ortho.png)
 
 ### Typed values
 
@@ -113,6 +124,27 @@ fields float beside the cursor:
 
 A plain number is in the design's length unit; `10 mm` or `2 in` say their own; an angle is
 in degrees. Typed values become dimensions on the new geometry.
+
+### Typed points
+
+Every tool that places points (Point, Line, the rectangles, circles, arcs, Polygon, Slot,
+Ellipse, Spline) also takes a typed point. Type it and press **Enter**:
+
+| Type | Places the point |
+|---|---|
+| `30,40` | at x = 30, y = 40 in the sketch |
+| `@15,-5` | 15 right of and 5 below the last point placed |
+| `@25<30` | 25 from the last point, at 30 degrees from +X (counter-clockwise) |
+| `#30,40` | at x = 30, y = 40, when the Length and Angle fields would take the digits |
+
+A typed point starts with `@` or `#` at any time, or with a digit while no value field is
+waiting (the first click of a line, every click of the Point tool). A box beside the cursor
+shows what you typed and the coordinates it lands on; Backspace deletes, Esc drops it.
+Lengths are in the design's unit and the comma separates the two numbers, so use a point
+for decimals. A typed point is exact: it neither snaps nor gets a horizontal or vertical
+constraint.
+
+![Typing 65,40 with the Point tool: the box shows where it lands; constraint markers sit on the plate's sides](images/sketching-typed-point.png)
 
 ## Constraints
 
@@ -136,8 +168,19 @@ menu in a sketch lists the constraints that fit the selection.
 | Collinear | Puts two lines on one straight line |
 | Fix | Pins a point where it is |
 
-A constraint that would conflict with others, or is already implied, is refused with a
-message and the sketch stays as it was.
+Each constraint shows a small marker (its icon) beside the geometry it holds: Horizontal
+and Vertical at the middle of their line, Fix and Coincident at their point, Parallel,
+Perpendicular, Equal and Tangent at both curves. Hover a marker to see its name; click it
+to select it (it turns accent) and press **Del** to delete that constraint and keep the
+geometry.
+
+A constraint that would conflict with the others opens **Constraint Conflict**: it lists
+the constraints whose removal, one at a time, would let the new one in. **Replace** deletes
+that one and adds the new constraint in one step (one Undo); **Cancel** leaves the sketch as
+it was. When no single removal helps, the dialog says so. A constraint that is already
+implied is refused with a message.
+
+![Fixing a point where its other constraints cannot follow: Fix and Horizontal (points) each stand in the way](images/sketching-conflict.png)
 
 ## Dimensions
 
@@ -263,25 +306,38 @@ reply (or name a step with `"as"` and use `"$name.curves.0"`) instead of guessin
 | Task | Command |
 |---|---|
 | Start, finish, edit | `sketch.create {plane: xy/xz/yz or a construction plane id, offset?}`, `sketch.create_on_face {feature, face}`, `sketch.finish`, `sketch.edit {sketch}` |
-| Draw | `sketch.line`, `sketch.rectangle`, `sketch.rectangle.centre`, `sketch.circle`, `sketch.arc`, `sketch.arc.three_point`, `sketch.arc.tangent`, `sketch.point`, `sketch.polygon {cx, cy, x, y, sides, mode}`, `sketch.slot {x1, y1, x2, y2, width, overall}`, `sketch.ellipse {cx, cy, x, y, minor}`, `sketch.ellipse.arc`, `sketch.spline {points, kind: fit/control, closed}` |
-| Constrain | `sketch.constrain {constraint: {kind, ...}}` or `{constraints: [...]}`, `sketch.constrain_selection {kind}` |
+| Draw | `sketch.line`, `sketch.rectangle`, `sketch.rectangle.centre`, `sketch.circle`, `sketch.arc`, `sketch.arc.three_point`, `sketch.arc.tangent`, `sketch.point`, `sketch.polygon {cx, cy, x, y, sides, mode}`, `sketch.slot {x1, y1, x2, y2, width, overall}`, `sketch.ellipse {cx, cy, x, y, minor}`, `sketch.ellipse.arc`, `sketch.spline {points, kind: fit/control, closed}`, `sketch.text {text, x, y, height, align, font, fix}` |
+| Constrain | `sketch.constrain {constraint: {kind, ...}}` or `{constraints: [...]}`, with `replace: id` to remove one first; `sketch.constrain_selection {kind}`; `sketch.conflicts {kind or constraint}` (what stands in the way) |
 | Dimension | `sketch.dimension_selection {x?, y?, direction?, arc_length?, driven?}`, `sketch.dimension {constraint, value or expression}`, `sketch.dimension.driven {constraint, driven}` |
 | Modify | `sketch.trim {curve, x, y}`, `sketch.extend {curve, x, y}`, `sketch.split {curve?}`, `sketch.fillet {point, radius}`, `sketch.chamfer {point, distance}`, `sketch.offset {curves, distance, corners}`, `sketch.mirror {axis, curves}`, `sketch.pattern.rectangular {curves, columns, dx, rows, dy}`, `sketch.pattern.circular {curves, cx, cy, count, angle}`, `sketch.move {dx, dy, copy}`, `sketch.rotate {cx, cy, angle, copy}`, `sketch.scale {cx, cy, factor, copy}` |
 | Other | `sketch.construction {curve, construction}`, `sketch.project {edges or faces, linked}`, `sketch.import_dxf {path, units, scale}`, `sketch.export_dxf {path}`, `sketch.remove` |
 
 Examples: `examples/sketch-plate.json`, `examples/sketch-snaps.json`,
 `examples/sketch-shapes.json`, `examples/spline-extrude.json`,
-`examples/parametric-plate.json`, `examples/dxf-import.json`.
+`examples/parametric-plate.json`, `examples/dxf-import.json`,
+`examples/sketch-crossings.json` (an ellipse and a spline crossed by other curves, their
+pieces extruded), `examples/sketch-input-v3.json`, `examples/sketch-conflict.json`,
+`examples/sketch-text.json` (a name plate with the letters cut through).
+
+## Overlapping curves
+
+Closed regions are found where the curves cross, without trimming first: lines, arcs and
+circles, and also ellipses, elliptical arcs and splines. An ellipse drawn over a
+rectangle's edge gives its two halves and the rectangle outside it as three profiles, and
+each extrudes with exact curved sides.
+
+![An ellipse over a rectangle and a spline arch crossed by a line: the left half ellipse, the plate around the right half and the arch's cap extruded](images/sketching-crossings.png)
+
+Split All Crossings (SKETCH > MODIFY) turns the pieces of lines, arcs and circles into
+separate curves you can trim or constrain; ellipses and splines stay whole curves.
 
 ## Limits
 
-- There is no Point tool in the ribbon; `sketch.point` (used for hole centres) is only
-  available from a script. The Hole tool places its own points by clicking on a face.
 - Only 2D ASCII DXF is read.
-- Ellipses and splines that cross other curves are not split for profiles; run Split All
-  Crossings or draw them to meet at their ends.
-- The value fields beside the cursor are drawn too narrow before you type: the live value
-  runs over the field's name and shows the unit twice ("40.00 mm mm"). What you type is
-  shown correctly.
+- Split All Crossings, Trim and Extend work on lines, arcs and circles; ellipses and
+  splines are split for profiles only.
+- Text is drawn as ordinary lines and splines with free points (one degree of freedom per
+  coordinate; `fix: true` pins them). It cannot be edited as text afterwards, follow a
+  path, or use kerning.
 - Ellipses and splines can be extruded straight but not tapered, and splines cannot be
   revolved ([solid-modelling.md](solid-modelling.md)).

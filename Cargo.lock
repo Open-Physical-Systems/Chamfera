@@ -392,6 +392,7 @@ dependencies = [
  "chamfera-kernel",
  "miniz_oxide 0.8.9",
  "serde_json",
+ "skrifa",
  "thiserror 2.0.21",
 ]
 
