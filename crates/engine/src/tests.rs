@@ -394,6 +394,10 @@ fn hostile_params_never_panic() {
         json!({"tool": 1, "kind": "scallop", "stepover": 1e-300, "max_slope": "89 deg", "holder_check": 5}),
         json!({"tool": 4294967296u64, "kind": "parallel", "holder_check": "refuse", "path": "/dev/zero", "tools": [1, 99]}),
         json!({"path": "/nonexistent/dir/tools.json", "replace": "yes", "tools": "all"}),
+        json!({"constraint": {"kind": "fix", "point": 1, "at": {"x": 1e300, "y": 0}}, "replace": 4294967296u64}),
+        json!({"constraints": [{"kind": "horizontal", "line": 3}], "replace": -1, "kind": "fix"}),
+        json!({"text": long, "x": 1e300, "y": f64::NAN, "height": -1, "font": long, "align": 5}),
+        json!({"text": "\u{0}\u{FFFF}", "x": 0, "y": 0, "height": 1e300, "align": "middle", "font": "/dev/zero"}),
     ];
     for c in registry() {
         for p in &hostile {
@@ -5334,6 +5338,102 @@ fn a_line_across_a_spline_cuts_off_a_cap_that_extrudes() {
         .unwrap();
     let v = extruded_volume(&r);
     assert!((v - cap * 10.0).abs() < 1e-4, "{v} vs {}", cap * 10.0);
+}
+
+/// p fixed at (0, 0), q level with it 10 away. Fixing q at (6, 8) conflicts; the
+/// constraints whose removal lets it in are p's fix (p can move to (-4, 8)) and "level"
+/// (q can rise to (6, 8)), not the distance (q could not be level with p at y = 8).
+#[test]
+fn conflicts_list_what_to_remove_and_replace_removes_it_in_one_step() {
+    let mut s = Session::new();
+    s.execute("sketch.create", &json!({"plane": "xy"})).unwrap();
+    let id = |v: serde_json::Value, k: &str| v[k].as_u64().unwrap();
+    let p = id(
+        s.execute("sketch.point", &json!({"x": 0, "y": 0})).unwrap(),
+        "point",
+    );
+    let q = id(
+        s.execute("sketch.point", &json!({"x": 10, "y": 0}))
+            .unwrap(),
+        "point",
+    );
+    let add = |s: &mut Session, c: serde_json::Value| {
+        id(
+            s.execute("sketch.constrain", &json!({ "constraint": c }))
+                .unwrap(),
+            "constraint",
+        )
+    };
+    let fix_p = add(
+        &mut s,
+        json!({"kind": "fix", "point": p, "at": {"x": 0, "y": 0}}),
+    );
+    let level = add(&mut s, json!({"kind": "horizontal_points", "a": p, "b": q}));
+    let dist = add(
+        &mut s,
+        json!({"kind": "distance", "a": p, "b": q, "value": 10}),
+    );
+    let fix_q = json!({"kind": "fix", "point": q, "at": {"x": 6, "y": 8}});
+    let r = s
+        .execute("sketch.conflicts", &json!({ "constraint": fix_q }))
+        .unwrap();
+    assert_eq!(r["conflict"], true);
+    let involved: Vec<u64> = r["involved"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["constraint"].as_u64().unwrap())
+        .collect();
+    assert_eq!(involved, vec![fix_p, level], "{r}");
+    assert_eq!(r["involved"][1]["title"], "Horizontal (points)");
+    // Replacing the distance does not help: refused, nothing changes.
+    let before = s.execute("sketch.get", &json!({})).unwrap()["constraints"].clone();
+    assert!(
+        s.execute(
+            "sketch.constrain",
+            &json!({ "constraint": fix_q, "replace": dist })
+        )
+        .is_err()
+    );
+    assert_eq!(
+        s.execute("sketch.get", &json!({})).unwrap()["constraints"],
+        before
+    );
+    // Replacing "level" fixes q at (6, 8), as one undo step.
+    let r = s
+        .execute(
+            "sketch.constrain",
+            &json!({ "constraint": fix_q, "replace": level }),
+        )
+        .unwrap();
+    assert_eq!(r["replaced"], level);
+    let at = |s: &mut Session, id: u64| {
+        let g = s.execute("sketch.get", &json!({})).unwrap();
+        let pt = g["points"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|x| x["point"] == id)
+            .unwrap()
+            .clone();
+        (pt["x"].as_f64().unwrap(), pt["y"].as_f64().unwrap())
+    };
+    let (x, y) = at(&mut s, q);
+    assert!((x - 6.0).abs() < 1e-9 && (y - 8.0).abs() < 1e-9, "{x}, {y}");
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(
+        s.execute("sketch.get", &json!({})).unwrap()["constraints"],
+        before
+    );
+    // A constraint that fits: no conflict.
+    let r = s
+        .execute(
+            "sketch.conflicts",
+            &json!({ "constraint": {"kind": "fix", "point": q, "at": {"x": 10, "y": 0}} }),
+        )
+        .unwrap();
+    assert_eq!(r["conflict"], false);
+    assert!(s.execute("sketch.conflicts", &json!({})).is_err());
 }
 
 #[test]
