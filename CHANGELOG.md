@@ -27,6 +27,9 @@ pull requests on GitHub.
 - Tools: trim, extend, split, fillet, chamfer, offset, mirror, patterns and arcs [#22].
 - Shift-straight lines, object snaps and typed values [#30].
 - Polygon, slot, ellipse and elliptical arc; project model edges [#36].
+- Ellipses and splines split for profiles where curves cross them; Point tool; typed
+  points (`x,y`, `@dx,dy`, `@length<angle`); Ortho mode (F8); constraint markers; the
+  Constraint Conflict dialog; sketch text from a bundled OFL font.
 
 ### Solid modelling
 - Extrude with extents, two sides, start offset, taper and live preview [#11, #35].

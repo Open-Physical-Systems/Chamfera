@@ -8,6 +8,7 @@
 pub mod atomic;
 pub mod csv;
 pub mod dxf;
+pub mod font;
 pub mod gltf;
 pub mod history;
 pub mod mesh;

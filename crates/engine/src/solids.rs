@@ -344,7 +344,20 @@ fn loop_edges(sketch: &Sketch, l: &ProfileLoop) -> Result<Vec<ProfileEdge>, Stri
                         ProfileEdge::arc_from_points(sketch.point(*centre).ok_or_else(gone)?, a, b)
                             .map_err(|e| format!("an arc of the profile: {e}"))?
                     }
-                    _ => return Err("only lines, arcs and circles are split".to_owned()),
+                    Curve::Ellipse { .. } | Curve::EllipticalArc { .. } | Curve::Spline { .. } => {
+                        // The exact piece: an elliptical arc as its rational spline, or
+                        // the part of the spline between the two cuts.
+                        let piece = sketch
+                            .piece_curve(seg.curve, [a, b])
+                            .ok_or_else(|| "a piece of a profile curve is gone".to_owned())?;
+                        let spline = match piece {
+                            chamfera_sketch::PieceCurve::Ellipse(arc) => arc
+                                .to_nurbs()
+                                .map_err(|e| format!("an ellipse of the profile: {e}"))?,
+                            chamfera_sketch::PieceCurve::Spline(c) => c,
+                        };
+                        ProfileEdge::Spline(spline)
+                    }
                 };
                 return Ok(vec![if seg.reversed { edge.reversed() } else { edge }]);
             }

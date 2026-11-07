@@ -399,6 +399,10 @@ fn hostile_params_never_panic() {
         json!({"tool": 1, "kind": "scallop", "stepover": 1e-300, "max_slope": "89 deg", "holder_check": 5}),
         json!({"tool": 4294967296u64, "kind": "parallel", "holder_check": "refuse", "path": "/dev/zero", "tools": [1, 99]}),
         json!({"path": "/nonexistent/dir/tools.json", "replace": "yes", "tools": "all"}),
+        json!({"constraint": {"kind": "fix", "point": 1, "at": {"x": 1e300, "y": 0}}, "replace": 4294967296u64}),
+        json!({"constraints": [{"kind": "horizontal", "line": 3}], "replace": -1, "kind": "fix"}),
+        json!({"text": long, "x": 1e300, "y": f64::NAN, "height": -1, "font": long, "align": 5}),
+        json!({"text": "\u{0}\u{FFFF}", "x": 0, "y": 0, "height": 1e300, "align": "middle", "font": "/dev/zero"}),
     ];
     for c in registry() {
         for p in &hostile {
@@ -5234,6 +5238,286 @@ fn overlapping_rectangles_extrude_their_regions_without_a_split() {
             .fold(0.0, f64::max);
         assert!((v - want).abs() < 1e-6, "{r}");
         s.execute("edit.undo", &json!({})).unwrap();
+    }
+}
+
+/// The largest solid volume in an extrude reply.
+fn extruded_volume(r: &serde_json::Value) -> f64 {
+    r["solids"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|b| b["volume"].as_f64().unwrap())
+        .fold(0.0, f64::max)
+}
+
+/// An ellipse x²/100 + y²/25 = 1 over a rectangle from (0, -10) to (20, 10): the
+/// rectangle's left side crosses the ellipse at (0, ±5), cutting it into two halves of
+/// π a b / 2 = 25π each. Extruded 10: each half 250π mm³, and the rectangle outside the
+/// ellipse (400 - 25π) x 10.
+#[test]
+fn an_ellipse_over_a_rectangle_extrudes_its_pieces_without_a_split() {
+    use std::f64::consts::PI;
+    let mut s = Session::new();
+    s.execute("sketch.create", &json!({"plane": "xy"})).unwrap();
+    s.execute(
+        "sketch.ellipse",
+        &json!({"cx": 0, "cy": 0, "x": 10, "y": 0, "minor": 5}),
+    )
+    .unwrap();
+    s.execute(
+        "sketch.rectangle",
+        &json!({"x1": 0, "y1": -10, "x2": 20, "y2": 10}),
+    )
+    .unwrap();
+    let g = s.execute("sketch.get", &json!({})).unwrap();
+    let mut areas: Vec<f64> = g["profiles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["area"].as_f64().unwrap())
+        .collect();
+    areas.sort_by(f64::total_cmp);
+    let want = [25.0 * PI, 25.0 * PI, 400.0 - 25.0 * PI];
+    let mut want_sorted = want;
+    want_sorted.sort_by(f64::total_cmp);
+    assert_eq!(areas.len(), 3, "{areas:?}");
+    for (a, w) in areas.iter().zip(want_sorted) {
+        assert!((a - w).abs() < 1e-9, "{areas:?}");
+    }
+    s.execute("sketch.finish", &json!({})).unwrap();
+    for (x, y, want) in [
+        (-5.0, 0.0, 250.0 * PI),
+        (5.0, 0.0, 250.0 * PI),
+        (15.0, 8.0, (400.0 - 25.0 * PI) * 10.0),
+    ] {
+        let r = s
+            .execute(
+                "solid.extrude",
+                &json!({"sketch": 1, "profiles": [{"x": x, "y": y}], "distance": 10}),
+            )
+            .unwrap();
+        let v = extruded_volume(&r);
+        assert!((v - want).abs() < 1e-6 * want, "{x},{y}: {v} vs {want}");
+        s.execute("edit.undo", &json!({})).unwrap();
+    }
+}
+
+/// The fit spline through (0, 0), (10, 10), (20, 0) is the parabola y = x (20 - x) / 10;
+/// with its base line it bounds 400/3 mm² (Archimedes). A line y = 5 across it cuts off
+/// the cap between x = 10 ± √50, of area ∫ (50 - u²) / 10 du over |u| ≤ √50 = 20√50 / 3.
+#[test]
+fn a_line_across_a_spline_cuts_off_a_cap_that_extrudes() {
+    let mut s = Session::new();
+    s.execute("sketch.create", &json!({"plane": "xy"})).unwrap();
+    s.execute(
+        "sketch.spline",
+        &json!({"points": [{"x": 0, "y": 0}, {"x": 10, "y": 10}, {"x": 20, "y": 0}]}),
+    )
+    .unwrap();
+    for (x1, y1, x2, y2) in [(0, 0, 20, 0), (-5, 5, 25, 5)] {
+        s.execute(
+            "sketch.line",
+            &json!({"x1": x1, "y1": y1, "x2": x2, "y2": y2}),
+        )
+        .unwrap();
+    }
+    let cap = 20.0 * 50f64.sqrt() / 3.0;
+    let g = s.execute("sketch.get", &json!({})).unwrap();
+    let mut areas: Vec<f64> = g["profiles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["area"].as_f64().unwrap())
+        .collect();
+    areas.sort_by(f64::total_cmp);
+    assert_eq!(areas.len(), 2, "{areas:?}");
+    assert!((areas[0] - cap).abs() < 1e-6, "{areas:?}");
+    assert!((areas[1] - (400.0 / 3.0 - cap)).abs() < 1e-6, "{areas:?}");
+    s.execute("sketch.finish", &json!({})).unwrap();
+    let r = s
+        .execute(
+            "solid.extrude",
+            &json!({"sketch": 1, "profiles": [{"x": 10, "y": 8}], "distance": 10}),
+        )
+        .unwrap();
+    let v = extruded_volume(&r);
+    assert!((v - cap * 10.0).abs() < 1e-4, "{v} vs {}", cap * 10.0);
+}
+
+/// p fixed at (0, 0), q level with it 10 away. Fixing q at (6, 8) conflicts; the
+/// constraints whose removal lets it in are p's fix (p can move to (-4, 8)) and "level"
+/// (q can rise to (6, 8)), not the distance (q could not be level with p at y = 8).
+#[test]
+fn conflicts_list_what_to_remove_and_replace_removes_it_in_one_step() {
+    let mut s = Session::new();
+    s.execute("sketch.create", &json!({"plane": "xy"})).unwrap();
+    let id = |v: serde_json::Value, k: &str| v[k].as_u64().unwrap();
+    let p = id(
+        s.execute("sketch.point", &json!({"x": 0, "y": 0})).unwrap(),
+        "point",
+    );
+    let q = id(
+        s.execute("sketch.point", &json!({"x": 10, "y": 0}))
+            .unwrap(),
+        "point",
+    );
+    let add = |s: &mut Session, c: serde_json::Value| {
+        id(
+            s.execute("sketch.constrain", &json!({ "constraint": c }))
+                .unwrap(),
+            "constraint",
+        )
+    };
+    let fix_p = add(
+        &mut s,
+        json!({"kind": "fix", "point": p, "at": {"x": 0, "y": 0}}),
+    );
+    let level = add(&mut s, json!({"kind": "horizontal_points", "a": p, "b": q}));
+    let dist = add(
+        &mut s,
+        json!({"kind": "distance", "a": p, "b": q, "value": 10}),
+    );
+    let fix_q = json!({"kind": "fix", "point": q, "at": {"x": 6, "y": 8}});
+    let r = s
+        .execute("sketch.conflicts", &json!({ "constraint": fix_q }))
+        .unwrap();
+    assert_eq!(r["conflict"], true);
+    let involved: Vec<u64> = r["involved"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["constraint"].as_u64().unwrap())
+        .collect();
+    assert_eq!(involved, vec![fix_p, level], "{r}");
+    assert_eq!(r["involved"][1]["title"], "Horizontal (points)");
+    // Replacing the distance does not help: refused, nothing changes.
+    let before = s.execute("sketch.get", &json!({})).unwrap()["constraints"].clone();
+    assert!(
+        s.execute(
+            "sketch.constrain",
+            &json!({ "constraint": fix_q, "replace": dist })
+        )
+        .is_err()
+    );
+    assert_eq!(
+        s.execute("sketch.get", &json!({})).unwrap()["constraints"],
+        before
+    );
+    // Replacing "level" fixes q at (6, 8), as one undo step.
+    let r = s
+        .execute(
+            "sketch.constrain",
+            &json!({ "constraint": fix_q, "replace": level }),
+        )
+        .unwrap();
+    assert_eq!(r["replaced"], level);
+    let at = |s: &mut Session, id: u64| {
+        let g = s.execute("sketch.get", &json!({})).unwrap();
+        let pt = g["points"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|x| x["point"] == id)
+            .unwrap()
+            .clone();
+        (pt["x"].as_f64().unwrap(), pt["y"].as_f64().unwrap())
+    };
+    let (x, y) = at(&mut s, q);
+    assert!((x - 6.0).abs() < 1e-9 && (y - 8.0).abs() < 1e-9, "{x}, {y}");
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(
+        s.execute("sketch.get", &json!({})).unwrap()["constraints"],
+        before
+    );
+    // A constraint that fits: no conflict.
+    let r = s
+        .execute(
+            "sketch.conflicts",
+            &json!({ "constraint": {"kind": "fix", "point": q, "at": {"x": 10, "y": 0}} }),
+        )
+        .unwrap();
+    assert_eq!(r["conflict"], false);
+    assert!(s.execute("sketch.conflicts", &json!({})).is_err());
+}
+
+/// Sketch text: an `H` of straight strokes is one region whose area is the shoelace area
+/// of the font's own outline (scaled to 10 mm capitals); `Hi` adds the stem and the dot
+/// of the `i`; an `O` is a ring (one region with a hole). The H extrudes to area x depth.
+#[test]
+fn sketch_text_draws_letters_as_regions_that_extrude() {
+    use chamfera_io::font::{Align, DEFAULT_FONT, Segment, text_outline};
+    let outline = text_outline(
+        DEFAULT_FONT,
+        "H",
+        chamfera_geom::Point2::new(0.0, 0.0),
+        10.0,
+        Align::Left,
+    )
+    .unwrap();
+    // Shoelace: ½ Σ (x_i y_{i+1} - x_{i+1} y_i) over the H's straight edges.
+    let shoelace: f64 = outline.contours[0]
+        .iter()
+        .map(|s| match s {
+            Segment::Line(a, b) => 0.5 * (a.x * b.y - b.x * a.y),
+            Segment::Cubic(_) => panic!("an H has no curves"),
+        })
+        .sum::<f64>()
+        .abs();
+    assert!(shoelace > 10.0, "{shoelace}");
+    let mut s = Session::new();
+    s.execute("sketch.create", &json!({"plane": "xy"})).unwrap();
+    let r = s
+        .execute("sketch.text", &json!({"text": "H", "height": 10}))
+        .unwrap();
+    let areas = r["profiles"].as_array().unwrap();
+    assert_eq!(areas.len(), 1, "{r}");
+    assert!((areas[0].as_f64().unwrap() - shoelace).abs() < 1e-9, "{r}");
+    s.execute("edit.undo", &json!({})).unwrap();
+    let r = s
+        .execute("sketch.text", &json!({"text": "Hi", "height": 10}))
+        .unwrap();
+    assert_eq!(r["contours"], 3);
+    assert_eq!(r["profiles"].as_array().unwrap().len(), 3, "{r}");
+    s.execute("edit.undo", &json!({})).unwrap();
+    let r = s
+        .execute("sketch.text", &json!({"text": "O", "x": 50, "height": 10}))
+        .unwrap();
+    let g = s.execute("sketch.get", &json!({})).unwrap();
+    let profiles = g["profiles"].as_array().unwrap();
+    assert_eq!(profiles.len(), 2, "{r}");
+    assert!(profiles.iter().any(|p| p["holes"] == 1), "{g}");
+    s.execute("edit.undo", &json!({})).unwrap();
+    s.execute("sketch.text", &json!({"text": "H", "height": 10}))
+        .unwrap();
+    s.execute("sketch.finish", &json!({})).unwrap();
+    // Inside the left stem: just right of the outline's leftmost point, halfway up.
+    let left = outline.contours[0]
+        .iter()
+        .map(|s| s.start().x)
+        .fold(f64::INFINITY, f64::min);
+    let r = s
+        .execute(
+            "solid.extrude",
+            &json!({"sketch": 1, "profiles": [{"x": left + 0.2, "y": 5.0}], "distance": 2}),
+        )
+        .unwrap();
+    let v = extruded_volume(&r);
+    assert!(
+        (v - 2.0 * shoelace).abs() < 1e-6,
+        "{v} vs {}",
+        2.0 * shoelace
+    );
+    // Bad input changes nothing.
+    s.execute("sketch.create", &json!({"plane": "xy"})).unwrap();
+    for bad in [
+        json!({"text": ""}),
+        json!({"text": "H", "height": -1}),
+        json!({"text": "H", "align": "middle"}),
+        json!({"text": "H", "font": "/dev/zero"}),
+        json!({"text": "   "}),
+    ] {
+        assert!(s.execute("sketch.text", &bad).is_err(), "{bad}");
     }
 }
 

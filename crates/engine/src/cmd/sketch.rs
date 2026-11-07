@@ -87,9 +87,21 @@ pub static COMMANDS: &[CommandSpec] = &[
         params: "constraint: object (required unless constraints) - {\"kind\": ..., ids and value}, for example \
                  {\"kind\": \"horizontal\", \"line\": 3} or {\"kind\": \"length\", \"line\": 3, \"value\": 50}\n\
                  constraints: array of objects (optional) - several at once, as one undo step; each one that \
-                 would conflict or is already implied is left out and counted in `skipped`",
+                 would conflict or is already implied is left out and counted in `skipped`\n\
+                 replace: integer (optional) - remove this constraint first (see sketch.conflicts)",
         mutates: true,
         run: constrain,
+    },
+    CommandSpec {
+        id: "sketch.conflicts",
+        label: "Constraint Conflicts",
+        params: "kind: string (optional) - a kind of sketch.constrain_selection, for the selection\n\
+                 constraint: object (optional) - or this constraint\n\
+                 replies `conflict` (true when it does not fit), `involved` (the constraints \
+                 whose removal, one at a time, lets it in: constraint, kind, title, value) and \
+                 `constraints` (what would be added)",
+        mutates: false,
+        run: conflicts,
     },
     CommandSpec {
         id: "sketch.constrain_selection",
@@ -747,8 +759,23 @@ fn arc(s: &mut Session, p: &Value) -> CmdResult {
 const MAX_CONSTRAINT_BATCH: usize = 64;
 
 fn constrain(s: &mut Session, p: &Value) -> CmdResult {
+    // `replace`: take that constraint out first (a failed add rolls it back with the rest).
+    let replaced = match p.get("replace") {
+        None | Some(Value::Null) => None,
+        Some(_) => {
+            let id = chamfera_sketch::ConstraintId(params::req_id(p, "replace")?);
+            let sk = active(s)?;
+            if sk.constraint(id).is_none() {
+                return Err(bad(format!("`replace`: no constraint {id}")));
+            }
+            sk.remove_constraint(id).map_err(sketch_err)?;
+            Some(id.0)
+        }
+    };
     if let Some(list) = p.get("constraints") {
-        return constrain_many(s, list);
+        let mut r = constrain_many(s, list)?;
+        r["replaced"] = json!(replaced);
+        return Ok(r);
     }
     let raw = p
         .get("constraint")
@@ -757,7 +784,7 @@ fn constrain(s: &mut Session, p: &Value) -> CmdResult {
         serde_json::from_value(raw.clone()).map_err(|e| bad(format!("`constraint`: {e}")))?;
     let sk = active(s)?;
     let id = sk.try_add_constraint(c).map_err(sketch_err)?;
-    Ok(json!({ "constraint": id.0 }))
+    Ok(json!({ "constraint": id.0, "replaced": replaced }))
 }
 
 /// Adds each constraint that solves and is not implied by the others; skips the rest.
@@ -876,10 +903,17 @@ fn selection(s: &Session) -> (Vec<PointId>, Vec<CurveId>) {
     (points, curves)
 }
 
-fn constrain_selection(s: &mut Session, p: &Value) -> CmdResult {
-    let kind = params::req_str(p, "kind")?.to_owned();
+/// The constraints `sketch.constrain_selection` would add for `kind` and the selection.
+fn selection_constraints(s: &Session, kind: &str) -> Result<Vec<Constraint>, CommandError> {
     let (points, curves) = selection(s);
-    let sk = active(s)?;
+    let sk = &s
+        .active_sketch()
+        .ok_or_else(|| {
+            CommandError::Unavailable(
+                "no sketch is being edited: Create Sketch or Edit Sketch".into(),
+            )
+        })?
+        .sketch;
     let is_line = |sk: &Sketch, c: CurveId| sk.curve(c).is_some_and(Curve::is_line);
     let need = |ok: bool, what: &str| {
         if ok {
@@ -889,7 +923,7 @@ fn constrain_selection(s: &mut Session, p: &Value) -> CmdResult {
         }
     };
     let mut new: Vec<Constraint> = Vec::new();
-    match kind.as_str() {
+    match kind {
         "horizontal" | "vertical" if curves.is_empty() && points.len() == 2 => {
             let (a, b) = (points[0], points[1]);
             new.push(if kind == "horizontal" {
@@ -1002,6 +1036,53 @@ fn constrain_selection(s: &mut Session, p: &Value) -> CmdResult {
         }
         other => return Err(bad(format!("unknown constraint kind {other:?}"))),
     }
+    Ok(new)
+}
+
+/// What stands in the way of a constraint: the existing constraints whose removal (one
+/// at a time) lets it in, each with its kind and a title for a list.
+fn conflicts(s: &mut Session, p: &Value) -> CmdResult {
+    let new: Vec<Constraint> = match (p.get("kind"), p.get("constraint")) {
+        (Some(k), _) if !k.is_null() => selection_constraints(s, params::req_str(p, "kind")?)?,
+        (_, Some(raw)) if !raw.is_null() => vec![
+            serde_json::from_value(raw.clone()).map_err(|e| bad(format!("`constraint`: {e}")))?,
+        ],
+        _ => return Err(bad("`kind` or `constraint` is required")),
+    };
+    let f = s.active_sketch().ok_or_else(|| {
+        CommandError::Unavailable("no sketch is being edited: Create Sketch or Edit Sketch".into())
+    })?;
+    let ids = f.sketch.conflicts_with(&new).map_err(sketch_err)?;
+    // A conflict is reported only when the constraints do not fit as they are.
+    let conflict = !ids.is_empty() || {
+        let mut trial = f.sketch.clone();
+        new.iter()
+            .any(|c| trial.try_add_constraint(c.clone()).is_err())
+    };
+    let involved: Vec<Value> = ids
+        .iter()
+        .filter_map(|id| {
+            let c = f.sketch.constraint(*id)?;
+            let kind = c.kind_name();
+            Some(json!({
+                "constraint": id.0,
+                "kind": kind,
+                "title": crate::sketching::constraint_title(kind),
+                "value": c.value(),
+            }))
+        })
+        .collect();
+    let new: Vec<Value> = new
+        .iter()
+        .filter_map(|c| serde_json::to_value(c).ok())
+        .collect();
+    Ok(json!({ "conflict": conflict, "involved": involved, "constraints": new }))
+}
+
+fn constrain_selection(s: &mut Session, p: &Value) -> CmdResult {
+    let kind = params::req_str(p, "kind")?.to_owned();
+    let new = selection_constraints(s, &kind)?;
+    let sk = active(s)?;
     let mut ids = Vec::new();
     for c in new {
         ids.push(sk.try_add_constraint(c).map_err(sketch_err)?.0);

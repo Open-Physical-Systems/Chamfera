@@ -288,7 +288,16 @@ pub fn notices(root: &Path, out: Option<&str>) -> Result<(), String> {
     let crates = shipped(&metadata)?;
     let apache = std::fs::read_to_string(root.join("LICENSE-APACHE"))
         .map_err(|e| format!("LICENSE-APACHE: {e}"))?;
-    let text = render(&crates, &apache)?;
+    let mut text = render(&crates, &apache)?;
+    // The font Chamfera bundles itself (sketch text), with its licence as the OFL asks.
+    let lato = std::fs::read_to_string(root.join("assets/fonts/OFL-Lato.txt"))
+        .map_err(|e| format!("assets/fonts/OFL-Lato.txt: {e}"))?;
+    text.push_str(
+        "\n================================================================\n\
+         Bundled font: Lato Regular (assets/fonts/Lato-Regular.ttf), used for sketch text\n\
+         ================================================================\n\n",
+    );
+    text.push_str(&lato);
     let path = match out {
         Some(p) => PathBuf::from(p),
         None => root.join("target").join("THIRD-PARTY-LICENSES.txt"),
