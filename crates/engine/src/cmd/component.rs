@@ -314,15 +314,20 @@ fn activate(s: &mut Session, p: &Value) -> CmdResult {
 
 fn copy(s: &mut Session, p: &Value) -> CmdResult {
     let id = component_id(s, p, "component")?;
+    // A copy starts where the original is shown: a jointed original's own placement is
+    // where it was before its joint moved it. (A nested original's placement is in its
+    // parent's coordinates, as the copy's is.)
+    let c = s.doc.assembly.component(id)?;
+    let shown = if c.parent == ROOT {
+        s.placements().of(id)
+    } else {
+        c.placement
+    };
     let placement = match p.get("transform") {
-        None | Some(Value::Null) => s.doc.assembly.component(id)?.placement,
+        None | Some(Value::Null) => shown,
         Some(_) => {
             let (t, absolute) = transform(s, p)?;
-            if absolute {
-                t
-            } else {
-                s.doc.assembly.component(id)?.placement.then(&t)
-            }
+            if absolute { t } else { shown.then(&t) }
         }
     };
     let copy = s.doc.assembly.add_occurrence(id, placement)?;

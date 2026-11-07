@@ -749,3 +749,35 @@ fn a_planar_joint_centres_a_round_puck_on_the_plate() {
         bounds(&mut s, b)
     );
 }
+
+/// A linked copy of a jointed component starts where the original is shown, not where
+/// it was before the joint moved it (QA user guide pass). B stacked on A by a rigid
+/// joint spans x 0..40, y 10..20, z 4..8 (see
+/// `a_face_origin_follows_the_face_and_a_pick_names_the_component`); its copy moved
+/// 50 along x spans x 50..90 at the same y and z.
+#[test]
+fn a_linked_copy_of_a_jointed_component_starts_where_it_is_shown() {
+    let mut s = Session::new();
+    let (a, b) = two_plates(&mut s);
+    let fa = s.doc.assembly.component(a as u32).unwrap().features[0];
+    let fb = s.doc.assembly.component(b as u32).unwrap().features[0];
+    s.execute(
+        "joint.create",
+        &json!({"type": "rigid", "a": {"face": format!("{fa}:top")},
+                "b": {"face": format!("{fb}:bottom")}, "flip": true}),
+    )
+    .unwrap();
+    let copy = s
+        .execute(
+            "component.copy",
+            &json!({"component": b, "transform": {"translate": {"x": 50, "y": 0, "z": 0}}}),
+        )
+        .unwrap()["component"]
+        .as_u64()
+        .unwrap();
+    assert!(
+        close(bounds(&mut s, copy), [50.0, 10.0, 4.0, 90.0, 20.0, 8.0]),
+        "{:?}",
+        bounds(&mut s, copy)
+    );
+}

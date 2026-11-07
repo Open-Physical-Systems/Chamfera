@@ -172,6 +172,9 @@ impl ChamferaApp {
                         ui.add_space(S4);
                         ui.vertical(|ui| {
                             ui.set_min_height(480.0);
+                            // The page fits beside the list: long hints wrap instead of
+                            // widening the window past its title bar.
+                            ui.set_max_width(PAGE_WIDTH);
                             ui.spacing_mut().item_spacing.y = S2 + 2.0;
                             match page {
                                 Page::General => general_page(ui, look, p),
@@ -469,6 +472,10 @@ fn grid_page(
     );
 }
 
+/// The width of a page: the window's 600 less the page list (130) and the gaps and
+/// divider between them.
+const PAGE_WIDTH: f32 = 600.0 - 130.0 - S3 - S4 - 1.0;
+
 fn assistant_page(
     ui: &mut egui::Ui,
     look: Look,
@@ -512,7 +519,7 @@ fn assistant_page(
                 egui::TextEdit::singleline(&mut a.key_text)
                     .password(true)
                     .hint_text("sk-ant-…")
-                    .desired_width(220.0)
+                    .desired_width(150.0)
                     .char_limit(chamfera_assistant::key::MAX_KEY_BYTES),
             );
             if ui.button("Save").clicked() {
