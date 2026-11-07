@@ -52,7 +52,8 @@
 //! [`Sketch::snap`] finds where a drawing click near existing geometry should land
 //! (endpoints, centres, the origin, midpoints, crossings, quadrants, perpendicular and
 //! tangent points, on-curve) and [`Sketch::snap_constraints`] the constraints that keep
-//! it there (`snap.rs`).
+//! it there (`snap.rs`); [`Sketch::track`] the alignment, perpendicular, tangent and
+//! polar guides when no snap is near (`track.rs`).
 //!
 //! Clean room: the solver and profile code are written from textbooks and papers
 //! (Madsen, Nielsen and Tingleff on Levenberg-Marquardt; Golub and Van Loan on QR and
@@ -76,6 +77,7 @@ mod tests;
 mod tools;
 #[cfg(test)]
 mod tools_tests;
+mod track;
 
 pub use chamfera_geom as geom;
 pub use constraint::Constraint;
@@ -85,8 +87,8 @@ pub use profile::{LoopSegment, ProfileLoop, Region};
 pub use shapes::{FixedCurve, MAX_POLYGON_SIDES, MIN_POLYGON_SIDES};
 pub use sketch::{MAX_CONSTRAINTS, MAX_CURVES, MAX_POINTS, Sketch, SketchError};
 pub use snap::{
-    MAX_SNAP_CURVES, Snap, SnapKind, SnapQuery, exact_direction, lock_angle, lock_straight,
-    midpoint, perpendicular_foot, quadrant_points, tangent_points,
+    MAX_SNAP_CURVES, Snap, SnapKind, SnapKinds, SnapQuery, exact_direction, lock_angle,
+    lock_straight, midpoint, perpendicular_foot, quadrant_points, tangent_points,
 };
 pub use solver::{
     ConstraintStatus, DETERMINED_TOLERANCE, DofReport, DragReport, MAX_DRAG_STEPS,
@@ -98,3 +100,4 @@ pub use spline::{
 pub use tools::{
     MAX_PATTERN_COPIES, MAX_TOOL_CURVES, OffsetCorners, ToolError, ToolOp, ToolReport,
 };
+pub use track::{Guide, GuideKind, MAX_TRACK_POINTS, Track, TrackQuery, guide_crossing};

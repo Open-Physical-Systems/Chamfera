@@ -1,0 +1,9 @@
+[
+  { "command": "sketch.create", "params": { "plane": "xy" } },
+  { "command": "sketch.line", "params": { "x1": 0, "y1": 0, "x2": 30, "y2": 40 } },
+  { "command": "sketch.point", "params": { "x": 70, "y": 10 } },
+  { "command": "sketch.circle", "params": { "cx": 70, "cy": 45, "radius": 8 } },
+  { "command": "view.standard", "params": { "view": "top" } },
+  { "command": "view.fit", "params": { "width": 1180, "height": 640 } },
+  { "command": "view.zoom", "params": { "factor": 1.3 } }
+]

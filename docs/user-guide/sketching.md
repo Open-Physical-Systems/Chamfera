@@ -71,6 +71,22 @@ at the snapped place: **Endpoint**, **Centre**, **Origin**, **Midpoint**, **Inte
 win over midpoints and crossings, which win over the others. The new geometry gets the
 matching constraint, so a line started on an endpoint stays joined to it.
 
+### Guides
+
+When no snap is near, dashed guides line the cursor up:
+
+- **Aligned**: the cursor shares the x or y of an existing point (or the origin); near both
+  it lands on their corner.
+- **Perpendicular** and **Tangent**: a line started on the end of a line is held at right
+  angles to it, and one started on the end of an arc along its tangent. The new line gets
+  that constraint, also when you type its length.
+- **Polar** (off by default): the line is held on whole steps of an angle, 15 degrees
+  unless you choose another.
+
+Hold **Ctrl** while drawing to place a point exactly where you click: no snap, guide, grid
+or automatic horizontal and vertical. Which snaps and guides are on, and how near the
+cursor they reach, are in Preferences > Grid and Snap.
+
 ### Shift lock
 
 Hold **Shift** while drawing a line to keep it horizontal or vertical (the marker says
