@@ -66,6 +66,10 @@ pub enum Act {
     RemoveBody(u32),
     Properties(u32),
     SketchOnFace(Px),
+    /// Opens Press Pull with what is under this pixel picked.
+    PressPullAt(Px),
+    /// Opens Measure, with what is under the pixel (when there is one) as its first pick.
+    Measure(Option<Px>),
     /// Opens Fillet (or Chamfer) with this edge picked.
     Blend {
         chamfer: bool,
@@ -381,7 +385,7 @@ impl ChamferaApp {
         }
         out.push(Entry::Separator);
         if measure {
-            out.push(measure_item());
+            out.push(measure_item(at));
         }
         out.push(item(
             "Properties",
@@ -411,7 +415,7 @@ impl ChamferaApp {
                     ));
                 }
                 out.push(Entry::Separator);
-                out.push(measure_item());
+                out.push(measure_item(Some(px)));
                 out
             }
             Target::Body {
@@ -433,12 +437,12 @@ impl ChamferaApp {
                     ));
                     out.push(self.run_item(Action::Extrude));
                     out.push(item(
-                        "Press Pull",
-                        Icon::Extrude,
-                        Some("Press Pull is planned".into()),
-                        Act::Run(Action::Cancel),
+                        action_label(Action::PressPull),
+                        Icon::PressPull,
+                        self.why(Action::PressPull),
+                        Act::PressPullAt(px),
                     ));
-                    out.push(measure_item());
+                    out.push(measure_item(Some(px)));
                     if *body_items {
                         out.push(Entry::Separator);
                     }
@@ -588,6 +592,20 @@ impl ChamferaApp {
             }
             Act::Properties(b) => self.open_properties(b),
             Act::SketchOnFace((x, y, w, h)) => self.face_click(x, y, w, h),
+            Act::PressPullAt((x, y, w, h)) => {
+                self.run_action(Action::PressPull);
+                if self.solid.press_pull.is_some() {
+                    self.press_pull_click(x, y, w, h);
+                }
+            }
+            Act::Measure(at) => {
+                // Open it fresh (`open_inspect` toggles an open Measure closed).
+                self.solid.inspect = None;
+                self.open_inspect(crate::inspect_ui::InspectMode::Measure);
+                if let Some((x, y, w, h)) = at {
+                    self.inspect_click(x, y, w, h);
+                }
+            }
             Act::Blend { chamfer, edge } => {
                 let action = if chamfer {
                     Action::Chamfer
@@ -820,12 +838,19 @@ impl ChamferaApp {
             return;
         };
         let mut rows = Vec::new();
+        let mut surface = false;
         let (volume, area) = match self.solid_of(body) {
             Some(s) => {
                 if let Ok(f) = self.session.doc.feature(s.feature) {
                     rows.push(("Feature".into(), f.name.clone()));
                 }
-                rows.push(("Kind".into(), "Solid (exact)".into()));
+                surface = s.body.is_open();
+                let kind = if surface {
+                    "Surface (exact)"
+                } else {
+                    "Solid (exact)"
+                };
+                rows.push(("Kind".into(), kind.into()));
                 (s.body.volume().ok(), s.body.area().ok())
             }
             None => {
@@ -838,7 +863,13 @@ impl ChamferaApp {
             Some(v) => show(v),
             None => "could not be measured".into(),
         };
-        rows.push(("Volume".into(), text(volume, &|v| u.volume(v))));
+        // An open surface encloses nothing: it has no volume to measure.
+        let volume_text = if surface {
+            "none (an open surface)".into()
+        } else {
+            text(volume, &|v| u.volume(v))
+        };
+        rows.push(("Volume".into(), volume_text));
         rows.push(("Area".into(), text(area, &|v| u.area(v))));
         if let Some(bb) = b.mesh.bounds() {
             let d = bb.max - bb.min;
@@ -961,12 +992,14 @@ impl ChamferaApp {
     }
 }
 
-fn measure_item() -> Entry {
+/// Measure: opens the Measure tool, with what is under `at` as its first pick when the
+/// menu was opened in the viewport.
+fn measure_item(at: Option<Px>) -> Entry {
     item(
-        "Measure",
-        Icon::Dimension,
-        Some("Measure is planned".into()),
-        Act::Run(Action::Cancel),
+        label("inspect.measure"),
+        Icon::Measure,
+        None,
+        Act::Measure(at),
     )
 }
 
@@ -1226,5 +1259,84 @@ mod tests {
         let texts: Vec<&str> = menu.shown.iter().map(|(s, _)| s.as_str()).collect();
         assert!(texts.contains(&label("sketch.create_on_face")), "{texts:?}");
         assert!(texts.contains(&label("feature.delete")), "{texts:?}");
+    }
+
+    /// Properties of a surface body say so, and give it no volume (QA user guide pass:
+    /// "Solid (exact)" and "could not be measured"). The 50 x 30 rectangle's sides
+    /// extruded 10 as a surface: area 2 (50 + 30) 10 = 1600.
+    #[test]
+    fn properties_of_a_surface_say_surface_and_no_volume() {
+        let mut app = ChamferaApp::headless();
+        app.run("sketch.create", json!({ "plane": "xy" }));
+        app.run(
+            "sketch.rectangle",
+            json!({ "x1": 0, "y1": 0, "x2": 50, "y2": 30 }),
+        );
+        app.run("sketch.finish", json!({}));
+        app.run(
+            "surface.extrude",
+            json!({ "sketch": 1, "profiles": [{ "x": 25, "y": 15 }], "distance": 10 }),
+        )
+        .unwrap();
+        let body = app.session.scene.bodies[0].id;
+        app.open_properties(body);
+        let rows = app.ctx_menu.properties.as_ref().unwrap().rows.clone();
+        let get = |k: &str| rows.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
+        assert_eq!(get("Kind").as_deref(), Some("Surface (exact)"));
+        assert_eq!(get("Volume").as_deref(), Some("none (an open surface)"));
+        assert_eq!(get("Area").as_deref(), Some("1600.00 mm²"));
+    }
+
+    /// The face menu's Press Pull and Measure items run their tools on the face under
+    /// the cursor: Press Pull opens with the plate's top face as its target, and Measure
+    /// opens with the top face as its first pick (the plate's top is at z = 10).
+    #[test]
+    fn the_face_menus_press_pull_and_measure_open_their_tools_on_that_face() {
+        let ctx = egui::Context::default();
+        let mut t = 0.0;
+        let mut app = plate_app(&ctx, &mut t);
+        let c = app.viewport_rect.center();
+        let menu_item = |app: &mut ChamferaApp, t: &mut f64, text: &str| {
+            click(app, &ctx, t, c, PointerButton::Secondary);
+            let menu = app.ctx_menu.menu.as_ref().expect("no menu");
+            let entries = app.menu_entries(&menu.target, menu.px);
+            let enabled = entries
+                .iter()
+                .any(|e| matches!(e, Entry::Item { text: s, why_not: None, .. } if s == text));
+            assert!(enabled, "{text} is not offered enabled: {entries:?}");
+            let at = menu
+                .shown
+                .iter()
+                .find(|(s, _)| s == text)
+                .map(|(_, r)| r.center())
+                .expect("item not drawn");
+            click(app, &ctx, t, at, PointerButton::Primary);
+        };
+        menu_item(&mut app, &mut t, "Press Pull");
+        let face = app
+            .solid
+            .press_pull
+            .as_ref()
+            .and_then(|p| p.target.as_ref())
+            .and_then(|t| {
+                t.params
+                    .get("face")
+                    .and_then(|f| f.as_str())
+                    .map(str::to_owned)
+            });
+        assert!(
+            face.is_some_and(|f| f.ends_with(":top")),
+            "no top face target"
+        );
+        app.solid.press_pull = None;
+        menu_item(&mut app, &mut t, "Measure");
+        let tool = app.solid.inspect.as_ref().expect("Measure did not open");
+        assert_eq!(tool.mode, crate::inspect_ui::InspectMode::Measure);
+        assert_eq!(tool.picks.len(), 1, "{:?}", tool.picks);
+        assert!(
+            tool.picks[0].to_string().contains("top"),
+            "{:?}",
+            tool.picks
+        );
     }
 }

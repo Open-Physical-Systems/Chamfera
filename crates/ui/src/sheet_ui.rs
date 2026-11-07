@@ -84,6 +84,7 @@ impl Default for FlangeTool {
 }
 
 /// The rule being edited in the Rules dialog (values as typed).
+#[derive(Clone)]
 pub struct RuleForm {
     pub name: String,
     pub thickness: String,
@@ -212,7 +213,11 @@ impl ChamferaApp {
                 r["length"].as_f64().unwrap_or(0.0),
                 r["width"].as_f64().unwrap_or(0.0),
             );
-            self.message = Some((format!("Flat pattern {l:.3} × {w:.3} mm"), false));
+            let u = self.units();
+            self.message = Some((
+                format!("Flat pattern {} × {}", u.length(l), u.length(w)),
+                false,
+            ));
         }
     }
 
@@ -226,7 +231,9 @@ impl ChamferaApp {
             let n = r["bends"].as_array().map_or(0, Vec::len);
             self.message = Some((
                 format!(
-                    "Flat pattern {l:.3} × {w:.3} mm · {n} bend{}",
+                    "Flat pattern {} × {} · {n} bend{}",
+                    self.units().length(l),
+                    self.units().length(w),
                     if n == 1 { "" } else { "s" }
                 ),
                 false,
@@ -272,8 +279,9 @@ impl ChamferaApp {
                     let v = r["solids"][0]["volume"].as_f64().unwrap_or(0.0);
                     self.message = Some((
                         format!(
-                            "{} · volume {v:.2} mm³",
-                            r["name"].as_str().unwrap_or("Base flange")
+                            "{} · volume {}",
+                            r["name"].as_str().unwrap_or("Base flange"),
+                            self.units().volume(v)
                         ),
                         false,
                     ));
@@ -516,8 +524,9 @@ impl ChamferaApp {
                 let v = r["solids"][0]["volume"].as_f64().unwrap_or(0.0);
                 self.message = Some((
                     format!(
-                        "{} · volume {v:.2} mm³",
-                        r["name"].as_str().unwrap_or(title)
+                        "{} · volume {}",
+                        r["name"].as_str().unwrap_or(title),
+                        self.units().volume(v)
                     ),
                     false,
                 ));
@@ -527,6 +536,49 @@ impl ChamferaApp {
         if cancel {
             self.sheet_metal.flange = None;
             self.message = None;
+        }
+    }
+
+    /// Apply in the Rules dialog: saves the rule through `sheet.rule`. Lengths are read
+    /// in the design's unit unless they name one (`3 in`); a field that cannot be read
+    /// stops it with an error naming the field, instead of keeping the old value.
+    pub(crate) fn apply_rule_form(&mut self) {
+        let Some(form) = self.sheet_metal.rules.clone() else {
+            return;
+        };
+        use chamfera_doc::expr::{self, Dim};
+        let unit = self.session.doc.units.length.mm();
+        let mut p = json!({ "name": form.name.trim(), "relief": form.relief.key() });
+        for (key, name, v, dim) in [
+            ("thickness", "Thickness", &form.thickness, Dim::LENGTH),
+            ("bend_radius", "Bend radius", &form.bend_radius, Dim::LENGTH),
+            ("k_factor", "K-factor", &form.k_factor, Dim::NONE),
+            (
+                "relief_width",
+                "Relief width",
+                &form.relief_width,
+                Dim::LENGTH,
+            ),
+            (
+                "relief_depth",
+                "Relief depth",
+                &form.relief_depth,
+                Dim::LENGTH,
+            ),
+        ] {
+            if v.trim().is_empty() {
+                continue;
+            }
+            match expr::evaluate_as_in(v.trim(), dim, unit, &expr::NoNames) {
+                Ok(x) => p[key] = json!(x),
+                Err(e) => {
+                    self.message = Some((format!("{name} {:?}: {e}", v.trim()), true));
+                    return;
+                }
+            }
+        }
+        if self.run("sheet.rule", p).is_some() {
+            self.message = Some(("Sheet metal rule saved".into(), false));
         }
     }
 
@@ -612,22 +664,7 @@ impl ChamferaApp {
             *form = RuleForm::from_rule(&r);
         }
         if ok {
-            let num = |s: &str| s.trim().trim_end_matches("mm").trim().parse::<f64>().ok();
-            let mut p = json!({ "name": form.name.trim(), "relief": form.relief.key() });
-            for (key, v) in [
-                ("thickness", &form.thickness),
-                ("bend_radius", &form.bend_radius),
-                ("k_factor", &form.k_factor),
-                ("relief_width", &form.relief_width),
-                ("relief_depth", &form.relief_depth),
-            ] {
-                if let Some(x) = num(v) {
-                    p[key] = json!(x);
-                }
-            }
-            if self.run("sheet.rule", p).is_some() {
-                self.message = Some(("Sheet metal rule saved".into(), false));
-            }
+            self.apply_rule_form();
         }
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) && !ctx.egui_wants_keyboard_input() {
             cancel = true;
@@ -641,6 +678,37 @@ impl ChamferaApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The Rules dialog reads lengths with their units and refuses what it cannot read
+    /// (QA user guide pass, sheet metal 6: "3 in" and "abc" were skipped silently and
+    /// "saved" shown). 3 in is 76.2 mm; a plain 2 is 2 mm in a millimetre design.
+    #[test]
+    fn the_rules_dialog_reads_units_and_refuses_unreadable_values() {
+        let mut app = ChamferaApp::headless();
+        let form = |thickness: &str| RuleForm {
+            name: "Plate".into(),
+            thickness: thickness.into(),
+            bend_radius: "2".into(),
+            k_factor: "0.4".into(),
+            relief: chamfera_doc::ReliefShape::default(),
+            relief_width: String::new(),
+            relief_depth: String::new(),
+        };
+        app.sheet_metal.rules = Some(form("3 in"));
+        app.apply_rule_form();
+        let r = app.session.doc.sheet_rule("Plate").unwrap().clone();
+        assert!((r.thickness - 76.2).abs() < 1e-9, "{}", r.thickness);
+        assert!((r.bend_radius - 2.0).abs() < 1e-9);
+        app.sheet_metal.rules = Some(form("abc"));
+        app.apply_rule_form();
+        let (text, error) = app.message.clone().unwrap();
+        assert!(error && text.contains("Thickness"), "{text}");
+        let after = app.session.doc.sheet_rule("Plate").unwrap();
+        assert!(
+            (after.thickness - 76.2).abs() < 1e-9,
+            "the rule is unchanged"
+        );
+    }
 
     #[test]
     fn the_flange_tool_builds_the_flange_command() {

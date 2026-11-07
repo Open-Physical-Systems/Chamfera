@@ -115,6 +115,15 @@ pub static COMMANDS: &[CommandSpec] = &[
         mutates: true,
         run: point_vertex,
     },
+    CommandSpec {
+        id: "construct.visibility",
+        label: "Show or Hide Construction",
+        params: "feature: integer (required) - a construction plane, axis or point\n\
+                 visible: boolean (required) - shown in the viewport; hiding changes \
+                 nothing built on it (a view setting, not saved and not undone)",
+        mutates: false,
+        run: visibility,
+    },
 ];
 
 fn bad(msg: impl Into<String>) -> CommandError {
@@ -345,6 +354,22 @@ fn axis_two_planes(s: &mut Session, p: &Value) -> CmdResult {
     let l = list(p, "planes", 2)?;
     let planes = [plane_ref(&l[0])?, plane_ref(&l[1])?];
     add(s, Construction::AxisTwoPlanes { planes })
+}
+
+fn visibility(s: &mut Session, p: &Value) -> CmdResult {
+    let id = params::req_id(p, "feature")?;
+    let visible = params::req_bool(p, "visible")?;
+    match s.doc.feature(id).map(|f| &f.kind) {
+        Ok(FeatureKind::Construct(_)) => {}
+        _ => return Err(bad(format!("feature {id} is not construction geometry"))),
+    }
+    if visible {
+        s.view_state.hidden_constructs.remove(&id);
+    } else {
+        s.view_state.hidden_constructs.insert(id);
+    }
+    s.refresh_overlays();
+    Ok(json!({ "feature": id, "visible": visible }))
 }
 
 fn point_vertex(s: &mut Session, p: &Value) -> CmdResult {

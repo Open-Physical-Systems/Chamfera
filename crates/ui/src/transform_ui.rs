@@ -73,6 +73,8 @@ pub struct TransformTool {
     pub dy: String,
     pub dz: String,
     pub axis: usize,
+    /// Circular Pattern: a construction axis to turn around instead of `axis`.
+    pub axis_feature: Option<u32>,
     pub angle: String,
     pub copy: bool,
     /// Patterns: the feature to repeat, how many, and the spacing (linear) along `axis`.
@@ -97,6 +99,7 @@ impl TransformTool {
             } else {
                 2
             },
+            axis_feature: None,
             angle: if kind == TransformKind::PatternCircular {
                 "360 deg"
             } else {
@@ -112,6 +115,29 @@ impl TransformTool {
             }
             .into(),
             spacing: "20 mm".into(),
+        }
+    }
+
+    /// The row of `axes` (from `pattern_axes`) the tool's axis is.
+    fn axis_choice(&self, axes: &[(String, Option<u32>)]) -> usize {
+        match self.axis_feature {
+            Some(id) => axes
+                .iter()
+                .position(|a| a.1 == Some(id))
+                .unwrap_or(self.axis),
+            None => self.axis,
+        }
+    }
+
+    /// Picks row `k` of `axes`: X, Y or Z through the origin, or a construction axis.
+    fn set_axis_choice(&mut self, k: usize, axes: &[(String, Option<u32>)]) {
+        match axes.get(k) {
+            Some((_, Some(id))) => self.axis_feature = Some(*id),
+            Some((_, None)) => {
+                self.axis = k;
+                self.axis_feature = None;
+            }
+            None => {}
         }
     }
 
@@ -170,14 +196,20 @@ impl TransformTool {
             }
             TransformKind::PatternCircular => {
                 let feature = self.feature?;
-                (filled(&self.count) && filled(&self.angle)).then(|| {
-                    json!({
+                (filled(&self.count) && filled(&self.angle)).then(|| match self.axis_feature {
+                    Some(id) => json!({
+                        "feature": feature,
+                        "count": self.count.trim(),
+                        "axis_feature": id,
+                        "angle": self.angle.trim(),
+                    }),
+                    None => json!({
                         "feature": feature,
                         "count": self.count.trim(),
                         "origin": { "x": 0.0, "y": 0.0, "z": 0.0 },
                         "axis": self.axis_vector(),
                         "angle": self.angle.trim(),
-                    })
+                    }),
                 })
             }
         }
@@ -219,6 +251,19 @@ pub(crate) fn move_details(m: &Move) -> String {
 }
 
 /// Features a pattern can repeat: (id, name). Patterns and moves cannot.
+/// What Circular Pattern can turn around: X, Y and Z through the origin (`None`), then
+/// the built construction axes (`Some(id)`, followed on rebuild).
+fn pattern_axes(app: &ChamferaApp) -> Vec<(String, Option<u32>)> {
+    AXES.iter()
+        .map(|a| (a.0.to_owned(), None))
+        .chain(
+            app.construction_axes()
+                .into_iter()
+                .map(|(id, name)| (name, Some(id))),
+        )
+        .collect()
+}
+
 fn pattern_sources(app: &ChamferaApp) -> Vec<(u32, String)> {
     app.session
         .doc
@@ -327,6 +372,7 @@ impl ChamferaApp {
         }
         let pos = self.tool_dialog_pos(WIDTH);
         let sources = pattern_sources(self);
+        let axes = pattern_axes(self);
         let look = Look {
             theme: &self.theme,
             icons: &self.icons,
@@ -357,7 +403,7 @@ impl ChamferaApp {
                         .num_columns(2)
                         .spacing([widgets::S3, widgets::S3])
                         .show(ui, |ui| {
-                            ok |= transform_fields(ui, look, tool, &sources);
+                            ok |= transform_fields(ui, look, tool, &sources, &axes);
                         });
                 });
                 widgets::dialog_footer(ui, look, |ui| {
@@ -388,6 +434,7 @@ fn transform_fields(
     look: Look,
     tool: &mut TransformTool,
     sources: &[(u32, String)],
+    pattern_axes: &[(String, Option<u32>)],
 ) -> bool {
     let mut enter = false;
     if tool.kind.on_bodies() {
@@ -451,7 +498,10 @@ fn transform_fields(
             enter |= field(ui, look, "Spacing", &mut tool.spacing, "20 mm");
         }
         TransformKind::PatternCircular => {
-            choice(ui, look, "Axis", &mut tool.axis, &axes);
+            let names: Vec<&str> = pattern_axes.iter().map(|a| a.0.as_str()).collect();
+            let mut k = tool.axis_choice(pattern_axes);
+            choice(ui, look, "Axis", &mut k, &names);
+            tool.set_axis_choice(k, pattern_axes);
             enter |= field(ui, look, "Count", &mut tool.count, "6");
             enter |= field(ui, look, "Angle", &mut tool.angle, "360 deg");
         }
@@ -547,5 +597,57 @@ mod tests {
         app.transform_ok().unwrap();
         // 3 more copies of the box at 90, 180 and 270 degrees about z.
         assert_eq!(app.session.solids().len(), 6);
+    }
+
+    /// Circular Pattern offers the built construction axes after X, Y and Z and passes
+    /// `axis_feature` for one. The box x 0..50, y 0..30 turned 180 degrees about a
+    /// vertical axis through (60, 15) (the planes x = 60 and y = 15 meet there) lands at
+    /// x 70..120, y 0..30: centre (95, 15) mirrored through (60, 15) from (25, 15).
+    #[test]
+    fn the_circular_pattern_dialog_turns_around_a_construction_axis() {
+        let mut app = app_with_box();
+        let px = app
+            .run(
+                "construct.plane_offset",
+                json!({ "base": "yz", "distance": 60 }),
+            )
+            .unwrap()["feature"]
+            .clone();
+        let py = app
+            // The XZ plane's normal is -Y, so y = 15 is an offset of -15.
+            .run(
+                "construct.plane_offset",
+                json!({ "base": "xz", "distance": -15 }),
+            )
+            .unwrap()["feature"]
+            .clone();
+        let axis = app
+            .run("construct.axis_two_planes", json!({ "planes": [px, py] }))
+            .unwrap()["feature"]
+            .as_u64()
+            .unwrap() as u32;
+        app.open_transform(TransformKind::PatternCircular);
+        let axes = pattern_axes(&app);
+        let k = axes
+            .iter()
+            .position(|(_, id)| *id == Some(axis))
+            .expect("the construction axis is not offered");
+        let tool = app.solid.transform.as_mut().unwrap();
+        tool.feature = Some(2);
+        tool.count = "2".into();
+        tool.set_axis_choice(k, &axes);
+        let params = tool.params().unwrap();
+        assert_eq!(params["axis_feature"], json!(axis));
+        app.transform_ok().unwrap();
+        assert_eq!(app.session.solids().len(), 2);
+        let b = app.session.solids()[1].body.bounding_box().unwrap();
+        assert!(
+            (b.min.x - 70.0).abs() < 1e-6 && (b.max.x - 120.0).abs() < 1e-6,
+            "{b:?}"
+        );
+        assert!(
+            b.min.y.abs() < 1e-6 && (b.max.y - 30.0).abs() < 1e-6,
+            "{b:?}"
+        );
     }
 }

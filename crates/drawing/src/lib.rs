@@ -38,13 +38,13 @@ pub use chamfera_doc::drawing::{
     DimensionKind, Drawing, Orientation, Paper, ProjectionAngle, Sheet, SheetDimension, SheetView,
     TitleBlock, ViewDirection,
 };
-pub use dims::{DimensionPlan, format_value, measure, plan_dimension};
+pub use dims::{DimensionPlan, format_value, measure, moved_offset, plan_dimension};
 pub use hlr::{Basis, Curve2, ViewCurve, ViewGeometry, project, project_basis};
 pub use sheet::{
-    DimensionState, PlacedView, SheetGeometry, Shown, centre_line_refs, dimension_refs,
+    DimensionState, Owner, PlacedView, SheetGeometry, Shown, centre_line_refs, dimension_refs,
     projects_from, render_sheet, render_with_parts, scale_text, shown,
 };
-pub use sheet::{MARGIN, TITLE_HEIGHT};
+pub use sheet::{MARGIN, MARGIN_LEFT, TITLE_HEIGHT};
 pub use text::width as text_width;
 
 use chamfera_geom::Point2;

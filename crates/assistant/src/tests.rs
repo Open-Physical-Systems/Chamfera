@@ -808,23 +808,27 @@ fn the_recorded_demo_builds_the_plate_with_four_holes() {
         confirm_destructive: true,
     };
     let mut errors = Vec::new();
+    let mut order = Vec::new();
     let end = agent::run(
         &mut conv,
         crate::script::DEMO_REQUEST,
         &mut replay,
         &mut host,
-        &mut |e| {
-            if let Event::ToolDone {
+        &mut |e| match e {
+            Event::ToolDone {
                 ok: false, summary, ..
-            } = e
-            {
-                errors.push(summary);
-            }
+            } => errors.push(summary),
+            Event::ToolPending { name, .. } => order.push(name),
+            _ => {}
         },
         &AtomicBool::new(false),
     );
     assert_eq!(end, RunEnd::Done);
     assert!(errors.is_empty(), "{errors:?}");
+    // Finish Sketch comes before the extrude (QA user guide pass: it ran after).
+    let at = |n: &str| order.iter().position(|x| x == n);
+    assert!(at("sketch_finish") < at("solid_extrude"), "{order:?}");
+    assert!(at("sketch_finish").is_some());
     // 60 x 40 x 8 less four 5.5 mm holes 8 deep: 19200 - 4 * pi * 2.75^2 * 8 = 19200 - 242 pi.
     let expected = 19200.0 - 242.0 * std::f64::consts::PI;
     let v = body_volume(&mut session);

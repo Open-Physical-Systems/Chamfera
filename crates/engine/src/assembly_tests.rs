@@ -711,3 +711,73 @@ fn motion_keys_survive_save_and_open() {
     t.execute("joint.delete", &json!({"joint": j})).unwrap();
     assert!(t.doc.motion.keys.is_empty());
 }
+
+/// A planar joint between a 60 x 60 x 4 plate's top (centre (30, 30, 4)) and the bottom
+/// of an r 5 puck made at (100, 100) centres the puck on the plate: its axis lands on
+/// x = y = 30 (QA user guide pass: the puck's face centre was averaged from its one
+/// seam vertex, putting it at (25, 30)).
+#[test]
+fn a_planar_joint_centres_a_round_puck_on_the_plate() {
+    let mut s = Session::new();
+    let fa = plate(&mut s, 0.0, 0.0, 60.0, 60.0, 4.0);
+    let sk = s.execute("sketch.create", &json!({"plane": "xy"})).unwrap();
+    s.execute("sketch.circle", &json!({"cx": 100, "cy": 100, "radius": 5}))
+        .unwrap();
+    s.execute("sketch.finish", &json!({})).unwrap();
+    let fb = s
+        .execute(
+            "solid.extrude",
+            &json!({"sketch": sk["sketch"], "distance": 3, "profiles": [{"x": 100, "y": 100}]}),
+        )
+        .unwrap()["feature"]
+        .as_u64()
+        .unwrap();
+    let a = new_component(&mut s, "Plate", fa);
+    let b = new_component(&mut s, "Puck", fb);
+    s.execute("component.ground", &json!({"component": a}))
+        .unwrap();
+    s.execute(
+        "joint.create",
+        &json!({"type": "planar", "a": {"face": format!("{fa}:top")},
+                "b": {"face": format!("{fb}:bottom")}, "flip": true}),
+    )
+    .unwrap();
+    // The puck's box is x and y 25..35 around the axis, z 4..7 on the top.
+    assert!(
+        close(bounds(&mut s, b), [25.0, 25.0, 4.0, 35.0, 35.0, 7.0]),
+        "{:?}",
+        bounds(&mut s, b)
+    );
+}
+
+/// A linked copy of a jointed component starts where the original is shown, not where
+/// it was before the joint moved it (QA user guide pass). B stacked on A by a rigid
+/// joint spans x 0..40, y 10..20, z 4..8 (see
+/// `a_face_origin_follows_the_face_and_a_pick_names_the_component`); its copy moved
+/// 50 along x spans x 50..90 at the same y and z.
+#[test]
+fn a_linked_copy_of_a_jointed_component_starts_where_it_is_shown() {
+    let mut s = Session::new();
+    let (a, b) = two_plates(&mut s);
+    let fa = s.doc.assembly.component(a as u32).unwrap().features[0];
+    let fb = s.doc.assembly.component(b as u32).unwrap().features[0];
+    s.execute(
+        "joint.create",
+        &json!({"type": "rigid", "a": {"face": format!("{fa}:top")},
+                "b": {"face": format!("{fb}:bottom")}, "flip": true}),
+    )
+    .unwrap();
+    let copy = s
+        .execute(
+            "component.copy",
+            &json!({"component": b, "transform": {"translate": {"x": 50, "y": 0, "z": 0}}}),
+        )
+        .unwrap()["component"]
+        .as_u64()
+        .unwrap();
+    assert!(
+        close(bounds(&mut s, copy), [50.0, 10.0, 4.0, 90.0, 20.0, 8.0]),
+        "{:?}",
+        bounds(&mut s, copy)
+    );
+}

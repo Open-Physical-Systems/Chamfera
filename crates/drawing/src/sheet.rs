@@ -103,6 +103,88 @@ pub struct SheetGeometry {
     /// Annotations that lost what they point at (a balloon's component, a centre line's
     /// circle), by id, with the reason.
     pub dangling_annotations: Vec<(u32, String)>,
+    /// Which `items` each dimension, annotation and the parts list drew, for picking.
+    pub owners: Vec<(Owner, std::ops::Range<usize>)>,
+}
+
+/// What a part of a laid-out sheet belongs to, for picking and moving it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Owner {
+    View(u32),
+    Dimension(u32),
+    /// An annotation or the parts list.
+    Annotation(u32),
+}
+
+impl Owner {
+    /// The `drawing.*` parameter that names it (`view`, `dimension`, `annotation`) and
+    /// its id.
+    pub fn key(self) -> (&'static str, u32) {
+        match self {
+            Owner::View(id) => ("view", id),
+            Owner::Dimension(id) => ("dimension", id),
+            Owner::Annotation(id) => ("annotation", id),
+        }
+    }
+}
+
+/// How far `p` is from a drawn shape, sheet mm (0 inside text and arrowheads).
+pub fn shape_distance(shape: &Shape, p: Point2) -> f64 {
+    match shape {
+        Shape::Line { a, b } => {
+            let d = *b - *a;
+            let len2 = d.dot(d);
+            let t = if len2 > 0.0 {
+                ((p - *a).dot(d) / len2).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            p.distance(*a + d * t)
+        }
+        Shape::Circle { centre, radius } | Shape::Arc { centre, radius, .. } => {
+            (p.distance(*centre) - radius).abs()
+        }
+        Shape::Fill { points } => {
+            let (lo, hi) = points.iter().fold(
+                (
+                    Point2::new(f64::MAX, f64::MAX),
+                    Point2::new(f64::MIN, f64::MIN),
+                ),
+                |(lo, hi), q| {
+                    (
+                        Point2::new(lo.x.min(q.x), lo.y.min(q.y)),
+                        Point2::new(hi.x.max(q.x), hi.y.max(q.y)),
+                    )
+                },
+            );
+            box_distance(p, lo, hi)
+        }
+        Shape::Text {
+            at,
+            height,
+            angle,
+            align,
+            text,
+        } => {
+            // Into the text's own frame: x along the baseline, y up.
+            let v = p - *at;
+            let (s, c) = angle.sin_cos();
+            let local = Point2::new(v.x * c + v.y * s, -v.x * s + v.y * c);
+            let w = crate::text::width(text, *height);
+            let x0 = match align {
+                Align::Left => 0.0,
+                Align::Centre => -w * 0.5,
+                Align::Right => -w,
+            };
+            box_distance(local, Point2::new(x0, 0.0), Point2::new(x0 + w, *height))
+        }
+    }
+}
+
+fn box_distance(p: Point2, lo: Point2, hi: Point2) -> f64 {
+    let dx = (lo.x - p.x).max(0.0).max(p.x - hi.x);
+    let dy = (lo.y - p.y).max(0.0).max(p.y - hi.y);
+    dx.hypot(dy)
 }
 
 impl SheetGeometry {
@@ -120,6 +202,31 @@ impl SheetGeometry {
                 })
             })
             .min_by(|a, b| a.centre.distance(p).total_cmp(&b.centre.distance(p)))
+    }
+
+    /// What is at `p` (sheet mm): the dimension or annotation drawn nearest it within
+    /// `tolerance` mm, else the view whose box holds it.
+    pub fn pick(&self, p: Point2, tolerance: f64) -> Option<Owner> {
+        let mut best: Option<(f64, Owner)> = None;
+        for (owner, range) in &self.owners {
+            for item in self.items.get(range.clone()).unwrap_or_default() {
+                let d = shape_distance(&item.shape, p);
+                if d <= tolerance && best.is_none_or(|(b, _)| d < b) {
+                    best = Some((d, *owner));
+                }
+            }
+        }
+        best.map(|b| b.1)
+            .or_else(|| self.view_at(p, 0.0).map(|v| Owner::View(v.id)))
+    }
+
+    /// The items `owner` drew (a view: none, it is picked by its box).
+    pub fn items_of(&self, owner: Owner) -> &[Item] {
+        self.owners
+            .iter()
+            .find(|(o, _)| *o == owner)
+            .and_then(|(_, r)| self.items.get(r.clone()))
+            .unwrap_or_default()
     }
 }
 
@@ -559,7 +666,10 @@ pub fn render_with_parts(
                 i.layer = Layer::Dangling;
             }
         }
+        let start = out.items.len();
         out.items.extend(items);
+        out.owners
+            .push((Owner::Dimension(d.id), start..out.items.len()));
         let value = dims::measure(d.kind, &points);
         out.dimensions.push(DimensionState {
             id: d.id,
@@ -574,7 +684,10 @@ pub fn render_with_parts(
     annotations(sheet, &views, &models, parts, &mut out);
     out.views = views;
     if let Some(pl) = &sheet.parts_list {
+        let start = out.items.len();
         annot::parts_list(&mut out.items, Point2::new(pl.x, pl.y), parts);
+        out.owners
+            .push((Owner::Annotation(pl.id), start..out.items.len()));
         out.parts = parts.to_vec();
     }
     Ok(out)
@@ -612,20 +725,57 @@ fn plain_view<'a>(
     let c3 = centre_of(&given);
     models.insert(v.id, (Shown::Given(given), basis, None));
     match geometry {
-        Ok(geometry) => PlacedView {
-            id: v.id,
-            direction: v.direction,
-            basis,
-            scale,
-            centre,
-            model_centre: basis.project(c3),
-            geometry,
-            clip: None,
-            section: false,
-            problem: None,
-        },
+        Ok(geometry) => keep_on_sheet(
+            sheet,
+            v,
+            PlacedView {
+                id: v.id,
+                direction: v.direction,
+                basis,
+                scale,
+                centre,
+                model_centre: basis.project(c3),
+                geometry,
+                clip: None,
+                section: false,
+                problem: None,
+            },
+        ),
         Err(e) => empty(e),
     }
+}
+
+/// Moves a projected view toward its base, along the axis it is projected on, just far
+/// enough that its box stays inside the sheet's border (first angle mirrors a view's
+/// distance to the other side, which could put a view placed for third angle off the
+/// sheet). Its alignment with the base is kept; a view larger than the sheet stays put.
+fn keep_on_sheet(sheet: &Sheet, v: &SheetView, mut p: PlacedView) -> PlacedView {
+    let Some(base) = v.parent.and_then(|id| sheet.view(id)) else {
+        return p;
+    };
+    let Some((lo, hi)) = p.bounds() else {
+        return p;
+    };
+    let (w, h) = sheet.size();
+    let base_at = placement(sheet, base).0;
+    // The shift that brings [lo, hi] inside [min, max], when it fits.
+    let shift = |lo: f64, hi: f64, min: f64, max: f64| -> f64 {
+        if hi - lo > max - min {
+            0.0
+        } else if lo < min {
+            min - lo
+        } else if hi > max {
+            max - hi
+        } else {
+            0.0
+        }
+    };
+    if (p.centre.x - base_at.x).abs() < chamfera_geom::LINEAR_TOLERANCE {
+        p.centre.y += shift(lo.y, hi.y, MARGIN, h - MARGIN);
+    } else {
+        p.centre.x += shift(lo.x, hi.x, MARGIN_LEFT, w - MARGIN);
+    }
+    p
 }
 
 fn section_view<'a>(
@@ -795,8 +945,10 @@ fn annotations(
     parts: &[PartRow],
     out: &mut SheetGeometry,
 ) {
+    let mut owners = Vec::new();
     let items = &mut out.items;
     for a in &sheet.annotations {
+        let start = items.len();
         match &a.kind {
             AnnotationKind::Note { at, text, height } => annot::note(items, *at, text, *height),
             AnnotationKind::Leader { points, text } => annot::leader(items, points, text),
@@ -869,7 +1021,9 @@ fn annotations(
                 annot::balloon(items, *at, v.to_sheet(*target), &number, layer);
             }
         }
+        owners.push((Owner::Annotation(a.id), start..items.len()));
     }
+    out.owners.extend(owners);
 }
 
 /// Clips a sheet line to the view's detail circle, if it has one.

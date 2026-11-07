@@ -29,6 +29,8 @@ pub struct InspectTool {
     /// Mass Properties: the solid (name), and the density as typed.
     pub body: Option<String>,
     pub density: String,
+    /// Why the density cannot be used, shown under it (Mass Properties).
+    pub error: Option<String>,
 }
 
 impl InspectTool {
@@ -39,6 +41,7 @@ impl InspectTool {
             result: None,
             body: None,
             density: "1".into(),
+            error: None,
         }
     }
 }
@@ -150,8 +153,48 @@ pub(crate) fn measure_rows(u: DisplayUnits, r: &Value) -> Vec<(String, String)> 
 }
 
 /// The rows of a Mass Properties result.
+/// `v` with six significant digits, without trailing zeros or an exponent unless
+/// it is very large or small: `9.8125`, `1234567`, `0.015209`, `1.2346e-9`.
+fn significant(v: f64) -> String {
+    if v == 0.0 || !v.is_finite() {
+        return if v.is_finite() {
+            "0".into()
+        } else {
+            "?".into()
+        };
+    }
+    let mag = v.abs().log10().floor();
+    if !(-4.0..9.0).contains(&mag) {
+        return format!("{v:.4e}");
+    }
+    let decimals = (5.0 - mag).max(0.0) as usize;
+    let text = format!("{v:.decimals$}");
+    if text.contains('.') {
+        text.trim_end_matches('0').trim_end_matches('.').to_owned()
+    } else {
+        text
+    }
+}
+
 pub(crate) fn mass_rows(u: DisplayUnits, r: &Value) -> Vec<(String, String)> {
-    let f = |v: &Value| num(v).map_or_else(|| "-".to_owned(), |x| format!("{x:.4e}"));
+    // Moments in mass x (display length)²; round-off below a billionth of the largest
+    // reads 0.
+    let mm2 = u.length.mm() * u.length.mm();
+    let all: Vec<f64> = (0..3)
+        .flat_map(|a| (0..3).map(move |b| (a, b)))
+        .filter_map(|(a, b)| num(&r["inertia"][a][b]))
+        .collect();
+    let largest = all.iter().fold(0.0_f64, |m, x| m.max(x.abs()));
+    let unit = format!("mass·{}²", u.length.symbol());
+    let f = |v: &Value| {
+        num(v).map_or_else(
+            || "-".to_owned(),
+            |x| {
+                let x = if x.abs() <= largest * 1e-9 { 0.0 } else { x };
+                format!("{} {unit}", significant(x / mm2))
+            },
+        )
+    };
     let mut rows = vec![
         (
             "Solid".to_owned(),
@@ -232,10 +275,25 @@ impl ChamferaApp {
         let Some(body) = tool.body.clone() else {
             return;
         };
-        let density = tool.density.trim().parse::<f64>().unwrap_or(f64::NAN);
+        let typed = tool.density.trim().to_owned();
+        let density = typed
+            .parse::<f64>()
+            .ok()
+            .filter(|d| d.is_finite() && *d > 0.0);
+        let Some(density) = density else {
+            // Steel is 7.85 g/cm³ = 0.00785 g/mm³.
+            let e = "Density must be a number above 0:\nmass per mm³ (steel: 0.00785 g)".to_owned();
+            self.message = Some((e.clone(), true));
+            if let Some(tool) = self.solid.inspect.as_mut() {
+                tool.result = None;
+                tool.error = Some(e);
+            }
+            return;
+        };
         let r = self.run("inspect.mass", json!({ "body": body, "density": density }));
         if let Some(tool) = self.solid.inspect.as_mut() {
             tool.result = r;
+            tool.error = None;
         }
     }
 
@@ -489,6 +547,11 @@ impl ChamferaApp {
                                     recompute = true;
                                 }
                                 ui.end_row();
+                                if let Some(e) = &tool.error {
+                                    ui.label("");
+                                    ui.label(egui::RichText::new(e).color(look.c(|t| t.error)));
+                                    ui.end_row();
+                                }
                             }
                             for (k, v) in &rows {
                                 widgets::fixed_text(
@@ -651,5 +714,59 @@ mod tests {
         // Clicking the button again closes it.
         app.open_inspect(InspectMode::Mass);
         assert!(app.solid.inspect.is_none());
+    }
+
+    /// Inertia reads as a plain number with its unit, mass x length squared in the
+    /// design's length unit, and round-off far below the largest moment reads 0 (QA user
+    /// guide pass: "9.8125e0" beside "2.57e-16", with no units). In inches the same
+    /// 9.8125 mass·mm² is 9.8125 / 645.16 = 0.01520940... mass·in², six digits 0.0152094.
+    #[test]
+    fn inertia_rows_are_plain_numbers_with_units_and_no_noise() {
+        let r = json!({
+            "inertia": [[9.8125, 2.57e-16, 0.0], [2.57e-16, 1234567.0, 0.0], [0.0, 0.0, 0.5]],
+            "principal_moments": [0.5, 9.8125, 1234567.0],
+        });
+        let rows = mass_rows(DisplayUnits::default(), &r);
+        let get = |rows: &[(String, String)], k: &str| {
+            rows.iter()
+                .find(|(n, _)| n == k)
+                .map(|(_, v)| v.clone())
+                .unwrap()
+        };
+        assert_eq!(get(&rows, "Ixx"), "9.8125 mass·mm²");
+        assert_eq!(get(&rows, "Ixy"), "0 mass·mm²");
+        assert_eq!(get(&rows, "Iyy"), "1234567 mass·mm²");
+        let inch = DisplayUnits {
+            length: chamfera_doc::LengthUnit::In,
+            ..DisplayUnits::default()
+        };
+        assert_eq!(get(&mass_rows(inch, &r), "Ixx"), "0.0152094 mass·in²");
+    }
+
+    /// A density that is not a number ("7.85 g/cm3", "abc", "-2", empty) is refused
+    /// with an error saying what is allowed; it is never taken as 1 (mass 15000 for the
+    /// 50 x 30 x 10 box). A good density afterwards clears the error.
+    #[test]
+    fn mass_properties_refuse_an_unreadable_density() {
+        let mut app = ChamferaApp::headless();
+        boxed(&mut app, 0.0, 50.0);
+        app.open_inspect(InspectMode::Mass);
+        for bad in ["7.85 g/cm3", "abc", "-2", "0", ""] {
+            app.solid.inspect.as_mut().unwrap().density = bad.into();
+            app.refresh_mass();
+            let tool = app.solid.inspect.as_ref().unwrap();
+            assert!(tool.result.is_none(), "{bad}: {:?}", tool.result);
+            let e = tool.error.clone().unwrap_or_default();
+            assert!(e.contains("Density"), "{bad}: {e}");
+        }
+        app.solid.inspect.as_mut().unwrap().density = "2".into();
+        app.refresh_mass();
+        let tool = app.solid.inspect.as_ref().unwrap();
+        assert!(tool.error.is_none());
+        let mass = tool.result.as_ref().and_then(|r| r["mass"].as_f64());
+        assert!(
+            mass.is_some_and(|m| (m - 30_000.0).abs() < 1e-6),
+            "{mass:?}"
+        );
     }
 }

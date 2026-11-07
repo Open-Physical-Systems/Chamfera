@@ -264,14 +264,53 @@ pub struct ExtrudeTool {
     seeds: Vec<Point2>,
     /// The extrude's options.
     pub form: ExtrudeForm,
-    /// Revolve: the sketch line to turn around, and the angle expression.
-    axis: Option<u32>,
+    /// Revolve: what to turn around (a sketch line or a construction axis), and the
+    /// angle expression.
+    axis: Option<RevolveAxis>,
     angle: String,
     /// New body, join, cut or intersect.
     operation: Operation,
     /// The parameters the preview shows, and what it said: the volume or why not.
     preview_for: Option<Value>,
     preview: Result<f64, String>,
+}
+
+/// What a revolve turns around.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RevolveAxis {
+    /// A line of the profile's sketch (`axis`).
+    Line(u32),
+    /// A construction axis in the sketch plane (`axis_feature`), followed on rebuild.
+    Construct(u32),
+}
+
+impl RevolveAxis {
+    /// The `solid.revolve` parameter that names it.
+    fn param(self) -> (&'static str, u32) {
+        match self {
+            RevolveAxis::Line(id) => ("axis", id),
+            RevolveAxis::Construct(id) => ("axis_feature", id),
+        }
+    }
+}
+
+impl ExtrudeTool {
+    /// The `solid.revolve` parameters, or `None` while a profile or the axis is missing.
+    fn revolve_params(&self) -> Option<Value> {
+        let axis = self.axis?;
+        if self.seeds.is_empty() {
+            return None;
+        }
+        let (key, id) = axis.param();
+        let mut params = json!({
+            "sketch": self.sketch,
+            "profiles": self.seeds.iter().map(|p| json!({ "x": p.x, "y": p.y })).collect::<Vec<_>>(),
+            "angle": self.angle.trim(),
+            "operation": self.operation.key(),
+        });
+        params[key] = json!(id);
+        Some(params)
+    }
 }
 
 impl Default for ExtrudeTool {
@@ -528,11 +567,10 @@ impl ChamferaApp {
         )
     }
 
-    /// The Extrude (or Revolve) dialog.
-    pub(crate) fn extrude_dialog(&mut self, ctx: &egui::Context) {
-        let units = self.session.doc.units;
-        // The lines of the picked sketch, for the revolve axis.
-        let lines: Vec<(u32, String)> = self
+    /// What the Revolve dialog offers to turn around: the lines of the picked sketch,
+    /// then the built construction axes (which the revolve follows on rebuild).
+    pub(crate) fn revolve_axes(&self) -> Vec<(RevolveAxis, String)> {
+        let mut out: Vec<(RevolveAxis, String)> = self
             .solid
             .extrude
             .as_ref()
@@ -548,11 +586,34 @@ impl ChamferaApp {
                         } else {
                             "Line"
                         };
-                        (id.0, format!("{kind} {}", id.0))
+                        (RevolveAxis::Line(id.0), format!("{kind} {}", id.0))
                     })
                     .collect()
             })
             .unwrap_or_default();
+        out.extend(
+            self.construction_axes()
+                .into_iter()
+                .map(|(id, name)| (RevolveAxis::Construct(id), name)),
+        );
+        out
+    }
+
+    /// The construction axes that built, by id and name.
+    pub(crate) fn construction_axes(&self) -> Vec<(u32, String)> {
+        let built = self.session.constructs();
+        self.session
+            .doc
+            .constructions(chamfera_doc::ConstructKind::Axis)
+            .into_iter()
+            .filter(|(id, _)| built.contains_key(id))
+            .collect()
+    }
+
+    /// The Extrude (or Revolve) dialog.
+    pub(crate) fn extrude_dialog(&mut self, ctx: &egui::Context) {
+        let units = self.session.doc.units;
+        let lines = self.revolve_axes();
         const WIDTH: f32 = 300.0;
         let pos = self.tool_dialog_pos(WIDTH);
         let look = Look {
@@ -638,7 +699,7 @@ impl ChamferaApp {
                                 let current = lines
                                     .iter()
                                     .find(|(id, _)| Some(*id) == tool.axis)
-                                    .map_or("Choose a line", |(_, n)| n.as_str());
+                                    .map_or("Choose a line or axis", |(_, n)| n.as_str());
                                 egui::ComboBox::from_id_salt("revolve axis")
                                     .selected_text(current)
                                     .width(widgets::FIELD_WIDTH)
@@ -692,14 +753,10 @@ impl ChamferaApp {
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) && !ctx.egui_wants_keyboard_input() {
             cancel = true;
         }
-        if ok && tool.revolve && !tool.seeds.is_empty() && tool.axis.is_some() {
-            let params = json!({
-                "sketch": tool.sketch,
-                "profiles": tool.seeds.iter().map(|p| json!({ "x": p.x, "y": p.y })).collect::<Vec<_>>(),
-                "axis": tool.axis,
-                "angle": tool.angle.trim(),
-                "operation": tool.operation.key(),
-            });
+        if ok
+            && tool.revolve
+            && let Some(params) = tool.revolve_params()
+        {
             if let Some(r) = self.run("solid.revolve", params) {
                 let v = r["solids"][0]["volume"].as_f64().unwrap_or(0.0);
                 self.message = Some((
@@ -872,6 +929,49 @@ mod tests {
             (r["solids"][0]["volume"].as_f64().unwrap() - 4000.0).abs() < 1e-6,
             "40 x 20 x 5"
         );
+    }
+
+    /// The Revolve dialog offers built construction axes as well as sketch lines, and
+    /// turning around one passes `axis_feature`. A 10 x 10 square on XZ at x 10..20,
+    /// turned about the Z axis (the XZ and YZ planes meet there), is a ring of radii 10
+    /// and 20 and height 10: π (20² - 10²) 10 = 3000 π.
+    #[test]
+    fn the_revolve_dialog_turns_around_a_construction_axis() {
+        let mut app = ChamferaApp::headless();
+        let axis = app
+            .run(
+                "construct.axis_two_planes",
+                json!({ "planes": ["xz", "yz"] }),
+            )
+            .unwrap()["feature"]
+            .as_u64()
+            .unwrap() as u32;
+        let sketch = app.run("sketch.create", json!({ "plane": "xz" })).unwrap()["sketch"]
+            .as_u64()
+            .unwrap() as u32;
+        app.run(
+            "sketch.rectangle",
+            json!({ "x1": 10, "y1": 0, "x2": 20, "y2": 10 }),
+        );
+        app.finish_sketch();
+        app.open_extrude(true);
+        if let Some(tool) = app.solid.extrude.as_mut() {
+            tool.sketch = Some(sketch);
+            tool.seeds = vec![chamfera_geom::Point2::new(15.0, 5.0)];
+        }
+        let offered = app.revolve_axes();
+        let choice = offered
+            .iter()
+            .find(|(a, _)| *a == RevolveAxis::Construct(axis))
+            .map(|(a, _)| *a);
+        assert!(choice.is_some(), "the axis is not offered: {offered:?}");
+        let tool = app.solid.extrude.as_mut().unwrap();
+        tool.axis = choice;
+        let params = tool.revolve_params().unwrap();
+        assert_eq!(params["axis_feature"], json!(axis));
+        let r = app.run("solid.revolve", params).unwrap();
+        let v = r["solids"][0]["volume"].as_f64().unwrap();
+        assert!((v - 3000.0 * std::f64::consts::PI).abs() < 1e-6, "{v}");
     }
 
     /// The dialog's options drive the live preview, OK extrudes what it showed, and the

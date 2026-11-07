@@ -36,6 +36,9 @@ pub struct AssemblyView {
     pub explode_manual: BTreeMap<u32, Vec3>,
     /// The last interference check's overlaps, for drawing.
     pub overlaps: Vec<OverlapShape>,
+    /// Construction features hidden in the viewport (`construct.visibility`): a view
+    /// setting, so hiding one changes nothing built on it.
+    pub hidden_constructs: std::collections::BTreeSet<u32>,
 }
 
 /// An overlap as drawn: its triangles and its edges.

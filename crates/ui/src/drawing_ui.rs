@@ -11,10 +11,13 @@ use crate::widgets::{self, T_SMALL};
 use crate::{ChamferaApp, color, label};
 use chamfera_doc::Document;
 use chamfera_doc::drawing::{DimensionKind, ProjectionAngle, ViewDirection};
-use chamfera_drawing::{Align, Layer, Shape, SheetGeometry};
+use chamfera_drawing::{Align, Layer, Owner, Shape, SheetGeometry};
 use chamfera_geom::Point2;
 use egui::{Color32, Pos2, Rect, Sense, Stroke, Vec2};
 use serde_json::json;
+
+/// How near (sheet mm) a click must be to a dimension or annotation to pick it.
+const PICK_MM: f64 = 2.0;
 
 /// What a click on the sheet does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,6 +59,11 @@ pub(crate) struct DrawingUi {
     pub(crate) rect: Option<Rect>,
     /// The fields of the annotation tools (`drawing_tools_ui.rs`).
     pub options: crate::drawing_tools_ui::DrawOptions,
+    /// The view, dimension or annotation picked with no tool (moved by a drag,
+    /// removed by Delete).
+    pub selected: Option<Owner>,
+    /// A drag of the selection: where it started and where the pointer is, sheet mm.
+    drag: Option<(Point2, Point2)>,
 }
 
 /// Sheet mm to screen points and back (y up on paper, down on screen).
@@ -194,7 +202,7 @@ impl ChamferaApp {
     pub(crate) fn drawing_click(&mut self, p: Point2) {
         let sheet = self.drawing_sheet();
         match self.drawing.tool {
-            None => {}
+            None => self.drawing_select(p),
             Some(
                 t @ (DrawTool::Section
                 | DrawTool::Detail
@@ -317,6 +325,7 @@ impl ChamferaApp {
         if escape {
             self.drawing.tool = None;
             self.drawing.picks.clear();
+            self.drawing.selected = None;
         }
         // The paper and its shadow.
         let lo = m.to_screen(Point2::new(0.0, size.1));
@@ -402,6 +411,41 @@ impl ChamferaApp {
                 painter.line_segment([a, b], stroke);
             }
         }
+        // With no tool: a drag moves what it starts on, Delete removes the selection.
+        if self.drawing.tool.is_none() {
+            if response.drag_started_by(egui::PointerButton::Primary)
+                && let Some(o) = ui.input(|i| i.pointer.press_origin())
+            {
+                let p = m.to_sheet(o);
+                self.drawing_select(p);
+                self.drawing.drag = self.drawing.selected.map(|_| (p, p));
+            }
+            if let Some((from, _)) = self.drawing.drag
+                && let Some(h) = response.interact_pointer_pos()
+            {
+                self.drawing.drag = Some((from, m.to_sheet(h)));
+            }
+            if response.drag_stopped_by(egui::PointerButton::Primary)
+                && let Some((from, to)) = self.drawing.drag.take()
+            {
+                self.drawing_move_selected(to.x - from.x, to.y - from.y);
+            }
+            let delete = !ui.ctx().egui_wants_keyboard_input()
+                && ui.input(|i| {
+                    i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace)
+                });
+            if delete {
+                self.drawing_delete_selected();
+            }
+        } else {
+            self.drawing.selected = None;
+            self.drawing.drag = None;
+        }
+        let shift = self
+            .drawing
+            .drag
+            .map_or(chamfera_geom::Vec2::new(0.0, 0.0), |(a, b)| b - a);
+        self.paint_drawing_selection(&painter, &m, shift);
         // Tool feedback: picks so far and a cross at the pointer.
         let pick = color(self.theme.sheet_pick);
         for p in &self.drawing.picks {
@@ -429,6 +473,188 @@ impl ChamferaApp {
             self.drawing_click(p);
         }
         self.drawing_options_dialog(ui.ctx(), rect);
+        self.sheet_picker(ui.ctx(), rect);
+    }
+
+    /// The sheets of the design, by id and name, for the sheet picker.
+    pub(crate) fn drawing_sheets(&self) -> Vec<(u32, String)> {
+        self.session
+            .doc
+            .drawing
+            .sheets
+            .iter()
+            .map(|s| (s.id, s.name.clone()))
+            .collect()
+    }
+
+    /// Shows sheet `id` on the canvas, fitted.
+    pub(crate) fn drawing_show_sheet(&mut self, id: u32) {
+        if self.drawing.sheet != Some(id) {
+            self.drawing.sheet = Some(id);
+            self.drawing.selected = None;
+            self.drawing.view = None;
+        }
+    }
+
+    /// With more than one sheet, a list at the canvas's top-left to show another.
+    fn sheet_picker(&mut self, ctx: &egui::Context, rect: Rect) {
+        let sheets = self.drawing_sheets();
+        if sheets.len() < 2 {
+            return;
+        }
+        let shown = self.drawing_sheet();
+        let current = sheets
+            .iter()
+            .find(|(id, _)| Some(*id) == shown)
+            .map_or("Sheet", |(_, n)| n.as_str())
+            .to_owned();
+        let mut pick = None;
+        egui::Area::new(egui::Id::unique("sheet picker"))
+            .fixed_pos(rect.min + Vec2::new(8.0, 8.0))
+            .show(ctx, |ui| {
+                egui::ComboBox::from_id_salt("drawing sheet")
+                    .selected_text(current)
+                    .show_ui(ui, |ui| {
+                        for (id, name) in &sheets {
+                            if ui.selectable_label(Some(*id) == shown, name).clicked() {
+                                pick = Some(*id);
+                            }
+                        }
+                    })
+                    .response
+                    .on_hover_text("The sheet shown");
+            });
+        if let Some(id) = pick {
+            self.drawing_show_sheet(id);
+        }
+    }
+
+    /// A click with no tool: selects the view, dimension or annotation under `p` (sheet
+    /// mm) through `drawing.pick`, or clears the selection on empty paper.
+    pub(crate) fn drawing_select(&mut self, p: Point2) {
+        let mut params = json!({ "x": p.x, "y": p.y, "tolerance": PICK_MM });
+        if let Some(s) = self.drawing_sheet() {
+            params["sheet"] = json!(s);
+        }
+        self.drawing.selected = self.run("drawing.pick", params).and_then(|r| {
+            let id = u32::try_from(r["id"].as_u64()?).ok()?;
+            match r["kind"].as_str()? {
+                "view" => Some(Owner::View(id)),
+                "dimension" => Some(Owner::Dimension(id)),
+                "annotation" => Some(Owner::Annotation(id)),
+                _ => None,
+            }
+        });
+    }
+
+    /// Moves the selection by `(dx, dy)` sheet mm with one `drawing.move`.
+    fn drawing_move_selected(&mut self, dx: f64, dy: f64) {
+        let Some(owner) = self.drawing.selected else {
+            return;
+        };
+        if dx.abs() < 1e-9 && dy.abs() < 1e-9 {
+            return;
+        }
+        let (key, id) = owner.key();
+        let mut params = json!({ "dx": dx, "dy": dy });
+        params[key] = json!(id);
+        self.run("drawing.move", params);
+    }
+
+    /// A drag with no tool from `from` to `to` (sheet mm): selects what is under `from`
+    /// and moves it (one undo step). Tests call this instead of a mouse.
+    #[cfg(test)]
+    pub(crate) fn drawing_drag(&mut self, from: Point2, to: Point2) {
+        self.drawing_select(from);
+        self.drawing_move_selected(to.x - from.x, to.y - from.y);
+    }
+
+    /// Selects what is at `from` and shows it being dragged to `to` without moving it
+    /// (`--drawing-drag`, for screenshots).
+    pub(crate) fn drawing_drag_preview(&mut self, from: Point2, to: Point2) {
+        self.drawing_select(from);
+        self.drawing.drag = self.drawing.selected.map(|_| (from, to));
+    }
+
+    /// Delete with a selection: removes it through `drawing.delete`.
+    pub(crate) fn drawing_delete_selected(&mut self) {
+        let Some(owner) = self.drawing.selected.take() else {
+            return;
+        };
+        let (key, id) = owner.key();
+        let mut params = json!({});
+        params[key] = json!(id);
+        self.run("drawing.delete", params);
+    }
+
+    /// The selection outlined in the pick colour: a view's box, or the lines and text a
+    /// dimension or annotation drew; shifted by `shift` sheet mm while it is dragged.
+    fn paint_drawing_selection(
+        &mut self,
+        painter: &egui::Painter,
+        m: &Mapping,
+        d: chamfera_geom::Vec2,
+    ) {
+        let Some(owner) = self.drawing.selected else {
+            return;
+        };
+        let pick = color(self.theme.sheet_pick);
+        let stroke = Stroke::new(2.0, pick);
+        let Some(g) = self.drawing_geometry() else {
+            return;
+        };
+        let at = |p: Point2| m.to_screen(p + d);
+        if let Owner::View(id) = owner {
+            if let Some((lo, hi)) = g.view(id).and_then(|v| v.bounds()) {
+                let r = Rect::from_two_pos(at(lo), at(hi)).expand(4.0);
+                painter.rect_stroke(r, 2.0, stroke, egui::StrokeKind::Outside);
+            }
+            return;
+        }
+        for item in g.items_of(owner) {
+            match &item.shape {
+                Shape::Line { a, b } => {
+                    painter.line_segment([at(*a), at(*b)], stroke);
+                }
+                Shape::Circle { centre, radius } => {
+                    painter.circle_stroke(at(*centre), (*radius as f32) * m.zoom, stroke);
+                }
+                Shape::Arc {
+                    centre,
+                    radius,
+                    start,
+                    end,
+                } => {
+                    let pts = arc_points(m, *centre + d, *radius, *start, *end);
+                    painter.add(egui::Shape::line(pts, stroke));
+                }
+                Shape::Fill { points } => {
+                    painter.add(egui::Shape::convex_polygon(
+                        points.iter().map(|p| at(*p)).collect(),
+                        pick,
+                        Stroke::NONE,
+                    ));
+                }
+                Shape::Text {
+                    at: a,
+                    height,
+                    angle,
+                    align,
+                    text,
+                } => {
+                    // An underline along the text's baseline marks it.
+                    let w = chamfera_drawing::text_width(text, *height);
+                    let x0 = match align {
+                        chamfera_drawing::Align::Left => 0.0,
+                        chamfera_drawing::Align::Centre => -w * 0.5,
+                        chamfera_drawing::Align::Right => -w,
+                    };
+                    let u = chamfera_geom::Vec2::new(angle.cos(), angle.sin());
+                    let p0 = *a + u * x0;
+                    painter.line_segment([at(p0), at(p0 + u * w)], stroke);
+                }
+            }
+        }
     }
 
     /// True when the shown sheet has a view to dimension or export.
@@ -540,7 +766,7 @@ impl ChamferaApp {
             Some(DrawTool::Dimension(_)) => "Click two vertices or edges · Esc cancels",
             Some(t) => crate::drawing_tools_ui::hint(t),
             None => {
-                "Pick a view or dimension tool · Middle- or right-drag: pan · Wheel: zoom · Middle double-click: fit"
+                "Click to select · Drag to move · Del: delete · Middle- or right-drag: pan · Wheel: zoom · Middle double-click: fit"
             }
         }
     }
@@ -613,5 +839,65 @@ mod tests {
             dims[0].offset < 0.0,
             "picks below the view centre put it below"
         );
+    }
+
+    /// Earlier sheets can be shown again (QA user guide pass: only the newest was).
+    #[test]
+    fn an_earlier_sheet_can_be_shown_again() {
+        let mut app = ChamferaApp::headless();
+        app.run("drawing.new_sheet", json!({ "name": "First" }));
+        app.run("drawing.new_sheet", json!({ "name": "Second" }));
+        let sheets = app.drawing_sheets();
+        assert_eq!(sheets.len(), 2);
+        assert_eq!(
+            app.drawing_sheet(),
+            Some(sheets[1].0),
+            "the newest at first"
+        );
+        app.drawing_show_sheet(sheets[0].0);
+        assert_eq!(app.drawing_sheet(), Some(sheets[0].0));
+    }
+
+    /// With no tool, a click selects what is under it, a drag moves it (one command,
+    /// one undo step) and Delete removes it. The front view of the 50 x 30 x 10 box at
+    /// (150, 150) spans x 125..175, y 145..155.
+    #[test]
+    fn a_drawing_item_is_selected_dragged_and_deleted() {
+        let mut app = ChamferaApp::headless();
+        let s = &mut app.session;
+        s.execute("sketch.create", &json!({"plane": "xy"})).unwrap();
+        s.execute(
+            "sketch.rectangle",
+            &json!({"x1": 0, "y1": 0, "x2": 50, "y2": 30}),
+        )
+        .unwrap();
+        s.execute("sketch.finish", &json!({})).unwrap();
+        s.execute(
+            "solid.extrude",
+            &json!({"sketch": 1, "profiles": [{"x": 5, "y": 5}], "distance": 10}),
+        )
+        .unwrap();
+        s.execute(
+            "drawing.add_view",
+            &json!({"view": "front", "x": 150, "y": 150}),
+        )
+        .unwrap();
+        app.drawing.active = true;
+        app.drawing_click(Point2::new(160.0, 150.0));
+        let view = app.session.doc.drawing.sheets[0].views[0].id;
+        assert_eq!(app.drawing.selected, Some(Owner::View(view)));
+        app.drawing_drag(Point2::new(160.0, 150.0), Point2::new(200.0, 120.0));
+        let v = &app.session.doc.drawing.sheets[0].views[0];
+        assert_eq!((v.x, v.y), (190.0, 120.0));
+        app.run("edit.undo", json!({}));
+        assert_eq!(app.session.doc.drawing.sheets[0].views[0].x, 150.0);
+        // A click on empty paper clears the selection; Delete then does nothing.
+        app.drawing_click(Point2::new(60.0, 260.0));
+        assert_eq!(app.drawing.selected, None);
+        app.drawing_delete_selected();
+        assert_eq!(app.session.doc.drawing.sheets[0].views.len(), 1);
+        app.drawing_click(Point2::new(160.0, 150.0));
+        app.drawing_delete_selected();
+        assert!(app.session.doc.drawing.sheets[0].views.is_empty());
     }
 }

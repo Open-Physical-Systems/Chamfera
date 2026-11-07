@@ -22,6 +22,9 @@ pub struct DisplayUi {
     plane: &'static str,
     offset: f64,
     flip: bool,
+    /// The section shown is not on an origin plane (a face's), so the fields do not
+    /// describe it and editing them would replace it.
+    custom_section: bool,
 }
 
 impl Default for DisplayUi {
@@ -33,14 +36,16 @@ impl Default for DisplayUi {
             plane: "xy",
             offset: 0.0,
             flip: false,
+            custom_section: false,
         }
     }
 }
 
+/// The section planes, named with the way their offset runs (XZ's normal is -Y).
 const PLANES: [(&str, &str); 3] = [
-    ("xy", "XY (top)"),
-    ("xz", "XZ (front)"),
-    ("yz", "YZ (right)"),
+    ("xy", "XY (top, +Z)"),
+    ("xz", "XZ (front, -Y)"),
+    ("yz", "YZ (right, +X)"),
 ];
 
 impl ChamferaApp {
@@ -54,6 +59,57 @@ impl ChamferaApp {
             Projection::Orthographic => "orthographic",
         };
         self.run("view.projection", json!({ "mode": mode }));
+    }
+
+    /// Takes the display bar's plane, offset and flip from the section shown, when a
+    /// command (`view.section` from a script or the View menu) set one the fields do not
+    /// describe. A cut that is not parallel to an origin plane (on a face) leaves the
+    /// fields alone and marks the bar as showing a custom cut.
+    pub(crate) fn sync_section_fields(&mut self) {
+        let Some((origin, normal)) = self
+            .session
+            .scene
+            .display
+            .section
+            .as_ref()
+            .map(|x| (x.origin, x.normal))
+        else {
+            self.display.custom_section = false;
+            return;
+        };
+        let frames = [
+            ("xy", chamfera_geom::Frame::XY),
+            ("xz", chamfera_geom::Frame::XZ),
+            ("yz", chamfera_geom::Frame::YZ),
+        ];
+        let o = origin - chamfera_geom::Point3::ORIGIN;
+        for (id, f) in frames {
+            let n = f.z();
+            let along = normal.dot(n);
+            if (along.abs() - 1.0).abs() < chamfera_geom::ANGULAR_TOLERANCE {
+                self.display.plane = id;
+                self.display.offset = o.dot(n);
+                self.display.flip = along < 0.0;
+                self.display.custom_section = false;
+                return;
+            }
+        }
+        self.display.custom_section = true;
+    }
+
+    /// Where a section turned on from the display bar starts: through the middle of the
+    /// model along the plane's normal (a cut at 0 of a part standing on XY shows only
+    /// its footprint), or 0 with no model.
+    pub(crate) fn section_start_offset(&self) -> f64 {
+        let n = match self.display.plane {
+            "xz" => chamfera_geom::Frame::XZ.z(),
+            "yz" => chamfera_geom::Frame::YZ.z(),
+            _ => chamfera_geom::Frame::XY.z(),
+        };
+        self.session.scene.bounds().map_or(0.0, |b| {
+            let mid = b.min + (b.max - b.min) * 0.5;
+            (mid - chamfera_geom::Point3::ORIGIN).dot(n)
+        })
     }
 
     fn apply_section(&mut self) {
@@ -119,6 +175,7 @@ impl ChamferaApp {
     /// The display bar at the bottom of the viewport: projection, visual style,
     /// section and appearance.
     pub(crate) fn display_bar(&mut self, ctx: &egui::Context, rect: Rect) {
+        self.sync_section_fields();
         let look = Look {
             theme: &self.theme,
             icons: &self.icons,
@@ -196,7 +253,10 @@ impl ChamferaApp {
                                 ))
                                 .on_hover_text("Section\nCut the view with a plane (display only)");
                             toggle_section = r.clicked();
-                            if section {
+                            if section && self.display.custom_section {
+                                ui.label(egui::RichText::new("On a face").size(T_SMALL))
+                                    .on_hover_text("Set from a face: Section toggles it off");
+                            } else if section {
                                 egui::ComboBox::from_id_salt("section plane")
                                     .selected_text(
                                         egui::RichText::new(self.display.plane.to_uppercase())
@@ -252,6 +312,7 @@ impl ChamferaApp {
             if section {
                 self.run("view.section_clear", json!({}));
             } else {
+                self.display.offset = self.section_start_offset();
                 self.apply_section();
             }
         } else if offset_changed && section {
@@ -389,5 +450,43 @@ impl ChamferaApp {
         if close {
             self.display.appearance_open = false;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The display bar follows a section set by command, and a section turned on from
+    /// the bar starts through the middle of the model (QA user guide pass: the bar showed
+    /// "XY 0.0 mm" for a script's cut; the default XY cut at 0 left only the footprint of
+    /// a part standing on XY). The 50 x 30 x 10 box's middle is at z = 5, y = 15.
+    #[test]
+    fn the_section_fields_follow_the_cut_and_start_mid_model() {
+        let mut app = ChamferaApp::headless();
+        app.run("sketch.create", json!({ "plane": "xy" }));
+        app.run(
+            "sketch.rectangle",
+            json!({ "x1": 0, "y1": 0, "x2": 50, "y2": 30 }),
+        );
+        app.run("sketch.finish", json!({}));
+        app.run(
+            "solid.extrude",
+            json!({ "sketch": 1, "profiles": [{ "x": 25, "y": 15 }], "distance": 10 }),
+        );
+        app.run(
+            "view.section",
+            json!({ "plane": "xz", "offset": -12, "flip": true }),
+        );
+        app.sync_section_fields();
+        assert_eq!(app.display.plane, "xz");
+        assert!((app.display.offset + 12.0).abs() < 1e-9);
+        assert!(app.display.flip);
+        assert!(!app.display.custom_section);
+        app.display.plane = "xy";
+        assert!((app.section_start_offset() - 5.0).abs() < 1e-9);
+        // XZ's normal is -Y: the middle y = 15 is the offset -15.
+        app.display.plane = "xz";
+        assert!((app.section_start_offset() + 15.0).abs() < 1e-9);
     }
 }

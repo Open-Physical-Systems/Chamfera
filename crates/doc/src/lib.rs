@@ -622,11 +622,26 @@ impl Document {
 
     /// Reads a design, refusing other JSON, newer formats and invalid content.
     pub fn from_json(text: &str) -> Result<Document, DocError> {
-        let doc: Document =
-            serde_json::from_str(text).map_err(|e| DocError::Format(e.to_string()))?;
-        if doc.format != FORMAT_TAG {
-            return Err(DocError::Format(format!("format tag is {:?}", doc.format)));
+        // Tell another file from a damaged design before reading it as one.
+        let value: serde_json::Value = serde_json::from_str(text).map_err(|_| {
+            DocError::Format("the file is not JSON text (is it a design file?)".into())
+        })?;
+        match value.get("format").and_then(serde_json::Value::as_str) {
+            Some(FORMAT_TAG) => {}
+            Some(other) => {
+                return Err(DocError::Format(format!(
+                    "the file is a {:?} file, not a design",
+                    other.chars().take(40).collect::<String>()
+                )));
+            }
+            None => {
+                return Err(DocError::Format(
+                    "the file holds JSON, but not a design (it has no format tag)".into(),
+                ));
+            }
         }
+        let doc: Document = serde_json::from_value(value)
+            .map_err(|e| DocError::Format(format!("the design is damaged: {e}")))?;
         if doc.version > FORMAT_VERSION {
             return Err(DocError::TooNew { found: doc.version });
         }
@@ -911,6 +926,13 @@ mod tests {
     fn other_json_newer_formats_and_bad_content_are_refused() {
         assert!(Document::from_json("{}").is_err());
         assert!(Document::from_json("not json").is_err());
+        // Another file says plainly that it is not a design, without the parser's words
+        // (QA user guide pass: "invalid type: integer `999`, expected struct Document").
+        for other in ["999", "not json", "{}", r#"{"format": "other"}"#] {
+            let e = Document::from_json(other).unwrap_err().to_string();
+            assert!(e.starts_with("not a Chamfera design"), "{e}");
+            assert!(!e.contains("expected") && !e.contains("struct"), "{e}");
+        }
         let newer = r#"{"format":"chamfera","version":999,"parameters":{}}"#;
         assert!(matches!(
             Document::from_json(newer),
