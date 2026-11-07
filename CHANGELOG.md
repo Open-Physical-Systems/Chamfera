@@ -3,7 +3,7 @@
 All notable changes to Chamfera. Versions follow [Semantic Versioning](https://semver.org);
 before 1.0 a minor version may change the design file format or the commands.
 
-## [0.1.0] - unreleased
+## [0.1.0] - 2026-11-07
 
 The first public release: a parametric 3D CAD application with its own sketch solver,
 feature timeline and B-rep kernel, written from scratch in Rust. Numbers in brackets are the
@@ -29,7 +29,13 @@ pull requests on GitHub.
 - Polygon, slot, ellipse and elliptical arc; project model edges [#36].
 - Ellipses and splines split for profiles where curves cross them; Point tool; typed
   points (`x,y`, `@dx,dy`, `@length<angle`); Ortho mode (F8); constraint markers; the
-  Constraint Conflict dialog; sketch text from a bundled OFL font.
+  Constraint Conflict dialog; sketch text from a bundled OFL font [#74].
+- Tracking guides (aligned, perpendicular, tangent, polar), Ctrl to suspend snapping and
+  snap settings in Preferences [#70].
+- Profiles split at line, arc and circle crossings; concentric, collinear and point
+  horizontal/vertical constraints; horizontal, vertical, aligned, arc-length and driven
+  dimensions; three-point rectangle, two-point, three-point and tangent circles; move,
+  rotate, scale and copy of sketch geometry (design format 37) [#71].
 
 ### Solid modelling
 - Extrude with extents, two sides, start offset, taper and live preview [#11, #35].
@@ -42,6 +48,9 @@ pull requests on GitHub.
 - Body tools: Combine, Split Body, Split Face, Thicken, Remove [#49].
 - Sheet metal: rules, base flange, flanges with bends, reliefs, flat pattern [#47].
 - Surface modelling: open shells, surface extrude, revolve and sweep, patch, stitch, trim [#53].
+- Tangent chain selection for fillets and chamfers; chamfers with two distances or a
+  distance and angle; thin extrude; holes up to a face; cosmetic threads with callouts
+  (design format 38) [#75].
 
 ### Parameters and timeline
 - Parameters: expressions with units that drive dimensions [#7]; v2 with configurations [#55].
@@ -51,12 +60,13 @@ pull requests on GitHub.
 ### Assemblies
 - Components and joints [#38].
 - Joint limits and drag, motion study, interference and exploded view [#52].
+- Edit Joint, Move Component and Rename Component dialogs [#72].
 
 ### Drawings
 - Sheets with views, hidden lines and dimensions [#41].
 - Associative dimensions, silhouettes, section and detail views, GD&T and a parts list [#56].
 - Sheet Settings dialog and a fuller title block; ordinate, baseline and chain dimensions;
-  hole callouts from the Hole feature (design format 39).
+  hole callouts from the Hole feature (design format 39) [#73].
 
 ### Manufacture (CAM)
 - 2D milling toolpaths and G-code [#43].
@@ -93,6 +103,6 @@ pull requests on GitHub.
 - None of the packages are signed yet: Windows SmartScreen and macOS Gatekeeper warn on first run.
 
 ### Quality
-- End-to-end QA parts and fixes [#54, #58]; test housekeeping [#1, #27, #31, #46, #64].
+- End-to-end QA parts and fixes [#54, #58]; fixes found while writing the user guide [#69, #72]; test housekeeping [#1, #27, #31, #46, #64].
 
 [0.1.0]: https://github.com/Open-Physical-Systems/Chamfera/releases/tag/v0.1.0
