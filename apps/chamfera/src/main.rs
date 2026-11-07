@@ -8,7 +8,7 @@
 //!          [--press-pull X,Y,D] [--ribbon-menu GROUP] [--assistant-demo]
 //!          [--assistant-ask REQUEST] [--about] [--size WxH]
 //!          [--history] [--recovery-demo] [--tutorial ID]
-//!          [--zoom F] [--screenshot shot.png]
+//!          [--zoom F] [--dialog NAME:ARG] [--screenshot shot.png]
 //!          [--sketch-input "tool line; click 0,0; hover 30,12; type 25"]
 //! ```
 
@@ -22,7 +22,7 @@ const USAGE: &str = "usage: chamfera [part.stl ...] [--sample] [--theme light|da
 [--extrude-with JSON] [--hole] \
 [--box X1,Y1,X2,Y2] [--drawing-drag X1,Y1,X2,Y2] [--search QUERY] [--context-menu X,Y] [--press-pull X,Y,D] \
 [--ribbon-menu GROUP] [--assistant-demo] [--assistant-ask REQUEST] [--about] [--history] [--recovery-demo] [--tutorial ID] [--render] [--render-window WxH,SAMPLES] [--size WxH] \
-[--zoom F] \
+[--zoom F] [--dialog NAME:ARG] \
 [--screenshot shot.png] \
 [--sketch-input \"tool line; click X,Y; hover X,Y; shift; type 25; tab\"]";
 
@@ -82,6 +82,15 @@ fn main() -> ExitCode {
                 None => return fail("--assistant-ask takes a request for the Assistant"),
             },
             "--about" => options.about = true,
+            "--dialog" => match args.next() {
+                Some(d) => options.dialog = Some(d),
+                None => {
+                    return fail(
+                        "--dialog takes joint-edit:ID, component-move:ID, component-rename:ID, \
+                         edit-feature:ID or dxf-insert:PATH",
+                    );
+                }
+            },
             "--history" => options.history = true,
             "--recovery-demo" => options.recovery_demo = true,
             "--extrude" => options.extrude = true,

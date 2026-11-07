@@ -103,11 +103,12 @@ still has an opening it stays a surface.
 ## Trim a surface
 
 1. Select the surface, or click SOLID > SURFACE > Trim Surface and click it.
-2. Pick the Plane: the XY, XZ or YZ origin plane, or one of your construction planes (see
-   construction-geometry.md).
+2. Pick what to **Trim with**: the XY, XZ or YZ origin plane, one of your construction
+   planes (see construction-geometry.md), or another body. A body must be a closed solid or
+   a flat surface of one face.
 3. Pick what to Keep: "Behind the plane" or "In front of the plane". In front is the side
    the plane's normal points to: +Z for XY, +X for YZ and -Y for XZ (the side towards you
-   in the Front view).
+   in the Front view). Trimming with a solid, keep "Outside" or "Inside" it.
 4. Click OK.
 
 The trimmed body keeps its name; the timeline gets a Trim feature. The open cylinder above
@@ -129,10 +130,11 @@ The open cylinder of radius 10 mm and height 20 mm thickened by 2 mm becomes a t
 ## Changing a surface feature
 
 Right-click the surface, or its icon in the timeline, and choose Edit Feature. For a
-surface extrude you can change the distance there. For the other surface features the
-dialog only shows what the feature is; change them from a script with `feature.edit`
-(for example a revolve's `angle`), or delete the feature and make it again. See
-timeline.md.
+surface extrude you change the distance there, for a surface revolve the angle. A sweep,
+patch, stitch or trim opens its own tool again with what it was made from picked: click to
+change the profiles, curves, path, edges, bodies or the trimming plane or body, and OK
+changes the feature (one undo step). A sweep keeps its sketches, and a patch keeps being
+made from profiles or from edges, as it was. See timeline.md.
 
 ## From a script
 
@@ -171,8 +173,8 @@ tray.
 ## Limits
 
 - Surfaces have no volume, so Mass Properties needs a stitched or thickened solid.
-- Trim Surface in the interface trims with a plane only. Trimming with a body, or with a
-  model face as the plane, is available from scripts (`tool`, `{feature, face}`).
+- Trimming with a model face as the plane is available from scripts (`{feature, face}`);
+  Edit Feature keeps such a face until you pick another plane or body.
 - A revolve's axis must be a line of the same sketch in the interface; a construction axis
   (`axis_feature`) is script only.
 - Sweep paths are lines and arcs that meet end to end.

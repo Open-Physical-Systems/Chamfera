@@ -15,6 +15,7 @@ use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
 
 mod about_ui;
+mod assembly_edit_ui;
 mod assembly_ui;
 mod assistant_ui;
 mod blend_ui;
@@ -149,6 +150,9 @@ pub struct Options {
     pub render_window: Option<[u32; 3]>,
     /// Start this guided tour (`tutorial_ui`, such as `first-part`).
     pub tutorial: Option<String>,
+    /// Open a dialog at start, for screenshots: `joint-edit:ID`, `component-move:ID`,
+    /// `component-rename:ID`, `edit-feature:ID` or `dxf-insert:PATH`.
+    pub dialog: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -549,7 +553,55 @@ impl ChamferaApp {
         if let Some(id) = &options.tutorial {
             app.start_tutorial(id);
         }
+        if let Some(spec) = &options.dialog
+            && let Err(e) = app.open_named_dialog(spec)
+        {
+            app.message = Some((e, true));
+        }
         app
+    }
+
+    /// Opens the dialog `--dialog` names: `joint-edit:ID`, `component-move:ID`,
+    /// `component-rename:ID`, `edit-feature:ID` or `dxf-insert:PATH`.
+    fn open_named_dialog(&mut self, spec: &str) -> Result<(), String> {
+        let (name, arg) = spec.split_once(':').unwrap_or((spec, ""));
+        let id = || {
+            arg.trim()
+                .parse::<u32>()
+                .map_err(|_| format!("--dialog {name} takes an id: {name}:1"))
+        };
+        match name {
+            "joint-edit" | "component-move" | "component-rename" => {
+                let id = id()?;
+                match name {
+                    "joint-edit" => self.open_joint_edit(id),
+                    "component-move" => self.open_component_move(id),
+                    _ => self.open_component_rename(id),
+                }
+                if self.assembly.edit.is_none() {
+                    return Err(format!(
+                        "--dialog {name}: there is no such joint or component {id}"
+                    ));
+                }
+            }
+            "edit-feature" => self.edit_feature(id()?),
+            "dxf-insert" if !arg.is_empty() => {
+                let file = std::path::Path::new(arg)
+                    .file_name()
+                    .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+                self.file.dxf = Some(file_ui::DxfInsert::new(
+                    file_ui::DxfSource::Path(arg.to_owned()),
+                    file,
+                ));
+            }
+            _ => {
+                return Err(format!(
+                    "--dialog takes joint-edit:ID, component-move:ID, component-rename:ID, \
+                     edit-feature:ID or dxf-insert:PATH, not {spec:?}"
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// Runs a command and shows its error, if any, in the status bar.
@@ -1192,6 +1244,8 @@ impl eframe::App for ChamferaApp {
             self.extrude_dialog(&ctx);
             self.blend_dialog(&ctx);
             self.joint_dialog(&ctx);
+            self.assembly_edit_dialog(&ctx);
+            self.dxf_insert_dialog(&ctx);
             self.motion_panels(&ctx);
             self.hole_dialog(&ctx);
             self.transform_dialog(&ctx);

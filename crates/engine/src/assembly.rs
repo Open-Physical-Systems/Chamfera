@@ -318,8 +318,9 @@ impl Session {
         }
         for c in asm.components.iter().filter(|c| c.occurrence_of.is_some()) {
             let original = asm.original_of(c.id);
+            // A copy's bodies are named after the copy, so each name means one body.
             for (feature, name, body) in made.iter().filter(|m| owner(m.0) == original) {
-                place(*feature, c.id, name.clone(), body);
+                place(*feature, c.id, format!("{name} ({})", c.name), body);
             }
         }
         built.placements = placements;

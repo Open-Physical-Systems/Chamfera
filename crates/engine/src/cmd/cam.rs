@@ -904,6 +904,17 @@ fn op_reply(s: &Session, id: u32) -> Value {
             let bodies: Vec<chamfera_kernel::Body> =
                 s.solids().iter().map(|x| x.body.clone()).collect();
             if let Ok(h) = chamfera_cam::drill_holes(&bodies, faces) {
+                if let Some(t) = s.doc.cam.tool(o.tool) {
+                    let w = chamfera_cam::ops::drill_warnings(
+                        t.diameter,
+                        t.kind == chamfera_doc::cam::ToolKind::Drill,
+                        t.kind.words(),
+                        &h,
+                    );
+                    if !w.is_empty() {
+                        v["warnings"] = json!(w);
+                    }
+                }
                 v["holes"] = json!(
                     h.iter()
                         .map(
@@ -1050,7 +1061,20 @@ fn generate(s: &mut Session, p: &Value) -> CmdResult {
     let ops: Vec<Value> = ids.iter().map(|id| op_reply(s, *id)).collect();
     let minutes: f64 = ops.iter().filter_map(|o| o["minutes"].as_f64()).sum();
     let errors = ops.iter().filter(|o| o.get("error").is_some()).count();
-    Ok(json!({"operations": ops, "minutes": minutes, "errors": errors}))
+    // Each operation's warnings, named after it: worth reading, but the toolpath stands.
+    let warnings: Vec<String> = ops
+        .iter()
+        .flat_map(|o| {
+            let name = o["name"].as_str().unwrap_or("").to_owned();
+            o["warnings"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(move |w| w.as_str().map(|w| format!("{name}: {w}")))
+        })
+        .collect();
+    Ok(json!({"operations": ops, "minutes": minutes, "errors": errors, "warnings": warnings}))
 }
 
 fn list(s: &mut Session, p: &Value) -> CmdResult {

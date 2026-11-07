@@ -45,7 +45,7 @@ Meshes approximate curved faces: an STL of the plate above has 476 triangles and
 
 ## DXF
 
-**Into a sketch:** while a sketch is being edited, **File > Insert DXF into Sketch…** draws a 2D ASCII DXF file into it: lines, arcs, circles, ellipses, splines, polylines (LWPOLYLINE and POLYLINE, with bulges) and points become sketch geometry, and ends that meet are joined. Units come from the file's `$INSUNITS` (else mm); `examples/dxf-plate.dxf` is in inches and comes in scaled by 25.4. The status bar says how many curves and profiles came in and how many entities were left out (text, for example). The item is greyed when no sketch is active.
+**Into a sketch:** while a sketch is being edited, **File > Insert DXF into Sketch…** draws a 2D ASCII DXF file into it: lines, arcs, circles, ellipses, splines, polylines (LWPOLYLINE and POLYLINE, with bulges) and points become sketch geometry, and ends that meet are joined. After you pick the file, the **Insert DXF** dialog asks for the **Units** (**From the file**: its `$INSUNITS`, else mm; or **Millimetres** or **Inches**) and a further **Scale** (default 1); `examples/dxf-plate.dxf` says it is in inches and comes in scaled by 25.4. From a script: `sketch.import_dxf {path, units?: "mm" | "inch", scale?}`. The status bar says how many curves and profiles came in and how many entities were left out (text, for example). The item is greyed when no sketch is active.
 
 **Out of a sketch:** **File > Export Sketch as DXF…** (while a sketch is being edited) writes it as an R12 ASCII DXF in mm.
 

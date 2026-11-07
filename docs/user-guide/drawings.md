@@ -265,7 +265,8 @@ title block fields, ordinate and chain dimensions and hole callouts.
 - Dimensions have no tolerances or styles yet, and there are no hole or revision tables.
   Hole callouts cover the Hole feature only: a hole cut by an extrude has none, and there
   are no thread callouts until the model has cosmetic threads.
-- The date in the title block is the UTC date, which can be a day off your local date.
+- The browser app leaves the title block date empty (the desktop app fills in today's
+  local date).
 - Export PDF, SVG and DXF only; the sheet is exported at its paper size, not scaled to fit.
 
 See also: file-formats.md (other export formats), parameters-and-configurations.md

@@ -65,9 +65,24 @@ active); its tooltip says so.
 **Copy Component** makes a second occurrence of the same component: it shows the same bodies,
 so a change to the original's features shows in every copy. The copy is called
 `Leaf B:2` and so on, and is marked `copy` in the Browser. From the menu the copy lands where
-the original was placed (before any joint moved it), so it sits inside the original until
-you move it; give it a place from a script with `component.copy {component, transform}`
-(see Limits). A copy is not driven by the original's joints.
+the original is shown, so it sits inside the original until you move it: right-click it in
+the Browser and choose **Move Component…** (below), or give it a place from a script with
+`component.copy {component, transform}`. A copy is not driven by the original's joints. Its
+bodies are named after it, such as `Extrude1 (Leaf B:2)`, so each body name means one body.
+
+### Moving and renaming a component
+
+Right-click a component in the Browser's Components section:
+
+- **Move Component…** opens a dialog with **Move X**, **Move Y** and **Move Z** (in the
+  design's length unit; `1 in` and other units work too), a **Turn about** axis (X, Y or Z
+  through the origin) with an **Angle** in degrees, and **From**: off moves the component
+  from where it is now, on places it from the origin. The turn comes first, then the move.
+  A component a joint places cannot be moved this way (the item is greyed out): drive or
+  delete the joint.
+- **Rename Component…** changes its name.
+
+Each runs one command (`component.move`, `component.rename`), so Undo takes it back.
 
 ## Joints
 
@@ -116,8 +131,16 @@ Limits).
 A joint can have a lower and an upper limit on its value, for example 0° to 180° for a hinge
 that should not fold through itself. Driving the joint outside them is refused with a message
 such as `200° is outside the limits of "Hinge": 0° to 180°`, and the Drive Joint panel shows
-the limits. The Joint dialog has no limit fields yet, so limits are set from a script
-(`min` and `max` on `joint.create`).
+the limits.
+
+The Browser lists the joints under the components, each with its type, value and limits.
+Double-click one (or right-click it and choose **Edit Joint**) to change its **Name** and
+its limits: tick **Limits** and type a **Minimum** and **Maximum** (degrees for revolute and
+cylindrical joints, the design's length unit for sliders; `10 mm` or `45 deg` work too).
+A value outside new limits moves to the nearer limit. Untick **Limits** to remove them.
+**Delete Joint** in the same menu removes a joint; its part stays where the joint left it.
+From a script: `joint.edit {joint, name?, min?, max?, limits?: false}` and `min` and `max`
+on `joint.create`.
 
 ## Driving a joint
 
@@ -243,6 +266,8 @@ The other commands:
   end: "start"|"end"}` (a vertex), `{component, point: {x, y, z}, axis: {x, y, z}}` (in that
   component's coordinates) or `{pick: {x, y, width, height}}`. B moves to A unless B is
   grounded.
+- `joint.edit {joint, name?, min?, max?, limits?}` (`limits: false` removes them; a value
+  outside new limits moves to the nearer one).
 - `joint.set_value {joint, value?, distance?, offset?}`, `joint.delete {joint}` (the part
   stays where the joint left it), `joint.drag {joint, from, to, width, height, start?}` (shows
   a drag without changing the design).
@@ -258,10 +283,6 @@ pictures.
 
 ## Limits
 
-- **Joint limits, deleting a joint, renaming a component and placing a component by typed
-  values have no buttons yet.** Use `joint.create` with `min` and `max`, `joint.delete`,
-  `component.rename` and `component.move` from a script or `chamfera-cli exec`; the search
-  palette lists them but only says they take parameters.
 - **A round face's joint origin is off-centre.** A face origin is the average of the face's
   vertices, and a circular face has a single vertex on its rim, so a joint on a round face
   lands one radius away from the centre. Click the circular edge instead; it uses the

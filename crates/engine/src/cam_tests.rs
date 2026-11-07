@@ -17,6 +17,50 @@ fn hole_plate() -> Session {
     s
 }
 
+/// QA user guide pass: nothing said that a drill and its holes do not match. The
+/// example drills its four Ø6 holes with a Ø5 drill: the toolpath stands, but the
+/// replies carry a warning, named after the operation in cam.generate. A Ø6 drill
+/// fits (no warning); the Ø6 flat end mill is not a drill (a warning).
+#[test]
+fn a_drill_that_does_not_match_its_holes_is_warned_about() {
+    let mut s = hole_plate();
+    let r = s.execute("cam.generate", &json!({})).unwrap();
+    assert_eq!(r["errors"], 0, "{r}");
+    assert_eq!(
+        r["warnings"],
+        json!(["Drill 1: the 5 mm tool is smaller than 4 6 mm holes: they would come out 5 mm"])
+    );
+    let list = s.execute("cam.list", &json!({})).unwrap();
+    let tool = |kind: &str, d: f64| {
+        list["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["kind"] == kind && t["diameter"] == json!(d))
+            .unwrap()["tool"]
+            .clone()
+    };
+    let (drill, mill) = (tool("drill", 5.0), tool("flat_end_mill", 6.0));
+    let op = list["operations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|o| o["kind"] == "drill")
+        .unwrap()["operation"]
+        .clone();
+    s.execute("cam.tool_edit", &json!({"tool": drill, "diameter": 6}))
+        .unwrap();
+    let r = s.execute("cam.generate", &json!({})).unwrap();
+    assert_eq!(r["warnings"], json!([]), "{r}");
+    let r = s
+        .execute("cam.op_edit", &json!({"operation": op, "tool": mill}))
+        .unwrap();
+    assert_eq!(
+        r["warnings"],
+        json!(["the tool is a flat end mill, not a drill: drilling plunges it straight down"])
+    );
+}
+
 #[test]
 fn drilling_finds_every_vertical_hole_of_the_hole_plate_example() {
     // examples/hole-plate.json: an 80 x 50 x 10 plate with four Ø6.6 counterbored
