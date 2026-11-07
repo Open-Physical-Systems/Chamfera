@@ -103,7 +103,7 @@ Close runners-up: selection filters and box selection (UI and NAV), splines (nee
 | Inline dimension editing | Edit a value in place on the canvas | done | P0 | S | ui |
 | DOF analysis and colour feedback | Under, fully and over-constrained shown; redundant and conflicting constraints reported | done | P0 | M | sketch, ui |
 | Constraint glyphs on canvas | Small markers showing each constraint; click to select or delete | missing | P0 | M | ui, render |
-| Automatic constraints while drawing | Horizontal/vertical, coincident, tangent, perpendicular added as you draw (H/V and coincident done) | missing | P0 | M | engine, ui |
+| Automatic constraints while drawing | Horizontal/vertical, coincident, tangent, perpendicular added as you draw (H/V and coincident done) | done (H/V, coincident and the snap constraints; a line started on the end of a line or arc is held at right angles or along the tangent and gets that constraint, `crates/sketch/src/track.rs`) | P0 | M | engine, ui |
 | Auto-constrain / auto-dimension | Fully constrain a sketch in one step | missing | P2 | M | sketch |
 | Drag with constraints | Drag a point; the sketch follows its constraints | done | P0 | S | sketch, ui |
 | Show unconstrained geometry | Highlight what can still move | done | P0 | S | ui |
@@ -115,18 +115,18 @@ Close runners-up: selection filters and box selection (UI and NAV), splines (nee
 |---|---|---|---|---|---|
 | Snap to existing points | Clicks near a point reuse it | done | P0 | S | engine, ui |
 | Horizontal/vertical inference | Lines within a small angle become horizontal or vertical | done | P0 | S | engine |
-| Endpoint, midpoint, centre, quadrant snaps | The usual object snaps, shown with a marker as the cursor nears them | missing | P0 | M | ui, engine |
-| On-curve, intersection, tangent, perpendicular, nearest snaps | Snaps to points on or between curves | missing | P0 | M | ui, engine, sketch |
-| Snap settings | Choose which snaps are active, and a snap radius in pixels | missing | P1 | S | ui |
-| Alignment (tracking) lines | Dashed guide when the cursor lines up with another point horizontally or vertically | missing | P1 | M | ui |
-| Polar tracking | Guides at a chosen angle step (for example every 15 degrees) | missing | P1 | S | ui |
-| Ortho mode | Force lines horizontal or vertical while held or toggled | missing | P1 | S | ui |
-| Hold a modifier to suspend snapping | Draw freely without inference | missing | P0 | S | ui |
-| Typed length and angle while drawing | Fields next to the cursor; Tab moves between them; Enter places | missing | P0 | M | ui |
+| Endpoint, midpoint, centre, quadrant snaps | The usual object snaps, shown with a marker as the cursor nears them | done (`crates/sketch/src/snap.rs`, markers in `sketch_ui.rs`) | P0 | M | ui, engine |
+| On-curve, intersection, tangent, perpendicular, nearest snaps | Snaps to points on or between curves | done (on-curve is the nearest point) | P0 | M | ui, engine, sketch |
+| Snap settings | Choose which snaps are active, and a snap radius in pixels | done (Preferences > Grid and Snap: each snap kind, radius, tracking) | P1 | S | ui |
+| Alignment (tracking) lines | Dashed guide when the cursor lines up with another point horizontally or vertically | done (through every sketch point and the origin; two guides meet at their corner) | P1 | M | ui |
+| Polar tracking | Guides at a chosen angle step (for example every 15 degrees) | done (off by default; step in Preferences) | P1 | S | ui |
+| Ortho mode | Force lines horizontal or vertical while held or toggled | done while held (Shift); no toggle yet | P1 | S | ui |
+| Hold a modifier to suspend snapping | Draw freely without inference | done (Ctrl: no snap, guide, grid or H/V inference) | P0 | S | ui |
+| Typed length and angle while drawing | Fields next to the cursor; Tab moves between them; Enter places | done (line, rectangle, circle) | P0 | M | ui |
 | Typed coordinates | Absolute, relative and polar coordinate entry, AutoCAD style | missing | P1 | M | ui, engine |
-| Sketch grid snap | Snap to a visible sketch grid with a chosen spacing | missing | P1 | S | ui, render |
+| Sketch grid snap | Snap to a visible sketch grid with a chosen spacing | done (Preferences > Grid and Snap) | P1 | S | ui, render |
 | Rubber-band preview | Show the curve being drawn before the click | done | P0 | S | ui |
-| Dimensions shown while drawing | Live length/angle readout | missing | P0 | S | ui |
+| Dimensions shown while drawing | Live length/angle readout | done (live values in the heads-up fields) | P0 | S | ui |
 
 ## 4. Solid features
 
