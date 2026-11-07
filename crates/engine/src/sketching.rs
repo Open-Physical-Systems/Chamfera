@@ -29,6 +29,9 @@ pub struct DimensionLabel {
     pub kind: String,
     pub value: f64,
     pub anchor: Point3,
+    /// A driven (reference) dimension: it shows the size and sets nothing.
+    #[serde(default)]
+    pub driven: bool,
 }
 
 /// The curve as a polyline in sketch coordinates (exact for lines). Arcs run
@@ -306,6 +309,32 @@ impl Session {
                 let at = match c {
                     C::Length { line, .. } => line_mid(*line),
                     C::Distance { a, b, .. } => mid(*a, *b),
+                    // Beside the span the dimension measures: above it for a horizontal
+                    // one, to its right for a vertical one.
+                    C::HorizontalDistance { a, b, .. } => {
+                        let (p, q) = (s.point(*a)?, s.point(*b)?);
+                        Some(Point2::new(0.5 * (p.x + q.x), p.y.max(q.y)))
+                    }
+                    C::VerticalDistance { a, b, .. } => {
+                        let (p, q) = (s.point(*a)?, s.point(*b)?);
+                        Some(Point2::new(p.x.max(q.x), 0.5 * (p.y + q.y)))
+                    }
+                    // The middle of the arc.
+                    C::ArcLength { curve, .. } => match s.curve(*curve)? {
+                        Curve::Arc {
+                            centre, start, end, ..
+                        } => {
+                            let (c, p, q) = (s.point(*centre)?, s.point(*start)?, s.point(*end)?);
+                            let a0 = (p - c).angle();
+                            let mut sweep = (q - c).angle() - a0;
+                            if sweep <= 0.0 {
+                                sweep += std::f64::consts::TAU;
+                            }
+                            let t = a0 + 0.5 * sweep;
+                            Some(c + chamfera_geom::Vec2::new(t.cos(), t.sin()) * c.distance(p))
+                        }
+                        _ => None,
+                    },
                     C::Radius { curve, .. } | C::Diameter { curve, .. } => circle_label(*curve),
                     C::PointLineDistance { point, line, .. } => {
                         Some(s.point(*point)?.lerp(line_mid(*line)?, 0.5))
@@ -318,6 +347,7 @@ impl Session {
                     kind: c.kind_name().to_owned(),
                     value,
                     anchor: f.plane.from_plane(at),
+                    driven: s.is_driven(id),
                 })
             })
             .collect()

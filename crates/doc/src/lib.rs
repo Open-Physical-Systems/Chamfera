@@ -132,7 +132,11 @@ use thiserror::Error;
 ///   cylinders and cones), the holder check of parallel and adaptive operations
 ///   (`holder_check`), and the `pencil` and `scallop` (experimental) finishing
 ///   operations. Older files open unchanged: every new field is optional.
-pub const FORMAT_VERSION: u32 = 36;
+/// - 37: sketch constraints v2: `concentric`, `collinear`, `horizontal_points` and
+///   `vertical_points` constraints; `horizontal_distance`, `vertical_distance` and
+///   `arc_length` dimensions; and driven (reference) dimensions, marked `driven: true` on
+///   their constraint record. Older files open unchanged.
+pub const FORMAT_VERSION: u32 = 37;
 /// The tag every design file starts with, so other JSON is not mistaken for a design.
 pub const FORMAT_TAG: &str = "chamfera";
 /// Longest parameter name.

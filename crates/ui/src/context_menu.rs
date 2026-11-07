@@ -154,7 +154,11 @@ pub struct ContextMenuUi {
 fn constraint_fits(kind: &str, points: usize, lines: usize, others: usize) -> bool {
     let curves = lines + others;
     match kind {
-        "horizontal" | "vertical" => points == 0 && lines >= 1 && others == 0,
+        "horizontal" | "vertical" => {
+            (points == 0 && lines >= 1 && others == 0) || (points == 2 && curves == 0)
+        }
+        "concentric" => points == 0 && lines == 0 && others == 2,
+        "collinear" => points == 0 && lines == 2 && others == 0,
         "coincident" => points == 2 && curves == 0,
         "point_on" => points == 1 && curves == 1,
         "midpoint" => points == 1 && lines == 1 && others == 0,

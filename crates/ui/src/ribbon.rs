@@ -757,6 +757,20 @@ pub const TOOLS: &[RibbonTool] = &[
         "3-Point Arc",
     ),
     sketch("CREATE", S::TangentArc, Icon::ArcTangent, "Tangent Arc"),
+    sketch(
+        "CREATE",
+        S::ThreePointRectangle,
+        Icon::RectangleThreePoint,
+        "3-Point Rectangle",
+    ),
+    sketch("CREATE", S::TwoPointCircle, Icon::CircleTwoPoint, "2-Point Circle"),
+    sketch(
+        "CREATE",
+        S::ThreePointCircle,
+        Icon::CircleThreePoint,
+        "3-Point Circle",
+    ),
+    sketch("CREATE", S::TangentCircle, Icon::CircleTangent, "Tangent Circle"),
     sketch("CREATE", S::Slot, Icon::Slot, "Slot"),
     sketch("CREATE", S::Ellipse, Icon::Ellipse, "Ellipse"),
     sketch("CREATE", S::Project, Icon::Project, "Project").sep(),
@@ -842,6 +856,18 @@ pub const TOOLS: &[RibbonTool] = &[
         "Give two lines the same length, or two circles the same radius",
     ),
     constraint(
+        "constraint.concentric",
+        "Concentric",
+        Icon::ConstraintConcentric,
+        "Give two circles or arcs the same centre",
+    ),
+    constraint(
+        "constraint.collinear",
+        "Collinear",
+        Icon::ConstraintCollinear,
+        "Put two lines on one straight line",
+    ),
+    constraint(
         "constraint.fix",
         "Fix",
         Icon::ConstraintFix,
@@ -855,6 +881,7 @@ pub const TOOLS: &[RibbonTool] = &[
         .short("Fillet"),
     sketch("MODIFY", S::Chamfer, Icon::Chamfer, "Sketch Chamfer").short("Chamfer"),
     sketch("MODIFY", S::Split, Icon::Split, "Split"),
+    sketch("MODIFY", S::Transform, Icon::SketchTransform, "Move/Copy"),
     tool(
         K,
         "MODIFY",
