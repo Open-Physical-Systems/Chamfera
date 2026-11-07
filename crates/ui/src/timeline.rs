@@ -1027,6 +1027,11 @@ impl ChamferaApp {
 
     /// Opens the Edit Feature dialog for a feature.
     pub(crate) fn edit_feature(&mut self, id: u32) {
+        // Surface sweeps, patches, stitches and trims are edited by changing their picks
+        // in their own tool.
+        if self.edit_surface_feature(id) {
+            return;
+        }
         let Ok(f) = self.session.doc.feature(id) else {
             return;
         };
@@ -1038,6 +1043,7 @@ impl ChamferaApp {
             self.edit_sheet_feature(id);
             return;
         }
+
         let (distance, extrude) = match &f.kind {
             FeatureKind::Surface(chamfera_doc::SurfaceFeature::Extrude(e)) => {
                 (e.distance.clone(), None)

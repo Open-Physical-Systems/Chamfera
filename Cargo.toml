@@ -39,6 +39,9 @@ miniz_oxide = { version = "0.8", default-features = false, features = ["with-all
 ureq = { version = "3.5", default-features = false, features = ["rustls-no-provider"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-native-certs = "0.8"
+# The local date for drawing title blocks (crates/engine, desktop only): the system's time
+# zone, read from the operating system's zone files (MIT or Unlicense).
+jiff = { version = "0.2", default-features = false, features = ["std", "tz-system", "tzdb-zoneinfo", "tzdb-bundle-platform"] }
 
 # GPU and UI (layers 5-6 only; `cargo xtask layers` enforces it)
 wgpu = "30"

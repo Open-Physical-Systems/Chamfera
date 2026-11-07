@@ -208,8 +208,9 @@ their own colour (the purple outline in the picture above).
 - **SKETCH > INSERT > Insert DXF** (also File > Insert DXF into Sketch…, while a sketch is
   open): pick a 2D ASCII `.dxf` file. Its lines, arcs, circles and polylines are drawn into
   the sketch, ends that meet are joined, and the status bar reports what came in and what
-  was skipped (text, for example). The file's `$INSUNITS` sets the unit (millimetres when
-  it has none).
+  was skipped (text, for example). Before it is drawn the Insert DXF dialog asks for the
+  units (from the file's `$INSUNITS`, millimetres when it has none; or millimetres or
+  inches) and a scale.
 - **Export Sketch as DXF…** (in the INSERT dropdown and the File menu) writes the sketch's
   curves to a DXF R12 file in millimetres.
 
@@ -261,8 +262,7 @@ Examples: `examples/sketch-plate.json`, `examples/sketch-snaps.json`,
 
 - There is no Point tool in the ribbon; `sketch.point` (used for hole centres) is only
   available from a script. The Hole tool places its own points by clicking on a face.
-- Insert DXF in the interface always uses the file's units; the `units` and `scale` options
-  are only available from a script. Only 2D ASCII DXF is read.
+- Only 2D ASCII DXF is read.
 - Overlapping closed shapes do not give separate profiles until you run Split All
   Crossings.
 - The value fields beside the cursor are drawn too narrow before you type: the live value

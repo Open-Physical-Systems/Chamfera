@@ -725,6 +725,49 @@ pub fn drill(
     tool.path(m)
 }
 
+/// How much smaller than its hole a drill may be before it is worth a warning, mm.
+pub const HOLE_FIT_TOLERANCE: f64 = 0.01;
+
+/// What is worth telling the user about drilling `holes` with a tool of `diameter`
+/// that is (`is_drill`) or is not a drill: a tool that is not a drill, and each hole
+/// size the tool is smaller than (the hole comes out at the tool's size). A tool bigger
+/// than a hole is refused by [`drill`], not warned about.
+pub fn drill_warnings(diameter: f64, is_drill: bool, kind: &str, holes: &[Hole]) -> Vec<String> {
+    let mut out = Vec::new();
+    if !is_drill {
+        out.push(format!(
+            "the tool is a {kind}, not a drill: drilling plunges it straight down"
+        ));
+    }
+    let mut sizes: Vec<f64> = holes
+        .iter()
+        .map(|h| h.diameter)
+        .filter(|d| d.is_finite() && *d > diameter + HOLE_FIT_TOLERANCE)
+        .collect();
+    sizes.sort_by(f64::total_cmp);
+    sizes.dedup_by(|a, b| (*a - *b).abs() <= HOLE_FIT_TOLERANCE);
+    for d in sizes {
+        let n = holes
+            .iter()
+            .filter(|h| (h.diameter - d).abs() <= HOLE_FIT_TOLERANCE)
+            .count();
+        out.push(format!(
+            "the {} mm tool is smaller than {} {} mm hole{}: {} come out {} mm",
+            fmt_mm(diameter),
+            if n == 1 {
+                "the".to_owned()
+            } else {
+                n.to_string()
+            },
+            fmt_mm(d),
+            if n == 1 { "" } else { "s" },
+            if n == 1 { "it would" } else { "they would" },
+            fmt_mm(diameter)
+        ));
+    }
+    out
+}
+
 fn fmt_mm(v: f64) -> String {
     crate::post::number(v)
 }

@@ -50,21 +50,23 @@ long.
    selected solid, or the first one if none is selected, and the status bar says
    `Click a solid to see its mass properties`.
 2. Click another solid in the viewport to switch to it.
-3. Type a **Density** in mass per mm³. The default, 1, makes the mass equal to the volume.
-   For steel in kilograms use `0.00000785` (7.85 g/cm³ = 7.85 × 10⁻⁶ kg/mm³); the results
-   update as you type.
+3. Type a **Density** with its unit: `7.85 g/cm3` for steel gives the mass in grams,
+   `7850 kg/m3` in kilograms and `0.284 lb/in3` in pounds (`g/mm3`, `g/cc`, `kg/dm3` and
+   `lb/ft3` work too). A plain number is mass per mm³ with no unit; the default, 1, makes
+   the mass equal to the volume. The results update as you type.
 
 The panel lists the solid's name, **Volume**, **Area**, **Mass**, **Centre of mass**, the
 inertia tensor about the centre of mass (**Ixx Iyy Izz Ixy Iyz Ixz**) and the three
-**Principal** moments. Inertia is in mass × mm² (kg·mm² with the steel density above) and is
-written in scientific notation (`9.8125e0`). Tiny values such as `2.5702e-16` are rounding
-noise and mean zero.
+**Principal** moments. The mass is in the density's mass unit and inertia in that unit ×
+(the design's length unit)², such as `g·mm²`; with a plain number they read `mass·mm²`.
+Round-off far below the largest moment reads 0.
 
 ![Mass Properties of the 50 x 30 x 10 block in steel: mass 0.1177 kg, centre of mass 25, 15, 5](images/inspect-mass.png)
 
-Check it by hand: the block's mass is 15000 × 7.85 × 10⁻⁶ = 0.11775 kg, its centre of mass is
-the middle (25, 15, 5), and Ixx = m (30² + 10²) / 12 = 9.8125 kg·mm², Iyy = m (50² + 10²) / 12
-= 25.5125 and Izz = m (50² + 30²) / 12 = 33.3625, as the panel shows.
+Check it by hand: at `7850 kg/m3` the block's mass is 15000 mm³ × 7.85 × 10⁻⁶ kg/mm³ =
+0.11775 kg, its centre of mass is the middle (25, 15, 5), and Ixx = m (30² + 10²) / 12 =
+9.8125 kg·mm², Iyy = m (50² + 10²) / 12 = 25.5125 and Izz = m (50² + 30²) / 12 = 33.3625.
+At `7.85 g/cm3` the same block is 117.75 g and Ixx is 9812.5 g·mm².
 
 ## Section view
 
@@ -76,13 +78,15 @@ From the display bar:
 1. Click **Section** in the display bar. The plane picker, an offset box and **Flip** appear
    next to it.
 2. Pick the plane: **XY (top)**, **XZ (front)** or **YZ (right)**.
-3. Drag or type the **offset** in mm, along the plane's normal. The side the normal points to
-   is cut away; tick **Flip** to keep that side instead.
+3. Drag or type the **offset** in mm, along the axis the plane is named for. The side the
+   plane's normal points to is cut away; tick **Flip** to keep that side instead.
 4. Click **Section** again to turn it off.
 
-The normals: XY points up (+Z), YZ to the right (+X), and XZ toward the front (−Y). So to cut
-an 80 × 50 × 30 box at Y = 25 on the XZ plane, type an offset of −25; to look into it from
-above on XY, type 15 (half its height).
+The offsets run along +Z for XY, +Y for XZ and +X for YZ, as the plane list says. So to cut
+an 80 × 50 × 30 box at Y = 25 on the XZ plane, type an offset of 25; to look into it from
+above on XY, type 15 (half its height). The side cut away is the one the plane's normal
+points to: above for XY, the right for YZ, and the front (−Y, toward you in the Front view)
+for XZ, so the cut faces you from the Front view.
 
 From the menu: **View > SECTION ANALYSIS** has the three planes (each starts at offset 0)
 and **Clear Section**.
@@ -158,9 +162,8 @@ panel with its result (`chamfera --script examples/measure-block-and-pin.json`).
 
 ## Limits
 
-- **A density the panel cannot read is taken as 1 without a warning.** Typing `7.85 g/cm3`
-  or `7,85e-6` leaves the text in the box but shows the results for density 1. Type a plain
-  number.
+- A density the panel cannot read (`7,85e-6`, a unit it does not know) shows an error under
+  the field and no results.
 - **The display bar does not follow a section set from a script or command**: after
   `view.section {plane: "xz", offset: -25}` the bar still shows `XY` and `0.0 mm`, and
   touching the offset box replaces the section with an XY one.

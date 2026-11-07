@@ -41,10 +41,10 @@ impl Default for DisplayUi {
     }
 }
 
-/// The section planes, named with the way their offset runs (XZ's normal is -Y).
+/// The section planes, named with the world axis their offset runs along.
 const PLANES: [(&str, &str); 3] = [
     ("xy", "XY (top, +Z)"),
-    ("xz", "XZ (front, -Y)"),
+    ("xz", "XZ (front, +Y)"),
     ("yz", "YZ (right, +X)"),
 ];
 
@@ -87,8 +87,9 @@ impl ChamferaApp {
             let n = f.z();
             let along = normal.dot(n);
             if (along.abs() - 1.0).abs() < chamfera_geom::ANGULAR_TOLERANCE {
+                let axis = chamfera_engine::display::section_axis(id).unwrap_or(n);
                 self.display.plane = id;
-                self.display.offset = o.dot(n);
+                self.display.offset = o.dot(axis);
                 self.display.flip = along < 0.0;
                 self.display.custom_section = false;
                 return;
@@ -101,11 +102,8 @@ impl ChamferaApp {
     /// model along the plane's normal (a cut at 0 of a part standing on XY shows only
     /// its footprint), or 0 with no model.
     pub(crate) fn section_start_offset(&self) -> f64 {
-        let n = match self.display.plane {
-            "xz" => chamfera_geom::Frame::XZ.z(),
-            "yz" => chamfera_geom::Frame::YZ.z(),
-            _ => chamfera_geom::Frame::XY.z(),
-        };
+        let n = chamfera_engine::display::section_axis(self.display.plane)
+            .unwrap_or(chamfera_geom::Vec3::Z);
         self.session.scene.bounds().map_or(0.0, |b| {
             let mid = b.min + (b.max - b.min) * 0.5;
             (mid - chamfera_geom::Point3::ORIGIN).dot(n)
@@ -485,8 +483,8 @@ mod tests {
         assert!(!app.display.custom_section);
         app.display.plane = "xy";
         assert!((app.section_start_offset() - 5.0).abs() < 1e-9);
-        // XZ's normal is -Y: the middle y = 15 is the offset -15.
+        // XZ's offset runs along +Y: the middle y = 15 is the offset +15.
         app.display.plane = "xz";
-        assert!((app.section_start_offset() + 15.0).abs() < 1e-9);
+        assert!((app.section_start_offset() - 15.0).abs() < 1e-9);
     }
 }

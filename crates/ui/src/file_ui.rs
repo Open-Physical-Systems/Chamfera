@@ -45,9 +45,78 @@ pub enum Pending {
     Quit,
 }
 
+/// The units Insert DXF offers: (command value, what the user reads).
+pub(crate) const DXF_UNITS: [(Option<&str>, &str); 3] = [
+    (None, "From the file (else mm)"),
+    (Some("mm"), "Millimetres"),
+    (Some("inch"), "Inches"),
+];
+
+/// Where the DXF file to insert comes from.
+#[derive(Debug, Clone, PartialEq)]
+pub enum DxfSource {
+    /// A path on this computer (desktop).
+    Path(String),
+    /// The file's contents as base64 (the browser's file picker).
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    Bytes(String),
+}
+
+/// Insert DXF after the file is chosen: its units and scale, before it is drawn.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DxfInsert {
+    pub source: DxfSource,
+    /// The file's name, for the dialog.
+    pub name: String,
+    /// Index into [`DXF_UNITS`].
+    pub units: usize,
+    /// A further factor, as typed.
+    pub scale: String,
+    /// Why the last Insert did nothing, shown under the fields.
+    pub error: Option<String>,
+}
+
+impl DxfInsert {
+    pub fn new(source: DxfSource, name: String) -> DxfInsert {
+        DxfInsert {
+            source,
+            name,
+            units: 0,
+            scale: "1".into(),
+            error: None,
+        }
+    }
+
+    /// The command and its parameters, or why the scale cannot be used.
+    pub fn params(&self) -> Result<(&'static str, serde_json::Value), String> {
+        let scale = self.scale.trim();
+        let scale = if scale.is_empty() { "1" } else { scale };
+        let k = scale
+            .parse::<f64>()
+            .ok()
+            .filter(|k| k.is_finite() && *k > 0.0 && *k <= 1e6)
+            .ok_or_else(|| format!("Scale {scale:?} must be a number above 0 (at most 1e6)"))?;
+        let mut p = match &self.source {
+            DxfSource::Path(path) => json!({ "path": path }),
+            DxfSource::Bytes(data) => json!({ "data": data }),
+        };
+        p["scale"] = json!(k);
+        if let Some(Some(u)) = DXF_UNITS.get(self.units).map(|u| u.0) {
+            p["units"] = json!(u);
+        }
+        let id = match self.source {
+            DxfSource::Path(_) => "sketch.import_dxf",
+            DxfSource::Bytes(_) => "sketch.import_dxf_bytes",
+        };
+        Ok((id, p))
+    }
+}
+
 #[derive(Default)]
 pub struct FileUi {
     pub pending: Option<Pending>,
+    /// Insert DXF's units and scale, after the file is chosen.
+    pub dxf: Option<DxfInsert>,
     /// The window title last sent, so it is only sent when it changes.
     title: String,
     /// Closing was confirmed (or nothing was unsaved): let the window close.
@@ -358,11 +427,143 @@ impl ChamferaApp {
         else {
             return;
         };
-        let reply = self.run(
-            "sketch.import_dxf",
-            json!({ "path": path.to_string_lossy() }),
-        );
-        self.after_dxf(reply.as_ref());
+        let name = path
+            .file_name()
+            .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+        self.file.dxf = Some(DxfInsert::new(
+            DxfSource::Path(path.to_string_lossy().into_owned()),
+            name,
+        ));
+    }
+
+    /// Insert in the Insert DXF dialog: draws the file with the chosen units and scale.
+    pub(crate) fn dxf_ok(&mut self) -> Option<serde_json::Value> {
+        let d = self.file.dxf.as_ref()?;
+        let (id, params) = match d.params() {
+            Ok(x) => x,
+            Err(e) => {
+                if let Some(d) = self.file.dxf.as_mut() {
+                    d.error = Some(e);
+                }
+                return None;
+            }
+        };
+        match self.session.execute(id, &params) {
+            Ok(r) => {
+                self.file.dxf = None;
+                self.after_dxf(Some(&r));
+                Some(r)
+            }
+            Err(e) => {
+                if let Some(d) = self.file.dxf.as_mut() {
+                    d.error = Some(e.to_string());
+                }
+                None
+            }
+        }
+    }
+
+    /// The Insert DXF dialog: the file, its units and a scale.
+    pub(crate) fn dxf_insert_dialog(&mut self, ctx: &egui::Context) {
+        const WIDTH: f32 = 320.0;
+        if self.file.dxf.is_none() {
+            return;
+        }
+        let pos = self.tool_dialog_pos(WIDTH);
+        let look = widgets::Look {
+            theme: &self.theme,
+            icons: &self.icons,
+        };
+        let Some(d) = self.file.dxf.as_mut() else {
+            return;
+        };
+        let title = label("sketch.import_dxf");
+        let mut ok = false;
+        let mut cancel = false;
+        egui::Window::new(title)
+            .id(egui::Id::unique("dxf insert dialog"))
+            .title_bar(false)
+            .frame(widgets::dialog_frame(look))
+            .default_pos(pos)
+            .fade_in(false)
+            .default_width(WIDTH)
+            .min_width(WIDTH)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.set_width(WIDTH);
+                if widgets::dialog_title(ui, look, Icon::ImportMesh, title) {
+                    cancel = true;
+                }
+                widgets::dialog_body(ui, |ui| {
+                    egui::Grid::new("dxf insert grid")
+                        .num_columns(2)
+                        .spacing([widgets::S3, widgets::S3])
+                        .show(ui, |ui| {
+                            widgets::field_label(ui, look, "File");
+                            ui.add(egui::Label::new(d.name.as_str()).truncate());
+                            ui.end_row();
+                            widgets::field_label(ui, look, "Units");
+                            egui::ComboBox::from_id_salt("dxf units")
+                                .selected_text(DXF_UNITS.get(d.units).map_or("", |u| u.1))
+                                .width(widgets::FIELD_WIDTH)
+                                .show_ui(ui, |ui| {
+                                    for (i, (_, n)) in DXF_UNITS.iter().enumerate() {
+                                        ui.selectable_value(&mut d.units, i, *n);
+                                    }
+                                });
+                            ui.end_row();
+                            widgets::field_label(ui, look, "Scale");
+                            let r = ui.add_sized(
+                                widgets::FIELD,
+                                egui::TextEdit::singleline(&mut d.scale)
+                                    .hint_text("1")
+                                    .align(egui::Align2::LEFT_CENTER),
+                            );
+                            if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                                ok = true;
+                            }
+                            ui.end_row();
+                        });
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(
+                                "Drawn into the sketch being edited. A file that does not say \
+                                 its units is taken as mm.",
+                            )
+                            .size(widgets::T_SMALL)
+                            .color(look.c(|t| t.text_muted)),
+                        )
+                        .wrap(),
+                    );
+                    if let Some(e) = &d.error {
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(e)
+                                    .size(widgets::T_SMALL)
+                                    .color(look.c(|t| t.error)),
+                            )
+                            .wrap(),
+                        );
+                    }
+                });
+                widgets::dialog_footer(ui, look, |ui| {
+                    if widgets::primary_button(ui, look, "Insert", true).clicked() {
+                        ok = true;
+                    }
+                    if widgets::secondary_button(ui, look, "Cancel").clicked() {
+                        cancel = true;
+                    }
+                });
+            });
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) && !ctx.egui_wants_keyboard_input() {
+            cancel = true;
+        }
+        if ok {
+            self.dxf_ok();
+        }
+        if cancel {
+            self.file.dxf = None;
+        }
     }
 
     /// STEP files are read from a path, which the browser build has none of.
@@ -481,8 +682,7 @@ impl ChamferaApp {
                     }
                 }
                 crate::web::Kind::Dxf => {
-                    let reply = self.run("sketch.import_dxf_bytes", json!({ "data": data }));
-                    self.after_dxf(reply.as_ref());
+                    self.file.dxf = Some(DxfInsert::new(DxfSource::Bytes(data), picked.name));
                 }
                 crate::web::Kind::Mesh => {
                     let name = picked.name.as_str();
@@ -878,5 +1078,39 @@ mod tests {
         for (_, _, command) in MESH_EXPORTS {
             assert!(chamfera_engine::cmd::find(command).is_some(), "{command}");
         }
+    }
+
+    /// Insert DXF asks for the units and a scale (QA user guide pass: it had no units
+    /// or scale choice). examples/dxf-plate.dxf says it is in inches ($INSUNITS 1): from
+    /// the file a drawing unit is 25.4 mm; taken as millimetres with scale 2 it is 2 mm.
+    /// An unreadable scale is refused under the fields and draws nothing.
+    #[test]
+    fn insert_dxf_takes_the_chosen_units_and_scale() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/dxf-plate.dxf");
+        let mut app = ChamferaApp::headless();
+        app.run("sketch.create", json!({ "plane": "xy" }));
+        app.file.dxf = Some(DxfInsert::new(DxfSource::Path(path.into()), "p.dxf".into()));
+        let r = app.dxf_ok().unwrap();
+        assert!(app.file.dxf.is_none());
+        assert_eq!(r["units"], "inch");
+        assert!((r["scale"].as_f64().unwrap() - 25.4).abs() < 1e-12);
+        let mut d = DxfInsert::new(DxfSource::Path(path.into()), "p.dxf".into());
+        d.units = 1;
+        d.scale = "abc".into();
+        app.file.dxf = Some(d);
+        assert!(app.dxf_ok().is_none());
+        let e = app.file.dxf.as_ref().and_then(|d| d.error.clone());
+        assert!(e.is_some_and(|e| e.contains("Scale")));
+        if let Some(d) = app.file.dxf.as_mut() {
+            d.scale = "2".into();
+        }
+        let r = app.dxf_ok().unwrap();
+        assert_eq!(r["units"], "mm");
+        assert!((r["scale"].as_f64().unwrap() - 2.0).abs() < 1e-12);
+        let (id, p) = DxfInsert::new(DxfSource::Bytes("AAAA".into()), "b.dxf".into())
+            .params()
+            .unwrap();
+        assert_eq!(id, "sketch.import_dxf_bytes");
+        assert!(p.get("units").is_none(), "from the file: no units given");
     }
 }

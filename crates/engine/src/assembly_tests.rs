@@ -781,3 +781,109 @@ fn a_linked_copy_of_a_jointed_component_starts_where_it_is_shown() {
         bounds(&mut s, copy)
     );
 }
+
+fn limits_of(s: &Session, j: &Value) -> Option<[f64; 2]> {
+    let id = u32::try_from(j.as_u64().unwrap()).unwrap();
+    s.doc.assembly.joint(id).unwrap().limits
+}
+
+/// joint.edit sets new limits (QA user guide pass: joint limits could not be changed).
+/// A slider at 15 mm moves B's 0..40 plate to 15..55; limits 0..10 move the value to the
+/// nearer limit, 10, so B spans 10..50. Limits of -5..30 then let 25 through (B at
+/// 25..65); `limits: false` removes them, and undo puts them back.
+#[test]
+fn editing_a_joints_limits_keeps_its_value_inside_them() {
+    let mut s = Session::new();
+    let (a, b) = two_plates(&mut s);
+    let r = s
+        .execute(
+            "joint.create",
+            &json!({"type": "slider", "a": at_origin(a, [1.0, 0.0, 0.0]),
+                    "b": at_origin(b, [1.0, 0.0, 0.0]), "value": 15}),
+        )
+        .unwrap();
+    let j = r["joint"].clone();
+    assert!(close(bounds(&mut s, b), [15.0, 0.0, 0.0, 55.0, 10.0, 4.0]));
+    let r = s
+        .execute("joint.edit", &json!({"joint": j, "min": 0, "max": 10}))
+        .unwrap();
+    assert_eq!(r["limits"], json!([0.0, 10.0]));
+    assert!((r["value"].as_f64().unwrap() - 10.0).abs() < 1e-9);
+    assert!(close(bounds(&mut s, b), [10.0, 0.0, 0.0, 50.0, 10.0, 4.0]));
+    s.execute(
+        "joint.edit",
+        &json!({"joint": j, "min": -5, "max": "30 mm"}),
+    )
+    .unwrap();
+    s.execute("joint.set_value", &json!({"joint": j, "value": 25}))
+        .unwrap();
+    assert!(close(bounds(&mut s, b), [25.0, 0.0, 0.0, 65.0, 10.0, 4.0]));
+    let r = s
+        .execute(
+            "joint.edit",
+            &json!({"joint": j, "limits": false, "name": "Rail"}),
+        )
+        .unwrap();
+    assert!(r["limits"].is_null());
+    assert_eq!(r["name"], "Rail");
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(limits_of(&s, &j), Some([-5.0, 30.0]));
+    // Refused, changing nothing: one limit only, min above max, nothing to change, both
+    // new limits and none, an empty name.
+    for bad in [
+        json!({"joint": j, "min": 0}),
+        json!({"joint": j, "min": 5, "max": 1}),
+        json!({"joint": j}),
+        json!({"joint": j, "min": 0, "max": 1, "limits": false}),
+        json!({"joint": j, "name": ""}),
+    ] {
+        assert!(s.execute("joint.edit", &bad).is_err(), "{bad}");
+    }
+    assert_eq!(limits_of(&s, &j), Some([-5.0, 30.0]));
+}
+
+/// A revolute joint's limits are typed in degrees: 0..45 with the joint at 90 turns it
+/// back to 45 (the reply in degrees, stored as pi / 4).
+#[test]
+fn a_revolute_joints_limits_are_in_degrees() {
+    let mut s = Session::new();
+    let (a, b) = two_plates(&mut s);
+    let r = s
+        .execute(
+            "joint.create",
+            &json!({"type": "revolute", "a": at_origin(a, [0.0, 0.0, 1.0]),
+                    "b": at_origin(b, [0.0, 0.0, 1.0]), "value": 90}),
+        )
+        .unwrap();
+    let j = r["joint"].clone();
+    let r = s
+        .execute("joint.edit", &json!({"joint": j, "min": 0, "max": 45}))
+        .unwrap();
+    assert!((r["value"].as_f64().unwrap() - 45.0).abs() < 1e-9);
+    let id = u32::try_from(j.as_u64().unwrap()).unwrap();
+    let stored = s.doc.assembly.joint(id).unwrap().value;
+    assert!((stored - std::f64::consts::FRAC_PI_4).abs() < 1e-12);
+}
+
+/// A linked copy's bodies are named after the copy (QA user guide pass: they reused the
+/// original's names, so one name meant two bodies). Peg's body Extrude1 shows in its
+/// copy Peg:2 as "Extrude1 (Peg:2)"; the original keeps its name.
+#[test]
+fn a_linked_copys_bodies_have_names_of_their_own() {
+    let mut s = Session::new();
+    let f = plate(&mut s, 0.0, 0.0, 10.0, 10.0, 10.0);
+    let c = new_component(&mut s, "Peg", f);
+    let copy = s
+        .execute("component.copy", &json!({"component": c}))
+        .unwrap();
+    assert_eq!(copy["name"], "Peg:2");
+    let mut names: Vec<String> = s.solids().iter().map(|x| x.name.clone()).collect();
+    names.sort();
+    assert_eq!(names, ["Extrude1", "Extrude1 (Peg:2)"]);
+    // The name finds the copy's own body: 10 x 10 x 10 is 1000 mm³.
+    let m = s
+        .execute("inspect.mass", &json!({"body": "Extrude1 (Peg:2)"}))
+        .unwrap();
+    assert!((m["volume"].as_f64().unwrap() - 1000.0).abs() < 1e-6);
+    assert_eq!(m["solid"], "Extrude1 (Peg:2)");
+}
