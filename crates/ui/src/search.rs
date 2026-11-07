@@ -60,6 +60,7 @@ pub(crate) fn command_of_action(action: Action) -> Option<&'static str> {
     Some(match action {
         Action::SketchTool(t) => match t {
             Tool::Select => return None,
+            Tool::Point => "sketch.point",
             Tool::Line => "sketch.line",
             Tool::Rectangle => "sketch.rectangle",
             Tool::CentreRectangle => "sketch.rectangle.centre",

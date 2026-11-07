@@ -64,6 +64,7 @@ pub enum Icon {
     ConstructPlaneOffset,
     ConstructPlanePoints,
     ConstructPoint,
+    SketchPoint,
     Construction,
     Delete,
     DeleteFace,
@@ -96,6 +97,7 @@ pub enum Icon {
     OffsetFace,
     Open,
     Origin,
+    Ortho,
     Parameters,
     Patch,
     PatternCircular,
@@ -151,7 +153,7 @@ pub enum Icon {
 
 impl Icon {
     #[cfg(test)]
-    pub const ALL: [Icon; 128] = [
+    pub const ALL: [Icon; 130] = [
         Icon::RenderCamera,
         Icon::RenderEnvironment,
         Icon::RenderImage,
@@ -206,6 +208,7 @@ impl Icon {
         Icon::ConstructPlaneOffset,
         Icon::ConstructPlanePoints,
         Icon::ConstructPoint,
+        Icon::SketchPoint,
         Icon::Construction,
         Icon::Delete,
         Icon::DeleteFace,
@@ -238,6 +241,7 @@ impl Icon {
         Icon::OffsetFace,
         Icon::Open,
         Icon::Origin,
+        Icon::Ortho,
         Icon::Parameters,
         Icon::Patch,
         Icon::PatternCircular,
@@ -325,6 +329,7 @@ impl Icon {
             Icon::ConstructPlaneOffset => master!("construct_plane_offset"),
             Icon::ConstructPlanePoints => master!("construct_plane_points"),
             Icon::ConstructPoint => master!("construct_point"),
+            Icon::SketchPoint => master!("sketch_point"),
             Icon::Construction => master!("construction"),
             Icon::Delete => master!("delete"),
             Icon::DeleteFace => master!("delete_face"),
@@ -356,6 +361,7 @@ impl Icon {
             Icon::New => master!("new"),
             Icon::Open => master!("open"),
             Icon::Origin => master!("origin"),
+            Icon::Ortho => master!("ortho"),
             Icon::Parameters => master!("parameters"),
             Icon::Plane => master!("plane"),
             Icon::Polygon => master!("polygon"),

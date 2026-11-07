@@ -736,6 +736,14 @@ pub const TOOLS: &[RibbonTool] = &[
     .short("Rules"),
     // SKETCH > SELECT
     sketch("SELECT", S::Select, Icon::Select, "Select").primary(),
+    tool(
+        K,
+        "SELECT",
+        Action::Tool("sketch.ortho"),
+        Icon::Ortho,
+        "Ortho",
+        "Keep lines horizontal or vertical as you draw; Shift frees them, point snaps still win",
+    ),
     // SKETCH > CREATE
     sketch("CREATE", S::Line, Icon::Line, "Line").primary(),
     sketch("CREATE", S::Rectangle, Icon::Rectangle, "Rectangle").primary(),
@@ -743,6 +751,7 @@ pub const TOOLS: &[RibbonTool] = &[
     sketch("CREATE", S::Arc, Icon::Arc, "Arc").primary(),
     sketch("CREATE", S::Polygon, Icon::Polygon, "Polygon").primary(),
     sketch("CREATE", S::Spline, Icon::Spline, "Spline").primary(),
+    sketch("CREATE", S::Point, Icon::SketchPoint, "Point"),
     sketch(
         "CREATE",
         S::CentreRectangle,
@@ -1728,6 +1737,7 @@ impl ChamferaApp {
                 self.session.active_sketch.is_some() && self.sketch.tool() == t
             }
             Action::Tool(id) => match id {
+                "sketch.ortho" => self.sketch.ortho,
                 "solid.hole" => s.hole.is_some(),
                 "solid.shell" => s.shell.is_some(),
                 "solid.offset_face" => pull == Some(PullMode::Offset),
@@ -1980,6 +1990,7 @@ impl ChamferaApp {
             "sketch.split_all" => {
                 self.run_sketch("sketch.split", json!({}));
             }
+            "sketch.ortho" => self.toggle_ortho(),
             "drawing.new_sheet" => self.drawing_new_sheet(),
             "drawing.projection" => self.drawing_toggle_projection(),
             "drawing.add_parts_list" => self.drawing_parts_list(),
@@ -2013,7 +2024,7 @@ impl ChamferaApp {
                 } else if let Some(k) = surface_kind(id) {
                     self.open_surface_tool(k);
                 } else if let Some(kind) = id.strip_prefix("constraint.") {
-                    self.run_sketch("sketch.constrain_selection", json!({ "kind": kind }));
+                    self.constrain_selection_checked(kind);
                 } else if let Some(k) = transform_kind(id) {
                     self.open_transform(k);
                 } else if let Some(k) = construct_kind(id) {

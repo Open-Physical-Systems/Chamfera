@@ -30,6 +30,7 @@ use serde_json::{Value, json};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tool {
     Select,
+    Point,
     Line,
     Rectangle,
     CentreRectangle,
@@ -74,7 +75,7 @@ macro_rules! shape_tools {
     };
 }
 
-pub(crate) const CREATE_ALL: [Tool; 20] = [
+pub(crate) const CREATE_ALL: [Tool; 21] = [
     Tool::Line,
     Tool::Rectangle,
     Tool::CentreRectangle,
@@ -91,6 +92,7 @@ pub(crate) const CREATE_ALL: [Tool; 20] = [
     Tool::Ellipse,
     Tool::Project,
     Tool::Spline,
+    Tool::Point,
     Tool::Offset,
     Tool::Mirror,
     Tool::RectangularPattern,
@@ -110,6 +112,7 @@ impl Tool {
     pub(crate) fn name(self) -> &'static str {
         match self {
             Tool::Select => "Select",
+            Tool::Point => label("sketch.point"),
             Tool::Line => label("sketch.line"),
             Tool::Rectangle => label("sketch.rectangle"),
             Tool::CentreRectangle => label("sketch.rectangle.centre"),
@@ -136,6 +139,7 @@ impl Tool {
     pub(crate) fn icon(self) -> Icon {
         match self {
             Tool::Select => Icon::Select,
+            Tool::Point => Icon::SketchPoint,
             Tool::Line => Icon::Line,
             Tool::Rectangle => Icon::Rectangle,
             Tool::CentreRectangle => Icon::RectangleCentre,
@@ -164,6 +168,10 @@ impl Tool {
             Tool::Select => {
                 "Select
 Pick points and curves to constrain or dimension (Shift adds); drag points to move them"
+            }
+            Tool::Point => {
+                "Point
+Click to place a point: a hole centre, or something to constrain and dimension to. Clicks snap to ends, midpoints, centres and curves, and stay there"
             }
             Tool::Line => {
                 "Line
@@ -239,6 +247,7 @@ Click a curve to split it where other curves cross it; Split All splits every cr
             (Tool::Select, _) => {
                 "Click to select (Shift adds) · drag a point to move it · drag on empty space to box select · Del deletes"
             }
+            (Tool::Point, _) => "Click to place a point · type x,y or @dx,dy and Enter · Esc ends",
             (Tool::Line, 0) => "Click the start of the line",
             (Tool::Line, _) => {
                 "Click the next point · type a length, Tab for the angle, Enter · Shift: straight · Ctrl: no snaps · Esc ends"
@@ -366,6 +375,10 @@ pub enum DemoStep {
     /// Type these characters.
     Type(String),
     Tab,
+    /// Start typing this point (`x,y`, `@dx,dy`, `@length<angle`), not yet entered.
+    Coord(String),
+    /// Turn Ortho mode on or off.
+    Ortho,
 }
 
 /// Parses `--sketch-input`: steps separated by `;`, such as
@@ -387,6 +400,7 @@ pub fn parse_demo(text: &str) -> Result<Vec<DemoStep>, String> {
         let step = match word {
             "tool" => DemoStep::Tool(match args.trim() {
                 "line" => Tool::Line,
+                "point" => Tool::Point,
                 "rectangle" => Tool::Rectangle,
                 "centre_rectangle" => Tool::CentreRectangle,
                 "three_point_rectangle" => Tool::ThreePointRectangle,
@@ -407,10 +421,12 @@ pub fn parse_demo(text: &str) -> Result<Vec<DemoStep>, String> {
             }
             "shift" => DemoStep::Shift,
             "tab" => DemoStep::Tab,
+            "ortho" => DemoStep::Ortho,
+            "coord" => DemoStep::Coord(args.trim().chars().take(48).collect()),
             "type" => DemoStep::Type(args.chars().take(32).collect()),
             _ => {
                 return Err(format!(
-                    "--sketch-input: unknown step `{raw}` (tool, click, hover, shift, type, tab)"
+                    "--sketch-input: unknown step `{raw}` (tool, click, hover, shift, type, tab, coord, ortho)"
                 ));
             }
         };
@@ -463,7 +479,7 @@ pub struct SketchUi {
     chain_start: Option<u32>,
     hover: Option<Point2>,
     /// The hovered pixel and viewport size, for previews that pick geometry.
-    hover_px: Option<(f64, f64, f64, f64)>,
+    pub(crate) hover_px: Option<(f64, f64, f64, f64)>,
     /// The curve the Offset tool picked with its first click.
     picked_curve: Option<u32>,
     pub options: ToolOptions,
@@ -491,6 +507,19 @@ pub struct SketchUi {
     pub status: Option<String>,
     /// The active sketch's constraint state, for the status bar's coloured dot.
     pub state: Option<SketchState>,
+    /// Ortho mode (F8): segments go horizontal or vertical as if Shift were held, and
+    /// Shift frees them (`sketch_entry.rs`). Kept from one sketch to the next.
+    pub ortho: bool,
+    /// The lock held now comes from Ortho mode, not Shift: point snaps still win.
+    pub(crate) ortho_lock: bool,
+    /// A point being typed: `x,y`, `@dx,dy` or `@length<angle` (`sketch_entry.rs`).
+    pub(crate) coord: Option<String>,
+    /// The last point a drawing tool placed, which `@` coordinates start from.
+    pub(crate) last_at: Option<Point2>,
+    /// The constraint whose marker was clicked (`constraint_ui.rs`); Del deletes it.
+    pub(crate) glyph_selected: Option<u32>,
+    /// The open conflict dialog (`constraint_ui.rs`).
+    pub(crate) conflict: Option<crate::constraint_ui::Conflict>,
 }
 
 /// How constrained the active sketch is.
@@ -527,7 +556,7 @@ impl SketchUi {
     }
 
     /// True while the heads-up fields are shown.
-    fn fields_shown(&self) -> bool {
+    pub(crate) fn fields_shown(&self) -> bool {
         !self.tool().value_fields().is_empty() && self.clicks.len() == 1
     }
 }
@@ -662,7 +691,9 @@ impl ChamferaApp {
 
     pub(crate) fn finish_sketch(&mut self) {
         self.run("sketch.finish", json!({}));
+        let ortho = self.sketch.ortho;
         self.sketch = super::sketch_ui::SketchUi::default();
+        self.sketch.ortho = ortho;
     }
 
     /// Dimensions the selection at its current size and starts editing the value, as the
@@ -732,6 +763,9 @@ impl ChamferaApp {
             return self.point_click_at(x, y, w, h);
         }
         let cursor = self.session.sketch_plane_point(x, y, w, h)?;
+        // A lock from Ortho mode lets a point snap (an end, a centre, a crossing) win, as
+        // object snaps do; a lock from Shift wins over everything.
+        let mut ortho_at = None;
         if let Some(from) = self.sketch.lock_anchor() {
             let locked = match self.sketch.lock {
                 Lock::Off => None,
@@ -739,13 +773,17 @@ impl ChamferaApp {
                 Lock::Steps => lock_angle(from, cursor, LOCK_STEP_DEGREES.to_radians()),
             };
             if let Some(at) = locked {
-                return Some(Click {
+                let click = Click {
                     at,
                     point: None,
                     snap: None,
                     track: None,
                     free: false,
-                });
+                };
+                if !self.sketch.ortho_lock || self.sketch.free {
+                    return Some(click);
+                }
+                ortho_at = Some(click);
             }
         }
         if self.sketch.free {
@@ -805,6 +843,18 @@ impl ChamferaApp {
                 .then_some(s),
             (s, _) => s,
         };
+        if let Some(locked) = ortho_at {
+            return Some(match snap {
+                Some(snap) if snap.kind != SnapKind::OnCurve => Click {
+                    at: snap.at,
+                    point: snap.point.map(|p| p.0),
+                    snap: Some(snap),
+                    track: None,
+                    free: false,
+                },
+                _ => locked,
+            });
+        }
         Some(match (snap, track) {
             (Some(snap), _) => Click {
                 at: snap.at,
@@ -897,15 +947,25 @@ impl ChamferaApp {
         // Keyboard focus on a widget (a text box) means the keys are not for the sketch.
         let typing = ui.ctx().egui_wants_keyboard_input();
         if self.sketch.pinned_hover.is_none() {
-            self.sketch.lock = match (shift, alt) {
-                (false, _) => Lock::Off,
+            // Ortho mode holds the straight lock until Shift frees it.
+            let straight = shift != self.sketch.ortho;
+            self.sketch.lock = match (straight, shift && alt) {
+                (_, true) => Lock::Steps,
                 (true, false) => Lock::Straight,
-                (true, true) => Lock::Steps,
+                (false, false) => Lock::Off,
             };
+            self.sketch.ortho_lock = self.sketch.ortho && !shift;
             self.sketch.free = ctrl;
         }
+        let (coord_used, coord_esc, coord_back) = if typing {
+            (false, false, false)
+        } else {
+            self.coordinate_keys(ui)
+        };
         let (esc_used, backspace_used) = if typing {
             (false, false)
+        } else if coord_used {
+            (coord_esc, coord_back)
         } else {
             self.heads_up_keys(ui)
         };
@@ -926,9 +986,13 @@ impl ChamferaApp {
             && !typing
             && !backspace_used
             && !self.sketch.typed.any()
-            && !self.session.sketch_selection.is_empty()
+            && self.sketch.coord.is_none()
         {
-            self.run_sketch("sketch.remove", json!({}));
+            if let Some(c) = self.sketch.glyph_selected.take() {
+                self.run_sketch("sketch.remove", json!({ "constraint": c }));
+            } else if !self.session.sketch_selection.is_empty() {
+                self.run_sketch("sketch.remove", json!({}));
+            }
         }
 
         // Hover: where the next click would land (for previews), and its snap.
@@ -1231,6 +1295,20 @@ impl ChamferaApp {
                     let n = self.sketch.tool().value_fields().len().max(1);
                     self.sketch.typed.active = (self.sketch.typed.active + 1) % n;
                 }
+                DemoStep::Coord(text) => self.sketch.coord = Some(text),
+                DemoStep::Ortho => {
+                    self.sketch.ortho = !self.sketch.ortho;
+                    // Keep the lock for the pinned cursor too.
+                    self.sketch.lock = if self.sketch.ortho {
+                        Lock::Straight
+                    } else {
+                        Lock::Off
+                    };
+                    self.sketch.ortho_lock = self.sketch.ortho;
+                    if self.sketch.pinned_hover.is_none() {
+                        self.sketch.pinned_hover = self.sketch.hover;
+                    }
+                }
             }
         }
     }
@@ -1248,15 +1326,21 @@ impl ChamferaApp {
             );
             return;
         }
-        self.sketch.lock = match (shift, self.sketch.lock) {
+        let straight = shift != self.sketch.ortho;
+        self.sketch.lock = match (straight, self.sketch.lock) {
+            (_, Lock::Steps) if shift => Lock::Steps,
             (false, _) => Lock::Off,
-            (true, Lock::Steps) => Lock::Steps,
             (true, _) => Lock::Straight,
         };
+        self.sketch.ortho_lock = self.sketch.ortho && !shift;
         let Some(click) = self.click_at(x, y, w, h) else {
             self.message = Some(("The sketch plane is edge-on: turn the view".into(), true));
             return;
         };
+        self.sketch.glyph_selected = None;
+        if !tool.edits() && !crate::sketch_shapes::picks(tool) {
+            self.sketch.last_at = Some(click.at);
+        }
         if tool.edits() {
             self.edit_click(tool, (x, y, w, h), click);
             return;
@@ -1342,6 +1426,11 @@ impl ChamferaApp {
             .filter_map(|c| serde_json::to_value(c).ok())
             .collect();
         self.run_sketch("sketch.constrain", json!({ "constraints": items }));
+    }
+
+    /// [`Self::place`] with no typed values: a typed point (`sketch_entry.rs`).
+    pub(crate) fn place_clicks(&mut self, tool: Tool) {
+        self.place(tool, TypedDims::default());
     }
 
     /// Creates geometry once a tool has all its clicks, with the constraints its snaps and
@@ -1478,6 +1567,19 @@ impl ChamferaApp {
                     }),
                 );
                 self.sketch.clicks.clear();
+            }
+            (Tool::Point, [a]) => {
+                self.sketch.clicks.clear();
+                if a.point.is_some() {
+                    self.message =
+                        Some(("Point: there is a sketch point there already".into(), false));
+                    return;
+                }
+                if let Some(r) =
+                    self.run_sketch("sketch.point", json!({ "x": a.at.x, "y": a.at.y }))
+                {
+                    extra.extend(self.snap_constraints(a, as_id(&r["point"]), None));
+                }
             }
             (Tool::TangentArc, [p]) if p.point.is_none() => {
                 self.message = Some((
@@ -1624,7 +1726,7 @@ impl ChamferaApp {
     }
 
     /// Projects a world point to the viewport rect.
-    fn project(&self, rect: Rect, p: Point3) -> Option<Pos2> {
+    pub(crate) fn project(&self, rect: Rect, p: Point3) -> Option<Pos2> {
         let (w, h) = (f64::from(rect.width()), f64::from(rect.height()));
         let bounds = self.session.scene.bounds();
         let vp = mat_mul(
@@ -1713,8 +1815,10 @@ impl ChamferaApp {
                 json!({ "constraint": c, "driven": false }),
             );
         }
+        self.constraint_glyphs_ui(ui, rect);
         self.snap_marker(ui, rect);
         self.heads_up(ui, rect);
+        self.coordinate_box(ui, rect);
         self.dimension_editor(ui, rect);
         self.sketch_tool_box(ui, rect);
         self.shape_tool_box(ui, rect);

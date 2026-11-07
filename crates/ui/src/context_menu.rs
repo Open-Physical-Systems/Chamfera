@@ -624,7 +624,7 @@ impl ChamferaApp {
                 }
             }
             Act::Constrain(kind) => {
-                self.run_sketch("sketch.constrain_selection", json!({ "kind": kind }));
+                self.constrain_selection_checked(kind);
             }
             Act::Rename(target) => {
                 let current = match target {

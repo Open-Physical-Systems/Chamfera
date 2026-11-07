@@ -1,0 +1,15 @@
+[
+  { "command": "sketch.create", "params": { "plane": "xy" } },
+  { "command": "sketch.ellipse", "params": { "cx": 0, "cy": 0, "x": 30, "y": 0, "minor": 15 } },
+  { "command": "sketch.rectangle", "params": { "x1": 0, "y1": -25, "x2": 50, "y2": 25 } },
+  { "command": "sketch.spline", "params": { "points": [{ "x": 60, "y": -20 }, { "x": 75, "y": 10 }, { "x": 90, "y": -20 }] } },
+  { "command": "sketch.line", "params": { "x1": 60, "y1": -20, "x2": 90, "y2": -20 } },
+  { "command": "sketch.line", "params": { "x1": 55, "y1": -5, "x2": 95, "y2": -5 } },
+  { "command": "sketch.get", "params": {} },
+  { "command": "sketch.finish", "params": {} },
+  { "command": "solid.extrude", "params": { "sketch": 1, "profiles": [{ "x": -15, "y": 0 }], "distance": 12 } },
+  { "command": "solid.extrude", "params": { "sketch": 1, "profiles": [{ "x": 40, "y": 20 }], "distance": 4 } },
+  { "command": "solid.extrude", "params": { "sketch": 1, "profiles": [{ "x": 75, "y": 0 }], "distance": 8 } },
+  { "command": "view.standard", "params": { "view": "iso" } },
+  { "command": "view.fit", "params": { "width": 1180, "height": 640 } }
+]

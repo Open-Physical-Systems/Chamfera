@@ -25,6 +25,7 @@ mod cam_ui;
 mod cam_worker;
 mod chrome;
 mod config_ui;
+mod constraint_ui;
 mod construct_ui;
 mod context_menu;
 mod display_ui;
@@ -54,6 +55,7 @@ mod search;
 mod sheet_ui;
 mod shell_ui;
 mod shortcuts;
+mod sketch_entry;
 mod sketch_select;
 mod sketch_shapes;
 mod sketch_ui;
@@ -579,6 +581,12 @@ impl ChamferaApp {
                 }
             }
             "edit-feature" => self.edit_feature(id()?),
+            "constraint-conflict" => {
+                let c: Value = serde_json::from_str(arg).map_err(|e| {
+                    format!("--dialog constraint-conflict takes a constraint as JSON: {e}")
+                })?;
+                self.open_conflict_for(&c)?;
+            }
             "dxf-insert" if !arg.is_empty() => {
                 let file = std::path::Path::new(arg)
                     .file_name()
@@ -591,7 +599,7 @@ impl ChamferaApp {
             _ => {
                 return Err(format!(
                     "--dialog takes joint-edit:ID, component-move:ID, component-rename:ID, \
-                     edit-feature:ID or dxf-insert:PATH, not {spec:?}"
+                     edit-feature:ID, dxf-insert:PATH or constraint-conflict:JSON, not {spec:?}"
                 ));
             }
         }
@@ -1239,6 +1247,7 @@ impl eframe::App for ChamferaApp {
             self.blend_dialog(&ctx);
             self.joint_dialog(&ctx);
             self.assembly_edit_dialog(&ctx);
+            self.conflict_dialog(&ctx);
             self.dxf_insert_dialog(&ctx);
             self.motion_panels(&ctx);
             self.hole_dialog(&ctx);
