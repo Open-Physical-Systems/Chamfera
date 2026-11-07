@@ -7,7 +7,12 @@
 //! with a marker and its name shown, and the snap's constraint is added with the new
 //! geometry; Shift holds a segment horizontal or vertical (Shift+Alt: 15 degree steps);
 //! typing a number fills the heads-up fields beside the cursor (Tab moves on, Enter
-//! places), and the typed values become dimensions.
+//! places), and the typed values become dimensions. With no snap near, tracking guides
+//! (`chamfera_sketch::track`) line the cursor up with existing points, hold a line at
+//! right angles to the line it starts on or along the tangent of the arc (adding that
+//! constraint), or on polar steps. Ctrl held places freely: no snap, guide, grid or
+//! horizontal/vertical inference. Which snaps and guides are on, and their radius, are
+//! preferences (`prefs::SnapPrefs`).
 
 use crate::icons::Icon;
 use crate::widgets;
@@ -16,8 +21,8 @@ use chamfera_engine::sketching::{PICK_CURVE_PX, PICK_POINT_PX, SketchItem, curve
 use chamfera_geom::{Point2, Point3};
 use chamfera_render::{Overlay, OverlayStyle, mat_mul, transform_point};
 use chamfera_sketch::{
-    Constraint, CurveId, OffsetCorners, PointId, Snap, SnapKind, SnapQuery, ToolOp,
-    exact_direction, lock_angle, lock_straight,
+    Constraint, CurveId, GuideKind, OffsetCorners, PointId, Snap, SnapKind, SnapQuery, ToolOp,
+    Track, TrackQuery, exact_direction, lock_angle, lock_straight,
 };
 use egui::{Pos2, Rect, Vec2};
 use serde_json::{Value, json};
@@ -143,7 +148,7 @@ Pick points and curves to constrain or dimension (Shift adds); drag points to mo
             }
             Tool::Line => {
                 "Line
-Click point after point; click the first point again to close the shape. Clicks snap to ends, midpoints, centres and crossings; Shift keeps a line horizontal or vertical; type a length to give it one"
+Click point after point; click the first point again to close the shape. Clicks snap to ends, midpoints, centres and crossings; guides line it up with points and hold it at right angles to the line it starts on; Shift keeps it horizontal or vertical; Ctrl draws freely; type a length to give it one"
             }
             Tool::Rectangle => {
                 "Rectangle
@@ -219,7 +224,7 @@ Click a curve to split it where other curves cross it; Split All splits every cr
             }
             (Tool::Line, 0) => "Click the start of the line",
             (Tool::Line, _) => {
-                "Click the next point · type a length, Tab for the angle, Enter · Shift: straight · Esc ends"
+                "Click the next point · type a length, Tab for the angle, Enter · Shift: straight · Ctrl: no snaps · Esc ends"
             }
             (Tool::Rectangle, 0) => "Click the first corner",
             (Tool::Rectangle, _) => {
@@ -289,6 +294,10 @@ pub(crate) struct Click {
     pub(crate) at: Point2,
     pub(crate) point: Option<u32>,
     pub(crate) snap: Option<Snap>,
+    /// The tracking guides that placed it, when no snap did.
+    pub(crate) track: Option<Track>,
+    /// Placed with Ctrl held: no snap, guide or inference.
+    pub(crate) free: bool,
 }
 
 /// The direction lock the modifier keys hold while drawing.
@@ -445,8 +454,12 @@ pub struct SketchUi {
     editing: Option<(u64, String, String)>,
     /// The snap under the cursor, for its marker.
     snap: Option<Snap>,
+    /// The tracking guides under the cursor, drawn dashed.
+    track: Option<Track>,
     /// The direction lock held now.
     lock: Lock,
+    /// Ctrl held now: clicks place freely, with no snap, guide or inference.
+    pub(crate) free: bool,
     /// The heads-up fields.
     typed: Typed,
     /// Tab presses taken for the heads-up fields before egui saw them (true: Shift+Tab).
@@ -481,6 +494,7 @@ impl SketchUi {
         self.picked_curve = None;
         self.typed = Typed::default();
         self.snap = None;
+        self.track = None;
     }
 
     /// The point a direction lock measures from: the line's previous point, an arc's
@@ -682,35 +696,89 @@ impl ChamferaApp {
                     at,
                     point: None,
                     snap: None,
+                    track: None,
+                    free: false,
                 });
             }
+        }
+        if self.sketch.free {
+            return Some(Click {
+                at: cursor,
+                point: None,
+                snap: None,
+                track: None,
+                free: true,
+            });
         }
         // Millimetres per pixel here, so the snap radii are the pick radii on screen.
         let per_px = [(10.0, 0.0), (0.0, 10.0)]
             .into_iter()
             .find_map(|(dx, dy)| self.session.sketch_plane_point(x + dx, y + dy, w, h))
             .map_or(0.0, |p| p.distance(cursor) / 10.0);
-        let from = match (tool, self.sketch.clicks.as_slice()) {
-            (Tool::Line, [a]) => Some(a.at),
-            _ => None,
+        let (from, from_point) = match (tool, self.sketch.clicks.as_slice()) {
+            (Tool::Line, [a]) => (Some(a.at), a.point.map(PointId)),
+            _ => (None, None),
         };
+        let prefs = self.prefs.snaps;
+        // The radius preference scales both: a curve is picked a little closer than a point.
+        let radius_px = prefs.radius_px.clamp(
+            crate::prefs::MIN_SNAP_RADIUS_PX,
+            crate::prefs::MAX_SNAP_RADIUS_PX,
+        );
         let query = SnapQuery {
             cursor,
-            radius: PICK_POINT_PX * per_px,
-            curve_radius: PICK_CURVE_PX * per_px,
+            radius: radius_px * per_px,
+            curve_radius: radius_px * PICK_CURVE_PX / PICK_POINT_PX * per_px,
             from,
+            kinds: prefs.kinds,
         };
-        let snap = self.session.active_sketch()?.sketch.snap(&query);
-        Some(match snap {
-            Some(snap) => Click {
+        let sketch = &self.session.active_sketch()?.sketch;
+        let snap = sketch.snap(&query);
+        let track = if prefs.alignment || prefs.infer || prefs.polar {
+            sketch.track(&TrackQuery {
+                cursor,
+                radius: radius_px * per_px,
+                from,
+                from_point,
+                align: prefs.alignment,
+                infer: prefs.infer,
+                polar_step: prefs.polar.then(|| prefs.polar_step_deg.to_radians()),
+            })
+        } else {
+            None
+        };
+        // Point-like snaps beat guides; a perpendicular or tangent guide beats a plain
+        // on-curve snap (which it would otherwise lose near the curve it starts on), and
+        // an alignment or polar guide does not.
+        let snap = match (snap, track) {
+            (Some(s), Some(t)) if s.kind == SnapKind::OnCurve => t
+                .direction()
+                .filter(|g| g.kind != GuideKind::Polar)
+                .is_none()
+                .then_some(s),
+            (s, _) => s,
+        };
+        Some(match (snap, track) {
+            (Some(snap), _) => Click {
                 at: snap.at,
                 point: snap.point.map(|p| p.0),
                 snap: Some(snap),
+                track: None,
+                free: false,
             },
-            None => Click {
+            (None, Some(track)) => Click {
+                at: track.at,
+                point: None,
+                snap: None,
+                track: Some(track),
+                free: false,
+            },
+            (None, None) => Click {
                 at: self.grid_snapped(cursor),
                 point: None,
                 snap: None,
+                track: None,
+                free: false,
             },
         })
     }
@@ -745,6 +813,8 @@ impl ChamferaApp {
                 at,
                 point: Some(id),
                 snap: None,
+                track: None,
+                free: false,
             });
         }
         let r = self.session.execute("sketch.plane_point", &px).ok()?;
@@ -752,6 +822,8 @@ impl ChamferaApp {
             at: Point2::new(r["x"].as_f64()?, r["y"].as_f64()?),
             point: None,
             snap: None,
+            track: None,
+            free: false,
         })
     }
 
@@ -765,10 +837,11 @@ impl ChamferaApp {
     ) -> bool {
         let (w, h) = (f64::from(rect.width()), f64::from(rect.height()));
         let local = |p: Pos2| (f64::from(p.x - rect.min.x), f64::from(p.y - rect.min.y));
-        let (shift, alt, esc, delete) = ui.input(|i| {
+        let (shift, alt, ctrl, esc, delete) = ui.input(|i| {
             (
                 i.modifiers.shift,
                 i.modifiers.alt,
+                i.modifiers.command,
                 i.key_pressed(egui::Key::Escape),
                 i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace),
             )
@@ -782,6 +855,7 @@ impl ChamferaApp {
                 (true, false) => Lock::Straight,
                 (true, true) => Lock::Steps,
             };
+            self.sketch.free = ctrl;
         }
         let (esc_used, backspace_used) = if typing {
             (false, false)
@@ -819,6 +893,7 @@ impl ChamferaApp {
         let hovered = hover_px.and_then(|(x, y)| self.click_at(x, y, w, h));
         self.sketch.hover = hovered.map(|c| c.at);
         self.sketch.snap = hovered.and_then(|c| c.snap);
+        self.sketch.track = hovered.and_then(|c| c.track);
 
         let tool = self.sketch.tool();
         // Dragging a point with the Select tool.
@@ -995,6 +1070,23 @@ impl ChamferaApp {
         }
     }
 
+    /// The perpendicular or tangent guide a typed line keeps: the one under the cursor, as
+    /// long as no angle was typed (the typed length goes along the guide).
+    fn typed_track(&self) -> Option<Track> {
+        let angle_typed = self
+            .sketch
+            .typed
+            .fields
+            .get(1)
+            .is_some_and(|f| !f.trim().is_empty());
+        if self.sketch.tool() != Tool::Line || angle_typed {
+            return None;
+        }
+        self.sketch
+            .track
+            .filter(|t| t.direction().is_some_and(|g| g.kind != GuideKind::Polar))
+    }
+
     /// Enter in the heads-up fields: places the geometry at the typed values.
     fn place_typed(&mut self) {
         let tool = self.sketch.tool();
@@ -1003,11 +1095,14 @@ impl ChamferaApp {
             return;
         };
         let dims = self.typed_dims();
+        let typed_track = self.typed_track();
         self.sketch.typed = Typed::default();
         self.sketch.clicks.push(Click {
             at,
             point: None,
             snap: None,
+            track: typed_track,
+            free: false,
         });
         self.place(tool, dims);
     }
@@ -1133,11 +1228,14 @@ impl ChamferaApp {
             && let Some(at) = self.typed_point()
         {
             let dims = self.typed_dims();
+            let typed_track = self.typed_track();
             self.sketch.typed = Typed::default();
             self.sketch.clicks.push(Click {
                 at,
                 point: None,
                 snap: None,
+                track: typed_track,
+                free: false,
             });
             self.place(tool, dims);
             return;
@@ -1224,7 +1322,7 @@ impl ChamferaApp {
                     return;
                 }
                 let mut p = json!({
-                    "x1": a.at.x, "y1": a.at.y, "x2": b.at.x, "y2": b.at.y, "snap": true,
+                    "x1": a.at.x, "y1": a.at.y, "x2": b.at.x, "y2": b.at.y, "snap": !b.free,
                 });
                 if let Some(id) = a.point {
                     p["start"] = json!(id);
@@ -1239,6 +1337,11 @@ impl ChamferaApp {
                         let line = as_id(&r["curve"]);
                         extra.extend(self.snap_constraints(a, start, None));
                         extra.extend(self.snap_constraints(b, end, line));
+                        if let (Some(t), Some(l), Some(f)) =
+                            (b.track, line, self.session.active_sketch())
+                        {
+                            extra.extend(f.sketch.track_constraints(&t, CurveId(l)));
+                        }
                         if let (Some(l), Some(value)) = (line, dims.length) {
                             extra.push(Constraint::Length {
                                 line: CurveId(l),
@@ -1257,6 +1360,8 @@ impl ChamferaApp {
                                 at: b.at,
                                 point: end,
                                 snap: None,
+                                track: None,
+                                free: false,
                             });
                         }
                     }
@@ -1348,6 +1453,8 @@ impl ChamferaApp {
                         at: q.at,
                         point: Some(end),
                         snap: None,
+                        track: None,
+                        free: false,
                     });
                 }
             }
@@ -1649,6 +1756,13 @@ impl ChamferaApp {
         let Some(f) = self.session.active_sketch() else {
             return;
         };
+        if self.sketch.snap.is_none()
+            && self.sketch.lock == Lock::Off
+            && let Some(track) = self.sketch.track
+        {
+            self.track_guides(ui, rect, &track);
+            return;
+        }
         let (at, text, kind) = match (self.sketch.snap, self.sketch.hover) {
             (Some(snap), _) => (snap.at, snap.kind.label().to_owned(), Some(snap.kind)),
             (None, Some(hover)) if self.sketch.lock != Lock::Off => {
@@ -1722,7 +1836,11 @@ impl ChamferaApp {
             }
             None => {}
         }
-        // The name, in a small box up and to the right, like a tooltip.
+        self.marker_label(&painter, rect, p, text);
+    }
+
+    /// A marker's name, in a small box up and to the right of `p`, like a tooltip.
+    fn marker_label(&self, painter: &egui::Painter, rect: Rect, p: Pos2, text: String) {
         let font = egui::FontId::proportional(11.5);
         let galley = painter.layout_no_wrap(text, font, color(self.theme.text));
         let size = galley.size() + Vec2::new(10.0, 4.0);
@@ -1739,6 +1857,48 @@ impl ChamferaApp {
             egui::StrokeKind::Inside,
         );
         painter.galley(r.min + Vec2::new(5.0, 2.0), galley, color(self.theme.text));
+    }
+
+    /// The tracking guides under the cursor: each dashed from the point it goes through
+    /// to a little past the tracked point, a small cross there, and their names.
+    fn track_guides(&self, ui: &egui::Ui, rect: Rect, track: &Track) {
+        let Some(f) = self.session.active_sketch() else {
+            return;
+        };
+        let Some(p) = self.project(rect, f.plane.from_plane(track.at)) else {
+            return;
+        };
+        let painter = ui.painter_at(rect);
+        let accent = color(self.theme.accent);
+        let stroke = egui::Stroke::new(1.0, accent);
+        let mut names: Vec<String> = Vec::new();
+        for g in track.guides.iter().flatten() {
+            let Some(o) = self.project(rect, f.plane.from_plane(g.origin)) else {
+                continue;
+            };
+            // Run the dash on past the tracked point by 40 px, along the guide on screen.
+            let along = p - o;
+            let end = match along.length() {
+                l if l > 1.0 => p + along / l * 40.0,
+                _ => p,
+            };
+            painter.extend(egui::Shape::dashed_line(&[o, end], stroke, 5.0, 4.0));
+            painter.circle_stroke(o, 2.5, stroke);
+            let name = match g.kind {
+                GuideKind::Polar => display_value(self.units(), "angle", g.dir.angle()),
+                k => k.label().to_owned(),
+            };
+            if !names.contains(&name) {
+                names.push(name);
+            }
+        }
+        let s = 4.0;
+        let thick = egui::Stroke::new(1.6, accent);
+        painter.line_segment([p + Vec2::new(-s, -s), p + Vec2::new(s, s)], thick);
+        painter.line_segment([p + Vec2::new(-s, s), p + Vec2::new(s, -s)], thick);
+        if !names.is_empty() {
+            self.marker_label(&painter, rect, p, names.join(" · "));
+        }
     }
 
     /// The heads-up value fields beside the cursor while a tool waits for its second click:

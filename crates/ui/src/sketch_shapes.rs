@@ -293,6 +293,9 @@ mod tests {
     /// pixel of sketch point (x, y).
     fn app_on_top_plane() -> (ChamferaApp, impl Fn(f64, f64) -> (f64, f64)) {
         let mut app = ChamferaApp::headless();
+        // These tests measure the clicks themselves: no alignment guide may pull them
+        // (the slot's width click at y = 13 would line up with the square's corner y = 15).
+        app.prefs.snaps.alignment = false;
         app.create_sketch("xy", "top");
         app.session.camera.target = chamfera_geom::Point3::new(40.0, 25.0, 0.0);
         app.session.camera.projection = chamfera_render::Projection::Orthographic;

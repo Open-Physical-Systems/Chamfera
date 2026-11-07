@@ -305,3 +305,172 @@ fn sketch_input_steps_parse_and_refuse_nonsense() {
     assert!(parse_demo("click nan,1e400").is_err());
     assert!(parse_demo("dance").is_err());
 }
+
+/// Ctrl, as egui reports it on Linux and Windows (and Cmd on a Mac).
+const CTRL: Modifiers = Modifiers {
+    ctrl: true,
+    command: true,
+    ..Modifiers::NONE
+};
+
+#[test]
+fn ctrl_places_the_click_freely_with_no_snap_and_no_inference() {
+    let mut d = Driver::new();
+    let r = d
+        .app
+        .run_sketch(
+            "sketch.line",
+            json!({ "x1": 10, "y1": 10, "x2": 50, "y2": 10 }),
+        )
+        .unwrap();
+    let base = CurveId(as_id(&r["curve"]).unwrap());
+    let points_before = d.sketch().points().count();
+    d.app.sketch.tool = Some(Tool::Line);
+    // 2 px right of the end (50, 10): without Ctrl this would reuse that point.
+    let start = d.screen(50.0, 10.0) + Vec2::new(2.0, 0.0);
+    d.click(start, CTRL);
+    assert!(d.app.sketch.clicks[0].point.is_none(), "no point reused");
+    assert!(d.app.sketch.clicks[0].free);
+    // 1 px up over 200 across is 0.29 degrees: within the 2 degree H/V inference, which
+    // Ctrl suspends.
+    let end = start + Vec2::new(200.0, -1.0);
+    d.frame(vec![
+        Event::ModifiersChanged(CTRL),
+        Event::PointerMoved(end),
+    ]);
+    assert!(d.app.sketch.snap.is_none() && d.app.sketch.track.is_none());
+    d.click(end, CTRL);
+    let (line, p, q) = d.new_line(&[base]);
+    assert!(p.distance(Point2::new(50.0, 10.0)) > 1e-3, "{p:?}");
+    assert!(q.y > p.y, "the line still slopes: {p:?} {q:?}");
+    assert!(!d.has(&Constraint::Horizontal { line }));
+    assert_eq!(d.sketch().points().count(), points_before + 2);
+}
+
+#[test]
+fn a_line_from_the_end_of_a_line_is_held_at_right_angles_and_constrained() {
+    let mut d = Driver::new();
+    // The first line slopes (3, 4), so its perpendicular at (30, 40) is (-4, 3): 25 mm
+    // along it is (10, 55). Neither is horizontal nor vertical, so only the
+    // perpendicular guide can explain where the end lands.
+    let r = d
+        .app
+        .run_sketch(
+            "sketch.line",
+            json!({ "x1": 0, "y1": 0, "x2": 30, "y2": 40 }),
+        )
+        .unwrap();
+    let base = CurveId(as_id(&r["curve"]).unwrap());
+    d.app.sketch.tool = Some(Tool::Line);
+    d.click(d.screen(30.0, 40.0), Modifiers::NONE);
+    assert!(d.app.sketch.clicks[0].point.is_some(), "starts on the end");
+    // 3 px off the guide.
+    let near = d.screen(10.0, 55.0) + Vec2::new(2.0, 2.0);
+    d.hover(near);
+    let track = d.app.sketch.track.expect("no guide shown");
+    assert_eq!(
+        track.direction().map(|g| g.kind),
+        Some(GuideKind::Perpendicular)
+    );
+    d.click(near, Modifiers::NONE);
+    let (line, p, q) = d.new_line(&[base]);
+    assert!(p.distance(Point2::new(30.0, 40.0)) < 1e-9);
+    // On the guide: (q - p) . (3, 4) = 0, to rounding.
+    assert!(
+        (q - p).dot(chamfera_geom::Vec2::new(3.0, 4.0)).abs() < 1e-6,
+        "{q:?}"
+    );
+    assert!(d.has(&Constraint::Perpendicular { a: line, b: base }));
+}
+
+#[test]
+fn a_typed_length_along_the_perpendicular_guide_keeps_the_constraint() {
+    let mut d = Driver::new();
+    let r = d
+        .app
+        .run_sketch(
+            "sketch.line",
+            json!({ "x1": 0, "y1": 0, "x2": 30, "y2": 40 }),
+        )
+        .unwrap();
+    let base = CurveId(as_id(&r["curve"]).unwrap());
+    d.app.sketch.tool = Some(Tool::Line);
+    d.click(d.screen(30.0, 40.0), Modifiers::NONE);
+    d.hover(d.screen(10.0, 55.0) + Vec2::new(2.0, 2.0));
+    d.text("20");
+    d.key(Key::Enter);
+    let (line, p, q) = d.new_line(&[base]);
+    // 20 along (-4, 3) / 5 from (30, 40): (14, 52).
+    assert!(q.distance(Point2::new(14.0, 52.0)) < 1e-6, "{p:?} {q:?}");
+    assert!(d.has(&Constraint::Perpendicular { a: line, b: base }));
+    assert!(d.has(&Constraint::Length { line, value: 20.0 }));
+}
+
+#[test]
+fn the_cursor_lines_up_with_a_point_on_an_alignment_guide() {
+    let mut d = Driver::new();
+    d.app
+        .run_sketch("sketch.point", json!({ "x": 40, "y": 30 }))
+        .unwrap();
+    d.app.sketch.tool = Some(Tool::Circle);
+    // 4 px right of x = 40, far below the point: the centre lands on x = 40.
+    let near = d.screen(40.0, 5.0) + Vec2::new(4.0, 0.0);
+    d.hover(near);
+    let track = d.app.sketch.track.expect("no guide shown");
+    assert_eq!(
+        track.guides[0].map(|g| g.kind),
+        Some(GuideKind::AlignVertical)
+    );
+    d.click(near, Modifiers::NONE);
+    assert_eq!(d.app.sketch.clicks[0].at.x, 40.0);
+    // With alignment off in the preferences the same spot stays where it is.
+    d.app.sketch.reset_tool();
+    d.app.prefs.snaps.alignment = false;
+    d.hover(near);
+    assert!(d.app.sketch.track.is_none());
+    assert!((d.app.sketch.hover.unwrap().x - 40.0).abs() > 0.1);
+}
+
+#[test]
+fn snap_settings_turn_a_snap_off_and_widen_the_radius() {
+    let mut d = Driver::new();
+    // The midpoint of (10, 0)-(50, 20) is (30, 10), as in the snap test above.
+    d.app
+        .run_sketch(
+            "sketch.line",
+            json!({ "x1": 10, "y1": 0, "x2": 50, "y2": 20 }),
+        )
+        .unwrap();
+    d.app.prefs.snaps.alignment = false;
+    d.app.sketch.tool = Some(Tool::Line);
+    d.click(d.screen(60.0, 40.0), Modifiers::NONE);
+    // 14 px from the midpoint, across the line: beyond the 9 px default radius.
+    let far = d.screen(30.0, 10.0) + Vec2::new(-6.0, -13.0);
+    let midpoint = |d: &Driver| d.app.sketch.snap.map(|s| s.kind) == Some(SnapKind::Midpoint);
+    d.hover(far);
+    assert!(!midpoint(&d));
+    d.app.prefs.snaps.radius_px = 20.0;
+    d.hover(far);
+    assert!(midpoint(&d));
+    d.app.prefs.snaps.kinds = d.app.prefs.snaps.kinds.with(SnapKind::Midpoint, false);
+    d.hover(far);
+    assert!(!midpoint(&d));
+}
+
+#[test]
+fn polar_guides_hold_a_line_on_whole_steps() {
+    let mut d = Driver::new();
+    d.app.prefs.snaps.polar = true;
+    d.app.prefs.snaps.polar_step_deg = 15.0;
+    d.app.prefs.snaps.alignment = false;
+    d.click(d.screen(10.0, 10.0), Modifiers::NONE);
+    // 44 degrees from (10, 10), 40 mm out: pulled onto 45 degrees.
+    let a = 44f64.to_radians();
+    d.click(
+        d.screen(10.0 + 40.0 * a.cos(), 10.0 + 40.0 * a.sin()),
+        Modifiers::NONE,
+    );
+    let (_, p, q) = d.new_line(&[]);
+    let angle = (q - p).angle().to_degrees();
+    assert!((angle - 45.0).abs() < 1e-9, "{angle}");
+}
