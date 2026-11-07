@@ -186,6 +186,27 @@ pub enum ToolOp {
         start: Point2,
         end: Point2,
     },
+    /// A rectangle at any angle: one side from `a` to `b`, the opposite side through the
+    /// line through `c` parallel to it.
+    ThreePointRectangle { a: Point2, b: Point2, c: Point2 },
+    /// A circle with `a` and `b` at the ends of a diameter.
+    TwoPointCircle { a: Point2, b: Point2 },
+    /// The circle through three points.
+    ThreePointCircle { a: Point2, b: Point2, c: Point2 },
+    /// A circle tangent to two or three lines, circles or arcs, solved from a first guess
+    /// with its centre at `near` (and, with two curves, the radius `radius`).
+    TangentCircle {
+        curves: Vec<CurveId>,
+        near: Point2,
+        radius: Option<f64>,
+    },
+    /// Moves, turns or scales curves and points, or with `copy` makes a moved copy.
+    Transform {
+        curves: Vec<CurveId>,
+        points: Vec<PointId>,
+        transform: crate::placed::SketchTransform,
+        copy: bool,
+    },
 }
 
 /// A curve that can cut others: its id, geometry and ends.
@@ -624,6 +645,20 @@ impl Sketch {
                 start,
                 end,
             } => self.ellipse(*centre, *major, *minor, Some((*start, *end))),
+            ToolOp::ThreePointRectangle { a, b, c } => self.three_point_rectangle(*a, *b, *c),
+            ToolOp::TwoPointCircle { a, b } => self.two_point_circle(*a, *b),
+            ToolOp::ThreePointCircle { a, b, c } => self.three_point_circle(*a, *b, *c),
+            ToolOp::TangentCircle {
+                curves,
+                near,
+                radius,
+            } => self.tangent_circle(curves, *near, *radius),
+            ToolOp::Transform {
+                curves,
+                points,
+                transform,
+                copy,
+            } => self.transform(curves, points, *transform, *copy),
         }
     }
 
@@ -1792,7 +1827,7 @@ impl Sketch {
     // ----- mirror and patterns -----
 
     /// The curves and the points to copy: the curves' points and the extra points.
-    fn copy_set(
+    pub(crate) fn copy_set(
         &self,
         curves: &[CurveId],
         points: &[PointId],
@@ -1822,7 +1857,7 @@ impl Sketch {
     }
 
     /// Adds the copied curves, with `map` from old to new point ids.
-    fn copy_curves(
+    pub(crate) fn copy_curves(
         &mut self,
         curves: &[CurveId],
         map: &BTreeMap<PointId, PointId>,
@@ -1987,6 +2022,8 @@ impl Sketch {
         let turns = motion.axis_turns();
         let originals: Vec<Constraint> = self
             .constraints()
+            // A driven dimension only shows a size; its copy would only repeat it.
+            .filter(|(id, _)| !self.is_driven(*id))
             .map(|(_, c)| c.clone())
             .filter(|c| {
                 c.point_refs().iter().all(|p| point_set.contains(p))
@@ -2010,6 +2047,33 @@ impl Sketch {
                         }
                     }
                 }
+                Constraint::HorizontalPoints { a, b } | Constraint::VerticalPoints { a, b } => {
+                    let horizontal = matches!(c, Constraint::HorizontalPoints { .. });
+                    let (a, b) = (mp(a), mp(b));
+                    match turns {
+                        None => continue,
+                        Some(swap) if horizontal != swap => Constraint::HorizontalPoints { a, b },
+                        Some(_) => Constraint::VerticalPoints { a, b },
+                    }
+                }
+                Constraint::HorizontalDistance { a, b, value }
+                | Constraint::VerticalDistance { a, b, value } => {
+                    let horizontal = matches!(c, Constraint::HorizontalDistance { .. });
+                    let (a, b) = (mp(a), mp(b));
+                    match turns {
+                        None => continue,
+                        Some(swap) if horizontal != swap => {
+                            Constraint::HorizontalDistance { a, b, value }
+                        }
+                        Some(_) => Constraint::VerticalDistance { a, b, value },
+                    }
+                }
+                Constraint::Concentric { a, b } => Constraint::Concentric { a: mc(a), b: mc(b) },
+                Constraint::Collinear { a, b } => Constraint::Collinear { a: mc(a), b: mc(b) },
+                Constraint::ArcLength { curve, value } => Constraint::ArcLength {
+                    curve: mc(curve),
+                    value,
+                },
                 Constraint::Fix { point, at } => Constraint::Fix {
                     point: mp(point),
                     at: motion.apply(at),

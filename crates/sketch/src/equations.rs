@@ -107,6 +107,14 @@ pub(crate) enum Residual {
         factor: f64,
         value: f64,
     },
+    /// `r θ - value`: the length of the arc about `centre` from `start` to `end`, with
+    /// `r = |start - centre|` and θ its counter-clockwise sweep in (0, 2π].
+    ArcLength {
+        centre: usize,
+        start: usize,
+        end: usize,
+        value: f64,
+    },
     /// `S · sin θ` between the two lines.
     Parallel {
         a1: usize,
@@ -319,6 +327,9 @@ impl Residual {
                 rad(r2, out);
             }
             Residual::RadiusValue { radius, .. } => rad(radius, out),
+            Residual::ArcLength {
+                centre, start, end, ..
+            } => pts(&[*centre, *start, *end], out),
             Residual::SymmetricMid { p, q, a, b } | Residual::SymmetricPerp { p, q, a, b } => {
                 pts(&[*p, *q, *a, *b], out)
             }
@@ -407,6 +418,33 @@ impl Residual {
                 factor,
                 value,
             } => factor * radius_value(x, *radius, *factor, g) - value,
+            Residual::ArcLength {
+                centre,
+                start,
+                end,
+                value,
+            } => {
+                // f = r θ - value with u = s - c, v = e - c, r = |u|,
+                // θ = atan2(v) - atan2(u) wrapped to (0, 2π]. ∂r/∂u = u/r;
+                // ∂θ/∂u = -perp(u)/|u|², ∂θ/∂v = perp(v)/|v|². The centre takes minus
+                // the sum of the start's and the end's gradients.
+                let c = pt(x, *centre);
+                let u = pt(x, *start) - c;
+                let v = pt(x, *end) - c;
+                let (r, du) = length_dir(u);
+                let qu = u.dot(u).max(MIN_LENGTH * MIN_LENGTH);
+                let qv = v.dot(v).max(MIN_LENGTH * MIN_LENGTH);
+                let mut theta = (v.angle() - u.angle()).rem_euclid(TAU);
+                if theta <= 0.0 {
+                    theta = TAU;
+                }
+                let gs = du * theta - u.perp() * (r / qu);
+                let ge = v.perp() * (r / qv);
+                push(g, *start, gs);
+                push(g, *end, ge);
+                push(g, *centre, -(gs + ge));
+                r * theta - value
+            }
             Residual::Parallel {
                 a1,
                 b1,
@@ -534,6 +572,7 @@ impl Residual {
             Residual::RadiusValue { radius, .. } | Residual::LineTangent { radius, .. } => {
                 rad(radius)
             }
+            Residual::ArcLength { centre, start, .. } => dir(*start, *centre),
             // A semi-axis passing through the centre turns the ellipse inside out.
             Residual::OnEllipse {
                 centre,
@@ -670,6 +709,10 @@ pub(crate) fn compile(sketch: &Sketch, layout: &Layout) -> Result<Vec<Equation>,
     let x = &layout.x;
     let scale = layout.scale;
     for (id, c) in sketch.constraints() {
+        // A driven dimension only shows a size.
+        if sketch.is_driven(id) {
+            continue;
+        }
         let mut add = |residual: Residual| {
             eqs.push(Equation {
                 residual,
@@ -707,6 +750,74 @@ pub(crate) fn compile(sketch: &Sketch, layout: &Layout) -> Result<Vec<Equation>,
                 let (a, b) = layout.line(sketch, *line)?;
                 add(diff(b + 1, a + 1));
             }
+            Constraint::HorizontalPoints { a, b } => {
+                let (a, b) = (layout.p(*a)?, layout.p(*b)?);
+                add(diff(b + 1, a + 1));
+            }
+            Constraint::VerticalPoints { a, b } => {
+                let (a, b) = (layout.p(*a)?, layout.p(*b)?);
+                add(diff(b, a));
+            }
+            Constraint::Concentric { a, b } => {
+                let (c1, _) = layout.circular(sketch, *a)?;
+                let (c2, _) = layout.circular(sketch, *b)?;
+                // Arcs that already share their centre point are concentric as drawn.
+                if c1 != c2 {
+                    add(diff(c1, c2));
+                    add(diff(c1 + 1, c2 + 1));
+                }
+            }
+            Constraint::Collinear { a, b } => {
+                // Each end of line `a` that is not also an end of `b` lies on `b`'s
+                // carrier: two equations for separate lines, one when they share a point.
+                let ends_of = |k: CurveId| match sketch.curve(k) {
+                    Some(Curve::Line { start, end, .. }) => Some([*start, *end]),
+                    _ => None,
+                };
+                let (ea, eb) = (
+                    ends_of(*a).ok_or(SketchError::UnknownCurve(*a))?,
+                    ends_of(*b).ok_or(SketchError::UnknownCurve(*b))?,
+                );
+                let (la, lb) = layout.line(sketch, *b)?;
+                layout.line(sketch, *a)?;
+                for e in ea.into_iter().filter(|e| !eb.contains(e)) {
+                    add(Residual::LineDistance {
+                        p: layout.p(e)?,
+                        a: la,
+                        b: lb,
+                        value: 0.0,
+                    });
+                }
+            }
+            Constraint::HorizontalDistance { a, b, value }
+            | Constraint::VerticalDistance { a, b, value } => {
+                let k = usize::from(matches!(c, Constraint::VerticalDistance { .. }));
+                let (a, b) = (layout.p(*a)? + k, layout.p(*b)? + k);
+                // Keep `b` on the side of `a` it is on now.
+                let side = sign_of(val(x, b) - val(x, a));
+                add(Residual::Linear {
+                    terms: vec![(b, 1.0), (a, -1.0)],
+                    constant: -side * value,
+                });
+            }
+            Constraint::ArcLength { curve, value } => match sketch.curve(*curve) {
+                Some(Curve::Arc {
+                    centre, start, end, ..
+                }) => add(Residual::ArcLength {
+                    centre: layout.p(*centre)?,
+                    start: layout.p(*start)?,
+                    end: layout.p(*end)?,
+                    value: *value,
+                }),
+                Some(other) => {
+                    return Err(SketchError::WrongCurveKind {
+                        curve: *curve,
+                        found: other.kind_name(),
+                        expected: "arc",
+                    });
+                }
+                None => return Err(SketchError::UnknownCurve(*curve)),
+            },
             Constraint::Vertical { line } => {
                 let (a, b) = layout.line(sketch, *line)?;
                 add(diff(b, a));

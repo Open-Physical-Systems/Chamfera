@@ -58,6 +58,30 @@ pub static COMMANDS: &[CommandSpec] = &[
         run: circle,
     },
     CommandSpec {
+        id: "sketch.circle.tangent",
+        label: "Tangent Circle",
+        params: "curves: array of integers (required) - two or three lines, circles or arcs to touch\n\
+                 x, y: number (required) - a first guess of the centre; the circle found is the nearest one, \
+                 on the side of each curve the guess is on\n\
+                 radius: number (required with two curves) - mm; becomes a radius dimension",
+        mutates: true,
+        run: circle_tangent,
+    },
+    CommandSpec {
+        id: "sketch.circle.three_point",
+        label: "3-Point Circle",
+        params: "x1, y1, x2, y2, x3, y3: number (required) - three points on the circle",
+        mutates: true,
+        run: circle_three_point,
+    },
+    CommandSpec {
+        id: "sketch.circle.two_point",
+        label: "2-Point Circle",
+        params: "x1, y1, x2, y2: number (required) - the ends of a diameter",
+        mutates: true,
+        run: circle_two_point,
+    },
+    CommandSpec {
         id: "sketch.constrain",
         label: "Add Constraint",
         params: "constraint: object (required unless constraints) - {\"kind\": ..., ids and value}, for example \
@@ -70,8 +94,9 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         id: "sketch.constrain_selection",
         label: "Constrain Selection",
-        params: "kind: string (required) - horizontal, vertical, coincident, point_on, parallel, \
-                 perpendicular, tangent, equal, midpoint or fix",
+        params: "kind: string (required) - horizontal or vertical (lines, or two points: level or \
+                 one above the other), coincident, point_on, parallel, perpendicular, tangent, \
+                 equal, midpoint, concentric (two circles or arcs), collinear (two lines) or fix",
         mutates: true,
         run: constrain_selection,
     },
@@ -118,11 +143,26 @@ pub static COMMANDS: &[CommandSpec] = &[
         run: dimension,
     },
     CommandSpec {
+        id: "sketch.dimension.driven",
+        label: "Driven Dimension",
+        params: "constraint: integer (required) - a dimension\n\
+                 driven: boolean (required) - true: it only shows the size the geometry has \
+                 (a reference dimension); false: it sets the size again",
+        mutates: true,
+        run: dimension_driven,
+    },
+    CommandSpec {
         id: "sketch.dimension_selection",
         label: "Sketch Dimension",
-        params: "(none) - dimensions the selection at its current size: one line (length), \
-                 a circle (diameter), an arc (radius), two points (distance), a point and a line \
-                 (distance) or two lines (angle)",
+        params: "dimensions the selection at its current size: one line (length), a circle (diameter), \
+                 an arc (radius), two points (distance), a point and a line (distance) or two lines (angle)\n\
+                 x, y: number (optional) - where the dimension is placed, in sketch mm: for two points or \
+                 a slanted line, beside their span across X gives a horizontal dimension, beside their span \
+                 across Y a vertical one, elsewhere an aligned one\n\
+                 direction: string (optional) - aligned, horizontal or vertical, instead of choosing by place\n\
+                 arc_length: boolean (optional) - for an arc, its length instead of its radius\n\
+                 driven: boolean (optional) - only show the size; a dimension that would over-constrain \
+                 the sketch is made driven anyway, and the reply says so",
         mutates: true,
         run: dimension_selection,
     },
@@ -206,6 +246,15 @@ pub static COMMANDS: &[CommandSpec] = &[
                  curves, points: array of integers (optional) - what to mirror; default the selection",
         mutates: true,
         run: mirror,
+    },
+    CommandSpec {
+        id: "sketch.move",
+        label: "Move Sketch Geometry",
+        params: "curves, points: array of integers (optional) - what to move; default the selection\n\
+                 dx, dy: number (required) - mm\n\
+                 copy: boolean (optional) - move a copy and keep the original (default false)",
+        mutates: true,
+        run: move_geometry,
     },
     CommandSpec {
         id: "sketch.offset",
@@ -295,6 +344,14 @@ pub static COMMANDS: &[CommandSpec] = &[
         run: rectangle_centre,
     },
     CommandSpec {
+        id: "sketch.rectangle.three_point",
+        label: "3-Point Rectangle",
+        params: "x1, y1, x2, y2: number (required) - the ends of one side, at any angle\n\
+                 x3, y3: number (required) - a point on the opposite side",
+        mutates: true,
+        run: rectangle_three_point,
+    },
+    CommandSpec {
         id: "sketch.remove",
         label: "Delete",
         params: "(none) - deletes the selected points and curves, and what depends on them\n\
@@ -309,6 +366,26 @@ pub static COMMANDS: &[CommandSpec] = &[
                  name: string (required) - the new name, 1 to 80 characters",
         mutates: true,
         run: rename,
+    },
+    CommandSpec {
+        id: "sketch.rotate",
+        label: "Rotate Sketch Geometry",
+        params: "curves, points: array of integers (optional) - what to turn; default the selection\n\
+                 cx, cy: number (required) - the centre\n\
+                 angle: number (required) - radians, counter-clockwise\n\
+                 copy: boolean (optional) - turn a copy and keep the original (default false)",
+        mutates: true,
+        run: rotate_geometry,
+    },
+    CommandSpec {
+        id: "sketch.scale",
+        label: "Scale Sketch Geometry",
+        params: "curves, points: array of integers (optional) - what to scale; default the selection\n\
+                 cx, cy: number (required) - the centre\n\
+                 factor: number (required) - above 0 and at most 1e6; dimensions scale with it\n\
+                 copy: boolean (optional) - scale a copy and keep the original (default false)",
+        mutates: true,
+        run: scale_geometry,
     },
     CommandSpec {
         id: "sketch.select",
@@ -724,6 +801,11 @@ fn dimension(s: &mut Session, p: &Value) -> CmdResult {
     if f.sketch.constraint(id).is_none_or(|c| !c.is_dimension()) {
         return Err(bad(format!("{id} is not a dimension")));
     }
+    if f.sketch.is_driven(id) {
+        return Err(bad(format!(
+            "{id} is a driven dimension: it shows a size; make it driving first (sketch.dimension.driven)"
+        )));
+    }
     match expression {
         // An expression drives the dimension from now on; evaluating applies and solves.
         Some(e) => {
@@ -743,6 +825,25 @@ fn dimension(s: &mut Session, p: &Value) -> CmdResult {
         "value": value,
         "expression": f.expressions.get(&id.0),
     }))
+}
+
+fn dimension_driven(s: &mut Session, p: &Value) -> CmdResult {
+    let id = chamfera_sketch::ConstraintId(params::req_id(p, "constraint")?);
+    let driven = params::req_bool(p, "driven")?;
+    let sketch_id = active_id(s)?;
+    let f = s.doc.sketch_mut(sketch_id)?;
+    let backup = f.sketch.clone();
+    f.sketch.set_driven(id, driven).map_err(sketch_err)?;
+    if driven {
+        // A driven dimension follows the geometry, so no expression drives it.
+        f.expressions.remove(&id.0);
+    }
+    if let Err(e) = f.sketch.solve() {
+        f.sketch = backup;
+        return Err(sketch_err(e));
+    }
+    let value = f.sketch.constraint(id).and_then(|c| c.value());
+    Ok(json!({ "constraint": id.0, "driven": driven, "value": value }))
 }
 
 fn drag(s: &mut Session, p: &Value) -> CmdResult {
@@ -789,8 +890,40 @@ fn constrain_selection(s: &mut Session, p: &Value) -> CmdResult {
     };
     let mut new: Vec<Constraint> = Vec::new();
     match kind.as_str() {
+        "horizontal" | "vertical" if curves.is_empty() && points.len() == 2 => {
+            let (a, b) = (points[0], points[1]);
+            new.push(if kind == "horizontal" {
+                Constraint::HorizontalPoints { a, b }
+            } else {
+                Constraint::VerticalPoints { a, b }
+            });
+        }
+        "concentric" => {
+            let circular = |c: &CurveId| sk.curve(*c).is_some_and(Curve::is_circular);
+            need(
+                points.is_empty() && curves.len() == 2 && curves.iter().all(circular),
+                "two circles or arcs",
+            )?;
+            new.push(Constraint::Concentric {
+                a: curves[0],
+                b: curves[1],
+            });
+        }
+        "collinear" => {
+            need(
+                points.is_empty() && curves.len() == 2 && curves.iter().all(|c| is_line(sk, *c)),
+                "two lines",
+            )?;
+            new.push(Constraint::Collinear {
+                a: curves[0],
+                b: curves[1],
+            });
+        }
         "horizontal" | "vertical" => {
-            need(!curves.is_empty() && points.is_empty(), "one or more lines")?;
+            need(
+                !curves.is_empty() && points.is_empty(),
+                "one or more lines, or two points",
+            )?;
             for &line in &curves {
                 need(is_line(sk, line), "only lines")?;
                 new.push(if kind == "horizontal" {
@@ -877,8 +1010,81 @@ fn constrain_selection(s: &mut Session, p: &Value) -> CmdResult {
     Ok(json!({ "constraints": ids }))
 }
 
+/// Which way a linear dimension between two points measures.
+#[derive(Clone, Copy, PartialEq)]
+enum Along {
+    Aligned,
+    Horizontal,
+    Vertical,
+}
+
+/// The direction for a dimension between `a` and `b`: the one asked for, or by where it is
+/// placed (`at`): beside the span across X (above or below the points) measures X, beside
+/// the span across Y (left or right of them) measures Y, anywhere else the true distance.
+/// Points level or one above the other always get an aligned dimension.
+fn along(a: Point2, b: Point2, at: Option<Point2>, asked: Option<Along>) -> Along {
+    if let Some(d) = asked {
+        return d;
+    }
+    let tol = chamfera_geom::LINEAR_TOLERANCE;
+    let Some(at) = at else {
+        return Along::Aligned;
+    };
+    if (a.x - b.x).abs() <= tol || (a.y - b.y).abs() <= tol {
+        return Along::Aligned;
+    }
+    let in_x = (a.x.min(b.x)..=a.x.max(b.x)).contains(&at.x);
+    let in_y = (a.y.min(b.y)..=a.y.max(b.y)).contains(&at.y);
+    match (in_x, in_y) {
+        (true, false) => Along::Horizontal,
+        (false, true) => Along::Vertical,
+        _ => Along::Aligned,
+    }
+}
+
+/// The dimension between points `a` and `b` (at `pa`, `pb`) measured `along`.
+fn point_dimension(a: PointId, b: PointId, pa: Point2, pb: Point2, along: Along) -> Constraint {
+    match along {
+        Along::Aligned => Constraint::Distance {
+            a,
+            b,
+            value: pa.distance(pb),
+        },
+        Along::Horizontal => Constraint::HorizontalDistance {
+            a,
+            b,
+            value: (pb.x - pa.x).abs(),
+        },
+        Along::Vertical => Constraint::VerticalDistance {
+            a,
+            b,
+            value: (pb.y - pa.y).abs(),
+        },
+    }
+}
+
 fn dimension_selection(s: &mut Session, p: &Value) -> CmdResult {
-    params::none(p)?;
+    let at = match (p.get("x"), p.get("y")) {
+        (None | Some(Value::Null), None | Some(Value::Null)) => None,
+        _ => Some(pt(p, "x", "y")?),
+    };
+    let asked = match params::opt_str(p, "direction")? {
+        None => None,
+        Some("aligned") => Some(Along::Aligned),
+        Some("horizontal") => Some(Along::Horizontal),
+        Some("vertical") => Some(Along::Vertical),
+        Some(other) => {
+            return Err(bad(format!(
+                "unknown direction {other:?}: use aligned, horizontal or vertical"
+            )));
+        }
+    };
+    let opt_bool = |key: &str| match p.get(key) {
+        None | Some(Value::Null) => Ok(false),
+        Some(_) => params::req_bool(p, key),
+    };
+    let arc_length = opt_bool("arc_length")?;
+    let want_driven = opt_bool("driven")?;
     let (points, curves) = selection(s);
     let sk = active(s)?;
     let pos =
@@ -889,9 +1095,24 @@ fn dimension_selection(s: &mut Session, p: &Value) -> CmdResult {
     };
     let c = match (points.as_slice(), curves.as_slice()) {
         ([], [c]) => match sk.curve(*c) {
-            Some(Curve::Line { start, end, .. }) => Constraint::Length {
-                line: *c,
-                value: pos(sk, *start)?.distance(pos(sk, *end)?),
+            Some(Curve::Line { start, end, .. }) => {
+                let (pa, pb) = (pos(sk, *start)?, pos(sk, *end)?);
+                match along(pa, pb, at, asked) {
+                    Along::Aligned => Constraint::Length {
+                        line: *c,
+                        value: pa.distance(pb),
+                    },
+                    d => point_dimension(*start, *end, pa, pb, d),
+                }
+            }
+            Some(Curve::Arc { .. }) if arc_length => Constraint::ArcLength {
+                curve: *c,
+                value: sk
+                    .measure(&Constraint::ArcLength {
+                        curve: *c,
+                        value: 0.0,
+                    })
+                    .ok_or_else(|| bad("the arc has no length"))?,
             },
             Some(Curve::Circle { radius, .. }) => Constraint::Diameter {
                 curve: *c,
@@ -913,11 +1134,10 @@ fn dimension_selection(s: &mut Session, p: &Value) -> CmdResult {
             }
             None => return Err(bad("the selected curve is gone")),
         },
-        ([a, b], []) => Constraint::Distance {
-            a: *a,
-            b: *b,
-            value: pos(sk, *a)?.distance(pos(sk, *b)?),
-        },
+        ([a, b], []) => {
+            let (pa, pb) = (pos(sk, *a)?, pos(sk, *b)?);
+            point_dimension(*a, *b, pa, pb, along(pa, pb, at, asked))
+        }
         ([point], [line]) => {
             let (s0, s1) = line_ends(sk, *line).ok_or_else(|| bad("select a point and a line"))?;
             let (q, a, b) = (pos(sk, *point)?, pos(sk, s0)?, pos(sk, s1)?);
@@ -949,9 +1169,27 @@ fn dimension_selection(s: &mut Session, p: &Value) -> CmdResult {
     };
     let value = c.value();
     let kind = c.kind_name();
-    let id = sk.try_add_constraint(c).map_err(sketch_err)?;
+    let backup = sk.clone();
+    let id = sk.add_constraint(c).map_err(sketch_err)?;
+    let mut driven = want_driven;
+    if driven {
+        sk.set_driven(id, true).map_err(sketch_err)?;
+    }
+    match sk.solve() {
+        // Measured at the size it has, a dimension that over-constrains the sketch holds
+        // but is implied by the others: it becomes a driven dimension instead.
+        Ok(report) if !driven && report.dof.redundant.contains(&id) => {
+            sk.set_driven(id, true).map_err(sketch_err)?;
+            driven = true;
+        }
+        Ok(_) => {}
+        Err(e) => {
+            *sk = backup;
+            return Err(sketch_err(e));
+        }
+    }
     s.sketch_selection.clear();
-    Ok(json!({ "constraint": id.0, "kind": kind, "value": value }))
+    Ok(json!({ "constraint": id.0, "kind": kind, "value": value, "driven": driven }))
 }
 
 fn remove(s: &mut Session, p: &Value) -> CmdResult {
@@ -1053,7 +1291,13 @@ fn get(s: &mut Session, p: &Value) -> CmdResult {
     let constraints: Vec<Value> = f
         .sketch
         .constraints()
-        .map(|(id, c)| json!({ "constraint": id.0, "definition": c }))
+        .map(|(id, c)| {
+            if f.sketch.is_driven(id) {
+                json!({ "constraint": id.0, "definition": c, "driven": true })
+            } else {
+                json!({ "constraint": id.0, "definition": c })
+            }
+        })
         .collect();
     Ok(json!({
         "sketch": id,
@@ -1065,7 +1309,8 @@ fn get(s: &mut Session, p: &Value) -> CmdResult {
         "dof": dof.as_ref().map(|d| d.dof),
         "status": dof.as_ref().map(|d| format!("{:?}", d.status)),
         "profiles": regions,
-        // Curves that cross unsplit give profiles that are not what the drawing shows.
+        // Curves cross without a shared point. The profiles above already split them
+        // there; `sketch.split` makes the pieces real curves (to trim or constrain them).
         "needs_split": f.sketch.has_unsplit_crossings(),
         "expressions": f.expressions,
         "selection": s.sketch_selection,
@@ -1317,6 +1562,95 @@ fn arc_three_point(s: &mut Session, p: &Value) -> CmdResult {
             through,
             end,
         },
+    )
+}
+
+fn rectangle_three_point(s: &mut Session, p: &Value) -> CmdResult {
+    let a = pt(p, "x1", "y1")?;
+    let b = pt(p, "x2", "y2")?;
+    let c = pt(p, "x3", "y3")?;
+    run_tool(s, ToolOp::ThreePointRectangle { a, b, c })
+}
+
+fn circle_two_point(s: &mut Session, p: &Value) -> CmdResult {
+    let a = pt(p, "x1", "y1")?;
+    let b = pt(p, "x2", "y2")?;
+    run_tool(s, ToolOp::TwoPointCircle { a, b })
+}
+
+fn circle_three_point(s: &mut Session, p: &Value) -> CmdResult {
+    let a = pt(p, "x1", "y1")?;
+    let b = pt(p, "x2", "y2")?;
+    let c = pt(p, "x3", "y3")?;
+    run_tool(s, ToolOp::ThreePointCircle { a, b, c })
+}
+
+fn circle_tangent(s: &mut Session, p: &Value) -> CmdResult {
+    let curves: Vec<CurveId> = opt_ids(p, "curves")?
+        .ok_or_else(|| bad("`curves` is required: two or three curve ids"))?
+        .into_iter()
+        .map(CurveId)
+        .collect();
+    let near = pt(p, "x", "y")?;
+    let radius = params::opt_f64(p, "radius")?;
+    run_tool(
+        s,
+        ToolOp::TangentCircle {
+            curves,
+            near,
+            radius,
+        },
+    )
+}
+
+fn opt_copy(p: &Value) -> Result<bool, CommandError> {
+    match p.get("copy") {
+        None | Some(Value::Null) => Ok(false),
+        Some(_) => params::req_bool(p, "copy"),
+    }
+}
+
+fn transform_tool(
+    s: &mut Session,
+    p: &Value,
+    transform: chamfera_sketch::SketchTransform,
+) -> CmdResult {
+    let (curves, points) = targets(s, p)?;
+    let copy = opt_copy(p)?;
+    run_tool(
+        s,
+        ToolOp::Transform {
+            curves,
+            points,
+            transform,
+            copy,
+        },
+    )
+}
+
+fn move_geometry(s: &mut Session, p: &Value) -> CmdResult {
+    let dx = params::req_f64(p, "dx")?;
+    let dy = params::req_f64(p, "dy")?;
+    transform_tool(s, p, chamfera_sketch::SketchTransform::Translate { dx, dy })
+}
+
+fn rotate_geometry(s: &mut Session, p: &Value) -> CmdResult {
+    let centre = pt(p, "cx", "cy")?;
+    let angle = params::req_f64(p, "angle")?;
+    transform_tool(
+        s,
+        p,
+        chamfera_sketch::SketchTransform::Rotate { centre, angle },
+    )
+}
+
+fn scale_geometry(s: &mut Session, p: &Value) -> CmdResult {
+    let centre = pt(p, "cx", "cy")?;
+    let factor = params::req_f64(p, "factor")?;
+    transform_tool(
+        s,
+        p,
+        chamfera_sketch::SketchTransform::Scale { centre, factor },
     )
 }
 

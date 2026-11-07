@@ -33,9 +33,9 @@ the plate's thickness and a sketch on its top face moves with it.
 | Group | Big buttons | Also in the dropdown |
 |---|---|---|
 | SELECT | Select | |
-| CREATE | Line, Rectangle, Circle, Arc, Polygon, Spline | Centre Rectangle, 3-Point Arc, Tangent Arc, Slot, Ellipse, Project, Offset, Mirror, Rectangular Pattern, Circular Pattern |
-| CONSTRAINTS | Dimension, and the ten constraints as small icons | |
-| MODIFY | Trim, Extend, Fillet | Chamfer, Split, Split All Crossings, Construction, Delete |
+| CREATE | Line, Rectangle, Circle, Arc, Polygon, Spline | Centre Rectangle, 3-Point Arc, Tangent Arc, 3-Point Rectangle, 2-Point Circle, 3-Point Circle, Tangent Circle, Slot, Ellipse, Project, Offset, Mirror, Rectangular Pattern, Circular Pattern |
+| CONSTRAINTS | Dimension, and the twelve constraints as small icons | |
+| MODIFY | Trim, Extend, Fillet | Chamfer, Split, Split All Crossings, Move/Copy, Construction, Delete |
 | INSERT | Insert DXF | Export Sketch as DXF… |
 | FINISH SKETCH | Finish Sketch | |
 
@@ -56,6 +56,10 @@ line"). **Esc** ends or cancels the tool.
 | Polygon | | Click the centre, then a corner. The tool box (top left of the viewport) has **Sides** and a **Circumscribed (around the circle)** check box; circumscribed means the second click is the middle of a side. |
 | Slot | | Click the centre of one end, then of the other end, then click to set the width. The tool box's **Points are the tips (overall length)** measures from tip to tip instead. |
 | Ellipse | | Click the centre, the end of the first axis, then click to set the other axis. |
+| 3-Point Rectangle | | Two clicks for one side, at any angle, then a click on the opposite side. |
+| 2-Point Circle | | Two clicks: the ends of a diameter. |
+| 3-Point Circle | | Three clicks: points the circle passes through. |
+| Tangent Circle | | Click three lines, circles or arcs, near where the circle should touch them; or, with **Two and a radius** in the tool box, two of them. |
 | Spline | | Click the points the curve passes through. Double-click or press Enter to finish; click the first point to close it. |
 
 ![A hexagon, a slot, an ellipse and a projected face outline in a sketch on a plate's top face](images/sketching-shapes-and-project.png)
@@ -128,6 +132,8 @@ menu in a sketch lists the constraints that fit the selection.
 | Perpendicular | Keeps two lines at a right angle |
 | Tangent | Makes a line or curve touch a circle or arc smoothly |
 | Equal | Gives two lines the same length, or two circles the same radius |
+| Concentric | Gives two circles or arcs the same centre |
+| Collinear | Puts two lines on one straight line |
 | Fix | Pins a point where it is |
 
 A constraint that would conflict with others, or is already implied, is refused with a
@@ -138,8 +144,16 @@ message and the sketch stays as it was.
 1. Select a line (its length), a circle (diameter), an arc (radius), two points (distance),
    a point and a line (distance) or two lines (angle).
 2. Press **D** or click **SKETCH > CONSTRAINTS > Dimension**. The dimension is placed at
-   the current size and its value box opens at once.
+   the current size and its value box opens at once. For two points or a slanted line,
+   where the cursor is when you press **D** chooses what it measures: above or below them
+   the horizontal distance, to their left or right the vertical distance, anywhere else
+   the true (aligned) distance.
 3. Type the value and press **Enter** (Esc leaves it at the current size).
+
+A dimension the other constraints already fix is added as a **driven** dimension: it
+shows the size in brackets, `(58.31 mm)`, and follows the sketch without setting
+anything. **Driven** in a dimension's value box makes any dimension driven; click a driven
+label to make it set the size again.
 
 To change a dimension later, click its label in the viewport ("Click to type a value, a
 parameter or a formula"). In the box you can type:
@@ -183,10 +197,11 @@ The tools that take a value show a small **tool box** at the top left of the vie
 | Rectangular Pattern | | Select the geometry, set **Columns**, **Spacing X**, **Rows**, **Spacing Y**, then **Apply**. |
 | Circular Pattern | | Select the geometry, set **Count** and **Angle**, then click the centre. |
 | Split | | Click a curve to split it where other curves cross it. |
-| Split All Crossings | | Splits every curve at every crossing. Do this before extruding overlapping shapes, so each region becomes its own profile. |
+| Split All Crossings | | Splits every curve at every crossing into separate curves, to trim or constrain the pieces. Overlapping shapes extrude without it: each region they make is already its own profile. |
+| Move/Copy | | Select the geometry. In the tool box pick **Move**, **Rotate** or **Scale**, type the values and **Apply**; **Copy** keeps the original. For a move you can instead click a base point and where it goes; for a turn or scale a click sets the centre. |
 
-For example, two 40 × 40 squares overlapping by 20 × 20 give, after Split All Crossings,
-three profiles of 1200, 400 and 1200 mm².
+For example, two 40 × 40 squares overlapping by 20 × 20 give three profiles of 1200, 400
+and 1200 mm², with or without Split All Crossings.
 
 ## Construction geometry in a sketch
 
@@ -250,8 +265,8 @@ reply (or name a step with `"as"` and use `"$name.curves.0"`) instead of guessin
 | Start, finish, edit | `sketch.create {plane: xy/xz/yz or a construction plane id, offset?}`, `sketch.create_on_face {feature, face}`, `sketch.finish`, `sketch.edit {sketch}` |
 | Draw | `sketch.line`, `sketch.rectangle`, `sketch.rectangle.centre`, `sketch.circle`, `sketch.arc`, `sketch.arc.three_point`, `sketch.arc.tangent`, `sketch.point`, `sketch.polygon {cx, cy, x, y, sides, mode}`, `sketch.slot {x1, y1, x2, y2, width, overall}`, `sketch.ellipse {cx, cy, x, y, minor}`, `sketch.ellipse.arc`, `sketch.spline {points, kind: fit/control, closed}` |
 | Constrain | `sketch.constrain {constraint: {kind, ...}}` or `{constraints: [...]}`, `sketch.constrain_selection {kind}` |
-| Dimension | `sketch.dimension_selection`, `sketch.dimension {constraint, value or expression}` |
-| Modify | `sketch.trim {curve, x, y}`, `sketch.extend {curve, x, y}`, `sketch.split {curve?}`, `sketch.fillet {point, radius}`, `sketch.chamfer {point, distance}`, `sketch.offset {curves, distance, corners}`, `sketch.mirror {axis, curves}`, `sketch.pattern.rectangular {curves, columns, dx, rows, dy}`, `sketch.pattern.circular {curves, cx, cy, count, angle}` |
+| Dimension | `sketch.dimension_selection {x?, y?, direction?, arc_length?, driven?}`, `sketch.dimension {constraint, value or expression}`, `sketch.dimension.driven {constraint, driven}` |
+| Modify | `sketch.trim {curve, x, y}`, `sketch.extend {curve, x, y}`, `sketch.split {curve?}`, `sketch.fillet {point, radius}`, `sketch.chamfer {point, distance}`, `sketch.offset {curves, distance, corners}`, `sketch.mirror {axis, curves}`, `sketch.pattern.rectangular {curves, columns, dx, rows, dy}`, `sketch.pattern.circular {curves, cx, cy, count, angle}`, `sketch.move {dx, dy, copy}`, `sketch.rotate {cx, cy, angle, copy}`, `sketch.scale {cx, cy, factor, copy}` |
 | Other | `sketch.construction {curve, construction}`, `sketch.project {edges or faces, linked}`, `sketch.import_dxf {path, units, scale}`, `sketch.export_dxf {path}`, `sketch.remove` |
 
 Examples: `examples/sketch-plate.json`, `examples/sketch-snaps.json`,
@@ -263,8 +278,8 @@ Examples: `examples/sketch-plate.json`, `examples/sketch-snaps.json`,
 - There is no Point tool in the ribbon; `sketch.point` (used for hole centres) is only
   available from a script. The Hole tool places its own points by clicking on a face.
 - Only 2D ASCII DXF is read.
-- Overlapping closed shapes do not give separate profiles until you run Split All
-  Crossings.
+- Ellipses and splines that cross other curves are not split for profiles; run Split All
+  Crossings or draw them to meet at their ends.
 - The value fields beside the cursor are drawn too narrow before you type: the live value
   runs over the field's name and shows the unit twice ("40.00 mm mm"). What you type is
   shown correctly.

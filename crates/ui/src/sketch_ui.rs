@@ -47,18 +47,42 @@ pub enum Tool {
     Trim,
     Extend,
     Split,
-    // The shape tools and Project live in `sketch_shapes.rs`.
+    // The shape tools, Project and Move/Copy live in `sketch_shapes.rs`.
     Polygon,
     Slot,
     Ellipse,
     Project,
+    ThreePointRectangle,
+    TwoPointCircle,
+    ThreePointCircle,
+    TangentCircle,
+    Transform,
 }
 
-pub(crate) const CREATE_ALL: [Tool; 16] = [
+/// The tools `sketch_shapes.rs` handles, for the `match`es below.
+macro_rules! shape_tools {
+    () => {
+        Tool::Polygon
+            | Tool::Slot
+            | Tool::Ellipse
+            | Tool::Project
+            | Tool::ThreePointRectangle
+            | Tool::TwoPointCircle
+            | Tool::ThreePointCircle
+            | Tool::TangentCircle
+            | Tool::Transform
+    };
+}
+
+pub(crate) const CREATE_ALL: [Tool; 20] = [
     Tool::Line,
     Tool::Rectangle,
     Tool::CentreRectangle,
+    Tool::ThreePointRectangle,
     Tool::Circle,
+    Tool::TwoPointCircle,
+    Tool::ThreePointCircle,
+    Tool::TangentCircle,
     Tool::Arc,
     Tool::ThreePointArc,
     Tool::TangentArc,
@@ -73,12 +97,13 @@ pub(crate) const CREATE_ALL: [Tool; 16] = [
     Tool::CircularPattern,
 ];
 /// The MODIFY tools shown in the ribbon (Construction and Delete follow them).
-pub(crate) const MODIFY_TOOLS: [Tool; 5] = [
+pub(crate) const MODIFY_TOOLS: [Tool; 6] = [
     Tool::Fillet,
     Tool::Chamfer,
     Tool::Trim,
     Tool::Extend,
     Tool::Split,
+    Tool::Transform,
 ];
 
 impl Tool {
@@ -104,9 +129,7 @@ impl Tool {
             Tool::Trim => label("sketch.trim"),
             Tool::Extend => label("sketch.extend"),
             Tool::Split => label("sketch.split"),
-            t @ (Tool::Polygon | Tool::Slot | Tool::Ellipse | Tool::Project) => {
-                crate::sketch_shapes::name(t)
-            }
+            t @ shape_tools!() => crate::sketch_shapes::name(t),
         }
     }
 
@@ -130,18 +153,14 @@ impl Tool {
             Tool::Trim => Icon::Trim,
             Tool::Extend => Icon::Extend,
             Tool::Split => Icon::Split,
-            t @ (Tool::Polygon | Tool::Slot | Tool::Ellipse | Tool::Project) => {
-                crate::sketch_shapes::icon(t)
-            }
+            t @ shape_tools!() => crate::sketch_shapes::icon(t),
         }
     }
 
     pub(crate) fn tooltip(self) -> &'static str {
         match self {
             Tool::Spline => crate::spline_ui::TOOLTIP,
-            t @ (Tool::Polygon | Tool::Slot | Tool::Ellipse | Tool::Project) => {
-                crate::sketch_shapes::tooltip(t)
-            }
+            t @ shape_tools!() => crate::sketch_shapes::tooltip(t),
             Tool::Select => {
                 "Select
 Pick points and curves to constrain or dimension (Shift adds); drag points to move them"
@@ -216,9 +235,7 @@ Click a curve to split it where other curves cross it; Split All splits every cr
     fn hint(self, clicks: usize) -> &'static str {
         match (self, clicks) {
             (Tool::Spline, n) => crate::spline_ui::hint(n),
-            (t @ (Tool::Polygon | Tool::Slot | Tool::Ellipse | Tool::Project), n) => {
-                crate::sketch_shapes::hint(t, n)
-            }
+            (t @ shape_tools!(), n) => crate::sketch_shapes::hint(t, n),
             (Tool::Select, _) => {
                 "Click to select (Shift adds) · drag a point to move it · drag on empty space to box select · Del deletes"
             }
@@ -372,6 +389,9 @@ pub fn parse_demo(text: &str) -> Result<Vec<DemoStep>, String> {
                 "line" => Tool::Line,
                 "rectangle" => Tool::Rectangle,
                 "centre_rectangle" => Tool::CentreRectangle,
+                "three_point_rectangle" => Tool::ThreePointRectangle,
+                "two_point_circle" => Tool::TwoPointCircle,
+                "three_point_circle" => Tool::ThreePointCircle,
                 "circle" => Tool::Circle,
                 "arc" => Tool::Arc,
                 other => return Err(format!("--sketch-input: no drawing tool `{other}`")),
@@ -513,7 +533,7 @@ impl SketchUi {
 }
 
 /// The geometric constraints: command kind, name, icon and what it does.
-pub(crate) const CONSTRAINTS: [(&str, &str, Icon, &str); 10] = [
+pub(crate) const CONSTRAINTS: [(&str, &str, Icon, &str); 12] = [
     (
         "horizontal",
         "Horizontal",
@@ -567,6 +587,18 @@ pub(crate) const CONSTRAINTS: [(&str, &str, Icon, &str); 10] = [
         "Equal",
         Icon::ConstraintEqual,
         "Give two lines the same length, or two circles the same radius",
+    ),
+    (
+        "concentric",
+        "Concentric",
+        Icon::ConstraintConcentric,
+        "Give two circles or arcs the same centre",
+    ),
+    (
+        "collinear",
+        "Collinear",
+        Icon::ConstraintCollinear,
+        "Put two lines on one straight line",
     ),
     ("fix", "Fix", Icon::ConstraintFix, "Pin a point where it is"),
 ];
@@ -635,15 +667,30 @@ impl ChamferaApp {
 
     /// Dimensions the selection at its current size and starts editing the value, as the
     /// Dimension button does.
+    /// With the cursor over the viewport (the D key), where it is chooses which way a
+    /// linear dimension measures: above or below the points horizontal, beside them
+    /// vertical, elsewhere aligned.
     pub(crate) fn dimension_selected(&mut self) {
-        if let Some(r) = self.run_sketch("sketch.dimension_selection", json!({}))
+        let params = match self.sketch.hover {
+            Some(at) if self.sketch.hover_px.is_some() => json!({ "x": at.x, "y": at.y }),
+            _ => json!({}),
+        };
+        if let Some(r) = self.run_sketch("sketch.dimension_selection", params)
             && let (Some(id), Some(v), Some(kind)) = (
                 r["constraint"].as_u64(),
                 r["value"].as_f64(),
                 r["kind"].as_str(),
             )
         {
-            self.sketch.editing = Some((id, kind.to_owned(), display_value(self.units(), kind, v)));
+            if r["driven"] == true {
+                self.message = Some((
+                    "The dimension is driven: the sketch already fixes that size".into(),
+                    false,
+                ));
+            } else {
+                self.sketch.editing =
+                    Some((id, kind.to_owned(), display_value(self.units(), kind, v)));
+            }
         }
     }
 
@@ -1218,8 +1265,8 @@ impl ChamferaApp {
             self.spline_click(click, (x, y, w, h));
             return;
         }
-        if tool == Tool::Project {
-            self.project_click(x, y, w, h);
+        if crate::sketch_shapes::picks(tool) {
+            self.pick_click(tool, x, y, w, h, click.at);
             return;
         }
         // A click places at the typed values when something was typed.
@@ -1602,6 +1649,8 @@ impl ChamferaApp {
         let labels = self.session.dimension_labels();
         let font = egui::FontId::proportional(12.5);
         let text_c = color(self.theme.text);
+        let muted_c = color(self.theme.text_muted);
+        let mut drive = None;
         let expr_c = color(self.theme.accent);
         let bg = color(self.theme.panel).gamma_multiply(0.96);
         let editing_id = self.sketch.editing.as_ref().map(|e| e.0);
@@ -1619,11 +1668,13 @@ impl ChamferaApp {
             // The value, and the expression it follows in the accent colour.
             let mut job = egui::text::LayoutJob::default();
             let format = |c| egui::TextFormat::simple(font.clone(), c);
-            job.append(
-                &display_value(self.units(), &l.kind, l.value),
-                0.0,
-                format(text_c),
-            );
+            let shown = display_value(self.units(), &l.kind, l.value);
+            // A driven dimension reads in brackets, in the muted text colour.
+            if l.driven {
+                job.append(&format!("({shown})"), 0.0, format(muted_c));
+            } else {
+                job.append(&shown, 0.0, format(text_c));
+            }
             if let Some(e) = &expression {
                 job.append(&format!("= {e}"), 6.0, format(expr_c));
             }
@@ -1632,7 +1683,11 @@ impl ChamferaApp {
             let id = ui.scope_id().with(("dimension", l.constraint));
             let resp = ui
                 .interact(r, id, egui::Sense::click())
-                .on_hover_text("Click to type a value, a parameter or a formula");
+                .on_hover_text(if l.driven {
+                    "Driven dimension: it shows the size the sketch has. Click to make it set the size"
+                } else {
+                    "Click to type a value, a parameter or a formula"
+                });
             let border = if resp.hovered() {
                 egui::Stroke::new(1.5, color(self.theme.accent))
             } else {
@@ -1644,11 +1699,19 @@ impl ChamferaApp {
                 .rect_stroke(r, radius, border, egui::StrokeKind::Inside);
             ui.painter()
                 .galley(r.center() - galley.size() * 0.5, galley, text_c);
-            if resp.clicked() {
+            if resp.clicked() && l.driven {
+                drive = Some(l.constraint);
+            } else if resp.clicked() {
                 let start =
                     expression.unwrap_or_else(|| display_value(self.units(), &l.kind, l.value));
                 self.sketch.editing = Some((u64::from(l.constraint), l.kind.clone(), start));
             }
+        }
+        if let Some(c) = drive {
+            self.run_sketch(
+                "sketch.dimension.driven",
+                json!({ "constraint": c, "driven": false }),
+            );
         }
         self.snap_marker(ui, rect);
         self.heads_up(ui, rect);
@@ -1670,6 +1733,7 @@ impl ChamferaApp {
             .and_then(|l| self.project(rect, l.anchor))
             .unwrap_or(rect.center());
         let mut keep = true;
+        let mut driven = false;
         let area = egui::Area::new(ui.scope_id().with(("dimension editor", id)))
             .fixed_pos(anchor - Vec2::new(50.0, 12.0))
             .order(egui::Order::Foreground);
@@ -1687,6 +1751,13 @@ impl ChamferaApp {
                     } else {
                         self.session.doc.units.length.symbol()
                     });
+                    if ui
+                        .small_button("Driven")
+                        .on_hover_text("Only show this size; the other constraints set it")
+                        .clicked()
+                    {
+                        driven = true;
+                    }
                     let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
                     let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
                     if esc {
@@ -1705,6 +1776,13 @@ impl ChamferaApp {
                 });
             });
         });
+        if driven {
+            self.run_sketch(
+                "sketch.dimension.driven",
+                json!({ "constraint": id, "driven": true }),
+            );
+            keep = false;
+        }
         if keep {
             self.sketch.editing = Some((id, kind, text));
         }
@@ -2018,7 +2096,7 @@ fn display_value(u: chamfera_doc::DisplayUnits, kind: &str, v: f64) -> String {
 /// Parses a typed value to internal units: a length (a plain number is in the design's
 /// unit, `10 mm` or `2 in` say their own) or an angle (a plain number is degrees). A
 /// formula of plain values works too; anything with a name is `None` (an expression).
-fn parse_value(u: chamfera_doc::DisplayUnits, kind: &str, text: &str) -> Option<f64> {
+pub(crate) fn parse_value(u: chamfera_doc::DisplayUnits, kind: &str, text: &str) -> Option<f64> {
     use chamfera_doc::expr;
     let cleaned: String = text
         .trim()
