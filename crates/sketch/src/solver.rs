@@ -626,6 +626,7 @@ fn commit(sketch: &mut Sketch, layout: &Layout, x: &[f64]) -> Result<(), SolveEr
     }
     let mut candidate = sketch.clone();
     write_back(&mut candidate, layout, x);
+    candidate.refresh_driven();
     candidate
         .validate()
         .map_err(|e| SolveError::Degenerate(e.to_string()))?;

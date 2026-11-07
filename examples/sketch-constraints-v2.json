@@ -1,0 +1,22 @@
+[
+  { "command": "sketch.create", "params": { "plane": "xy" } },
+  { "command": "sketch.rectangle", "params": { "x1": 0, "y1": 0, "x2": 40, "y2": 40 } },
+  { "command": "sketch.rectangle", "params": { "x1": 20, "y1": 20, "x2": 60, "y2": 60 } },
+  { "command": "sketch.circle", "params": { "cx": 60, "cy": 20, "radius": 12 }, "as": "outer" },
+  { "command": "sketch.circle", "params": { "cx": 64, "cy": 18, "radius": 5 }, "as": "inner" },
+  { "command": "sketch.line", "params": { "x1": 80, "y1": 0, "x2": 110, "y2": 0 }, "as": "base" },
+  { "command": "sketch.line", "params": { "x1": 110, "y1": 0, "x2": 80, "y2": 40 }, "as": "hyp" },
+  { "command": "sketch.line", "params": { "x1": 80, "y1": 40, "x2": 80, "y2": 0 }, "as": "side" },
+  { "command": "sketch.circle.tangent", "params": { "curves": ["$base.curve", "$hyp.curve", "$side.curve"], "x": 88, "y": 12 } },
+  { "command": "sketch.circle.three_point", "params": { "x1": 0, "y1": 70, "x2": 20, "y2": 70, "x3": 0, "y3": 90 } },
+  { "command": "sketch.rectangle.three_point", "params": { "x1": 40, "y1": 75, "x2": 70, "y2": 92, "x3": 36, "y3": 88 } },
+  { "command": "sketch.point", "params": { "x": 90, "y": 60 }, "as": "p" },
+  { "command": "sketch.point", "params": { "x": 140, "y": 95 }, "as": "q" },
+  { "command": "sketch.constrain", "params": { "constraint": { "kind": "concentric", "a": "$outer.curve", "b": "$inner.curve" } } },
+  { "command": "sketch.constrain", "params": { "constraint": { "kind": "horizontal_distance", "a": "$p.point", "b": "$q.point", "value": 50 } } },
+  { "command": "sketch.constrain", "params": { "constraint": { "kind": "vertical_distance", "a": "$p.point", "b": "$q.point", "value": 35 } } },
+  { "command": "sketch.constrain", "params": { "constraint": { "kind": "distance", "a": "$p.point", "b": "$q.point", "value": 61.032778078668514 } }, "as": "diag" },
+  { "command": "sketch.dimension.driven", "params": { "constraint": "$diag.constraint", "driven": true } },
+  { "command": "view.standard", "params": { "view": "top" } },
+  { "command": "view.fit", "params": { "width": 1180, "height": 640 } }
+]

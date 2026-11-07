@@ -58,6 +58,8 @@ pub enum SketchError {
     NotADimension(ConstraintId),
     #[error("{0}")]
     BadSpline(String),
+    #[error("{0} is a driven dimension: it shows a size and cannot set one")]
+    Driven(ConstraintId),
 }
 
 /// A 2D sketch: points, curves and the constraints between them.
@@ -67,6 +69,9 @@ pub struct Sketch {
     points: BTreeMap<PointId, Point2>,
     curves: BTreeMap<CurveId, Curve>,
     constraints: BTreeMap<ConstraintId, Constraint>,
+    /// Dimensions that only show a size (driven, or reference, dimensions): they take no
+    /// part in the solve, and their value follows the geometry after every solve.
+    driven: BTreeSet<ConstraintId>,
     next_id: u32,
 }
 
@@ -117,7 +122,10 @@ fn check_dimension_value(c: &Constraint, value: f64) -> Result<(), SketchError> 
                 })
             }
         }
-        Constraint::Distance { .. } | Constraint::PointLineDistance { .. } => {
+        Constraint::Distance { .. }
+        | Constraint::HorizontalDistance { .. }
+        | Constraint::VerticalDistance { .. }
+        | Constraint::PointLineDistance { .. } => {
             if value.is_finite() && (0.0..=MAX_COORDINATE).contains(&value) {
                 Ok(())
             } else {
@@ -129,6 +137,17 @@ fn check_dimension_value(c: &Constraint, value: f64) -> Result<(), SketchError> 
             }
         }
         Constraint::Radius { .. } | Constraint::Diameter { .. } => check_radius("value", value),
+        Constraint::ArcLength { .. } => {
+            if value.is_finite() && value > LINEAR_TOLERANCE && value <= TAU * MAX_COORDINATE {
+                Ok(())
+            } else {
+                Err(SketchError::BadValue {
+                    what: "value",
+                    allowed: "a finite length above 0 and at most 2π × 1e6 mm",
+                    value,
+                })
+            }
+        }
         Constraint::Angle { .. } => {
             if value.is_finite() && value.abs() <= TAU {
                 Ok(())
@@ -151,6 +170,7 @@ impl Sketch {
             points: BTreeMap::new(),
             curves: BTreeMap::new(),
             constraints: BTreeMap::new(),
+            driven: BTreeSet::new(),
             next_id: 1,
         }
     }
@@ -361,9 +381,100 @@ impl Sketch {
 
     /// Removes a constraint and returns it.
     pub fn remove_constraint(&mut self, id: ConstraintId) -> Result<Constraint, SketchError> {
-        self.constraints
+        let c = self
+            .constraints
             .remove(&id)
-            .ok_or(SketchError::UnknownConstraint(id))
+            .ok_or(SketchError::UnknownConstraint(id))?;
+        self.driven.remove(&id);
+        Ok(c)
+    }
+
+    /// True for a driven (reference) dimension: one that shows a size without setting it.
+    pub fn is_driven(&self, id: ConstraintId) -> bool {
+        self.driven.contains(&id)
+    }
+
+    /// Makes a dimension driven (it shows the size the other constraints give and takes no
+    /// part in the solve) or driving again. A driven dimension's value is measured at once.
+    pub fn set_driven(&mut self, id: ConstraintId, driven: bool) -> Result<(), SketchError> {
+        let c = self
+            .constraints
+            .get(&id)
+            .ok_or(SketchError::UnknownConstraint(id))?;
+        if !c.is_dimension() {
+            return Err(SketchError::NotADimension(id));
+        }
+        if driven {
+            self.driven.insert(id);
+            self.refresh_driven();
+        } else {
+            self.driven.remove(&id);
+        }
+        Ok(())
+    }
+
+    /// The size a dimension measures on the geometry as it is now (mm or radians), or
+    /// `None` for a constraint without a value or with missing geometry. An angle is the
+    /// signed counter-clockwise angle from line `a` to line `b`, in (-π, π].
+    pub fn measure(&self, c: &Constraint) -> Option<f64> {
+        let line = |id: CurveId| match self.curve(id)? {
+            Curve::Line { start, end, .. } => Some((self.point(*start)?, self.point(*end)?)),
+            _ => None,
+        };
+        Some(match c {
+            Constraint::Distance { a, b, .. } => self.point(*a)?.distance(self.point(*b)?),
+            Constraint::HorizontalDistance { a, b, .. } => {
+                (self.point(*b)?.x - self.point(*a)?.x).abs()
+            }
+            Constraint::VerticalDistance { a, b, .. } => {
+                (self.point(*b)?.y - self.point(*a)?.y).abs()
+            }
+            Constraint::PointLineDistance { point, line: l, .. } => {
+                let (a, b) = line(*l)?;
+                let d = (b - a).normalized()?;
+                d.cross(self.point(*point)? - a).abs()
+            }
+            Constraint::Length { line: l, .. } => {
+                let (a, b) = line(*l)?;
+                a.distance(b)
+            }
+            Constraint::Radius { curve, .. } => self.radius(*curve)?,
+            Constraint::Diameter { curve, .. } => 2.0 * self.radius(*curve)?,
+            Constraint::ArcLength { curve, .. } => match self.curve(*curve)? {
+                Curve::Arc {
+                    centre, start, end, ..
+                } => {
+                    let (c, s, e) = (self.point(*centre)?, self.point(*start)?, self.point(*end)?);
+                    let (_, sweep) = crate::intersect::arc_angles(c, s, e)?;
+                    c.distance(s) * sweep
+                }
+                _ => return None,
+            },
+            Constraint::Angle { a, b, .. } => {
+                let (a0, a1) = line(*a)?;
+                let (b0, b1) = line(*b)?;
+                let (u, v) = (a1 - a0, b1 - b0);
+                u.cross(v).atan2(u.dot(v))
+            }
+            _ => return None,
+        })
+    }
+
+    /// Sets every driven dimension to the size it measures now. A size that is no valid
+    /// value for its kind (a line of no length) keeps the last one.
+    pub(crate) fn refresh_driven(&mut self) {
+        let ids: Vec<ConstraintId> = self.driven.iter().copied().collect();
+        for id in ids {
+            let Some(c) = self.constraints.get(&id) else {
+                continue;
+            };
+            let Some(v) = self.measure(c) else { continue };
+            if check_dimension_value(c, v).is_ok()
+                && let Some(c) = self.constraints.get_mut(&id)
+            {
+                c.set_value_unchecked(v);
+            }
+        }
     }
 
     /// Removes a curve and every constraint that refers to it. Its points stay.
@@ -374,6 +485,7 @@ impl Sketch {
             .ok_or(SketchError::UnknownCurve(id))?;
         self.constraints
             .retain(|_, c| !c.curve_refs().contains(&id));
+        self.forget_driven();
         Ok(curve)
     }
 
@@ -392,7 +504,14 @@ impl Sketch {
         self.constraints.retain(|_, c| {
             !c.point_refs().contains(&id) && !c.curve_refs().iter().any(|k| dead.contains(k))
         });
+        self.forget_driven();
         Ok(())
+    }
+
+    /// Drops driven marks of constraints that are gone.
+    fn forget_driven(&mut self) {
+        let constraints = &self.constraints;
+        self.driven.retain(|k| constraints.contains_key(k));
     }
 
     /// Changes a dimension's value (mm or radians) without solving. Use
@@ -404,6 +523,9 @@ impl Sketch {
             .ok_or(SketchError::UnknownConstraint(id))?;
         if !c.is_dimension() {
             return Err(SketchError::NotADimension(id));
+        }
+        if self.driven.contains(&id) {
+            return Err(SketchError::Driven(id));
         }
         check_dimension_value(c, value)?;
         c.set_value_unchecked(value);
@@ -444,6 +566,7 @@ impl Sketch {
     /// Keeps only the constraints `keep` says yes to.
     pub(crate) fn retain_constraints(&mut self, mut keep: impl FnMut(&Constraint) -> bool) {
         self.constraints.retain(|_, c| keep(c));
+        self.forget_driven();
     }
 
     // ----- crate-internal access for the solver -----
@@ -569,7 +692,12 @@ impl Sketch {
             self.curve_kind(k)?;
         }
         match c {
-            Constraint::Coincident { a, b } | Constraint::Distance { a, b, .. } => {
+            Constraint::Coincident { a, b }
+            | Constraint::HorizontalPoints { a, b }
+            | Constraint::VerticalPoints { a, b }
+            | Constraint::HorizontalDistance { a, b, .. }
+            | Constraint::VerticalDistance { a, b, .. }
+            | Constraint::Distance { a, b, .. } => {
                 if a == b {
                     return Err(SketchError::SameEntityTwice {
                         what: c.kind_name(),
@@ -595,6 +723,7 @@ impl Sketch {
             | Constraint::Diameter { curve, .. } => self.check_circular(*curve)?,
             Constraint::Parallel { a, b }
             | Constraint::Perpendicular { a, b }
+            | Constraint::Collinear { a, b }
             | Constraint::Angle { a, b, .. } => {
                 if a == b {
                     return Err(SketchError::SameEntityTwice {
@@ -622,6 +751,23 @@ impl Sketch {
                     self.check_line(*b)?;
                 } else {
                     self.check_circular(*b)?;
+                }
+            }
+            Constraint::Concentric { a, b } => {
+                if a == b {
+                    return Err(SketchError::SameEntityTwice { what: "concentric" });
+                }
+                self.check_circular(*a)?;
+                self.check_circular(*b)?;
+            }
+            Constraint::ArcLength { curve, .. } => {
+                let k = self.curve_kind(*curve)?;
+                if !matches!(k, Curve::Arc { .. }) {
+                    return Err(SketchError::WrongCurveKind {
+                        curve: *curve,
+                        found: k.kind_name(),
+                        expected: "arc",
+                    });
                 }
             }
             Constraint::Fix { at, .. } => check_point2("at", *at)?,
@@ -676,6 +822,15 @@ impl Sketch {
         for c in self.constraints.values() {
             self.check_constraint(c)?;
         }
+        for id in &self.driven {
+            if !self
+                .constraints
+                .get(id)
+                .is_some_and(Constraint::is_dimension)
+            {
+                return Err(SketchError::NotADimension(*id));
+            }
+        }
         Ok(())
     }
 }
@@ -709,6 +864,9 @@ struct CurveRecord {
 struct ConstraintRecord {
     id: ConstraintId,
     constraint: Constraint,
+    /// A driven (reference) dimension; absent means driving.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    driven: bool,
 }
 
 impl TryFrom<SketchData> for Sketch {
@@ -737,6 +895,7 @@ impl TryFrom<SketchData> for Sketch {
             points: BTreeMap::new(),
             curves: BTreeMap::new(),
             constraints: BTreeMap::new(),
+            driven: BTreeSet::new(),
             next_id: data.next_id,
         };
         for r in data.points {
@@ -752,6 +911,9 @@ impl TryFrom<SketchData> for Sketch {
         for r in data.constraints {
             if sketch.constraints.insert(r.id, r.constraint).is_some() {
                 return Err(SketchError::DuplicateId(r.id.0));
+            }
+            if r.driven {
+                sketch.driven.insert(r.id);
             }
         }
         sketch.validate()?;
@@ -776,7 +938,11 @@ impl From<Sketch> for SketchData {
             constraints: s
                 .constraints
                 .into_iter()
-                .map(|(id, constraint)| ConstraintRecord { id, constraint })
+                .map(|(id, constraint)| ConstraintRecord {
+                    id,
+                    constraint,
+                    driven: s.driven.contains(&id),
+                })
                 .collect(),
         }
     }

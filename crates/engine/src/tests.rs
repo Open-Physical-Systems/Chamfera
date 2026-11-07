@@ -201,6 +201,12 @@ fn hostile_params_never_panic() {
         json!({"points": [{"x": 0, "y": 0}, {"x": 10, "y": 0}], "text": "\u{202e}x", "characteristic": "position",
                "tolerance": 1e300, "datums": ["A", "A"], "diameter": "yes", "removal": 1, "height": 0}),
         json!({"x1": 0, "y1": 0, "x2": 1, "y2": 1, "x3": 2, "y3": 2, "cx": 0, "cy": 0}),
+        json!({"dx": 1e300, "dy": "a", "copy": "yes", "factor": -1, "angle": f64::NAN, "cx": 0, "cy": 0}),
+        json!({"dx": 5, "dy": 0, "copy": true, "factor": 1e300, "angle": 1e300, "cx": 1e300, "cy": 0, "curves": [1, 2]}),
+        json!({"direction": "sideways", "arc_length": 3, "driven": "no", "x": 1, "y": null}),
+        json!({"direction": "horizontal", "arc_length": true, "driven": true, "x": 1e300, "y": 0, "constraint": 1}),
+        json!({"curves": [1, 1, 1, 1], "x": 0, "y": 0, "radius": 1e300}),
+        json!({"curves": [1, 2], "x": f64::NAN, "y": 0, "radius": -1}),
         json!({"point": 3, "x": 50, "y": 0, "distance2": 0, "curve": null}),
         json!({"sketch": 1, "profiles": [{"x": 10, "y": 10}], "distance": 5, "operation": "cut"}),
         json!({"sketch": 1, "profiles": [{"x": 10, "y": 10}], "distance": 5, "operation": "smash"}),
@@ -5167,5 +5173,454 @@ fn the_visual_style_is_set_by_name_and_reported_by_view_get() {
     assert_eq!(
         s.scene.display.style,
         chamfera_render::VisualStyle::WireframeHidden
+    );
+}
+
+/// Two 40 x 40 squares overlapping by 20 x 20, drawn and extruded 10 without splitting:
+/// the overlap is 20 x 20 x 10 = 4000 mm³ and the L-shaped rest of the first square
+/// (1600 - 400) x 10 = 12000 mm³.
+#[test]
+fn overlapping_rectangles_extrude_their_regions_without_a_split() {
+    let mut s = Session::new();
+    s.execute("sketch.create", &json!({"plane": "xy"})).unwrap();
+    for (x1, y1, x2, y2) in [(0, 0, 40, 40), (20, 20, 60, 60)] {
+        s.execute(
+            "sketch.rectangle",
+            &json!({"x1": x1, "y1": y1, "x2": x2, "y2": y2}),
+        )
+        .unwrap();
+    }
+    let g = s.execute("sketch.get", &json!({})).unwrap();
+    let mut areas: Vec<f64> = g["profiles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["area"].as_f64().unwrap())
+        .collect();
+    areas.sort_by(f64::total_cmp);
+    assert_eq!(areas.len(), 3, "{areas:?}");
+    for (a, want) in areas.iter().zip([400.0, 1200.0, 1200.0]) {
+        assert!((a - want).abs() < 1e-6, "{areas:?}");
+    }
+    s.execute("sketch.finish", &json!({})).unwrap();
+    for (x, y, want) in [(30.0, 30.0, 4000.0), (10.0, 10.0, 12000.0)] {
+        let r = s
+            .execute(
+                "solid.extrude",
+                &json!({"sketch": 1, "profiles": [{"x": x, "y": y}], "distance": 10}),
+            )
+            .unwrap();
+        let v: f64 = r["solids"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|b| b["volume"].as_f64().unwrap())
+            .fold(0.0, f64::max);
+        assert!((v - want).abs() < 1e-6, "{r}");
+        s.execute("edit.undo", &json!({})).unwrap();
+    }
+}
+
+#[test]
+fn concentric_collinear_and_point_alignment_from_the_selection() {
+    use crate::sketching::SketchItem;
+    let mut s = Session::new();
+    s.execute("sketch.create", &json!({"plane": "xy"})).unwrap();
+    let c1 = s
+        .execute("sketch.circle", &json!({"cx": 0, "cy": 0, "radius": 10}))
+        .unwrap();
+    let c2 = s
+        .execute("sketch.circle", &json!({"cx": 6, "cy": 2, "radius": 4}))
+        .unwrap();
+    let id = |v: &serde_json::Value, k: &str| v[k].as_u64().unwrap() as u32;
+    s.sketch_selection = vec![
+        SketchItem::Curve(id(&c1, "curve")),
+        SketchItem::Curve(id(&c2, "curve")),
+    ];
+    s.execute("sketch.constrain_selection", &json!({"kind": "concentric"}))
+        .unwrap();
+    let at = |s: &mut Session, p: u32| {
+        let g = s.execute("sketch.get", &json!({})).unwrap();
+        let q = g["points"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|q| q["point"] == p)
+            .unwrap()
+            .clone();
+        (q["x"].as_f64().unwrap(), q["y"].as_f64().unwrap())
+    };
+    let (a, b) = (at(&mut s, id(&c1, "centre")), at(&mut s, id(&c2, "centre")));
+    assert!((a.0 - b.0).abs() < 1e-7 && (a.1 - b.1).abs() < 1e-7);
+    // Two lines made collinear: the second's ends land on the first's line.
+    let l1 = s
+        .execute(
+            "sketch.line",
+            &json!({"x1": 20, "y1": 0, "x2": 40, "y2": 0}),
+        )
+        .unwrap();
+    let l2 = s
+        .execute(
+            "sketch.line",
+            &json!({"x1": 50, "y1": 3, "x2": 70, "y2": 5}),
+        )
+        .unwrap();
+    s.execute(
+        "sketch.constrain",
+        &json!({"constraint": {"kind": "horizontal", "line": id(&l1, "curve")}}),
+    )
+    .unwrap();
+    s.sketch_selection = vec![
+        SketchItem::Curve(id(&l1, "curve")),
+        SketchItem::Curve(id(&l2, "curve")),
+    ];
+    s.execute("sketch.constrain_selection", &json!({"kind": "collinear"}))
+        .unwrap();
+    let y1 = at(&mut s, id(&l1, "start")).1;
+    let y2 = at(&mut s, id(&l2, "start")).1;
+    let y3 = at(&mut s, id(&l2, "end")).1;
+    assert!(
+        (y1 - y2).abs() < 1e-7 && (y1 - y3).abs() < 1e-7,
+        "{y1} {y2} {y3}"
+    );
+    // Two points made level.
+    let p = s
+        .execute("sketch.point", &json!({"x": 80, "y": 0}))
+        .unwrap();
+    let q = s
+        .execute("sketch.point", &json!({"x": 90, "y": 7}))
+        .unwrap();
+    s.sketch_selection = vec![
+        SketchItem::Point(id(&p, "point")),
+        SketchItem::Point(id(&q, "point")),
+    ];
+    s.execute("sketch.constrain_selection", &json!({"kind": "horizontal"}))
+        .unwrap();
+    let (pp, qq) = (at(&mut s, id(&p, "point")), at(&mut s, id(&q, "point")));
+    assert!((pp.1 - qq.1).abs() < 1e-7);
+    let g = s.execute("sketch.get", &json!({})).unwrap();
+    assert!(
+        g["constraints"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c["definition"]["kind"] == "horizontal_points")
+    );
+    // Concentric needs circles or arcs.
+    s.sketch_selection = vec![
+        SketchItem::Curve(id(&l1, "curve")),
+        SketchItem::Curve(id(&c1, "curve")),
+    ];
+    assert!(
+        s.execute("sketch.constrain_selection", &json!({"kind": "concentric"}))
+            .is_err()
+    );
+}
+
+/// Points (0, 0) and (30, 40): placed above them (inside their X span) a dimension
+/// measures X, 30; to their right (inside the Y span) Y, 40; off a corner the distance, 50.
+#[test]
+fn a_dimension_measures_the_way_it_is_placed() {
+    use crate::sketching::SketchItem;
+    let mut s = Session::new();
+    s.execute("sketch.create", &json!({"plane": "xy"})).unwrap();
+    let l = s
+        .execute(
+            "sketch.line",
+            &json!({"x1": 0, "y1": 0, "x2": 30, "y2": 40}),
+        )
+        .unwrap();
+    let (a, b) = (
+        l["start"].as_u64().unwrap() as u32,
+        l["end"].as_u64().unwrap() as u32,
+    );
+    for (at, kind, want) in [
+        (json!({"x": 15, "y": 50}), "horizontal_distance", 30.0),
+        (json!({"x": 45, "y": 20}), "vertical_distance", 40.0),
+        (json!({"x": 45, "y": 50}), "distance", 50.0),
+        (json!({"direction": "vertical"}), "vertical_distance", 40.0),
+    ] {
+        s.sketch_selection = vec![SketchItem::Point(a), SketchItem::Point(b)];
+        let d = s.execute("sketch.dimension_selection", &at).unwrap();
+        assert_eq!(d["kind"], kind, "{d}");
+        assert!((d["value"].as_f64().unwrap() - want).abs() < 1e-9, "{d}");
+        s.execute("edit.undo", &json!({})).unwrap();
+    }
+    // The line itself placed above it: its horizontal extent.
+    s.sketch_selection = vec![SketchItem::Curve(l["curve"].as_u64().unwrap() as u32)];
+    let d = s
+        .execute("sketch.dimension_selection", &json!({"x": 10, "y": 60}))
+        .unwrap();
+    assert_eq!(d["kind"], "horizontal_distance");
+    assert!((d["value"].as_f64().unwrap() - 30.0).abs() < 1e-9, "{d}");
+    s.sketch_selection = vec![SketchItem::Point(a), SketchItem::Point(b)];
+    assert!(
+        s.execute("sketch.dimension_selection", &json!({"direction": "up"}))
+            .is_err()
+    );
+}
+
+/// The 50 x 30 rectangle is fully constrained, so a dimension across its diagonal
+/// (√(2500 + 900) = √3400) is driven: it shows the size, and follows the width when it
+/// changes to 40 (√(1600 + 900) = 50). Driving again, it over-constrains.
+#[test]
+fn a_dimension_that_would_over_constrain_becomes_driven() {
+    use crate::sketching::SketchItem;
+    let mut s = Session::new();
+    let (pts, lines) = dimensioned_rectangle(&mut s);
+    let g = s.execute("sketch.get", &json!({})).unwrap();
+    assert_eq!(g["status"], "FullyConstrained", "{g}");
+    s.sketch_selection = vec![
+        SketchItem::Point(pts[0] as u32),
+        SketchItem::Point(pts[2] as u32),
+    ];
+    let d = s.execute("sketch.dimension_selection", &json!({})).unwrap();
+    assert_eq!(d["driven"], true, "{d}");
+    assert!((d["value"].as_f64().unwrap() - 3400f64.sqrt()).abs() < 1e-9);
+    let diagonal = d["constraint"].as_u64().unwrap();
+    let g = s.execute("sketch.get", &json!({})).unwrap();
+    assert_eq!(g["status"], "FullyConstrained");
+    let width = g["constraints"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["definition"]["kind"] == "length" && c["definition"]["line"] == lines[0])
+        .unwrap()["constraint"]
+        .clone();
+    s.execute(
+        "sketch.dimension",
+        &json!({"constraint": width, "value": 40}),
+    )
+    .unwrap();
+    let labels = s.dimension_labels();
+    let l = labels
+        .iter()
+        .find(|l| u64::from(l.constraint) == diagonal)
+        .unwrap();
+    assert!(l.driven && (l.value - 50.0).abs() < 1e-7, "{l:?}");
+    // A driven dimension takes no new value.
+    assert!(
+        s.execute(
+            "sketch.dimension",
+            &json!({"constraint": diagonal, "value": 10})
+        )
+        .is_err()
+    );
+    s.execute(
+        "sketch.dimension.driven",
+        &json!({"constraint": diagonal, "driven": false}),
+    )
+    .unwrap();
+    let g = s.execute("sketch.get", &json!({})).unwrap();
+    assert_eq!(g["status"], "OverConstrained");
+    s.execute("edit.undo", &json!({})).unwrap();
+    let g = s.execute("sketch.get", &json!({})).unwrap();
+    assert_eq!(g["status"], "FullyConstrained");
+}
+
+/// An arc of r = 10 from angle 0 to π/2 is 5π long.
+#[test]
+fn an_arc_can_be_dimensioned_by_its_length() {
+    use crate::sketching::SketchItem;
+    let mut s = Session::new();
+    s.execute("sketch.create", &json!({"plane": "xy"})).unwrap();
+    let a = s
+        .execute(
+            "sketch.arc",
+            &json!({"cx": 0, "cy": 0, "x1": 10, "y1": 0, "x2": 0, "y2": 10}),
+        )
+        .unwrap();
+    s.sketch_selection = vec![SketchItem::Curve(a["curve"].as_u64().unwrap() as u32)];
+    let d = s
+        .execute("sketch.dimension_selection", &json!({"arc_length": true}))
+        .unwrap();
+    assert_eq!(d["kind"], "arc_length");
+    assert!((d["value"].as_f64().unwrap() - 5.0 * std::f64::consts::PI).abs() < 1e-9);
+}
+
+/// A 3-point rectangle with side (0, 0)-(30, 0) and height 20: area 600. A 2-point circle
+/// across (0, 50)-(0, 70) has r = 10: area 100π. A 3-point circle through (100, 0),
+/// (120, 0), (100, 20) has the right angle at (100, 0), so its hypotenuse (20√2) is a
+/// diameter: r² = 200, area 200π.
+#[test]
+fn rectangles_and_circles_by_points() {
+    let mut s = Session::new();
+    s.execute("sketch.create", &json!({"plane": "xy"})).unwrap();
+    s.execute(
+        "sketch.rectangle.three_point",
+        &json!({"x1": 0, "y1": 0, "x2": 30, "y2": 0, "x3": 12, "y3": 20}),
+    )
+    .unwrap();
+    s.execute(
+        "sketch.circle.two_point",
+        &json!({"x1": 0, "y1": 50, "x2": 0, "y2": 70}),
+    )
+    .unwrap();
+    s.execute(
+        "sketch.circle.three_point",
+        &json!({"x1": 100, "y1": 0, "x2": 120, "y2": 0, "x3": 100, "y3": 20}),
+    )
+    .unwrap();
+    let g = s.execute("sketch.get", &json!({})).unwrap();
+    let mut areas: Vec<f64> = g["profiles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["area"].as_f64().unwrap())
+        .collect();
+    areas.sort_by(f64::total_cmp);
+    let pi = std::f64::consts::PI;
+    assert_eq!(areas.len(), 3, "{areas:?}");
+    for (a, want) in areas.iter().zip([100.0 * pi, 600.0, 200.0 * pi]) {
+        assert!((a - want).abs() < 1e-6, "{areas:?}");
+    }
+    assert!(
+        s.execute(
+            "sketch.circle.three_point",
+            &json!({"x1": 0, "y1": 0, "x2": 1, "y2": 1, "x3": 2, "y3": 2}),
+        )
+        .is_err()
+    );
+}
+
+/// The corner of two lines along the axes, radius 5: the tangent circle's centre is at
+/// (5, 5).
+#[test]
+fn a_tangent_circle_touches_the_curves_it_is_given() {
+    let mut s = Session::new();
+    s.execute("sketch.create", &json!({"plane": "xy"})).unwrap();
+    let x = s
+        .execute("sketch.line", &json!({"x1": 0, "y1": 0, "x2": 50, "y2": 0}))
+        .unwrap();
+    let y = s
+        .execute("sketch.line", &json!({"x1": 0, "y1": 0, "x2": 0, "y2": 50}))
+        .unwrap();
+    for p in [&x["start"], &x["end"], &y["start"], &y["end"]] {
+        let g = s.execute("sketch.get", &json!({})).unwrap();
+        let q = g["points"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|q| q["point"] == *p)
+            .unwrap()
+            .clone();
+        s.execute(
+            "sketch.constrain",
+            &json!({"constraint": {"kind": "fix", "point": p, "at": {"x": q["x"], "y": q["y"]}}}),
+        )
+        .unwrap();
+    }
+    let r = s
+        .execute(
+            "sketch.circle.tangent",
+            &json!({"curves": [x["curve"], y["curve"]], "x": 4, "y": 7, "radius": 5}),
+        )
+        .unwrap();
+    let circle = r["created_curves"][0].as_u64().unwrap();
+    let g = s.execute("sketch.get", &json!({})).unwrap();
+    let def = g["curves"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["curve"] == circle)
+        .unwrap()["geometry"]
+        .clone();
+    let centre = g["points"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["point"] == def["centre"])
+        .unwrap()
+        .clone();
+    assert!(
+        (centre["x"].as_f64().unwrap() - 5.0).abs() < 1e-7,
+        "{centre}"
+    );
+    assert!(
+        (centre["y"].as_f64().unwrap() - 5.0).abs() < 1e-7,
+        "{centre}"
+    );
+    assert!(
+        s.execute(
+            "sketch.circle.tangent",
+            &json!({"curves": [x["curve"]], "x": 4, "y": 7, "radius": 5}),
+        )
+        .is_err()
+    );
+}
+
+/// A 20 x 10 rectangle at the origin, selected: moved by (5, 5) its corners span (5, 5)
+/// to (25, 15); copied 30 to the right there are two 200 mm² profiles; scaled by 3 about
+/// the origin it is 60 x 30 = 1800; turned a quarter about the origin the box is
+/// x -10..0, y 0..20. Each is one undo step.
+#[test]
+fn selected_sketch_geometry_moves_turns_scales_and_copies() {
+    use crate::sketching::SketchItem;
+    let new_plate = || {
+        let mut s = Session::new();
+        s.execute("sketch.create", &json!({"plane": "xy"})).unwrap();
+        let r = s
+            .execute(
+                "sketch.rectangle",
+                &json!({"x1": 0, "y1": 0, "x2": 20, "y2": 10}),
+            )
+            .unwrap();
+        s.sketch_selection = r["curves"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| SketchItem::Curve(c.as_u64().unwrap() as u32))
+            .collect();
+        s
+    };
+    let bounds = |s: &mut Session| {
+        let g = s.execute("sketch.get", &json!({})).unwrap();
+        let pts = g["points"].as_array().unwrap().clone();
+        let xs: Vec<f64> = pts.iter().map(|p| p["x"].as_f64().unwrap()).collect();
+        let ys: Vec<f64> = pts.iter().map(|p| p["y"].as_f64().unwrap()).collect();
+        let lo = |v: &[f64]| v.iter().copied().fold(f64::MAX, f64::min);
+        let hi = |v: &[f64]| v.iter().copied().fold(f64::MIN, f64::max);
+        [lo(&xs), lo(&ys), hi(&xs), hi(&ys)]
+    };
+    let close = |a: [f64; 4], b: [f64; 4]| a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-7);
+    let mut s = new_plate();
+    s.execute("sketch.move", &json!({"dx": 5, "dy": 5}))
+        .unwrap();
+    assert!(close(bounds(&mut s), [5.0, 5.0, 25.0, 15.0]));
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(close(bounds(&mut s), [0.0, 0.0, 20.0, 10.0]));
+
+    let mut s = new_plate();
+    s.execute("sketch.move", &json!({"dx": 30, "dy": 0, "copy": true}))
+        .unwrap();
+    let g = s.execute("sketch.get", &json!({})).unwrap();
+    let areas: Vec<f64> = g["profiles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["area"].as_f64().unwrap())
+        .collect();
+    assert_eq!(areas.len(), 2);
+    assert!(areas.iter().all(|a| (a - 200.0).abs() < 1e-6), "{areas:?}");
+
+    let mut s = new_plate();
+    s.execute("sketch.scale", &json!({"cx": 0, "cy": 0, "factor": 3}))
+        .unwrap();
+    let g = s.execute("sketch.get", &json!({})).unwrap();
+    assert!((g["profiles"][0]["area"].as_f64().unwrap() - 1800.0).abs() < 1e-6);
+
+    let mut s = new_plate();
+    s.execute(
+        "sketch.rotate",
+        &json!({"cx": 0, "cy": 0, "angle": std::f64::consts::FRAC_PI_2}),
+    )
+    .unwrap();
+    assert!(close(bounds(&mut s), [-10.0, 0.0, 0.0, 20.0]));
+
+    let mut s = new_plate();
+    s.sketch_selection.clear();
+    assert!(
+        s.execute("sketch.move", &json!({"dx": 1, "dy": 0}))
+            .is_err()
     );
 }
