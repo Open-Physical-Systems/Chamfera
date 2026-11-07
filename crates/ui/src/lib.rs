@@ -28,6 +28,7 @@ mod config_ui;
 mod construct_ui;
 mod context_menu;
 mod display_ui;
+mod drawing_sheet_ui;
 mod drawing_tools_ui;
 mod drawing_ui;
 mod file_ui;
@@ -93,6 +94,8 @@ pub struct Options {
     pub tool_library: bool,
     /// Open the DRAWING workspace at start.
     pub drawing: bool,
+    /// Open the DRAWING workspace's Sheet Settings dialog on the shown sheet at start.
+    pub sheet_settings: bool,
     /// Open the Extrude tool at start and pick the profile under the viewport's centre,
     /// as a click there would.
     pub extrude: bool,
@@ -474,7 +477,10 @@ impl ChamferaApp {
             app.cam.active = true;
             app.cam.library_open = true;
         }
-        app.drawing.active = options.drawing;
+        app.drawing.active = options.drawing || options.sheet_settings;
+        if options.sheet_settings {
+            app.toggle_sheet_settings();
+        }
         if options.extrude {
             let mut tool = solid_ui::ExtrudeTool::default();
             if let Some(p) = &options.extrude_with {

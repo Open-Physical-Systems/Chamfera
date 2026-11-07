@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! chamfera [part.stl ...] [--sample] [--theme light|dark] [--script steps.json]
-//!          [--parameters] [--configurations] [--tool-library] [--preferences PAGE] [--drawing] [--extrude] [--extrude-with JSON]
+//!          [--parameters] [--configurations] [--tool-library] [--preferences PAGE] [--drawing] [--sheet-settings] [--extrude] [--extrude-with JSON]
 //!          [--render] [--render-window WxH,SAMPLES]
 //!          [--hole] [--box X1,Y1,X2,Y2] [--drawing-drag X1,Y1,X2,Y2] [--search QUERY] [--context-menu X,Y]
 //!          [--press-pull X,Y,D] [--ribbon-menu GROUP] [--assistant-demo]
@@ -18,7 +18,7 @@
 use std::process::ExitCode;
 
 const USAGE: &str = "usage: chamfera [part.stl ...] [--sample] [--theme light|dark] \
-[--script steps.json] [--parameters] [--configurations] [--tool-library] [--preferences PAGE] [--drawing] [--extrude] \
+[--script steps.json] [--parameters] [--configurations] [--tool-library] [--preferences PAGE] [--drawing] [--sheet-settings] [--extrude] \
 [--extrude-with JSON] [--hole] \
 [--box X1,Y1,X2,Y2] [--drawing-drag X1,Y1,X2,Y2] [--search QUERY] [--context-menu X,Y] [--press-pull X,Y,D] \
 [--ribbon-menu GROUP] [--assistant-demo] [--assistant-ask REQUEST] [--about] [--history] [--recovery-demo] [--tutorial ID] [--render] [--render-window WxH,SAMPLES] [--size WxH] \
@@ -58,6 +58,7 @@ fn main() -> ExitCode {
                 }
             },
             "--drawing" => options.drawing = true,
+            "--sheet-settings" => options.sheet_settings = true,
             "--render" => options.render = true,
             "--render-window" => match args.next().as_deref().and_then(parse_render) {
                 Some(r) => options.render_window = Some(r),

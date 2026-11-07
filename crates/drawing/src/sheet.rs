@@ -1,10 +1,11 @@
 //! A sheet laid out on paper: border, title block, views and dimensions.
 //!
 //! The title block is Chamfera's own simple design: a projection-symbol cell on the left
-//! (the ISO 128 truncated-cone symbol for first- or third-angle), then the part name
-//! across the top and scale, units, date and drawer below.
+//! (the ISO 128 truncated-cone symbol for first- or third-angle), then the part name,
+//! drawing number and revision across the top, and scale, units, material, date, drawer
+//! and checker below.
 
-use crate::annot::{self, PartRow};
+use crate::annot::{self, HoleNote, PartRow};
 use crate::hlr::{Basis, Curve2, ViewGeometry, project, project_basis};
 use crate::text::{clean, width};
 use crate::{Align, DrawingResult, Item, Layer, Shape, dims};
@@ -299,16 +300,6 @@ fn frame(sheet: &Sheet, w: f64, h: f64, items: &mut Vec<Item>) {
         Point2::new(x1, mid_y),
         Point2::new(t_hi.x, mid_y),
     );
-    let cell = (t_hi.x - x1) / 4.0;
-    for k in 1..4 {
-        let x = x1 + cell * f64::from(k);
-        line(
-            items,
-            Layer::Border,
-            Point2::new(x, t_lo.y),
-            Point2::new(x, mid_y),
-        );
-    }
     let label = 1.8;
     let value = 3.5;
     let title = &sheet.title;
@@ -317,62 +308,84 @@ fn frame(sheet: &Sheet, w: f64, h: f64, items: &mut Vec<Item>) {
     } else {
         clean(&title.part_name, 64)
     };
-    text(
-        items,
-        Layer::Border,
-        Point2::new(x1 + 1.5, t_hi.y - 3.0),
-        label,
-        Align::Left,
-        "PART",
-    );
-    text(
-        items,
-        Layer::Border,
-        Point2::new(t_hi.x - 1.5, t_hi.y - 3.0),
-        label,
-        Align::Right,
-        "CHAMFERA",
-    );
-    text(
-        items,
-        Layer::Border,
-        Point2::new(x1 + 1.5, mid_y + 3.0),
-        5.0,
-        Align::Left,
-        &part,
-    );
-    let fields = [
+    // The top row: the part's name, the drawing number and the revision; the bottom
+    // row: six equal cells.
+    let fields_w = t_hi.x - x1;
+    let rev_w = (fields_w * 0.14).max(12.0);
+    let number_w = fields_w * 0.3;
+    let top = [
+        (x1, fields_w - number_w - rev_w, "PART", part, 5.0),
+        (
+            t_hi.x - number_w - rev_w,
+            number_w,
+            "DRAWING NO.",
+            clean(&title.drawing_number, 64),
+            value,
+        ),
+        (
+            t_hi.x - rev_w,
+            rev_w,
+            "REV",
+            clean(&title.revision, 64),
+            value,
+        ),
+    ];
+    let cell = fields_w / 6.0;
+    let bottom: Vec<(f64, f64, &str, String, f64)> = [
         ("SCALE", scale_text(sheet.scale)),
         ("UNITS", "mm".to_owned()),
+        ("MATERIAL", clean(&title.material, 64)),
         ("DATE", clean(&title.date, 64)),
-        ("DRAWN BY", clean(&title.drawn_by, 64)),
-    ];
-    for (k, (name, v)) in fields.iter().enumerate() {
-        let x = x1 + cell * k as f64;
-        text(
-            items,
-            Layer::Border,
-            Point2::new(x + 1.5, mid_y - 3.0),
-            label,
-            Align::Left,
-            name,
-        );
-        // Long values shrink to fit their cell.
-        let mut hv = value;
-        let room = cell - 3.0;
-        let wv = width(v, hv);
-        if wv > room && wv > 0.0 {
-            hv = (hv * room / wv).max(1.0);
+        ("DRAWN", clean(&title.drawn_by, 64)),
+        ("CHECKED", clean(&title.checked_by, 64)),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(k, (name, v))| (x1 + cell * k as f64, cell, name, v, value))
+    .collect();
+    for (row, (y_lo, y_hi)) in [(top.to_vec(), (mid_y, t_hi.y)), (bottom, (t_lo.y, mid_y))] {
+        for (k, (x, w, name, v, size)) in row.iter().enumerate() {
+            if k > 0 {
+                line(
+                    items,
+                    Layer::Border,
+                    Point2::new(*x, y_lo),
+                    Point2::new(*x, y_hi),
+                );
+            }
+            text(
+                items,
+                Layer::Border,
+                Point2::new(x + 1.5, y_hi - 3.0),
+                label,
+                Align::Left,
+                name,
+            );
+            // Long values shrink to fit their cell.
+            let mut hv = *size;
+            let room = w - 3.0;
+            let wv = width(v, hv);
+            if wv > room && wv > 0.0 {
+                hv = (hv * room / wv).max(1.0);
+            }
+            text(
+                items,
+                Layer::Border,
+                Point2::new(x + 1.5, y_lo + 3.0),
+                hv,
+                Align::Left,
+                v,
+            );
         }
-        text(
-            items,
-            Layer::Border,
-            Point2::new(x + 1.5, t_lo.y + 3.0),
-            hv,
-            Align::Left,
-            v,
-        );
     }
+    text(
+        items,
+        Layer::Border,
+        Point2::new(t_lo.x + sym_w * 0.5, t_hi.y - 3.0),
+        label,
+        Align::Centre,
+        "CHAMFERA",
+    );
     // The projection symbol (ISO 128-30): a truncated cone, small end left, and its end
     // view as two circles, on the left for third angle and on the right for first angle.
     let (name, third) = match sheet.projection {
@@ -575,6 +588,22 @@ pub fn centre_line_refs(
     }
 }
 
+/// The model reference for a hole callout on the circle `c` (centre and radius, view
+/// coordinates) of view `view`: none when no named circular edge projects onto it.
+pub fn hole_callout_refs(
+    sheet: &Sheet,
+    bodies: &[(&str, &Body)],
+    view: u32,
+    c: (Point2, f64),
+) -> Vec<chamfera_doc::drawing::ModelRef> {
+    match shown(sheet, view, bodies) {
+        Ok((s, basis, _)) => refs::hole_ref(c.0, c.1, &basis, &s.bodies())
+            .into_iter()
+            .collect(),
+        Err(_) => Vec::new(),
+    }
+}
+
 fn centre_of(bodies: &[&Body]) -> Point3 {
     let mut bbox: Option<chamfera_geom::Aabb> = None;
     for b in bodies {
@@ -600,6 +629,16 @@ pub fn render_with_parts(
     sheet: &Sheet,
     bodies: &[(&str, &Body)],
     parts: &[PartRow],
+) -> DrawingResult<SheetGeometry> {
+    render_full(sheet, bodies, parts, &[])
+}
+
+/// [`render_with_parts`] with what the hole callouts say about each hole feature.
+pub fn render_full(
+    sheet: &Sheet,
+    bodies: &[(&str, &Body)],
+    parts: &[PartRow],
+    holes: &[HoleNote],
 ) -> DrawingResult<SheetGeometry> {
     let (w, h) = sheet.size();
     let mut out = SheetGeometry {
@@ -681,7 +720,7 @@ pub fn render_with_parts(
         });
     }
     let views = std::mem::take(&mut out.views);
-    annotations(sheet, &views, &models, parts, &mut out);
+    annotations(sheet, &views, &models, parts, holes, &mut out);
     out.views = views;
     if let Some(pl) = &sheet.parts_list {
         let start = out.items.len();
@@ -943,6 +982,7 @@ fn annotations(
     views: &[PlacedView],
     models: &HashMap<u32, (Shown, Basis, Option<section::Cut>)>,
     parts: &[PartRow],
+    holes: &[HoleNote],
     out: &mut SheetGeometry,
 ) {
     let mut owners = Vec::new();
@@ -1019,6 +1059,63 @@ fn annotations(
                     }
                 };
                 annot::balloon(items, *at, v.to_sheet(*target), &number, layer);
+            }
+            AnnotationKind::HoleCallout {
+                view,
+                feature,
+                at,
+                target,
+                refs: r,
+            } => {
+                let Some(v) = views.iter().find(|x| x.id == *view) else {
+                    continue;
+                };
+                let model = models.get(view).or_else(|| {
+                    sheet
+                        .view(*view)
+                        .and_then(|x| x.detail.as_ref())
+                        .and_then(|d| models.get(&d.from))
+                });
+                let now = match model {
+                    Some((s, basis, _)) => refs::resolve_circle(*target, r, basis, &s.bodies()),
+                    None => Err("its view shows no model".into()),
+                };
+                let note = holes.iter().find(|h| h.feature == *feature);
+                let (centre, radius, layer) = match (now, note) {
+                    (Ok((c, radius)), Some(_)) => (c, radius, Layer::Dim),
+                    (Err(e), _) => {
+                        out.dangling_annotations.push((a.id, e));
+                        (*target, None, Layer::Dangling)
+                    }
+                    (Ok((c, radius)), None) => {
+                        out.dangling_annotations
+                            .push((a.id, format!("feature {feature} is not a hole any more")));
+                        (c, radius, Layer::Dangling)
+                    }
+                };
+                // The hole's outline: its edge's radius, else the largest circle of the
+                // view about its centre.
+                let radius = radius.unwrap_or_else(|| {
+                    v.geometry
+                        .curves
+                        .iter()
+                        .filter_map(|c| match c.curve {
+                            Curve2::Circle { centre: k, radius } if k.distance(centre) < 1e-6 => {
+                                Some(radius)
+                            }
+                            _ => None,
+                        })
+                        .fold(0.0, f64::max)
+                });
+                let lines = note.map_or_else(|| vec!["?".to_owned()], |n| n.lines.clone());
+                annot::hole_callout(
+                    items,
+                    *at,
+                    v.to_sheet(centre),
+                    radius * v.scale,
+                    &lines,
+                    layer,
+                );
             }
         }
         owners.push((Owner::Annotation(a.id), start..items.len()));

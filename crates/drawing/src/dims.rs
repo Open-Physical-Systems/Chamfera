@@ -47,6 +47,8 @@ pub fn measure(kind: DimensionKind, points: &[Point2]) -> Option<f64> {
         DimensionKind::Aligned => p(0)?.distance(p(1)?),
         DimensionKind::Diameter => 2.0 * p(0)?.distance(p(1)?),
         DimensionKind::Radius => p(0)?.distance(p(1)?),
+        DimensionKind::OrdinateX => p(1)?.x - p(0)?.x,
+        DimensionKind::OrdinateY => p(1)?.y - p(0)?.y,
         DimensionKind::Angular => {
             let (v, a, b) = (p(0)?, p(1)?, p(2)?);
             let (u, w) = (a - v, b - v);
@@ -161,7 +163,11 @@ pub fn plan_dimension(
             .ok_or_else(|| bad(format!("a {} dimension needs more points", kind.id())))
     };
     let points = match kind {
-        DimensionKind::Horizontal | DimensionKind::Vertical | DimensionKind::Aligned => {
+        DimensionKind::Horizontal
+        | DimensionKind::Vertical
+        | DimensionKind::Aligned
+        | DimensionKind::OrdinateX
+        | DimensionKind::OrdinateY => {
             let mut out = Vec::new();
             for i in 0..2 {
                 let p = pick(i)?;
@@ -237,7 +243,7 @@ pub fn plan_dimension(
     };
     let value =
         measure(kind, &points).ok_or_else(|| bad("the picked points give no finite value"))?;
-    if kind != DimensionKind::Angular && value <= 1e-6 {
+    if kind != DimensionKind::Angular && !kind.is_ordinate() && value <= 1e-6 {
         return Err(bad(
             "the two points are the same: the dimension would be zero",
         ));
@@ -350,6 +356,8 @@ pub fn moved_offset(d: &SheetDimension, view: &PlacedView, delta: Vec2) -> Optio
             let u = (p - c).normalized()?;
             Some((off.abs().max(ARROW_LENGTH) + delta.dot(u)).max(ARROW_LENGTH))
         }
+        (DimensionKind::OrdinateX, &[_, _]) => Some(off + delta.y),
+        (DimensionKind::OrdinateY, &[_, _]) => Some(off + delta.x),
         (DimensionKind::Angular, &[v, a, b]) => {
             let mid = ((a - v).normalized()? + (b - v).normalized()?).normalized()?;
             let r = if off.abs() > ARROW_LENGTH {
@@ -433,6 +441,17 @@ pub(crate) fn draw(d: &SheetDimension, view: &PlacedView, items: &mut Vec<Item>)
                 s,
             );
         }
+        (DimensionKind::OrdinateX | DimensionKind::OrdinateY, &[o, p]) => {
+            ordinate(
+                items,
+                d.kind == DimensionKind::OrdinateX,
+                o,
+                p,
+                off,
+                value,
+                s,
+            );
+        }
         (DimensionKind::Angular, &[v, a, b]) => {
             let a1 = (a.y - v.y).atan2(a.x - v.x);
             let a2 = (b.y - v.y).atan2(b.x - v.x);
@@ -486,4 +505,54 @@ pub(crate) fn draw(d: &SheetDimension, view: &PlacedView, items: &mut Vec<Item>)
         }
         _ => {}
     }
+}
+
+/// The radius of the small circle that marks an ordinate set's origin (ISO 129-1).
+const ORIGIN_MARK: f64 = 1.0;
+
+/// An ordinate dimension from origin `o` to the point `p` (sheet mm): an extension line
+/// from `p` across the measured axis to the line `offset` beyond the origin (above it
+/// along x, right of it along y), the value written along its end. The zero dimension
+/// at the origin also gets the origin's small circle.
+fn ordinate(
+    items: &mut Vec<Item>,
+    along_x: bool,
+    o: Point2,
+    p: Point2,
+    off: f64,
+    v: f64,
+    s: String,
+) {
+    let end = if along_x {
+        Point2::new(p.x, o.y + off)
+    } else {
+        Point2::new(o.x + off, p.y)
+    };
+    let d = end - p;
+    let len = d.length();
+    if len <= EXT_GAP {
+        return;
+    }
+    let u = d * (1.0 / len);
+    push_line(items, p + u * EXT_GAP, end);
+    // The origin's circle sits just beyond the line's end, clear of the value.
+    if v.abs() < 1e-9 {
+        items.push(Item {
+            layer: Layer::Dim,
+            shape: Shape::Circle {
+                centre: end + u * ORIGIN_MARK,
+                radius: ORIGIN_MARK,
+            },
+        });
+    }
+    // The text runs along the line's end, read from below or from the right; it sits
+    // above a horizontal line and left of a vertical one, like any dimension's value.
+    let (angle, side) = if along_x {
+        (FRAC_PI_2, Vec2::new(-TEXT_GAP, 0.0))
+    } else {
+        (0.0, Vec2::new(0.0, TEXT_GAP))
+    };
+    let outward = if along_x { u.y > 0.0 } else { u.x > 0.0 };
+    let align = if outward { Align::Right } else { Align::Left };
+    label(items, end + side, angle, align, s);
 }

@@ -38,6 +38,13 @@ pub(crate) enum DrawTool {
     CentreLine,
     /// A view whose components get balloons.
     Balloons,
+    /// The origin, then each point measured from it, one ordinate dimension a click.
+    Ordinate,
+    /// Points from a baseline (the first click) or along a chain; Enter places them.
+    Baseline,
+    Chain,
+    /// A hole's circle, then where its callout goes.
+    HoleCallout,
 }
 
 /// The drawing workspace's state.
@@ -64,6 +71,8 @@ pub(crate) struct DrawingUi {
     pub selected: Option<Owner>,
     /// A drag of the selection: where it started and where the pointer is, sheet mm.
     drag: Option<(Point2, Point2)>,
+    /// The Sheet Settings dialog, while it is open (`drawing_sheet_ui.rs`).
+    pub settings: Option<crate::drawing_sheet_ui::SheetForm>,
 }
 
 /// Sheet mm to screen points and back (y up on paper, down on screen).
@@ -211,7 +220,11 @@ impl ChamferaApp {
                 | DrawTool::SurfaceFinish
                 | DrawTool::Gdt
                 | DrawTool::CentreLine
-                | DrawTool::Balloons),
+                | DrawTool::Balloons
+                | DrawTool::Ordinate
+                | DrawTool::Baseline
+                | DrawTool::Chain
+                | DrawTool::HoleCallout),
             ) => self.drawing_tool_click(t, p),
             Some(DrawTool::PlaceView(d)) => {
                 let mut params = json!({ "view": d.id(), "x": p.x, "y": p.y });
@@ -326,6 +339,16 @@ impl ChamferaApp {
             self.drawing.tool = None;
             self.drawing.picks.clear();
             self.drawing.selected = None;
+        }
+        let enter =
+            !ui.ctx().egui_wants_keyboard_input() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        if enter
+            && matches!(
+                self.drawing.tool,
+                Some(DrawTool::Baseline | DrawTool::Chain)
+            )
+        {
+            self.drawing_finish_set();
         }
         // The paper and its shadow.
         let lo = m.to_screen(Point2::new(0.0, size.1));
@@ -474,6 +497,12 @@ impl ChamferaApp {
         }
         self.drawing_options_dialog(ui.ctx(), rect);
         self.sheet_picker(ui.ctx(), rect);
+        self.sheet_settings_dialog(ui.ctx());
+    }
+
+    /// Fits the sheet in the canvas on the next frame (after its size changed).
+    pub(crate) fn drawing_refit(&mut self) {
+        self.drawing.view = None;
     }
 
     /// The sheets of the design, by id and name, for the sheet picker.
@@ -493,6 +522,7 @@ impl ChamferaApp {
             self.drawing.sheet = Some(id);
             self.drawing.selected = None;
             self.drawing.view = None;
+            self.drawing.settings = None;
         }
     }
 
