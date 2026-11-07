@@ -224,11 +224,11 @@ fn the_title_block_shows_number_revision_material_and_checker() {
             align: Align::Left,
             ..
         } = &i.shape
+            && at.y < 40.0
+            && at.x > 230.0
         {
-            if at.y < 40.0 && at.x > 230.0 {
-                let right = at.x + text_width(text, *height);
-                assert!(right <= 410.0 + EPS, "{text} runs out to {right}");
-            }
+            let right = at.x + text_width(text, *height);
+            assert!(right <= 410.0 + EPS, "{text} runs out to {right}");
         }
     }
     // A long value shrinks to fit its cell rather than running over the next one.
