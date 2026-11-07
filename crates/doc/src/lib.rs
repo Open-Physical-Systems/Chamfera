@@ -134,13 +134,17 @@ use thiserror::Error;
 ///   cylinders and cones), the holder check of parallel and adaptive operations
 ///   (`holder_check`), and the `pencil` and `scallop` (experimental) finishing
 ///   operations. Older files open unchanged: every new field is optional.
-/// - 37: solid modelling options: fillets and chamfers that follow tangent chains
+/// - 37: sketch constraints v2: `concentric`, `collinear`, `horizontal_points` and
+///   `vertical_points` constraints; `horizontal_distance`, `vertical_distance` and
+///   `arc_length` dimensions; and driven (reference) dimensions, marked `driven: true` on
+///   their constraint record. Older files open unchanged.
+/// - 38: solid modelling options: fillets and chamfers that follow tangent chains
 ///   (`tangent_chain`), chamfers with two distances (`distance2`) or a distance and an
 ///   angle (`angle`) from a reference face (`reference_face`, `flip`); thin extrudes
 ///   (`thin`: thickness, side and an optional open chain of `curves`); holes that go to a
 ///   face (`to`); and cosmetic threads (`kind: thread`). Older files open unchanged: every
 ///   new field is optional.
-pub const FORMAT_VERSION: u32 = 37;
+pub const FORMAT_VERSION: u32 = 38;
 /// The tag every design file starts with, so other JSON is not mistaken for a design.
 pub const FORMAT_TAG: &str = "chamfera";
 /// Longest parameter name.

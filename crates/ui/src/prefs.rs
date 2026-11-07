@@ -23,6 +23,12 @@ pub const MAX_GRID: f64 = 100_000.0;
 /// Autosave interval range in seconds (0 turns autosave off).
 pub const MIN_AUTOSAVE_SECS: u32 = 10;
 pub const MAX_AUTOSAVE_SECS: u32 = 3600;
+/// The snap radius range (pixels).
+pub const MIN_SNAP_RADIUS_PX: f64 = 2.0;
+pub const MAX_SNAP_RADIUS_PX: f64 = 40.0;
+/// The polar tracking step range (degrees).
+pub const MIN_POLAR_STEP_DEG: f64 = 1.0;
+pub const MAX_POLAR_STEP_DEG: f64 = 90.0;
 /// Version history limits: versions kept, and megabytes of snapshots.
 pub const MAX_HISTORY_COUNT: usize = 1000;
 pub const MAX_HISTORY_MB: u64 = 100_000;
@@ -48,6 +54,8 @@ pub struct Preferences {
     pub grid_spacing: Option<f64>,
     /// Sketch clicks on empty space snap to the grid.
     pub snap_to_grid: bool,
+    /// Object snaps and tracking while drawing.
+    pub snaps: SnapPrefs,
     /// The Assistant panel (the API key is not here: it has a file of its own).
     pub assistant: AssistantPrefs,
     /// Seconds of unsaved changes before they are written to a recovery file (0: never).
@@ -58,6 +66,78 @@ pub struct Preferences {
     pub history_mb: u64,
     /// Show the welcome panel when the app starts with nothing to open.
     pub show_welcome: bool,
+}
+
+/// Object snaps and tracking while drawing in a sketch.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SnapPrefs {
+    /// The object snaps that are on.
+    pub kinds: chamfera_sketch::SnapKinds,
+    /// How near the cursor a snap or guide must be (pixels).
+    pub radius_px: f64,
+    /// Alignment guides through existing points.
+    pub alignment: bool,
+    /// Perpendicular and tangent guides from the line or arc a new line starts on,
+    /// kept by a constraint.
+    pub infer: bool,
+    /// Polar guides at whole multiples of `polar_step_deg`.
+    pub polar: bool,
+    pub polar_step_deg: f64,
+}
+
+impl Default for SnapPrefs {
+    fn default() -> Self {
+        Self {
+            kinds: chamfera_sketch::SnapKinds::ALL,
+            radius_px: chamfera_engine::sketching::PICK_POINT_PX,
+            alignment: true,
+            infer: true,
+            polar: false,
+            polar_step_deg: 15.0,
+        }
+    }
+}
+
+impl SnapPrefs {
+    fn to_json(self) -> Value {
+        let kinds: Map<String, Value> = chamfera_sketch::SnapKind::ALL
+            .into_iter()
+            .map(|k| (k.key().to_owned(), Value::Bool(self.kinds.contains(k))))
+            .collect();
+        json!({
+            "kinds": kinds,
+            "radius_px": self.radius_px,
+            "alignment": self.alignment,
+            "infer": self.infer,
+            "polar": self.polar,
+            "polar_step_deg": self.polar_step_deg,
+        })
+    }
+
+    fn read(&mut self, m: &Map<String, Value>) {
+        if let Some(Value::Object(k)) = m.get("kinds") {
+            for kind in chamfera_sketch::SnapKind::ALL {
+                if let Some(on) = boolean(k, kind.key()) {
+                    self.kinds = self.kinds.with(kind, on);
+                }
+            }
+        }
+        if let Some(r) = number(m, "radius_px", MIN_SNAP_RADIUS_PX, MAX_SNAP_RADIUS_PX) {
+            self.radius_px = r;
+        }
+        if let Some(b) = boolean(m, "alignment") {
+            self.alignment = b;
+        }
+        if let Some(b) = boolean(m, "infer") {
+            self.infer = b;
+        }
+        if let Some(b) = boolean(m, "polar") {
+            self.polar = b;
+        }
+        if let Some(s) = number(m, "polar_step_deg", MIN_POLAR_STEP_DEG, MAX_POLAR_STEP_DEG) {
+            self.polar_step_deg = s;
+        }
+    }
 }
 
 /// The Assistant's settings.
@@ -96,6 +176,7 @@ impl Default for Preferences {
             navigation: Navigation::default(),
             grid_spacing: None,
             snap_to_grid: false,
+            snaps: SnapPrefs::default(),
             assistant: AssistantPrefs::default(),
             autosave_secs: 60,
             history_count: 50,
@@ -171,6 +252,7 @@ impl Preferences {
             "history_count": self.history_count,
             "history_mb": self.history_mb,
             "snap_to_grid": self.snap_to_grid,
+            "snaps": self.snaps.to_json(),
             "show_welcome": self.show_welcome,
             "assistant": {
                 "model": self.assistant.model.id(),
@@ -236,6 +318,9 @@ impl Preferences {
         p.grid_spacing = number(&m, "grid_spacing", MIN_GRID, MAX_GRID);
         if let Some(b) = boolean(&m, "snap_to_grid") {
             p.snap_to_grid = b;
+        }
+        if let Some(Value::Object(s)) = m.get("snaps") {
+            p.snaps.read(s);
         }
         if let Some(b) = boolean(&m, "show_welcome") {
             p.show_welcome = b;
@@ -387,6 +472,16 @@ mod tests {
             },
             grid_spacing: Some(5.0),
             snap_to_grid: true,
+            snaps: SnapPrefs {
+                kinds: chamfera_sketch::SnapKinds::ALL
+                    .with(chamfera_sketch::SnapKind::Midpoint, false)
+                    .with(chamfera_sketch::SnapKind::OnCurve, false),
+                radius_px: 14.0,
+                alignment: false,
+                infer: false,
+                polar: true,
+                polar_step_deg: 30.0,
+            },
             assistant: AssistantPrefs {
                 model: chamfera_assistant::Model::Sonnet,
                 effort: chamfera_assistant::Effort::High,
@@ -437,6 +532,9 @@ mod tests {
             r#"{"assistant": [1], "api_key": "sk-ant-not-read-from-here"}"#.into(),
             r#"{"autosave_secs": 5, "history_count": 0, "history_mb": 1e300}"#.into(),
             r#"{"autosave_secs": -1, "history_count": "9", "history_mb": -4}"#.into(),
+            r#"{"snaps": {"kinds": {"endpoint": 1, "chaos": false}, "radius_px": 1e9}}"#.into(),
+            r#"{"snaps": {"radius_px": -2, "polar_step_deg": 0, "polar": "on"}}"#.into(),
+            r#"{"snaps": [true], "kinds": {"midpoint": false}}"#.into(),
         ];
         for c in &cases {
             let p = Preferences::from_json(c);
@@ -450,6 +548,7 @@ mod tests {
                     .is_none_or(|g| (MIN_GRID..=MAX_GRID).contains(&g))
             );
             assert_eq!(p.assistant, AssistantPrefs::default());
+            assert_eq!(p.snaps, SnapPrefs::default());
             assert!(!p.to_json().contains("sk-ant"));
             // Below the shortest interval, or not a count: the defaults stay.
             assert_eq!(p.autosave_secs, 60);

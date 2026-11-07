@@ -160,7 +160,7 @@ pub struct Extrude {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub to: Option<ExtrudeTo>,
     /// A thin extrude: a wall of this thickness along each profile's loops, or along an
-    /// open chain of the sketch's curves (format 37). `None` extrudes the whole profile.
+    /// open chain of the sketch's curves (format 38). `None` extrudes the whole profile.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thin: Option<Thin>,
 }
@@ -325,20 +325,20 @@ pub struct Blend {
     /// unequal chamfer's distance on each edge's reference face.
     pub size: String,
     /// Also blend every edge that continues a named one tangentially, found again at
-    /// every rebuild (format 37).
+    /// every rebuild (format 38).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub tangent_chain: bool,
-    /// A chamfer's distance on each edge's other face (two distances, format 37).
+    /// A chamfer's distance on each edge's other face (two distances, format 38).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub distance2: Option<String>,
-    /// A chamfer's angle from each edge's reference face (distance and angle, format 37).
+    /// A chamfer's angle from each edge's reference face (distance and angle, format 38).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub angle: Option<String>,
     /// The face (`2:top`) that takes `size` on every edge bounding it; other edges use the
-    /// face their first half-edge lies in (format 37).
+    /// face their first half-edge lies in (format 38).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reference_face: Option<String>,
-    /// Swap each edge's reference face for its other face (format 37).
+    /// Swap each edge's reference face for its other face (format 38).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub flip: bool,
 }
@@ -458,7 +458,7 @@ pub struct Hole {
     #[serde(default)]
     pub tip_angle: Option<String>,
     /// A flat face parallel to the hole's face that the hole goes down to, ending flat on
-    /// it, instead of `depth` (format 37). Found again by name at every rebuild.
+    /// it, instead of `depth` (format 38). Found again by name at every rebuild.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub to: Option<crate::FaceRef>,
 }
@@ -622,7 +622,7 @@ pub enum FeatureKind {
     Remove(crate::body_tools::RemoveBodies),
     /// A surface body feature: swept surfaces, patch, stitch, trim (format 28).
     Surface(crate::surface::SurfaceFeature),
-    /// A cosmetic thread on a cylindrical face (format 37).
+    /// A cosmetic thread on a cylindrical face (format 38).
     Thread(crate::thread::Thread),
 }
 

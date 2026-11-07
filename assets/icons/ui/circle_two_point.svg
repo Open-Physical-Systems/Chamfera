@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+  <!-- Chamfera interface icon: circle two point. Original artwork, MIT OR Apache-2.0. -->
+  <circle cx="12" cy="12" r="7.75" stroke="#2B313B"/>
+  <path stroke="#2B313B" stroke-dasharray="1 2.5" d="M4.25 12h15.5"/>
+  <circle cx="4.25" cy="12" r="2.1" fill="#E8770E" stroke="none"/>
+  <circle cx="19.75" cy="12" r="2.1" fill="#E8770E" stroke="none"/>
+</svg>

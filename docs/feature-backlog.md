@@ -36,43 +36,43 @@ Close runners-up: selection filters and box selection (UI and NAV), splines (nee
 |---|---|---|---|---|---|
 | Sketch on origin planes | Start a sketch on XY, XZ or YZ | done | P0 | S | doc, engine, ui |
 | Sketch on a flat face | Sketch on a planar face; the sketch follows the face on rebuild | done | P0 | M | doc, engine |
-| Sketch on a construction plane | Sketch on any user-made plane | missing | P0 | S | doc, engine |
+| Sketch on a construction plane | Sketch on any user-made plane | done (`sketch.create {plane: <plane id>}`; follows the plane) | P0 | S | doc, engine |
 | Line (chained) | Click-click line chains that close on the first point | done | P0 | S | sketch, ui |
 | Two-point rectangle | Rectangle from two corners | done | P0 | S | sketch, ui |
-| Centre rectangle | Rectangle from centre and a corner | branch (`sketch/tools`) | P0 | S | sketch, ui |
-| Three-point rectangle | Rectangle at any angle from three points | missing | P1 | S | sketch, ui |
+| Centre rectangle | Rectangle from centre and a corner | done | P0 | S | sketch, ui |
+| Three-point rectangle | Rectangle at any angle from three points | done (`sketch.rectangle.three_point`, 3-Point Rectangle tool) | P1 | S | sketch, ui |
 | Centre-diameter circle | Circle from centre and radius | done | P0 | S | sketch, ui |
-| Two-point, three-point and tangent circles | Circle through points, or tangent to two or three curves | missing | P1 | S | sketch, ui |
+| Two-point, three-point and tangent circles | Circle through points, or tangent to two or three curves | done (`sketch.circle.two_point`, `.three_point`, `.tangent` to two curves and a radius or three curves; tools) | P1 | S | sketch, ui |
 | Centre-point arc | Arc from centre, start, end | done | P0 | S | sketch, ui |
-| Three-point arc | Arc through start, a middle point, end | branch (`sketch/tools`) | P0 | S | sketch, ui |
-| Tangent arc | Arc that continues tangentially from a line end | branch (`sketch/tools`) | P0 | S | sketch, ui |
+| Three-point arc | Arc through start, a middle point, end | done | P0 | S | sketch, ui |
+| Tangent arc | Arc that continues tangentially from a line end | done | P0 | S | sketch, ui |
 | Point | A free sketch point | done | P0 | S | sketch |
 | Construction toggle | Mark a curve as construction (not part of profiles) | done | P0 | S | sketch, ui |
-| Polygon | Regular polygon, inscribed or circumscribed, by centre or edge | branch (`sketch/shapes-project`) (by centre) | P0 | S | sketch, ui |
-| Slot | Straight slot by centres or overall length, arc slot | branch (`sketch/shapes-project`) (straight) | P0 | S | sketch, ui |
-| Ellipse | Ellipse by centre and two axes (kernel ellipses exist) | branch (`sketch/shapes-project`) (not extruded yet) | P1 | S | sketch, ui |
-| Elliptical arc | Partial ellipse | branch (`sketch/shapes-project`) (command only) | P2 | S | sketch |
+| Polygon | Regular polygon, inscribed or circumscribed, by centre or edge | done (by centre; not by edge) | P0 | S | sketch, ui |
+| Slot | Straight slot by centres or overall length, arc slot | done (straight; no arc slot) | P0 | S | sketch, ui |
+| Ellipse | Ellipse by centre and two axes (kernel ellipses exist) | done (not extruded yet) | P1 | S | sketch, ui |
+| Elliptical arc | Partial ellipse | done (command only) | P2 | S | sketch |
 | Conic curve | A conic with a shape value (rho) between two ends | missing | P2 | M | sketch, geom |
-| Fit-point spline | Smooth curve through clicked points, with tangent handles | branch (`kernel/k10-splines`): `sketch.spline`, Spline tool, open and closed, extrudes; tangent handles and end-tangent constraints not yet | P1 | L | sketch, geom (needs K10) |
-| Control-point spline | Spline edited by its control polygon | branch (`kernel/k10-splines`): `sketch.spline {kind: control}`, open and closed; no UI tool of its own yet | P1 | M | sketch, geom (needs K10) |
+| Fit-point spline | Smooth curve through clicked points, with tangent handles | done (`sketch.spline`, Spline tool, open and closed, extrudes; tangent handles and end-tangent constraints not yet) | P1 | L | sketch, geom (needs K10) |
+| Control-point spline | Spline edited by its control polygon | done (`sketch.spline {kind: control}`; no UI tool of its own yet) | P1 | M | sketch, geom (needs K10) |
 | Sketch text | Text as closed profiles, with a font, height and alignment on a path | missing | P2 | L | sketch, io (font parsing) |
-| Trim | Delete the piece of a curve between crossings | branch (`sketch/tools`) | P0 | M | sketch, engine, ui |
-| Extend | Lengthen a curve to the next one it meets | branch (`sketch/tools`) | P0 | S | sketch, engine, ui |
-| Split / break | Cut a curve at a point or at its crossings | branch (`sketch/tools`) | P0 | S | sketch, engine |
-| Sketch fillet | Round a corner between two curves with a tangent arc | branch (`sketch/tools`) | P0 | S | sketch, engine |
-| Sketch chamfer | Bevel a corner between two lines | branch (`sketch/tools`) | P1 | S | sketch, engine |
-| Offset | Parallel copy of a chain at a distance | branch (`sketch/tools`) | P0 | M | sketch, engine |
-| Sketch mirror | Mirror curves across a line, with symmetry constraints | branch (`sketch/tools`) | P0 | S | sketch, engine |
-| Sketch rectangular and circular patterns | Repeat curves in a grid or around a point | branch (`sketch/tools`) | P1 | S | sketch, engine |
-| Move, rotate, scale, copy sketch geometry | Transform selected curves by drag or typed values | missing | P1 | M | sketch, engine, ui |
-| Project / include geometry | Bring model edges, faces and other sketch curves into the sketch, linked to their source | branch (`sketch/shapes-project`) (edges and faces) | P0 | M | sketch, doc, engine |
+| Trim | Delete the piece of a curve between crossings | done | P0 | M | sketch, engine, ui |
+| Extend | Lengthen a curve to the next one it meets | done | P0 | S | sketch, engine, ui |
+| Split / break | Cut a curve at a point or at its crossings | done | P0 | S | sketch, engine |
+| Sketch fillet | Round a corner between two curves with a tangent arc | done | P0 | S | sketch, engine |
+| Sketch chamfer | Bevel a corner between two lines | done | P1 | S | sketch, engine |
+| Offset | Parallel copy of a chain at a distance | done | P0 | M | sketch, engine |
+| Sketch mirror | Mirror curves across a line, with symmetry constraints | done | P0 | S | sketch, engine |
+| Sketch rectangular and circular patterns | Repeat curves in a grid or around a point | done | P1 | S | sketch, engine |
+| Move, rotate, scale, copy sketch geometry | Transform selected curves by drag or typed values | done (typed values: `sketch.move`, `sketch.rotate`, `sketch.scale` with `copy`, Move/Copy tool; no drag handles) | P1 | M | sketch, engine, ui |
+| Project / include geometry | Bring model edges, faces and other sketch curves into the sketch, linked to their source | done (edges and faces) | P0 | M | sketch, doc, engine |
 | Intersection curve | Curve where the sketch plane cuts a body | missing | P1 | M | kernel, sketch |
 | Project to surface / wrap | Project curves onto a curved face | missing | P2 | L | kernel |
 | 3D sketch | Curves in space, not on one plane (paths for sweeps) | missing | P2 | L | sketch, doc |
 | Profile detection | Closed regions, holes, nested profiles found automatically | done | P0 | M | sketch |
-| Splitting curves at crossings for profiles | Overlapping curves form regions without trimming first | missing | P0 | M | sketch |
+| Splitting curves at crossings for profiles | Overlapping curves form regions without trimming first | done (lines, arcs and circles: crossings, T-junctions and overlaps on one line; not ellipses or splines) | P0 | M | sketch |
 | Large sketches | Sparse solver for sketches with thousands of entities | missing | P2 | L | sketch |
-| Import DXF into a sketch | Bring 2D drawings in as sketch curves (`sketch.import_dxf`) | branch (`io/formats`) | P1 | M | io, sketch |
+| Import DXF into a sketch | Bring 2D drawings in as sketch curves (`sketch.import_dxf`) | done | P1 | M | io, sketch |
 | Import SVG into a sketch | Bring vector drawings in as sketch curves | missing | P1 | M | io, sketch |
 | Copy and paste sketch geometry | Clipboard for curves between sketches | missing | P2 | S | engine, ui |
 
@@ -89,21 +89,21 @@ Close runners-up: selection filters and box selection (UI and NAV), splines (nee
 | Fix / lock | Pin a point | done | P0 | S | sketch |
 | Midpoint | Point at the middle of a line | done | P0 | S | sketch |
 | Symmetric | Two points mirrored about a line | done | P0 | S | sketch |
-| Concentric | Two circles or arcs share a centre (now done by coincident centres; a direct tool is expected) | missing | P0 | S | sketch, ui |
-| Collinear | Two lines on one infinite line | missing | P0 | S | sketch |
-| Horizontal/vertical between two points | Align two points along an axis | missing | P1 | S | sketch |
+| Concentric | Two circles or arcs share a centre | done | P0 | S | sketch, ui |
+| Collinear | Two lines on one infinite line | done | P0 | S | sketch |
+| Horizontal/vertical between two points | Align two points along an axis | done | P1 | S | sketch |
 | Curvature continuity (G2) | Smooth join for splines | missing | P2 | M | sketch (needs splines) |
 | Linear dimensions | Distance between points, point to line, line length | done | P0 | S | sketch, ui |
 | Radius and diameter dimensions | On circles and arcs | done | P0 | S | sketch, ui |
 | Angle dimension | Between two lines | done | P0 | S | sketch, ui |
-| Aligned / horizontal / vertical dimension choice | Pick which direction a linear dimension measures by where it is placed | missing | P0 | S | sketch, ui |
-| Arc length dimension | Length along an arc | missing | P1 | S | sketch |
-| Driven (reference) dimensions | A dimension that shows a value without constraining it | missing | P1 | S | sketch, doc |
+| Aligned / horizontal / vertical dimension choice | Pick which direction a linear dimension measures by where it is placed | done (`sketch.dimension_selection {x, y}` or `direction`; the D key uses the cursor) | P0 | S | sketch, ui |
+| Arc length dimension | Length along an arc | done | P1 | S | sketch |
+| Driven (reference) dimensions | A dimension that shows a value without constraining it | done (`sketch.dimension.driven`; a dimension that would over-constrain becomes driven) | P1 | S | sketch, doc |
 | Dimensions as expressions | Type `width/2` or a parameter name into a dimension | done | P0 | S | doc, sketch |
 | Inline dimension editing | Edit a value in place on the canvas | done | P0 | S | ui |
 | DOF analysis and colour feedback | Under, fully and over-constrained shown; redundant and conflicting constraints reported | done | P0 | M | sketch, ui |
 | Constraint glyphs on canvas | Small markers showing each constraint; click to select or delete | missing | P0 | M | ui, render |
-| Automatic constraints while drawing | Horizontal/vertical, coincident, tangent, perpendicular added as you draw (H/V and coincident done) | missing | P0 | M | engine, ui |
+| Automatic constraints while drawing | Horizontal/vertical, coincident, tangent, perpendicular added as you draw (H/V and coincident done) | done (H/V, coincident and the snap constraints; a line started on the end of a line or arc is held at right angles or along the tangent and gets that constraint, `crates/sketch/src/track.rs`) | P0 | M | engine, ui |
 | Auto-constrain / auto-dimension | Fully constrain a sketch in one step | missing | P2 | M | sketch |
 | Drag with constraints | Drag a point; the sketch follows its constraints | done | P0 | S | sketch, ui |
 | Show unconstrained geometry | Highlight what can still move | done | P0 | S | ui |
@@ -115,18 +115,18 @@ Close runners-up: selection filters and box selection (UI and NAV), splines (nee
 |---|---|---|---|---|---|
 | Snap to existing points | Clicks near a point reuse it | done | P0 | S | engine, ui |
 | Horizontal/vertical inference | Lines within a small angle become horizontal or vertical | done | P0 | S | engine |
-| Endpoint, midpoint, centre, quadrant snaps | The usual object snaps, shown with a marker as the cursor nears them | missing | P0 | M | ui, engine |
-| On-curve, intersection, tangent, perpendicular, nearest snaps | Snaps to points on or between curves | missing | P0 | M | ui, engine, sketch |
-| Snap settings | Choose which snaps are active, and a snap radius in pixels | missing | P1 | S | ui |
-| Alignment (tracking) lines | Dashed guide when the cursor lines up with another point horizontally or vertically | missing | P1 | M | ui |
-| Polar tracking | Guides at a chosen angle step (for example every 15 degrees) | missing | P1 | S | ui |
-| Ortho mode | Force lines horizontal or vertical while held or toggled | missing | P1 | S | ui |
-| Hold a modifier to suspend snapping | Draw freely without inference | missing | P0 | S | ui |
-| Typed length and angle while drawing | Fields next to the cursor; Tab moves between them; Enter places | missing | P0 | M | ui |
+| Endpoint, midpoint, centre, quadrant snaps | The usual object snaps, shown with a marker as the cursor nears them | done (`crates/sketch/src/snap.rs`, markers in `sketch_ui.rs`) | P0 | M | ui, engine |
+| On-curve, intersection, tangent, perpendicular, nearest snaps | Snaps to points on or between curves | done (on-curve is the nearest point) | P0 | M | ui, engine, sketch |
+| Snap settings | Choose which snaps are active, and a snap radius in pixels | done (Preferences > Grid and Snap: each snap kind, radius, tracking) | P1 | S | ui |
+| Alignment (tracking) lines | Dashed guide when the cursor lines up with another point horizontally or vertically | done (through every sketch point and the origin; two guides meet at their corner) | P1 | M | ui |
+| Polar tracking | Guides at a chosen angle step (for example every 15 degrees) | done (off by default; step in Preferences) | P1 | S | ui |
+| Ortho mode | Force lines horizontal or vertical while held or toggled | done while held (Shift); no toggle yet | P1 | S | ui |
+| Hold a modifier to suspend snapping | Draw freely without inference | done (Ctrl: no snap, guide, grid or H/V inference) | P0 | S | ui |
+| Typed length and angle while drawing | Fields next to the cursor; Tab moves between them; Enter places | done (line, rectangle, circle) | P0 | M | ui |
 | Typed coordinates | Absolute, relative and polar coordinate entry, AutoCAD style | missing | P1 | M | ui, engine |
-| Sketch grid snap | Snap to a visible sketch grid with a chosen spacing | missing | P1 | S | ui, render |
+| Sketch grid snap | Snap to a visible sketch grid with a chosen spacing | done (Preferences > Grid and Snap) | P1 | S | ui, render |
 | Rubber-band preview | Show the curve being drawn before the click | done | P0 | S | ui |
-| Dimensions shown while drawing | Live length/angle readout | missing | P0 | S | ui |
+| Dimensions shown while drawing | Live length/angle readout | done (live values in the heads-up fields) | P0 | S | ui |
 
 ## 4. Solid features
 

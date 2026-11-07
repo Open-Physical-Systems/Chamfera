@@ -7,7 +7,12 @@
 //! with a marker and its name shown, and the snap's constraint is added with the new
 //! geometry; Shift holds a segment horizontal or vertical (Shift+Alt: 15 degree steps);
 //! typing a number fills the heads-up fields beside the cursor (Tab moves on, Enter
-//! places), and the typed values become dimensions.
+//! places), and the typed values become dimensions. With no snap near, tracking guides
+//! (`chamfera_sketch::track`) line the cursor up with existing points, hold a line at
+//! right angles to the line it starts on or along the tangent of the arc (adding that
+//! constraint), or on polar steps. Ctrl held places freely: no snap, guide, grid or
+//! horizontal/vertical inference. Which snaps and guides are on, and their radius, are
+//! preferences (`prefs::SnapPrefs`).
 
 use crate::icons::Icon;
 use crate::widgets;
@@ -16,8 +21,8 @@ use chamfera_engine::sketching::{PICK_CURVE_PX, PICK_POINT_PX, SketchItem, curve
 use chamfera_geom::{Point2, Point3};
 use chamfera_render::{Overlay, OverlayStyle, mat_mul, transform_point};
 use chamfera_sketch::{
-    Constraint, CurveId, OffsetCorners, PointId, Snap, SnapKind, SnapQuery, ToolOp,
-    exact_direction, lock_angle, lock_straight,
+    Constraint, CurveId, GuideKind, OffsetCorners, PointId, Snap, SnapKind, SnapQuery, ToolOp,
+    Track, TrackQuery, exact_direction, lock_angle, lock_straight,
 };
 use egui::{Pos2, Rect, Vec2};
 use serde_json::{Value, json};
@@ -42,18 +47,42 @@ pub enum Tool {
     Trim,
     Extend,
     Split,
-    // The shape tools and Project live in `sketch_shapes.rs`.
+    // The shape tools, Project and Move/Copy live in `sketch_shapes.rs`.
     Polygon,
     Slot,
     Ellipse,
     Project,
+    ThreePointRectangle,
+    TwoPointCircle,
+    ThreePointCircle,
+    TangentCircle,
+    Transform,
 }
 
-pub(crate) const CREATE_ALL: [Tool; 16] = [
+/// The tools `sketch_shapes.rs` handles, for the `match`es below.
+macro_rules! shape_tools {
+    () => {
+        Tool::Polygon
+            | Tool::Slot
+            | Tool::Ellipse
+            | Tool::Project
+            | Tool::ThreePointRectangle
+            | Tool::TwoPointCircle
+            | Tool::ThreePointCircle
+            | Tool::TangentCircle
+            | Tool::Transform
+    };
+}
+
+pub(crate) const CREATE_ALL: [Tool; 20] = [
     Tool::Line,
     Tool::Rectangle,
     Tool::CentreRectangle,
+    Tool::ThreePointRectangle,
     Tool::Circle,
+    Tool::TwoPointCircle,
+    Tool::ThreePointCircle,
+    Tool::TangentCircle,
     Tool::Arc,
     Tool::ThreePointArc,
     Tool::TangentArc,
@@ -68,12 +97,13 @@ pub(crate) const CREATE_ALL: [Tool; 16] = [
     Tool::CircularPattern,
 ];
 /// The MODIFY tools shown in the ribbon (Construction and Delete follow them).
-pub(crate) const MODIFY_TOOLS: [Tool; 5] = [
+pub(crate) const MODIFY_TOOLS: [Tool; 6] = [
     Tool::Fillet,
     Tool::Chamfer,
     Tool::Trim,
     Tool::Extend,
     Tool::Split,
+    Tool::Transform,
 ];
 
 impl Tool {
@@ -99,9 +129,7 @@ impl Tool {
             Tool::Trim => label("sketch.trim"),
             Tool::Extend => label("sketch.extend"),
             Tool::Split => label("sketch.split"),
-            t @ (Tool::Polygon | Tool::Slot | Tool::Ellipse | Tool::Project) => {
-                crate::sketch_shapes::name(t)
-            }
+            t @ shape_tools!() => crate::sketch_shapes::name(t),
         }
     }
 
@@ -125,25 +153,21 @@ impl Tool {
             Tool::Trim => Icon::Trim,
             Tool::Extend => Icon::Extend,
             Tool::Split => Icon::Split,
-            t @ (Tool::Polygon | Tool::Slot | Tool::Ellipse | Tool::Project) => {
-                crate::sketch_shapes::icon(t)
-            }
+            t @ shape_tools!() => crate::sketch_shapes::icon(t),
         }
     }
 
     pub(crate) fn tooltip(self) -> &'static str {
         match self {
             Tool::Spline => crate::spline_ui::TOOLTIP,
-            t @ (Tool::Polygon | Tool::Slot | Tool::Ellipse | Tool::Project) => {
-                crate::sketch_shapes::tooltip(t)
-            }
+            t @ shape_tools!() => crate::sketch_shapes::tooltip(t),
             Tool::Select => {
                 "Select
 Pick points and curves to constrain or dimension (Shift adds); drag points to move them"
             }
             Tool::Line => {
                 "Line
-Click point after point; click the first point again to close the shape. Clicks snap to ends, midpoints, centres and crossings; Shift keeps a line horizontal or vertical; type a length to give it one"
+Click point after point; click the first point again to close the shape. Clicks snap to ends, midpoints, centres and crossings; guides line it up with points and hold it at right angles to the line it starts on; Shift keeps it horizontal or vertical; Ctrl draws freely; type a length to give it one"
             }
             Tool::Rectangle => {
                 "Rectangle
@@ -211,15 +235,13 @@ Click a curve to split it where other curves cross it; Split All splits every cr
     fn hint(self, clicks: usize) -> &'static str {
         match (self, clicks) {
             (Tool::Spline, n) => crate::spline_ui::hint(n),
-            (t @ (Tool::Polygon | Tool::Slot | Tool::Ellipse | Tool::Project), n) => {
-                crate::sketch_shapes::hint(t, n)
-            }
+            (t @ shape_tools!(), n) => crate::sketch_shapes::hint(t, n),
             (Tool::Select, _) => {
                 "Click to select (Shift adds) · drag a point to move it · drag on empty space to box select · Del deletes"
             }
             (Tool::Line, 0) => "Click the start of the line",
             (Tool::Line, _) => {
-                "Click the next point · type a length, Tab for the angle, Enter · Shift: straight · Esc ends"
+                "Click the next point · type a length, Tab for the angle, Enter · Shift: straight · Ctrl: no snaps · Esc ends"
             }
             (Tool::Rectangle, 0) => "Click the first corner",
             (Tool::Rectangle, _) => {
@@ -289,6 +311,10 @@ pub(crate) struct Click {
     pub(crate) at: Point2,
     pub(crate) point: Option<u32>,
     pub(crate) snap: Option<Snap>,
+    /// The tracking guides that placed it, when no snap did.
+    pub(crate) track: Option<Track>,
+    /// Placed with Ctrl held: no snap, guide or inference.
+    pub(crate) free: bool,
 }
 
 /// The direction lock the modifier keys hold while drawing.
@@ -363,6 +389,9 @@ pub fn parse_demo(text: &str) -> Result<Vec<DemoStep>, String> {
                 "line" => Tool::Line,
                 "rectangle" => Tool::Rectangle,
                 "centre_rectangle" => Tool::CentreRectangle,
+                "three_point_rectangle" => Tool::ThreePointRectangle,
+                "two_point_circle" => Tool::TwoPointCircle,
+                "three_point_circle" => Tool::ThreePointCircle,
                 "circle" => Tool::Circle,
                 "arc" => Tool::Arc,
                 other => return Err(format!("--sketch-input: no drawing tool `{other}`")),
@@ -445,8 +474,12 @@ pub struct SketchUi {
     editing: Option<(u64, String, String)>,
     /// The snap under the cursor, for its marker.
     snap: Option<Snap>,
+    /// The tracking guides under the cursor, drawn dashed.
+    track: Option<Track>,
     /// The direction lock held now.
     lock: Lock,
+    /// Ctrl held now: clicks place freely, with no snap, guide or inference.
+    pub(crate) free: bool,
     /// The heads-up fields.
     typed: Typed,
     /// Tab presses taken for the heads-up fields before egui saw them (true: Shift+Tab).
@@ -481,6 +514,7 @@ impl SketchUi {
         self.picked_curve = None;
         self.typed = Typed::default();
         self.snap = None;
+        self.track = None;
     }
 
     /// The point a direction lock measures from: the line's previous point, an arc's
@@ -499,7 +533,7 @@ impl SketchUi {
 }
 
 /// The geometric constraints: command kind, name, icon and what it does.
-pub(crate) const CONSTRAINTS: [(&str, &str, Icon, &str); 10] = [
+pub(crate) const CONSTRAINTS: [(&str, &str, Icon, &str); 12] = [
     (
         "horizontal",
         "Horizontal",
@@ -553,6 +587,18 @@ pub(crate) const CONSTRAINTS: [(&str, &str, Icon, &str); 10] = [
         "Equal",
         Icon::ConstraintEqual,
         "Give two lines the same length, or two circles the same radius",
+    ),
+    (
+        "concentric",
+        "Concentric",
+        Icon::ConstraintConcentric,
+        "Give two circles or arcs the same centre",
+    ),
+    (
+        "collinear",
+        "Collinear",
+        Icon::ConstraintCollinear,
+        "Put two lines on one straight line",
     ),
     ("fix", "Fix", Icon::ConstraintFix, "Pin a point where it is"),
 ];
@@ -621,15 +667,30 @@ impl ChamferaApp {
 
     /// Dimensions the selection at its current size and starts editing the value, as the
     /// Dimension button does.
+    /// With the cursor over the viewport (the D key), where it is chooses which way a
+    /// linear dimension measures: above or below the points horizontal, beside them
+    /// vertical, elsewhere aligned.
     pub(crate) fn dimension_selected(&mut self) {
-        if let Some(r) = self.run_sketch("sketch.dimension_selection", json!({}))
+        let params = match self.sketch.hover {
+            Some(at) if self.sketch.hover_px.is_some() => json!({ "x": at.x, "y": at.y }),
+            _ => json!({}),
+        };
+        if let Some(r) = self.run_sketch("sketch.dimension_selection", params)
             && let (Some(id), Some(v), Some(kind)) = (
                 r["constraint"].as_u64(),
                 r["value"].as_f64(),
                 r["kind"].as_str(),
             )
         {
-            self.sketch.editing = Some((id, kind.to_owned(), display_value(self.units(), kind, v)));
+            if r["driven"] == true {
+                self.message = Some((
+                    "The dimension is driven: the sketch already fixes that size".into(),
+                    false,
+                ));
+            } else {
+                self.sketch.editing =
+                    Some((id, kind.to_owned(), display_value(self.units(), kind, v)));
+            }
         }
     }
 
@@ -682,35 +743,89 @@ impl ChamferaApp {
                     at,
                     point: None,
                     snap: None,
+                    track: None,
+                    free: false,
                 });
             }
+        }
+        if self.sketch.free {
+            return Some(Click {
+                at: cursor,
+                point: None,
+                snap: None,
+                track: None,
+                free: true,
+            });
         }
         // Millimetres per pixel here, so the snap radii are the pick radii on screen.
         let per_px = [(10.0, 0.0), (0.0, 10.0)]
             .into_iter()
             .find_map(|(dx, dy)| self.session.sketch_plane_point(x + dx, y + dy, w, h))
             .map_or(0.0, |p| p.distance(cursor) / 10.0);
-        let from = match (tool, self.sketch.clicks.as_slice()) {
-            (Tool::Line, [a]) => Some(a.at),
-            _ => None,
+        let (from, from_point) = match (tool, self.sketch.clicks.as_slice()) {
+            (Tool::Line, [a]) => (Some(a.at), a.point.map(PointId)),
+            _ => (None, None),
         };
+        let prefs = self.prefs.snaps;
+        // The radius preference scales both: a curve is picked a little closer than a point.
+        let radius_px = prefs.radius_px.clamp(
+            crate::prefs::MIN_SNAP_RADIUS_PX,
+            crate::prefs::MAX_SNAP_RADIUS_PX,
+        );
         let query = SnapQuery {
             cursor,
-            radius: PICK_POINT_PX * per_px,
-            curve_radius: PICK_CURVE_PX * per_px,
+            radius: radius_px * per_px,
+            curve_radius: radius_px * PICK_CURVE_PX / PICK_POINT_PX * per_px,
             from,
+            kinds: prefs.kinds,
         };
-        let snap = self.session.active_sketch()?.sketch.snap(&query);
-        Some(match snap {
-            Some(snap) => Click {
+        let sketch = &self.session.active_sketch()?.sketch;
+        let snap = sketch.snap(&query);
+        let track = if prefs.alignment || prefs.infer || prefs.polar {
+            sketch.track(&TrackQuery {
+                cursor,
+                radius: radius_px * per_px,
+                from,
+                from_point,
+                align: prefs.alignment,
+                infer: prefs.infer,
+                polar_step: prefs.polar.then(|| prefs.polar_step_deg.to_radians()),
+            })
+        } else {
+            None
+        };
+        // Point-like snaps beat guides; a perpendicular or tangent guide beats a plain
+        // on-curve snap (which it would otherwise lose near the curve it starts on), and
+        // an alignment or polar guide does not.
+        let snap = match (snap, track) {
+            (Some(s), Some(t)) if s.kind == SnapKind::OnCurve => t
+                .direction()
+                .filter(|g| g.kind != GuideKind::Polar)
+                .is_none()
+                .then_some(s),
+            (s, _) => s,
+        };
+        Some(match (snap, track) {
+            (Some(snap), _) => Click {
                 at: snap.at,
                 point: snap.point.map(|p| p.0),
                 snap: Some(snap),
+                track: None,
+                free: false,
             },
-            None => Click {
+            (None, Some(track)) => Click {
+                at: track.at,
+                point: None,
+                snap: None,
+                track: Some(track),
+                free: false,
+            },
+            (None, None) => Click {
                 at: self.grid_snapped(cursor),
                 point: None,
                 snap: None,
+                track: None,
+                free: false,
             },
         })
     }
@@ -745,6 +860,8 @@ impl ChamferaApp {
                 at,
                 point: Some(id),
                 snap: None,
+                track: None,
+                free: false,
             });
         }
         let r = self.session.execute("sketch.plane_point", &px).ok()?;
@@ -752,6 +869,8 @@ impl ChamferaApp {
             at: Point2::new(r["x"].as_f64()?, r["y"].as_f64()?),
             point: None,
             snap: None,
+            track: None,
+            free: false,
         })
     }
 
@@ -765,10 +884,11 @@ impl ChamferaApp {
     ) -> bool {
         let (w, h) = (f64::from(rect.width()), f64::from(rect.height()));
         let local = |p: Pos2| (f64::from(p.x - rect.min.x), f64::from(p.y - rect.min.y));
-        let (shift, alt, esc, delete) = ui.input(|i| {
+        let (shift, alt, ctrl, esc, delete) = ui.input(|i| {
             (
                 i.modifiers.shift,
                 i.modifiers.alt,
+                i.modifiers.command,
                 i.key_pressed(egui::Key::Escape),
                 i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace),
             )
@@ -782,6 +902,7 @@ impl ChamferaApp {
                 (true, false) => Lock::Straight,
                 (true, true) => Lock::Steps,
             };
+            self.sketch.free = ctrl;
         }
         let (esc_used, backspace_used) = if typing {
             (false, false)
@@ -819,6 +940,7 @@ impl ChamferaApp {
         let hovered = hover_px.and_then(|(x, y)| self.click_at(x, y, w, h));
         self.sketch.hover = hovered.map(|c| c.at);
         self.sketch.snap = hovered.and_then(|c| c.snap);
+        self.sketch.track = hovered.and_then(|c| c.track);
 
         let tool = self.sketch.tool();
         // Dragging a point with the Select tool.
@@ -995,6 +1117,23 @@ impl ChamferaApp {
         }
     }
 
+    /// The perpendicular or tangent guide a typed line keeps: the one under the cursor, as
+    /// long as no angle was typed (the typed length goes along the guide).
+    fn typed_track(&self) -> Option<Track> {
+        let angle_typed = self
+            .sketch
+            .typed
+            .fields
+            .get(1)
+            .is_some_and(|f| !f.trim().is_empty());
+        if self.sketch.tool() != Tool::Line || angle_typed {
+            return None;
+        }
+        self.sketch
+            .track
+            .filter(|t| t.direction().is_some_and(|g| g.kind != GuideKind::Polar))
+    }
+
     /// Enter in the heads-up fields: places the geometry at the typed values.
     fn place_typed(&mut self) {
         let tool = self.sketch.tool();
@@ -1003,11 +1142,14 @@ impl ChamferaApp {
             return;
         };
         let dims = self.typed_dims();
+        let typed_track = self.typed_track();
         self.sketch.typed = Typed::default();
         self.sketch.clicks.push(Click {
             at,
             point: None,
             snap: None,
+            track: typed_track,
+            free: false,
         });
         self.place(tool, dims);
     }
@@ -1123,8 +1265,8 @@ impl ChamferaApp {
             self.spline_click(click, (x, y, w, h));
             return;
         }
-        if tool == Tool::Project {
-            self.project_click(x, y, w, h);
+        if crate::sketch_shapes::picks(tool) {
+            self.pick_click(tool, x, y, w, h, click.at);
             return;
         }
         // A click places at the typed values when something was typed.
@@ -1133,11 +1275,14 @@ impl ChamferaApp {
             && let Some(at) = self.typed_point()
         {
             let dims = self.typed_dims();
+            let typed_track = self.typed_track();
             self.sketch.typed = Typed::default();
             self.sketch.clicks.push(Click {
                 at,
                 point: None,
                 snap: None,
+                track: typed_track,
+                free: false,
             });
             self.place(tool, dims);
             return;
@@ -1224,7 +1369,7 @@ impl ChamferaApp {
                     return;
                 }
                 let mut p = json!({
-                    "x1": a.at.x, "y1": a.at.y, "x2": b.at.x, "y2": b.at.y, "snap": true,
+                    "x1": a.at.x, "y1": a.at.y, "x2": b.at.x, "y2": b.at.y, "snap": !b.free,
                 });
                 if let Some(id) = a.point {
                     p["start"] = json!(id);
@@ -1239,6 +1384,11 @@ impl ChamferaApp {
                         let line = as_id(&r["curve"]);
                         extra.extend(self.snap_constraints(a, start, None));
                         extra.extend(self.snap_constraints(b, end, line));
+                        if let (Some(t), Some(l), Some(f)) =
+                            (b.track, line, self.session.active_sketch())
+                        {
+                            extra.extend(f.sketch.track_constraints(&t, CurveId(l)));
+                        }
                         if let (Some(l), Some(value)) = (line, dims.length) {
                             extra.push(Constraint::Length {
                                 line: CurveId(l),
@@ -1257,6 +1407,8 @@ impl ChamferaApp {
                                 at: b.at,
                                 point: end,
                                 snap: None,
+                                track: None,
+                                free: false,
                             });
                         }
                     }
@@ -1348,6 +1500,8 @@ impl ChamferaApp {
                         at: q.at,
                         point: Some(end),
                         snap: None,
+                        track: None,
+                        free: false,
                     });
                 }
             }
@@ -1495,6 +1649,8 @@ impl ChamferaApp {
         let labels = self.session.dimension_labels();
         let font = egui::FontId::proportional(12.5);
         let text_c = color(self.theme.text);
+        let muted_c = color(self.theme.text_muted);
+        let mut drive = None;
         let expr_c = color(self.theme.accent);
         let bg = color(self.theme.panel).gamma_multiply(0.96);
         let editing_id = self.sketch.editing.as_ref().map(|e| e.0);
@@ -1512,11 +1668,13 @@ impl ChamferaApp {
             // The value, and the expression it follows in the accent colour.
             let mut job = egui::text::LayoutJob::default();
             let format = |c| egui::TextFormat::simple(font.clone(), c);
-            job.append(
-                &display_value(self.units(), &l.kind, l.value),
-                0.0,
-                format(text_c),
-            );
+            let shown = display_value(self.units(), &l.kind, l.value);
+            // A driven dimension reads in brackets, in the muted text colour.
+            if l.driven {
+                job.append(&format!("({shown})"), 0.0, format(muted_c));
+            } else {
+                job.append(&shown, 0.0, format(text_c));
+            }
             if let Some(e) = &expression {
                 job.append(&format!("= {e}"), 6.0, format(expr_c));
             }
@@ -1525,7 +1683,11 @@ impl ChamferaApp {
             let id = ui.scope_id().with(("dimension", l.constraint));
             let resp = ui
                 .interact(r, id, egui::Sense::click())
-                .on_hover_text("Click to type a value, a parameter or a formula");
+                .on_hover_text(if l.driven {
+                    "Driven dimension: it shows the size the sketch has. Click to make it set the size"
+                } else {
+                    "Click to type a value, a parameter or a formula"
+                });
             let border = if resp.hovered() {
                 egui::Stroke::new(1.5, color(self.theme.accent))
             } else {
@@ -1537,11 +1699,19 @@ impl ChamferaApp {
                 .rect_stroke(r, radius, border, egui::StrokeKind::Inside);
             ui.painter()
                 .galley(r.center() - galley.size() * 0.5, galley, text_c);
-            if resp.clicked() {
+            if resp.clicked() && l.driven {
+                drive = Some(l.constraint);
+            } else if resp.clicked() {
                 let start =
                     expression.unwrap_or_else(|| display_value(self.units(), &l.kind, l.value));
                 self.sketch.editing = Some((u64::from(l.constraint), l.kind.clone(), start));
             }
+        }
+        if let Some(c) = drive {
+            self.run_sketch(
+                "sketch.dimension.driven",
+                json!({ "constraint": c, "driven": false }),
+            );
         }
         self.snap_marker(ui, rect);
         self.heads_up(ui, rect);
@@ -1563,6 +1733,7 @@ impl ChamferaApp {
             .and_then(|l| self.project(rect, l.anchor))
             .unwrap_or(rect.center());
         let mut keep = true;
+        let mut driven = false;
         let area = egui::Area::new(ui.scope_id().with(("dimension editor", id)))
             .fixed_pos(anchor - Vec2::new(50.0, 12.0))
             .order(egui::Order::Foreground);
@@ -1580,6 +1751,13 @@ impl ChamferaApp {
                     } else {
                         self.session.doc.units.length.symbol()
                     });
+                    if ui
+                        .small_button("Driven")
+                        .on_hover_text("Only show this size; the other constraints set it")
+                        .clicked()
+                    {
+                        driven = true;
+                    }
                     let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
                     let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
                     if esc {
@@ -1598,6 +1776,13 @@ impl ChamferaApp {
                 });
             });
         });
+        if driven {
+            self.run_sketch(
+                "sketch.dimension.driven",
+                json!({ "constraint": id, "driven": true }),
+            );
+            keep = false;
+        }
         if keep {
             self.sketch.editing = Some((id, kind, text));
         }
@@ -1649,6 +1834,13 @@ impl ChamferaApp {
         let Some(f) = self.session.active_sketch() else {
             return;
         };
+        if self.sketch.snap.is_none()
+            && self.sketch.lock == Lock::Off
+            && let Some(track) = self.sketch.track
+        {
+            self.track_guides(ui, rect, &track);
+            return;
+        }
         let (at, text, kind) = match (self.sketch.snap, self.sketch.hover) {
             (Some(snap), _) => (snap.at, snap.kind.label().to_owned(), Some(snap.kind)),
             (None, Some(hover)) if self.sketch.lock != Lock::Off => {
@@ -1722,7 +1914,11 @@ impl ChamferaApp {
             }
             None => {}
         }
-        // The name, in a small box up and to the right, like a tooltip.
+        self.marker_label(&painter, rect, p, text);
+    }
+
+    /// A marker's name, in a small box up and to the right of `p`, like a tooltip.
+    fn marker_label(&self, painter: &egui::Painter, rect: Rect, p: Pos2, text: String) {
         let font = egui::FontId::proportional(11.5);
         let galley = painter.layout_no_wrap(text, font, color(self.theme.text));
         let size = galley.size() + Vec2::new(10.0, 4.0);
@@ -1739,6 +1935,48 @@ impl ChamferaApp {
             egui::StrokeKind::Inside,
         );
         painter.galley(r.min + Vec2::new(5.0, 2.0), galley, color(self.theme.text));
+    }
+
+    /// The tracking guides under the cursor: each dashed from the point it goes through
+    /// to a little past the tracked point, a small cross there, and their names.
+    fn track_guides(&self, ui: &egui::Ui, rect: Rect, track: &Track) {
+        let Some(f) = self.session.active_sketch() else {
+            return;
+        };
+        let Some(p) = self.project(rect, f.plane.from_plane(track.at)) else {
+            return;
+        };
+        let painter = ui.painter_at(rect);
+        let accent = color(self.theme.accent);
+        let stroke = egui::Stroke::new(1.0, accent);
+        let mut names: Vec<String> = Vec::new();
+        for g in track.guides.iter().flatten() {
+            let Some(o) = self.project(rect, f.plane.from_plane(g.origin)) else {
+                continue;
+            };
+            // Run the dash on past the tracked point by 40 px, along the guide on screen.
+            let along = p - o;
+            let end = match along.length() {
+                l if l > 1.0 => p + along / l * 40.0,
+                _ => p,
+            };
+            painter.extend(egui::Shape::dashed_line(&[o, end], stroke, 5.0, 4.0));
+            painter.circle_stroke(o, 2.5, stroke);
+            let name = match g.kind {
+                GuideKind::Polar => display_value(self.units(), "angle", g.dir.angle()),
+                k => k.label().to_owned(),
+            };
+            if !names.contains(&name) {
+                names.push(name);
+            }
+        }
+        let s = 4.0;
+        let thick = egui::Stroke::new(1.6, accent);
+        painter.line_segment([p + Vec2::new(-s, -s), p + Vec2::new(s, s)], thick);
+        painter.line_segment([p + Vec2::new(-s, s), p + Vec2::new(s, -s)], thick);
+        if !names.is_empty() {
+            self.marker_label(&painter, rect, p, names.join(" · "));
+        }
     }
 
     /// The heads-up value fields beside the cursor while a tool waits for its second click:
@@ -1858,7 +2096,7 @@ fn display_value(u: chamfera_doc::DisplayUnits, kind: &str, v: f64) -> String {
 /// Parses a typed value to internal units: a length (a plain number is in the design's
 /// unit, `10 mm` or `2 in` say their own) or an angle (a plain number is degrees). A
 /// formula of plain values works too; anything with a name is `None` (an expression).
-fn parse_value(u: chamfera_doc::DisplayUnits, kind: &str, text: &str) -> Option<f64> {
+pub(crate) fn parse_value(u: chamfera_doc::DisplayUnits, kind: &str, text: &str) -> Option<f64> {
     use chamfera_doc::expr;
     let cleaned: String = text
         .trim()

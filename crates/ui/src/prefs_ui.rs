@@ -470,6 +470,61 @@ fn grid_page(
         "Clicks on empty space land on the nearest grid point; clicks on a point still snap \
          to the point.",
     );
+    snaps_section(ui, look, &mut p.snaps);
+}
+
+/// The object snaps and tracking guides used while drawing.
+fn snaps_section(ui: &mut egui::Ui, look: Look, s: &mut prefs::SnapPrefs) {
+    use chamfera_sketch::SnapKind;
+    ui.add_space(S2);
+    widgets::caption(ui, look, "OBJECT SNAPS");
+    egui::Grid::new("snap kinds")
+        .num_columns(3)
+        .spacing(vec2(S4, S2))
+        .show(ui, |ui| {
+            for (i, kind) in SnapKind::ALL.into_iter().enumerate() {
+                let mut on = s.kinds.contains(kind);
+                if ui.checkbox(&mut on, kind.label()).changed() {
+                    s.kinds = s.kinds.with(kind, on);
+                }
+                if i % 3 == 2 {
+                    ui.end_row();
+                }
+            }
+        });
+    ui.horizontal(|ui| {
+        row_label(ui, look, "Snap radius");
+        ui.add(
+            egui::Slider::new(
+                &mut s.radius_px,
+                prefs::MIN_SNAP_RADIUS_PX..=prefs::MAX_SNAP_RADIUS_PX,
+            )
+            .step_by(1.0)
+            .suffix(" px"),
+        );
+    });
+    ui.add_space(S2);
+    widgets::caption(ui, look, "TRACKING");
+    ui.checkbox(&mut s.alignment, "Alignment guides through existing points");
+    ui.checkbox(
+        &mut s.infer,
+        "Perpendicular and tangent guides from the line or arc a line starts on",
+    );
+    ui.horizontal(|ui| {
+        ui.checkbox(&mut s.polar, "Polar guides every");
+        ui.add_enabled(
+            s.polar,
+            egui::DragValue::new(&mut s.polar_step_deg)
+                .range(prefs::MIN_POLAR_STEP_DEG..=prefs::MAX_POLAR_STEP_DEG)
+                .speed(1.0)
+                .suffix("°"),
+        );
+    });
+    hint(
+        ui,
+        look,
+        "Hold Ctrl while drawing to place a point freely, with no snap, guide or grid.",
+    );
 }
 
 /// The width of a page: the window's 600 less the page list (130) and the gaps and

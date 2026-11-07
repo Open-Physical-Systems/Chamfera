@@ -1,4 +1,4 @@
-//! Cosmetic threads (format 37): a thread recorded on a cylindrical face, its size, pitch
+//! Cosmetic threads (format 38): a thread recorded on a cylindrical face, its size, pitch
 //! and length, shown in the viewport and called out on drawings. The solid stays a plain
 //! cylinder; a modelled helical thread comes later.
 

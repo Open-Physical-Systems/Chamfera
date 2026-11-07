@@ -18,19 +18,25 @@
 //! its area (outer area minus holes). A circle inside a rectangle gives two regions: the
 //! rectangle with a circular hole, and the disc.
 //!
-//! **Limits.** Curves are not split here where they cross or where one ends in the middle
-//! of another (a T-junction): a junction counts only where curves share an endpoint, and
-//! crossing curves give undefined, though never panicking, results. The split tool
-//! (`ToolOp::Split`, `sketch.split`) cuts such drawings into pieces first. Arcs are measured exactly; signed
-//! areas use Green's theorem on each line, arc and elliptical arc.
+//! **Crossings.** Lines, arcs and circles are cut, for profile detection only, where they
+//! cross each other, where one ends in the middle of another (a T-junction) and where two
+//! lines overlap on one line, so overlapping shapes give the regions the drawing shows
+//! without trimming or splitting first. The cuts are the exact intersections of
+//! `intersect.rs`; each cut is a vertex of the graph, and a [`LoopSegment`] that uses a
+//! piece of a curve names the piece's ends. A circle cut in fewer than two places stays a
+//! loop of its own. Ellipses and splines are joined only at shared endpoints, and above
+//! [`MAX_SPLIT_CURVES`] curves nothing is cut. The split tool (`ToolOp::Split`,
+//! `sketch.split`) makes the pieces real curves. Arcs are measured exactly; signed areas
+//! use Green's theorem on each line, arc and elliptical arc.
 
 use crate::constraint::Constraint;
 use crate::ellipse::EllipseArc;
 use crate::entity::Curve;
 use crate::entity::{CurveId, PointId};
+use crate::intersect::{self, Shape};
 use crate::sketch::Sketch;
 use crate::spline::{ray_crossings, spline_polyline};
-use chamfera_geom::{BSplineCurve2, LINEAR_TOLERANCE, Point2, Vec2};
+use chamfera_geom::{ANGULAR_TOLERANCE, BSplineCurve2, LINEAR_TOLERANCE, Point2, Vec2};
 use std::collections::BTreeMap;
 use std::f64::consts::{FRAC_PI_2, PI, TAU};
 use std::sync::Arc;
@@ -43,10 +49,14 @@ const TANGENT_BUCKET: f64 = 1e-9;
 
 /// One curve of a loop, and whether the loop runs along it backwards (end to start; for a
 /// circle or arc, clockwise).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LoopSegment {
     pub curve: CurveId,
     pub reversed: bool,
+    /// When the loop uses only a piece of the curve (between places where other curves
+    /// cross it): the piece's two ends, in the curve's own direction (for an arc or
+    /// circle, counter-clockwise from the first to the second). `None` for the whole curve.
+    pub piece: Option<[Point2; 2]>,
 }
 
 /// A closed chain of curves.
@@ -298,18 +308,22 @@ struct Edge {
     u: usize,
     v: usize,
     geo: Geo,
+    piece: Option<[Point2; 2]>,
 }
 
-/// A loop under construction: segments as (geometry, reversed).
+/// One segment of a loop under construction: curve, geometry, reversed, piece.
+type TracedSegment = (CurveId, Geo, bool, Option<[Point2; 2]>);
+
+/// A loop under construction.
 struct Traced {
-    segments: Vec<(CurveId, Geo, bool)>,
+    segments: Vec<TracedSegment>,
     area: f64,
     piece: usize,
 }
 
 impl Traced {
     fn contains(&self, p: Point2) -> bool {
-        let n: usize = self.segments.iter().map(|(_, g, _)| g.crossings(p)).sum();
+        let n: usize = self.segments.iter().map(|s| s.1.crossings(p)).sum();
         n % 2 == 1
     }
 
@@ -318,13 +332,136 @@ impl Traced {
             segments: self
                 .segments
                 .iter()
-                .map(|(curve, _, reversed)| LoopSegment {
+                .map(|(curve, _, reversed, piece)| LoopSegment {
                     curve: *curve,
                     reversed: *reversed,
+                    piece: *piece,
                 })
                 .collect(),
             signed_area: self.area,
         }
+    }
+}
+
+/// Most lines, arcs and circles whose crossings profile detection splits; a larger sketch
+/// is joined only at shared endpoints, as the split tool also stops at this many.
+pub const MAX_SPLIT_CURVES: usize = crate::tools::MAX_TOOL_CURVES;
+
+/// A place where another curve cuts a curve inside it: the curve's parameter there (see
+/// `Shape::param`) and the point.
+type CutAt = (f64, Point2);
+
+/// A box around a shape, for skipping pairs that cannot meet.
+fn shape_box(s: &Shape) -> (Point2, Point2) {
+    let t = LINEAR_TOLERANCE;
+    match *s {
+        Shape::Segment { a, b } => (
+            Point2::new(a.x.min(b.x) - t, a.y.min(b.y) - t),
+            Point2::new(a.x.max(b.x) + t, a.y.max(b.y) + t),
+        ),
+        Shape::Arc { c, r, .. } | Shape::Circle { c, r } => (
+            Point2::new(c.x - r - t, c.y - r - t),
+            Point2::new(c.x + r + t, c.y + r + t),
+        ),
+    }
+}
+
+/// Where two shapes cut each other inside: the points where they cross or touch, and for
+/// two segments on one line, each end of one that lies inside the other (their overlap).
+/// Returns the cuts on `s1` and on `s2`.
+fn mutual_cuts(s1: &Shape, s2: &Shape) -> (Vec<CutAt>, Vec<CutAt>) {
+    let (mut c1, mut c2) = (Vec::new(), Vec::new());
+    for x in intersect::intersections(s1, s2) {
+        let (t1, t2) = (s1.param(x), s2.param(x));
+        if s1.interior(t1) {
+            c1.push((t1, x));
+        }
+        if s2.interior(t2) {
+            c2.push((t2, x));
+        }
+    }
+    if let (Shape::Segment { a: a1, b: b1 }, Shape::Segment { a: a2, b: b2 }) = (*s1, *s2) {
+        let (d1, d2) = (b1 - a1, b2 - a2);
+        let parallel = d1.cross(d2).abs() <= ANGULAR_TOLERANCE * d1.length() * d2.length();
+        let on_line = d1
+            .normalized()
+            .is_some_and(|u| u.cross(a2 - a1).abs() <= LINEAR_TOLERANCE);
+        if parallel && on_line {
+            for p in [a2, b2] {
+                let t = s1.param(p);
+                if s1.interior(t) {
+                    c1.push((t, p));
+                }
+            }
+            for p in [a1, b1] {
+                let t = s2.param(p);
+                if s2.interior(t) {
+                    c2.push((t, p));
+                }
+            }
+        }
+    }
+    (c1, c2)
+}
+
+impl Sketch {
+    /// Where the non-construction lines, arcs and circles cross each other, end on one
+    /// another (a T-junction) or overlap on one line, for each curve cut inside: its cuts in
+    /// parameter order, one per place. Empty above [`MAX_SPLIT_CURVES`] curves.
+    fn crossing_cuts(&self) -> BTreeMap<CurveId, Vec<CutAt>> {
+        let shapes: Vec<(CurveId, Shape, (Point2, Point2))> = self
+            .curves()
+            .filter(|(_, c)| !c.is_construction())
+            .filter_map(|(id, c)| {
+                let s = self.shape_of(c)?;
+                Some((id, s, shape_box(&s)))
+            })
+            .collect();
+        let mut out: BTreeMap<CurveId, Vec<CutAt>> = BTreeMap::new();
+        if shapes.len() > MAX_SPLIT_CURVES {
+            return out;
+        }
+        // Sweep along X: a pair can only meet when their boxes overlap.
+        let mut order: Vec<usize> = (0..shapes.len()).collect();
+        order.sort_by(|i, j| {
+            let key = |k: usize| shapes.get(k).map_or(f64::INFINITY, |s| s.2.0.x);
+            key(*i).total_cmp(&key(*j))
+        });
+        for (k, &i) in order.iter().enumerate() {
+            let Some((ki, si, bi)) = shapes.get(i) else {
+                continue;
+            };
+            for &j in order.iter().skip(k + 1) {
+                let Some((kj, sj, bj)) = shapes.get(j) else {
+                    continue;
+                };
+                if bj.0.x > bi.1.x {
+                    break;
+                }
+                if bj.0.y > bi.1.y || bj.1.y < bi.0.y {
+                    continue;
+                }
+                let (ci, cj) = mutual_cuts(si, sj);
+                if !ci.is_empty() {
+                    out.entry(*ki).or_default().extend(ci);
+                }
+                if !cj.is_empty() {
+                    out.entry(*kj).or_default().extend(cj);
+                }
+            }
+        }
+        for list in out.values_mut() {
+            list.sort_by(|a, b| a.0.total_cmp(&b.0));
+            list.dedup_by(|a, b| a.1.coincident(b.1));
+            // A circle's cuts near angle 0 and near 2π can be the same place.
+            if list.len() > 1
+                && let (Some(first), Some(last)) = (list.first(), list.last())
+                && first.1.coincident(last.1)
+            {
+                list.pop();
+            }
+        }
+        out
     }
 }
 
@@ -463,7 +600,25 @@ impl Sketch {
         endpoints.dedup();
         let index: BTreeMap<PointId, usize> =
             endpoints.iter().enumerate().map(|(i, p)| (*p, i)).collect();
-        let mut parent: Vec<usize> = (0..endpoints.len()).collect();
+        // Vertices: the endpoints, then one for each place a curve is cut, merged below
+        // with the endpoints and cuts at the same place.
+        let cuts = self.crossing_cuts();
+        let mut positions: Vec<Point2> = endpoints
+            .iter()
+            .map(|id| self.point(*id).unwrap_or(Point2::ORIGIN))
+            .collect();
+        let mut cut_vertices: BTreeMap<CurveId, Vec<usize>> = BTreeMap::new();
+        for (curve, list) in &cuts {
+            let ids = list
+                .iter()
+                .map(|(_, p)| {
+                    positions.push(*p);
+                    positions.len() - 1
+                })
+                .collect();
+            cut_vertices.insert(*curve, ids);
+        }
+        let mut parent: Vec<usize> = (0..positions.len()).collect();
         for (_, c) in self.constraints() {
             if let Constraint::Coincident { a, b } = c
                 && let (Some(&i), Some(&j)) = (index.get(a), index.get(b))
@@ -471,11 +626,7 @@ impl Sketch {
                 union(&mut parent, i, j);
             }
         }
-        let mut by_x: Vec<(usize, Point2)> = endpoints
-            .iter()
-            .enumerate()
-            .filter_map(|(i, id)| self.point(*id).map(|p| (i, p)))
-            .collect();
+        let mut by_x: Vec<(usize, Point2)> = positions.iter().copied().enumerate().collect();
         by_x.sort_by(|a, b| a.1.x.total_cmp(&b.1.x));
         for (k, (i, p)) in by_x.iter().enumerate() {
             for (j, q) in by_x.iter().skip(k + 1) {
@@ -489,13 +640,24 @@ impl Sketch {
         }
         let vertex = |parent: &mut [usize], id: PointId| index.get(&id).map(|&i| find(parent, i));
 
-        // Edges.
+        // Edges: each line, arc and circle in the pieces between its cuts.
         let mut edges = Vec::new();
         let mut circles: Vec<(CurveId, Geo)> = Vec::new();
+        let no_cuts: Vec<CutAt> = Vec::new();
+        let no_vertices: Vec<usize> = Vec::new();
         for (id, c) in self.curves() {
             if c.is_construction() {
                 continue;
             }
+            let curve_cuts = cuts.get(&id).unwrap_or(&no_cuts);
+            let cut_ids = cut_vertices.get(&id).unwrap_or(&no_vertices);
+            // (vertex, point, parameter) of each cut, in order.
+            let inner: Vec<(usize, Point2, f64)> = curve_cuts
+                .iter()
+                .zip(cut_ids)
+                .map(|((t, p), v)| (find(&mut parent, *v), *p, *t))
+                .collect();
+            let split = !inner.is_empty();
             match c {
                 Curve::Line { start, end, .. } => {
                     let (Some(u), Some(v), Some(a), Some(b)) = (
@@ -506,13 +668,22 @@ impl Sketch {
                     ) else {
                         continue;
                     };
-                    if u != v {
-                        edges.push(Edge {
-                            curve: id,
-                            u,
-                            v,
-                            geo: Geo::Line { a, b },
-                        });
+                    let mut chain = vec![(u, a, 0.0)];
+                    chain.extend(inner.iter().copied());
+                    chain.push((v, b, 1.0));
+                    for w in chain.windows(2) {
+                        let (Some(&(u, a, _)), Some(&(v, b, _))) = (w.first(), w.get(1)) else {
+                            continue;
+                        };
+                        if u != v {
+                            edges.push(Edge {
+                                curve: id,
+                                u,
+                                v,
+                                geo: Geo::Line { a, b },
+                                piece: split.then_some([a, b]),
+                            });
+                        }
                     }
                 }
                 Curve::Arc {
@@ -527,15 +698,59 @@ impl Sketch {
                     ) else {
                         continue;
                     };
-                    if u != v
-                        && let Some(geo) = arc_geo(c, s, e)
-                    {
-                        edges.push(Edge {
-                            curve: id,
-                            u,
-                            v,
-                            geo,
-                        });
+                    let Some(Geo::Arc { c, r, a0, sweep }) = arc_geo(c, s, e) else {
+                        continue;
+                    };
+                    let mut chain = vec![(u, s, 0.0)];
+                    chain.extend(inner.iter().copied());
+                    chain.push((v, e, sweep));
+                    for w in chain.windows(2) {
+                        let (Some(&(u, p, t0)), Some(&(v, q, t1))) = (w.first(), w.get(1)) else {
+                            continue;
+                        };
+                        if u != v {
+                            edges.push(Edge {
+                                curve: id,
+                                u,
+                                v,
+                                geo: Geo::Arc {
+                                    c,
+                                    r,
+                                    a0: a0 + t0,
+                                    sweep: t1 - t0,
+                                },
+                                piece: split.then_some([p, q]),
+                            });
+                        }
+                    }
+                }
+                Curve::Circle { centre, radius, .. } if inner.len() >= 2 => {
+                    // Cut in two or more places: the arcs between consecutive cuts.
+                    let Some(c) = self.point(*centre) else {
+                        continue;
+                    };
+                    let n = inner.len();
+                    for k in 0..n {
+                        let (Some(&(u, p, t0)), Some(&(v, q, t1))) =
+                            (inner.get(k), inner.get((k + 1) % n))
+                        else {
+                            continue;
+                        };
+                        let sweep = if k + 1 == n { t1 + TAU - t0 } else { t1 - t0 };
+                        if u != v {
+                            edges.push(Edge {
+                                curve: id,
+                                u,
+                                v,
+                                geo: Geo::Arc {
+                                    c,
+                                    r: *radius,
+                                    a0: t0,
+                                    sweep,
+                                },
+                                piece: Some([p, q]),
+                            });
+                        }
                     }
                 }
                 Curve::EllipticalArc { start, end, .. } => {
@@ -552,6 +767,7 @@ impl Sketch {
                             u,
                             v,
                             geo: Geo::Ellipse(geo),
+                            piece: None,
                         });
                     }
                 }
@@ -585,6 +801,7 @@ impl Sketch {
                             u,
                             v,
                             geo: Geo::Spline { curve, a, b },
+                            piece: None,
                         });
                     }
                 }
@@ -603,7 +820,13 @@ impl Sketch {
                 }
             }
         }
-        let vcount = endpoints.len();
+        // Two line pieces between the same two vertices are the same segment (lines that
+        // overlap on one line): keep one, or they would bound a face of no area.
+        let mut seen_lines = std::collections::BTreeSet::new();
+        edges.retain(|e| {
+            !matches!(e.geo, Geo::Line { .. }) || seen_lines.insert((e.u.min(e.v), e.u.max(e.v)))
+        });
+        let vcount = positions.len();
         let is_bridge = bridges(vcount, &edges);
         let kept: Vec<&Edge> = edges
             .iter()
@@ -673,7 +896,7 @@ impl Sketch {
                     *v = true;
                 }
                 let Some(e) = kept.get(h / 2) else { break };
-                segments.push((e.curve, e.geo.clone(), h % 2 == 1));
+                segments.push((e.curve, e.geo.clone(), h % 2 == 1, e.piece));
                 match next(h) {
                     Some(n) if n == h0 => {
                         closed = true;
@@ -686,7 +909,7 @@ impl Sketch {
             if !closed {
                 continue;
             }
-            let area: f64 = segments.iter().map(|(_, g, r)| g.area(*r)).sum();
+            let area: f64 = segments.iter().map(|s| s.1.area(s.2)).sum();
             let piece = kept
                 .get(h0 / 2)
                 .map(|e| find(&mut piece_parent, e.u))
@@ -710,12 +933,12 @@ impl Sketch {
                 continue;
             }
             faces.push(Traced {
-                segments: vec![(*id, geo.clone(), false)],
+                segments: vec![(*id, geo.clone(), false, None)],
                 area,
                 piece,
             });
             boundaries.push(Traced {
-                segments: vec![(*id, geo.clone(), true)],
+                segments: vec![(*id, geo.clone(), true, None)],
                 area: -area,
                 piece,
             });
@@ -724,7 +947,7 @@ impl Sketch {
         // Holes go to the smallest face of another piece that contains them.
         let mut holes: Vec<Vec<Traced>> = (0..faces.len()).map(|_| Vec::new()).collect();
         for b in boundaries {
-            let Some((_, geo, _)) = b.segments.first() else {
+            let Some((_, geo, _, _)) = b.segments.first() else {
                 continue;
             };
             let probe = geo.point_at_fraction(PROBE_FRACTION);
@@ -780,12 +1003,25 @@ mod tests {
             .collect()
     }
 
+    fn sorted_areas(s: &Sketch) -> Vec<f64> {
+        let mut areas: Vec<f64> = s.profiles().iter().map(|r| r.area).collect();
+        areas.sort_by(f64::total_cmp);
+        areas
+    }
+
+    fn assert_areas(s: &Sketch, want: &[f64]) {
+        let areas = sorted_areas(s);
+        assert_eq!(areas.len(), want.len(), "{areas:?}");
+        for (a, w) in areas.iter().zip(want) {
+            assert!((a - w).abs() < 1e-9 * w.max(1.0), "{areas:?} vs {want:?}");
+        }
+    }
+
     /// Two 40 x 40 squares overlapping by 20 x 20, drawn without splitting where they
-    /// cross: no region of area 0 with a hole (QA user guide pass), and the sketch says
-    /// it needs splitting. After the split the three faces are 1200, 400 and 1200
-    /// (40 x 40 = 1600 each, less the shared 20 x 20 = 400).
+    /// cross: the three faces are 1200, 400 and 1200 (40 x 40 = 1600 each, less the shared
+    /// 20 x 20 = 400) as drawn, and the same after the split tool makes the pieces real.
     #[test]
-    fn crossing_squares_give_no_empty_region_and_ask_for_a_split() {
+    fn crossing_squares_give_their_three_regions_without_a_split() {
         let mut s = Sketch::new();
         polygon(
             &mut s,
@@ -795,17 +1031,99 @@ mod tests {
             &mut s,
             &[(20.0, 20.0), (60.0, 20.0), (60.0, 60.0), (20.0, 60.0)],
         );
-        assert!(s.profiles().iter().all(|r| r.area >= MIN_AREA));
+        assert_areas(&s, &[400.0, 1200.0, 1200.0]);
+        // The overlap is found by a point inside it, and its outline is the 20 x 20 square.
+        let overlap = s.region_at(Point2::new(30.0, 30.0)).unwrap();
+        assert!((overlap.area - 400.0).abs() < 1e-9);
+        assert!(overlap.outer.segments.iter().all(|seg| seg.piece.is_some()));
+        let poly = s.loop_polyline(&overlap.outer);
+        assert_eq!(poly.len(), 4, "{poly:?}");
         assert!(s.has_unsplit_crossings());
         s.apply_tool(&crate::tools::ToolOp::Split { curve: None })
             .unwrap();
         assert!(!s.has_unsplit_crossings());
-        let mut areas: Vec<f64> = s.profiles().iter().map(|r| r.area).collect();
-        areas.sort_by(f64::total_cmp);
-        assert_eq!(areas.len(), 3, "{areas:?}");
-        for (a, want) in areas.iter().zip([400.0, 1200.0, 1200.0]) {
-            assert!((a - want).abs() < 1e-6, "{areas:?}");
-        }
+        assert_areas(&s, &[400.0, 1200.0, 1200.0]);
+    }
+
+    /// A circle r = 10 about (20, 0) over the right edge x = 20 of a 20 x 20 square
+    /// (0..20, -10..10): the edge is a diameter, so the half disc inside is 50π, the square
+    /// less it 400 - 50π, and the half disc outside 50π.
+    #[test]
+    fn a_circle_over_a_square_edge_splits_into_half_discs() {
+        let mut s = Sketch::new();
+        polygon(
+            &mut s,
+            &[(0.0, -10.0), (20.0, -10.0), (20.0, 10.0), (0.0, 10.0)],
+        );
+        let c = pt(&mut s, 20.0, 0.0);
+        s.add_circle(c, 10.0).unwrap();
+        let half = 50.0 * PI;
+        assert_areas(&s, &[half, half, 400.0 - half]);
+    }
+
+    /// A line across a circle r = 5 at y = 3 cuts a cap. The cap's area is the sector
+    /// less the triangle: the half-angle θ has cos θ = 3/5, so the cap is
+    /// r² (θ - sin θ cos θ) = 25 acos(0.6) - 12, and the rest 25π less that.
+    #[test]
+    fn a_line_across_a_circle_cuts_off_a_cap() {
+        let mut s = Sketch::new();
+        let c = pt(&mut s, 0.0, 0.0);
+        s.add_circle(c, 5.0).unwrap();
+        let a = pt(&mut s, -10.0, 3.0);
+        let b = pt(&mut s, 10.0, 3.0);
+        s.add_line(a, b).unwrap();
+        let cap = 25.0 * 0.6f64.acos() - 12.0;
+        assert_areas(&s, &[cap, 25.0 * PI - cap]);
+    }
+
+    /// A 40 x 20 rectangle with a line from the middle of its bottom up to the middle of
+    /// its top, ending on both (T-junctions, no shared points): two 20 x 20 halves.
+    #[test]
+    fn a_line_ending_on_two_sides_splits_a_rectangle() {
+        let mut s = Sketch::new();
+        polygon(
+            &mut s,
+            &[(0.0, 0.0), (40.0, 0.0), (40.0, 20.0), (0.0, 20.0)],
+        );
+        let a = pt(&mut s, 20.0, 0.0);
+        let b = pt(&mut s, 20.0, 20.0);
+        s.add_line(a, b).unwrap();
+        assert_areas(&s, &[400.0, 400.0]);
+    }
+
+    /// Two rectangles side by side sharing part of an edge on x = 20 (drawn separately,
+    /// so the edges overlap on one line): 20 x 20 = 400 and 10 x 10 = 100, with no sliver.
+    #[test]
+    fn rectangles_overlapping_on_one_edge_give_two_regions() {
+        let mut s = Sketch::new();
+        polygon(
+            &mut s,
+            &[(0.0, 0.0), (20.0, 0.0), (20.0, 20.0), (0.0, 20.0)],
+        );
+        polygon(
+            &mut s,
+            &[(20.0, 5.0), (30.0, 5.0), (30.0, 15.0), (20.0, 15.0)],
+        );
+        assert_areas(&s, &[100.0, 400.0]);
+    }
+
+    /// An arc (upper half of r = 10 about the origin, ends at (±10, 0)) over a line from
+    /// (-20, 5) to (20, 5) with the arc's chord closed by a line: the region above y = 5
+    /// inside the arc is a cap with cos θ = 5/10, r² (θ - sin θ cos θ) = 100 (π/3) - 25√3,
+    /// and the rest of the half disc 50π less that.
+    #[test]
+    fn an_arc_crossed_by_a_line_is_cut_at_the_crossings() {
+        let mut s = Sketch::new();
+        let c = pt(&mut s, 0.0, 0.0);
+        let e1 = pt(&mut s, 10.0, 0.0);
+        let e2 = pt(&mut s, -10.0, 0.0);
+        s.add_arc(c, e1, e2).unwrap();
+        s.add_line(e2, e1).unwrap();
+        let a = pt(&mut s, -20.0, 5.0);
+        let b = pt(&mut s, 20.0, 5.0);
+        s.add_line(a, b).unwrap();
+        let cap = 100.0 * PI / 3.0 - 25.0 * 3f64.sqrt();
+        assert_areas(&s, &[cap, 50.0 * PI - cap]);
     }
 
     #[test]
@@ -848,7 +1166,8 @@ mod tests {
             hole.segments,
             vec![LoopSegment {
                 curve: circle,
-                reversed: true
+                reversed: true,
+                piece: None
             }]
         );
         let disc = regions.iter().find(|r| r.holes.is_empty()).unwrap();
@@ -1071,55 +1390,80 @@ impl Sketch {
     pub fn loop_polyline(&self, l: &ProfileLoop) -> Vec<Point2> {
         let mut out = Vec::new();
         for seg in &l.segments {
-            let mut pts: Vec<Point2> = match self.curve(seg.curve) {
-                Some(Curve::Line { start, end, .. }) => {
-                    match (self.point(*start), self.point(*end)) {
-                        (Some(a), Some(b)) => vec![a, b],
-                        _ => return Vec::new(),
-                    }
-                }
-                Some(Curve::Circle { centre, radius, .. }) => match self.point(*centre) {
-                    Some(c) => {
-                        let n = LOOP_SEGMENTS_PER_TURN as usize;
-                        (0..=n)
-                            .map(|k| {
-                                let a = TAU * k as f64 / n as f64;
-                                c + Vec2::new(a.cos(), a.sin()) * *radius
-                            })
-                            .collect()
-                    }
-                    None => return Vec::new(),
-                },
-                Some(Curve::Arc {
-                    centre, start, end, ..
-                }) => {
-                    let (Some(c), Some(s), Some(e)) =
-                        (self.point(*centre), self.point(*start), self.point(*end))
+            let mut pts: Vec<Point2> = match (self.curve(seg.curve), seg.piece) {
+                (Some(Curve::Line { .. }), Some([a, b])) => vec![a, b],
+                (Some(Curve::Arc { centre, .. } | Curve::Circle { centre, .. }), Some([s, e])) => {
+                    let Some(Geo::Arc { c, r, a0, sweep }) =
+                        self.point(*centre).and_then(|c| arc_geo(c, s, e))
                     else {
                         return Vec::new();
                     };
-                    let Some(Geo::Arc { c, r, a0, sweep }) = arc_geo(c, s, e) else {
-                        return Vec::new();
-                    };
                     let n = ((LOOP_SEGMENTS_PER_TURN * sweep / TAU).ceil() as usize).max(2);
-                    (0..=n)
+                    let mut v: Vec<Point2> = (0..=n)
                         .map(|k| {
                             let a = a0 + sweep * k as f64 / n as f64;
                             c + Vec2::new(a.cos(), a.sin()) * r
                         })
-                        .collect()
+                        .collect();
+                    // The ends exactly where the pieces meet.
+                    if let Some(f) = v.first_mut() {
+                        *f = s;
+                    }
+                    if let Some(l) = v.last_mut() {
+                        *l = e;
+                    }
+                    v
                 }
-                Some(c @ Curve::Spline { .. }) => match self.spline_of(c) {
-                    Some(curve) => spline_polyline(&curve),
+                (curve, _) => match curve {
+                    Some(Curve::Line { start, end, .. }) => {
+                        match (self.point(*start), self.point(*end)) {
+                            (Some(a), Some(b)) => vec![a, b],
+                            _ => return Vec::new(),
+                        }
+                    }
+                    Some(Curve::Circle { centre, radius, .. }) => match self.point(*centre) {
+                        Some(c) => {
+                            let n = LOOP_SEGMENTS_PER_TURN as usize;
+                            (0..=n)
+                                .map(|k| {
+                                    let a = TAU * k as f64 / n as f64;
+                                    c + Vec2::new(a.cos(), a.sin()) * *radius
+                                })
+                                .collect()
+                        }
+                        None => return Vec::new(),
+                    },
+                    Some(Curve::Arc {
+                        centre, start, end, ..
+                    }) => {
+                        let (Some(c), Some(s), Some(e)) =
+                            (self.point(*centre), self.point(*start), self.point(*end))
+                        else {
+                            return Vec::new();
+                        };
+                        let Some(Geo::Arc { c, r, a0, sweep }) = arc_geo(c, s, e) else {
+                            return Vec::new();
+                        };
+                        let n = ((LOOP_SEGMENTS_PER_TURN * sweep / TAU).ceil() as usize).max(2);
+                        (0..=n)
+                            .map(|k| {
+                                let a = a0 + sweep * k as f64 / n as f64;
+                                c + Vec2::new(a.cos(), a.sin()) * r
+                            })
+                            .collect()
+                    }
+                    Some(c @ Curve::Spline { .. }) => match self.spline_of(c) {
+                        Some(curve) => spline_polyline(&curve),
+                        None => return Vec::new(),
+                    },
+                    Some(c @ (Curve::Ellipse { .. } | Curve::EllipticalArc { .. })) => {
+                        match self.ellipse_arc_of(c) {
+                            Some(e) => e.polyline(LOOP_SEGMENTS_PER_TURN as usize),
+                            None => return Vec::new(),
+                        }
+                    }
                     None => return Vec::new(),
                 },
-                Some(c @ (Curve::Ellipse { .. } | Curve::EllipticalArc { .. })) => {
-                    match self.ellipse_arc_of(c) {
-                        Some(e) => e.polyline(LOOP_SEGMENTS_PER_TURN as usize),
-                        None => return Vec::new(),
-                    }
-                }
-                None => return Vec::new(),
             };
             if seg.reversed {
                 pts.reverse();
