@@ -336,6 +336,18 @@ fn loop_edges(sketch: &Sketch, l: &ProfileLoop) -> Result<Vec<ProfileEdge>, Stri
         .iter()
         .map(|seg| {
             let curve = sketch.curve(seg.curve).ok_or_else(gone)?;
+            // A piece of a curve that other curves cross: the piece between its two ends.
+            if let Some([a, b]) = seg.piece {
+                let edge = match curve {
+                    Curve::Line { .. } => ProfileEdge::line(a, b),
+                    Curve::Arc { centre, .. } | Curve::Circle { centre, .. } => {
+                        ProfileEdge::arc_from_points(sketch.point(*centre).ok_or_else(gone)?, a, b)
+                            .map_err(|e| format!("an arc of the profile: {e}"))?
+                    }
+                    _ => return Err("only lines, arcs and circles are split".to_owned()),
+                };
+                return Ok(vec![if seg.reversed { edge.reversed() } else { edge }]);
+            }
             let edge = match curve {
                 Curve::Line { start, end, .. } => {
                     let (a, b) = (

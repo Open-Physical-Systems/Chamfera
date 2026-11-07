@@ -1055,3 +1055,227 @@ fn a_full_circle_area_is_exact() {
     assert_eq!(regions.len(), 1);
     assert!((regions[0].area - 4.0 * PI).abs() < 1e-12);
 }
+
+/// Two circles about (0, 0) and (7, 3) made concentric: with the first centre fixed, the
+/// second moves onto it; each keeps its radius.
+#[test]
+fn concentric_circles_share_a_centre() {
+    let mut s = Sketch::new();
+    let c1 = pt(&mut s, 0.0, 0.0);
+    let c2 = pt(&mut s, 7.0, 3.0);
+    let a = s.add_circle(c1, 10.0).unwrap();
+    let b = s.add_circle(c2, 4.0).unwrap();
+    fix_at(&mut s, c1, 0.0, 0.0);
+    let before = s.analyze().unwrap().dof;
+    add(&mut s, Constraint::Concentric { a, b });
+    let report = s.solve().unwrap();
+    assert_at(&s, c2, 0.0, 0.0);
+    assert!((s.radius(b).unwrap() - 4.0).abs() < TOL);
+    // Two equations: the second centre's x and y.
+    assert_eq!(before - report.dof.dof, 2);
+    // A line is not circular, and a circle is not concentric with itself.
+    let p = pt(&mut s, 1.0, 1.0);
+    let q = pt(&mut s, 2.0, 1.0);
+    let l = s.add_line(p, q).unwrap();
+    assert!(
+        s.add_constraint(Constraint::Concentric { a, b: l })
+            .is_err()
+    );
+    assert!(
+        s.add_constraint(Constraint::Concentric { a, b: a })
+            .is_err()
+    );
+}
+
+/// A line from (0, 0) to (10, 0), fixed, and one from (12, 3) to (20, 4): collinear puts
+/// both ends of the second on y = 0, two degrees of freedom fewer. Lines that share a point
+/// need one equation only.
+#[test]
+fn collinear_lines_lie_on_one_line() {
+    let mut s = Sketch::new();
+    let a = pt(&mut s, 0.0, 0.0);
+    let b = pt(&mut s, 10.0, 0.0);
+    let c = pt(&mut s, 12.0, 3.0);
+    let d = pt(&mut s, 20.0, 4.0);
+    let l1 = s.add_line(a, b).unwrap();
+    let l2 = s.add_line(c, d).unwrap();
+    fix_at(&mut s, a, 0.0, 0.0);
+    fix_at(&mut s, b, 10.0, 0.0);
+    let before = s.analyze().unwrap().dof;
+    add(&mut s, Constraint::Collinear { a: l2, b: l1 });
+    let report = s.solve().unwrap();
+    assert!(at(&s, c).y.abs() < TOL && at(&s, d).y.abs() < TOL);
+    assert_eq!(before - report.dof.dof, 2);
+    assert!(report.dof.redundant.is_empty());
+    // A third line from b, sharing it: one equation, and no redundancy.
+    let e = pt(&mut s, 15.0, -2.0);
+    let l3 = s.add_line(b, e).unwrap();
+    let before = s.analyze().unwrap().dof;
+    add(&mut s, Constraint::Collinear { a: l3, b: l1 });
+    let report = s.solve().unwrap();
+    assert!(at(&s, e).y.abs() < TOL);
+    assert_eq!(before - report.dof.dof, 1);
+    assert!(report.dof.redundant.is_empty());
+}
+
+/// Points (0, 0) fixed and (8, 5): horizontal between them puts the second at y = 0,
+/// vertical at x = 0. Together they would join the points.
+#[test]
+fn horizontal_and_vertical_between_two_points() {
+    let mut s = Sketch::new();
+    let a = pt(&mut s, 0.0, 0.0);
+    let b = pt(&mut s, 8.0, 5.0);
+    fix_at(&mut s, a, 0.0, 0.0);
+    add(&mut s, Constraint::HorizontalPoints { a, b });
+    s.solve().unwrap();
+    assert!(at(&s, b).y.abs() < TOL && (at(&s, b).x - 8.0).abs() < 1.0);
+    let mut s2 = Sketch::new();
+    let a = pt(&mut s2, 0.0, 0.0);
+    let b = pt(&mut s2, 8.0, 5.0);
+    fix_at(&mut s2, a, 0.0, 0.0);
+    add(&mut s2, Constraint::VerticalPoints { a, b });
+    s2.solve().unwrap();
+    assert!(at(&s2, b).x.abs() < TOL && (at(&s2, b).y - 5.0).abs() < 1.0);
+    assert!(
+        s2.add_constraint(Constraint::VerticalPoints { a, b: a })
+            .is_err()
+    );
+}
+
+/// From (0, 0) fixed to (30, 40): a horizontal dimension of 12 puts the second point at
+/// x = 12, a vertical one of 9 at y = 9; the aligned distance is then √(144 + 81) = 15.
+/// The second point stays on the side it started on.
+#[test]
+fn horizontal_and_vertical_dimensions_measure_along_the_axes() {
+    let mut s = Sketch::new();
+    let a = pt(&mut s, 0.0, 0.0);
+    let b = pt(&mut s, 30.0, 40.0);
+    fix_at(&mut s, a, 0.0, 0.0);
+    add(&mut s, Constraint::HorizontalDistance { a, b, value: 12.0 });
+    add(&mut s, Constraint::VerticalDistance { a, b, value: 9.0 });
+    let report = s.solve().unwrap();
+    assert_at(&s, b, 12.0, 9.0);
+    assert_eq!(report.dof.dof, 0);
+    assert!((at(&s, a).distance(at(&s, b)) - 15.0).abs() < TOL);
+    // From the left: a point at (-30, 40) goes to x = -12.
+    let mut s = Sketch::new();
+    let a = pt(&mut s, 0.0, 0.0);
+    let b = pt(&mut s, -30.0, 40.0);
+    fix_at(&mut s, a, 0.0, 0.0);
+    add(&mut s, Constraint::HorizontalDistance { a, b, value: 12.0 });
+    s.solve().unwrap();
+    assert!((at(&s, b).x + 12.0).abs() < TOL);
+    assert!(
+        s.add_constraint(Constraint::HorizontalDistance { a, b, value: -1.0 })
+            .is_err()
+    );
+}
+
+/// A quarter arc about the fixed origin, start fixed at (10, 0): an arc length of 5π
+/// (a quarter turn of r = 10 is 5π; asking 10π/3 gives a sweep of π/3) puts the end at
+/// angle π/3: (5, 5√3).
+#[test]
+fn an_arc_length_dimension_sets_the_sweep() {
+    let mut s = Sketch::new();
+    let c = pt(&mut s, 0.0, 0.0);
+    let st = pt(&mut s, 10.0, 0.0);
+    let en = pt(&mut s, 0.0, 10.0);
+    let arc = s.add_arc(c, st, en).unwrap();
+    fix_at(&mut s, c, 0.0, 0.0);
+    fix_at(&mut s, st, 10.0, 0.0);
+    let len = add(
+        &mut s,
+        Constraint::ArcLength {
+            curve: arc,
+            value: 5.0 * PI,
+        },
+    );
+    s.solve().unwrap();
+    assert_at(&s, en, 0.0, 10.0);
+    s.try_set_dimension(len, 10.0 * PI / 3.0).unwrap();
+    assert_at(&s, en, 5.0, 5.0 * 3f64.sqrt());
+    assert_eq!(s.analyze().unwrap().dof, 0);
+    // Only arcs have an arc length.
+    let o = pt(&mut s, 50.0, 50.0);
+    let circle = s.add_circle(o, 3.0).unwrap();
+    assert!(
+        s.add_constraint(Constraint::ArcLength {
+            curve: circle,
+            value: 1.0
+        })
+        .is_err()
+    );
+}
+
+/// A 40 x 20 rectangle fully dimensioned, with a driven distance across the diagonal: it
+/// reads √(1600 + 400) = 20√5 without over-constraining, follows a width change to 30
+/// (√(900 + 400) = 10√13), refuses a new value, survives a save and becomes driving again
+/// on request.
+#[test]
+fn a_driven_dimension_shows_a_size_without_constraining() {
+    let mut s = Sketch::new();
+    let p0 = pt(&mut s, 0.0, 0.0);
+    let p1 = pt(&mut s, 40.0, 0.0);
+    let p2 = pt(&mut s, 40.0, 20.0);
+    let p3 = pt(&mut s, 0.0, 20.0);
+    let l: Vec<CurveId> = [(p0, p1), (p1, p2), (p2, p3), (p3, p0)]
+        .iter()
+        .map(|(a, b)| s.add_line(*a, *b).unwrap())
+        .collect();
+    fix_at(&mut s, p0, 0.0, 0.0);
+    add(&mut s, Constraint::Horizontal { line: l[0] });
+    add(&mut s, Constraint::Horizontal { line: l[2] });
+    add(&mut s, Constraint::Vertical { line: l[1] });
+    add(&mut s, Constraint::Vertical { line: l[3] });
+    let width = add(
+        &mut s,
+        Constraint::Length {
+            line: l[0],
+            value: 40.0,
+        },
+    );
+    add(
+        &mut s,
+        Constraint::Length {
+            line: l[1],
+            value: 20.0,
+        },
+    );
+    assert_eq!(s.solve().unwrap().dof.dof, 0);
+    let diagonal = add(
+        &mut s,
+        Constraint::Distance {
+            a: p0,
+            b: p2,
+            value: 1.0,
+        },
+    );
+    s.set_driven(diagonal, true).unwrap();
+    assert!(s.is_driven(diagonal));
+    let value = |s: &Sketch| s.constraint(diagonal).and_then(Constraint::value).unwrap();
+    assert!((value(&s) - 20.0 * 5f64.sqrt()).abs() < TOL);
+    let report = s.solve().unwrap();
+    assert!(report.dof.redundant.is_empty());
+    assert_eq!(report.dof.status, ConstraintStatus::FullyConstrained);
+    s.try_set_dimension(width, 30.0).unwrap();
+    assert!((value(&s) - 10.0 * 13f64.sqrt()).abs() < TOL);
+    assert!(matches!(
+        s.set_dimension(diagonal, 5.0),
+        Err(SketchError::Driven(_))
+    ));
+    let json = serde_json::to_string(&s).unwrap();
+    assert!(json.contains("\"driven\":true"));
+    let back: Sketch = serde_json::from_str(&json).unwrap();
+    assert!(back.is_driven(diagonal));
+    // Driving again it over-constrains the rectangle.
+    s.set_driven(diagonal, false).unwrap();
+    assert!(!s.analyze().unwrap().redundant.is_empty());
+    // Only dimensions can be driven.
+    let h = s.constraints().find(|(_, c)| !c.is_dimension()).unwrap().0;
+    assert!(s.set_driven(h, true).is_err());
+    // Removing it forgets it.
+    s.set_driven(diagonal, true).unwrap();
+    s.remove_constraint(diagonal).unwrap();
+    assert!(!s.is_driven(diagonal));
+    s.validate().unwrap();
+}

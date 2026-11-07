@@ -48,8 +48,22 @@ pub enum Constraint {
         b: PointId,
         line: CurveId,
     },
+    /// Two circles or arcs share a centre.
+    Concentric { a: CurveId, b: CurveId },
+    /// Two lines lie on one infinite line.
+    Collinear { a: CurveId, b: CurveId },
+    /// Two points are level: the same Y.
+    HorizontalPoints { a: PointId, b: PointId },
+    /// Two points are one above the other: the same X.
+    VerticalPoints { a: PointId, b: PointId },
     /// Dimension: the distance between two points (mm).
     Distance { a: PointId, b: PointId, value: f64 },
+    /// Dimension: the distance between two points along X (mm), `|b.x - a.x|`.
+    HorizontalDistance { a: PointId, b: PointId, value: f64 },
+    /// Dimension: the distance between two points along Y (mm), `|b.y - a.y|`.
+    VerticalDistance { a: PointId, b: PointId, value: f64 },
+    /// Dimension: the length along an arc, radius times sweep (mm).
+    ArcLength { curve: CurveId, value: f64 },
     /// Dimension: the distance from a point to the (infinite) line through `line` (mm).
     PointLineDistance {
         point: PointId,
@@ -72,6 +86,9 @@ impl Constraint {
     pub fn value(&self) -> Option<f64> {
         match self {
             Constraint::Distance { value, .. }
+            | Constraint::HorizontalDistance { value, .. }
+            | Constraint::VerticalDistance { value, .. }
+            | Constraint::ArcLength { value, .. }
             | Constraint::PointLineDistance { value, .. }
             | Constraint::Length { value, .. }
             | Constraint::Radius { value, .. }
@@ -91,6 +108,9 @@ impl Constraint {
     pub(crate) fn set_value_unchecked(&mut self, new: f64) -> bool {
         match self {
             Constraint::Distance { value, .. }
+            | Constraint::HorizontalDistance { value, .. }
+            | Constraint::VerticalDistance { value, .. }
+            | Constraint::ArcLength { value, .. }
             | Constraint::PointLineDistance { value, .. }
             | Constraint::Length { value, .. }
             | Constraint::Radius { value, .. }
@@ -107,7 +127,11 @@ impl Constraint {
     pub fn point_refs(&self) -> Vec<PointId> {
         match self {
             Constraint::Coincident { a, b }
+            | Constraint::HorizontalPoints { a, b }
+            | Constraint::VerticalPoints { a, b }
             | Constraint::Distance { a, b, .. }
+            | Constraint::HorizontalDistance { a, b, .. }
+            | Constraint::VerticalDistance { a, b, .. }
             | Constraint::Symmetric { a, b, .. } => vec![*a, *b],
             Constraint::PointOnLine { point, .. }
             | Constraint::PointOnCircle { point, .. }
@@ -130,14 +154,21 @@ impl Constraint {
             | Constraint::Length { line, .. } => vec![*line],
             Constraint::PointOnCircle { curve, .. }
             | Constraint::Radius { curve, .. }
+            | Constraint::ArcLength { curve, .. }
             | Constraint::Diameter { curve, .. } => vec![*curve],
             Constraint::Parallel { a, b }
+            | Constraint::Concentric { a, b }
+            | Constraint::Collinear { a, b }
             | Constraint::Perpendicular { a, b }
             | Constraint::Tangent { a, b }
             | Constraint::Equal { a, b }
             | Constraint::Angle { a, b, .. } => vec![*a, *b],
             Constraint::Coincident { .. }
+            | Constraint::HorizontalPoints { .. }
+            | Constraint::VerticalPoints { .. }
             | Constraint::Fix { .. }
+            | Constraint::HorizontalDistance { .. }
+            | Constraint::VerticalDistance { .. }
             | Constraint::Distance { .. } => Vec::new(),
         }
     }
@@ -157,7 +188,14 @@ impl Constraint {
             Constraint::Fix { .. } => "fix",
             Constraint::Midpoint { .. } => "midpoint",
             Constraint::Symmetric { .. } => "symmetric",
+            Constraint::Concentric { .. } => "concentric",
+            Constraint::Collinear { .. } => "collinear",
+            Constraint::HorizontalPoints { .. } => "horizontal_points",
+            Constraint::VerticalPoints { .. } => "vertical_points",
             Constraint::Distance { .. } => "distance",
+            Constraint::HorizontalDistance { .. } => "horizontal_distance",
+            Constraint::VerticalDistance { .. } => "vertical_distance",
+            Constraint::ArcLength { .. } => "arc_length",
             Constraint::PointLineDistance { .. } => "point_line_distance",
             Constraint::Length { .. } => "length",
             Constraint::Radius { .. } => "radius",

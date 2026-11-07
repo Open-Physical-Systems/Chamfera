@@ -11,9 +11,12 @@
 //!   profile.
 //! - **Constraints** ([`Constraint`]) relate entities: coincident, point on line, point on
 //!   circle or arc, horizontal, vertical, parallel, perpendicular, tangent, equal, fix,
-//!   midpoint, symmetric; and **dimensions**, which carry a plain `f64` value (mm or
+//!   midpoint, symmetric, concentric, collinear, horizontal and vertical between two points;
+//!   and **dimensions**, which carry a plain `f64` value (mm or
 //!   radians) that a later milestone drives from parameters: distance, point-line distance,
-//!   length, radius, diameter and angle.
+//!   horizontal and vertical distance, length, radius, diameter, arc length and angle. A
+//!   dimension can be driven (a reference dimension): it takes no part in the solve and
+//!   shows the size the geometry has ([`Sketch::set_driven`]).
 //!
 //! Every edit is validated, and deserialising re-validates everything (dangling ids,
 //! non-finite or out-of-range numbers, counts), so a `Sketch` is always well formed.
@@ -35,17 +38,18 @@
 //!
 //! # Profiles
 //! [`Sketch::profiles`] finds the closed regions bounded by non-construction curves: outer
-//! loops counter-clockwise, holes clockwise, with exact signed areas. Curves are joined only
-//! at shared (or coincident) endpoints; crossings and T-junctions in the middle of a curve
-//! are not split by profile detection itself (`profile.rs`); the split tool below cuts
-//! crossing curves into pieces that share points, after which their regions are found.
+//! loops counter-clockwise, holes clockwise, with exact signed areas. Lines, arcs and
+//! circles are cut where they cross, meet in a T-junction or overlap, so overlapping shapes
+//! give their regions without splitting first (`profile.rs`); the split tool below makes
+//! those pieces real curves.
 //!
 //! # Tools
 //! [`Sketch::apply_tool`] runs a [`ToolOp`]: trim, extend, split at crossings, fillet,
 //! chamfer, offset, mirror, rectangular and circular patterns, centre rectangle,
 //! three-point and tangent arcs (`tools.rs`, with planar intersections in
-//! `intersect.rs`), and the shapes polygon, slot, ellipse and elliptical arc
-//! (`shapes.rs`). A failed tool changes nothing. Curves fixed in place
+//! `intersect.rs`), the shapes polygon, slot, ellipse and elliptical arc
+//! (`shapes.rs`), the three-point rectangle, circles through two or three points or
+//! tangent to curves, and moving, turning, scaling or copying geometry (`placed.rs`). A failed tool changes nothing. Curves fixed in place
 //! ([`Sketch::add_fixed_curve`]) carry model geometry projected into a sketch.
 //!
 //! # Snaps
@@ -65,6 +69,7 @@ mod entity;
 mod equations;
 mod intersect;
 mod linalg;
+mod placed;
 mod profile;
 mod shapes;
 mod sketch;
@@ -81,7 +86,8 @@ pub use chamfera_geom as geom;
 pub use constraint::Constraint;
 pub use ellipse::EllipseArc;
 pub use entity::{ConstraintId, Curve, CurveId, PointId};
-pub use profile::{LoopSegment, ProfileLoop, Region};
+pub use placed::SketchTransform;
+pub use profile::{LoopSegment, MAX_SPLIT_CURVES, ProfileLoop, Region};
 pub use shapes::{FixedCurve, MAX_POLYGON_SIDES, MIN_POLYGON_SIDES};
 pub use sketch::{MAX_CONSTRAINTS, MAX_CURVES, MAX_POINTS, Sketch, SketchError};
 pub use snap::{
