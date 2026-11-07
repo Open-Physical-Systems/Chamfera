@@ -5232,6 +5232,110 @@ fn overlapping_rectangles_extrude_their_regions_without_a_split() {
     }
 }
 
+/// The largest solid volume in an extrude reply.
+fn extruded_volume(r: &serde_json::Value) -> f64 {
+    r["solids"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|b| b["volume"].as_f64().unwrap())
+        .fold(0.0, f64::max)
+}
+
+/// An ellipse x²/100 + y²/25 = 1 over a rectangle from (0, -10) to (20, 10): the
+/// rectangle's left side crosses the ellipse at (0, ±5), cutting it into two halves of
+/// π a b / 2 = 25π each. Extruded 10: each half 250π mm³, and the rectangle outside the
+/// ellipse (400 - 25π) x 10.
+#[test]
+fn an_ellipse_over_a_rectangle_extrudes_its_pieces_without_a_split() {
+    use std::f64::consts::PI;
+    let mut s = Session::new();
+    s.execute("sketch.create", &json!({"plane": "xy"})).unwrap();
+    s.execute(
+        "sketch.ellipse",
+        &json!({"cx": 0, "cy": 0, "x": 10, "y": 0, "minor": 5}),
+    )
+    .unwrap();
+    s.execute(
+        "sketch.rectangle",
+        &json!({"x1": 0, "y1": -10, "x2": 20, "y2": 10}),
+    )
+    .unwrap();
+    let g = s.execute("sketch.get", &json!({})).unwrap();
+    let mut areas: Vec<f64> = g["profiles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["area"].as_f64().unwrap())
+        .collect();
+    areas.sort_by(f64::total_cmp);
+    let want = [25.0 * PI, 25.0 * PI, 400.0 - 25.0 * PI];
+    let mut want_sorted = want;
+    want_sorted.sort_by(f64::total_cmp);
+    assert_eq!(areas.len(), 3, "{areas:?}");
+    for (a, w) in areas.iter().zip(want_sorted) {
+        assert!((a - w).abs() < 1e-9, "{areas:?}");
+    }
+    s.execute("sketch.finish", &json!({})).unwrap();
+    for (x, y, want) in [
+        (-5.0, 0.0, 250.0 * PI),
+        (5.0, 0.0, 250.0 * PI),
+        (15.0, 8.0, (400.0 - 25.0 * PI) * 10.0),
+    ] {
+        let r = s
+            .execute(
+                "solid.extrude",
+                &json!({"sketch": 1, "profiles": [{"x": x, "y": y}], "distance": 10}),
+            )
+            .unwrap();
+        let v = extruded_volume(&r);
+        assert!((v - want).abs() < 1e-6 * want, "{x},{y}: {v} vs {want}");
+        s.execute("edit.undo", &json!({})).unwrap();
+    }
+}
+
+/// The fit spline through (0, 0), (10, 10), (20, 0) is the parabola y = x (20 - x) / 10;
+/// with its base line it bounds 400/3 mm² (Archimedes). A line y = 5 across it cuts off
+/// the cap between x = 10 ± √50, of area ∫ (50 - u²) / 10 du over |u| ≤ √50 = 20√50 / 3.
+#[test]
+fn a_line_across_a_spline_cuts_off_a_cap_that_extrudes() {
+    let mut s = Session::new();
+    s.execute("sketch.create", &json!({"plane": "xy"})).unwrap();
+    s.execute(
+        "sketch.spline",
+        &json!({"points": [{"x": 0, "y": 0}, {"x": 10, "y": 10}, {"x": 20, "y": 0}]}),
+    )
+    .unwrap();
+    for (x1, y1, x2, y2) in [(0, 0, 20, 0), (-5, 5, 25, 5)] {
+        s.execute(
+            "sketch.line",
+            &json!({"x1": x1, "y1": y1, "x2": x2, "y2": y2}),
+        )
+        .unwrap();
+    }
+    let cap = 20.0 * 50f64.sqrt() / 3.0;
+    let g = s.execute("sketch.get", &json!({})).unwrap();
+    let mut areas: Vec<f64> = g["profiles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["area"].as_f64().unwrap())
+        .collect();
+    areas.sort_by(f64::total_cmp);
+    assert_eq!(areas.len(), 2, "{areas:?}");
+    assert!((areas[0] - cap).abs() < 1e-6, "{areas:?}");
+    assert!((areas[1] - (400.0 / 3.0 - cap)).abs() < 1e-6, "{areas:?}");
+    s.execute("sketch.finish", &json!({})).unwrap();
+    let r = s
+        .execute(
+            "solid.extrude",
+            &json!({"sketch": 1, "profiles": [{"x": 10, "y": 8}], "distance": 10}),
+        )
+        .unwrap();
+    let v = extruded_volume(&r);
+    assert!((v - cap * 10.0).abs() < 1e-4, "{v} vs {}", cap * 10.0);
+}
+
 #[test]
 fn concentric_collinear_and_point_alignment_from_the_selection() {
     use crate::sketching::SketchItem;
