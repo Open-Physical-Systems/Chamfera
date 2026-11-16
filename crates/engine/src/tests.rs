@@ -427,6 +427,16 @@ fn hostile_params_never_panic() {
         json!({"constraints": [{"kind": "horizontal", "line": 3}], "replace": -1, "kind": "fix"}),
         json!({"text": long, "x": 1e300, "y": f64::NAN, "height": -1, "font": long, "align": 5}),
         json!({"text": "\u{0}\u{FFFF}", "x": 0, "y": 0, "height": 1e300, "align": "middle", "font": "/dev/zero"}),
+        // Primitives, scale, align, physical materials.
+        json!({"length": 1e300, "width": f64::NAN, "height": -1, "radius": "1e7 mm", "top_radius": 1e300, "origin": {"x": 1e300, "y": 0, "z": 0}}),
+        json!({"major_radius": 5, "minor_radius": 5, "axis": [1], "operation": "melt", "origin": [1, 2, 3]}),
+        json!({"radius": 3, "height": 4, "top_radius": 3, "axis": "x", "operation": "cut", "feature": 2}),
+        json!({"bodies": ["Sample bracket"], "factor": 1e-300, "x": "big", "origin": {"x": "a"}}),
+        json!({"bodies": vec!["x"; 1001], "factor": 1e300, "y": f64::NAN, "z": -1}),
+        json!({"from": {"solid": "Sample bracket", "face": "#0"}, "to": {"point": [1e300, 0, 0]}, "copy": "yes"}),
+        json!({"from": {"point": [0, 0, 0]}, "to": {"solid": long, "edge": long}, "body": long}),
+        json!({"body": "Sample bracket", "preset": long, "density": "1e400 g/cm3", "clear": 1}),
+        json!({"body": 1, "density": f64::MAX, "name": long, "preset": null}),
         // Drafts: neutral planes and angles.
         json!({"faces": ["1:side 0"], "neutral": long, "angle": 1e300, "flip": "yes"}),
         json!({"faces": ["2:side 0", "2:side 1"], "neutral": "xy", "angle": "80 deg", "flip": true, "preview": true}),

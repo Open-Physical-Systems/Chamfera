@@ -134,9 +134,9 @@ pub use tessellate::{BodyMesh, TessOptions, tessellate};
 pub use thin::{MAX_THIN_EDGES, ThinSide, thin_profile};
 pub use topology::{
     Body, Curve, CurveId, EdgeCurve, EdgeId, FaceId, HalfEdgeId, LoopId, MAX_NAME_LENGTH,
-    MAX_PROFILE_VERTICES, MAX_TOPOLOGY_ENTITIES, Mvfs, PointId, PointOnFace,
-    SURFACE_QUADRATURE_TOLERANCE, ShellId, ShellReport, SurfaceId, TopologyError, TopologyReport,
-    TopologySummary, Validation, VertexId,
+    MAX_PROFILE_VERTICES, MAX_SCALE_FACTOR, MAX_TOPOLOGY_ENTITIES, MIN_SCALE_FACTOR, Mvfs, PointId,
+    PointOnFace, SURFACE_QUADRATURE_TOLERANCE, ShellId, ShellReport, SurfaceId, TopologyError,
+    TopologyReport, TopologySummary, Validation, VertexId,
 };
 pub(crate) use topology::{ListEdge, ListFace, ListVertex};
 

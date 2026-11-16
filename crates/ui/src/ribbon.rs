@@ -351,6 +351,11 @@ pub const TOOLS: &[RibbonTool] = &[
         "Grow a thin wall from a sketch line to the solid (or through it, a web)",
     )
     .sep(),
+    tool(P, "CREATE", Action::Tool("solid.box"), Icon::Body, "Box", "A box of typed length, width and height at a point").sep(),
+    tool(P, "CREATE", Action::Tool("solid.cylinder"), Icon::Extrude, "Cylinder", "A cylinder of typed radius and height at a point"),
+    tool(P, "CREATE", Action::Tool("solid.sphere"), Icon::Revolve, "Sphere", "A sphere of typed radius centred on a point"),
+    tool(P, "CREATE", Action::Tool("solid.torus"), Icon::Revolve, "Torus", "A ring of typed major and minor radius about an axis"),
+    tool(P, "CREATE", Action::Tool("solid.cone"), Icon::Loft, "Cone", "A pointed or cut-off cone of typed radii and height"),
     // SOLID > MODIFY
     tool(
         P,
@@ -454,6 +459,9 @@ pub const TOOLS: &[RibbonTool] = &[
         "Move or rotate bodies by typed values, or copy them",
     )
     .sep(),
+    tool(P, "MODIFY", Action::Tool("solid.align"), Icon::Move, "Align", "Move a body so a face, edge or vertex meets another"),
+    tool(P, "MODIFY", Action::Tool("solid.scale"), Icon::SketchTransform, "Scale", "Scale bodies about a point, uniformly or per axis"),
+    tool(P, "MODIFY", Action::Tool("body.material"), Icon::Mass, "Physical Material", "What a body is made of: its density, for its mass"),
     tool(
         P,
         "MODIFY",
@@ -700,6 +708,7 @@ pub const TOOLS: &[RibbonTool] = &[
         "Mass Properties",
         "Volume, mass, centre of mass and inertia of a solid",
     ),
+    tool(P, "INSPECT", Action::Tool("inspect.check"), Icon::Warning, "Check Bodies", "Check every body's topology and geometry with the kernel"),
     // SOLID > INSERT
     tool(
         P,
@@ -1827,6 +1836,7 @@ impl ChamferaApp {
             || s.press_pull.is_some()
             || s.sweep.is_some()
             || s.body_tool.is_some()
+            || s.quick.is_some()
             || s.surface.is_some()
             || self.construct.tool.is_some()
             || self.assembly.joint.is_some()
@@ -1893,6 +1903,8 @@ impl ChamferaApp {
                         s.body_tool.as_ref().is_some_and(|t| t.kind == k)
                     } else if let Some(k) = surface_kind(id) {
                         s.surface.as_ref().is_some_and(|t| t.kind == k)
+                    } else if let Some(k) = crate::quick_ui::QuickKind::from_command(id) {
+                        s.quick.as_ref().is_some_and(|t| t.kind == k)
                     } else if let Some(k) = transform_kind(id) {
                         s.transform.as_ref().is_some_and(|t| t.kind == k)
                     } else if let Some(k) = construct_kind(id) {
@@ -1983,6 +1995,11 @@ impl ChamferaApp {
                 }
                 "solid.rib" if has_solids && !self.has_sketch_curves() => {
                     format!("{name}: draw a line in a sketch first")
+                }
+                _ if crate::quick_ui::QuickKind::from_command(id)
+                    .is_some_and(|k| !k.needs_solid() && !self.tool_open()) =>
+                {
+                    return None;
                 }
                 _ if !has_solids && construct_kind(id).is_none_or(|k| k.needs_solid()) => {
                     format!("{name}: build a solid first")
@@ -2177,6 +2194,8 @@ impl ChamferaApp {
                     self.open_surface_tool(k);
                 } else if let Some(kind) = id.strip_prefix("constraint.") {
                     self.constrain_selection_checked(kind);
+                } else if let Some(k) = crate::quick_ui::QuickKind::from_command(id) {
+                    self.open_quick_tool(k);
                 } else if let Some(k) = transform_kind(id) {
                     self.open_transform(k);
                 } else if let Some(k) = construct_kind(id) {
