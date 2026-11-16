@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+  <!-- Chamfera interface icon: bill of materials. Original artwork, MIT OR Apache-2.0. -->
+  <rect x="3.5" y="3.5" width="17" height="17" rx="1.5" stroke="#2B313B"/>
+  <path stroke="#2B313B" d="M3.5 8.5h17M8 3.5v17"/>
+  <path stroke="#E8770E" d="M10.5 12h7M10.5 15.5h7M5.5 12h0.5M5.5 15.5h0.5"/>
+</svg>

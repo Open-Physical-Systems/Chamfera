@@ -70,11 +70,26 @@ pub static COMMANDS: &[CommandSpec] = &[
         run: rename,
     },
     CommandSpec {
+        id: "component.rigid_group",
+        label: "Rigid Group",
+        params: "components: array of integers (required) - two or more components to lock together where they sit; none may be in another group\n\
+                 name: string (optional) - default GroupN",
+        mutates: true,
+        run: rigid_group,
+    },
+    CommandSpec {
         id: "component.tint",
         label: "Tint Component",
         params: "component: integer (required)\ntint: boolean (required) - draw its bodies with a subtle colour of their own",
         mutates: true,
         run: tint,
+    },
+    CommandSpec {
+        id: "component.ungroup",
+        label: "Ungroup",
+        params: "group: integer (required) - the rigid group; its components stay where they are and move freely again",
+        mutates: true,
+        run: ungroup,
     },
 ];
 
@@ -207,7 +222,8 @@ pub(crate) fn component_json(s: &Session, id: u32) -> Value {
         "tint": c.is_some_and(|c| c.tint),
         "placement": c.map(|c| placement_json(&c.placement)),
         "world": placement_json(&s.placements().of(id)),
-        "driven_by": asm.driver_of(id).map(|d| d.joint),
+        "driven_by": asm.driver_of(id).map(|d| d.joint).filter(|j| *j <= asm.last_id),
+        "group": asm.group_of(id).map(|g| g.id),
         "bodies": bodies,
     })
 }
@@ -229,10 +245,35 @@ fn list(s: &mut Session, p: &Value) -> CmdResult {
         .iter()
         .map(|j| super::joint::joint_json(s, j.id))
         .collect();
+    let groups: Vec<Value> = s
+        .doc
+        .assembly
+        .groups
+        .iter()
+        .map(|g| group_json(s, g.id))
+        .collect();
+    let loops: Vec<Value> = s
+        .placements()
+        .loops
+        .iter()
+        .map(|l| {
+            json!({
+                "joints": l.joints,
+                "unknowns": l.unknowns,
+                "equations": l.equations,
+                "freedom": l.freedom,
+                "residual": l.residual,
+                "iterations": l.iterations,
+                "error": l.error,
+            })
+        })
+        .collect();
     Ok(json!({
         "active": s.doc.assembly.active,
         "components": components,
         "joints": joints,
+        "groups": groups,
+        "loops": loops,
     }))
 }
 
@@ -343,6 +384,18 @@ fn move_component(s: &mut Session, p: &Value) -> CmdResult {
             "the root component is the design's origin and does not move".into(),
         ));
     }
+    if let Some(g) = s.doc.assembly.group_of(id)
+        && g.members.first().is_some_and(|m| m.component != id)
+    {
+        let first = g.members.first().map_or(0, |m| m.component);
+        return Err(CommandError::Unavailable(format!(
+            "{} is locked in rigid group {:?}: move {}, the group's first component, or \
+             ungroup it",
+            s.doc.assembly.name_of(id),
+            g.name,
+            s.doc.assembly.name_of(first)
+        )));
+    }
     if let Some(d) = s.doc.assembly.driver_of(id) {
         let name = s
             .doc
@@ -391,9 +444,11 @@ fn ground(s: &mut Session, p: &Value) -> CmdResult {
             ))
         };
     }
+    let before = super::joint::failures(s);
     s.doc.assembly.component_mut(id)?.grounded = grounded;
-    chamfera_doc::joint::check_tree(&s.doc.assembly)?;
     s.rebuild();
+    super::joint::refuse_new_failures(s, &before)?;
+    super::joint::keep_solved(s);
     Ok(component_json(s, id))
 }
 
@@ -408,4 +463,93 @@ fn tint(s: &mut Session, p: &Value) -> CmdResult {
     s.doc.assembly.component_mut(id)?.tint = on;
     s.rebuild();
     Ok(component_json(s, id))
+}
+
+/// One rigid group, for replies.
+fn group_json(s: &Session, id: u32) -> Value {
+    let asm = &s.doc.assembly;
+    let Ok(g) = asm.group(id) else {
+        return Value::Null;
+    };
+    json!({
+        "group": g.id,
+        "name": g.name,
+        "components": g.members.iter().map(|m| m.component).collect::<Vec<_>>(),
+        "error": s.placements().group_errors.get(&id),
+    })
+}
+
+fn rigid_group(s: &mut Session, p: &Value) -> CmdResult {
+    let list = match p.get("components") {
+        Some(Value::Array(a)) => a,
+        None | Some(Value::Null) => return Err(bad("`components` is required")),
+        Some(_) => return Err(bad("`components` must be an array of component ids")),
+    };
+    if list.len() > chamfera_doc::component::MAX_COMPONENTS {
+        return Err(bad("`components` lists too many components"));
+    }
+    let mut members = Vec::with_capacity(list.len());
+    for v in list {
+        let id = v
+            .as_u64()
+            .and_then(|v| u32::try_from(v).ok())
+            .ok_or_else(|| bad("`components` holds whole number ids"))?;
+        if !s.doc.assembly.exists(id) {
+            return Err(CommandError::Unavailable(format!("no component {id}")));
+        }
+        members.push((id, s.placements().of(id)));
+    }
+    let name = match params::opt_str(p, "name")? {
+        Some(n) => n.to_owned(),
+        None => format!("Group{}", s.doc.assembly.groups.len() + 1),
+    };
+    let before = super::joint::failures(s);
+    let id = s.doc.assembly.add_group(&name, &members)?;
+    s.rebuild();
+    super::joint::refuse_new_failures(s, &before)?;
+    super::joint::keep_solved(s);
+    Ok(group_json(s, id))
+}
+
+fn ungroup(s: &mut Session, p: &Value) -> CmdResult {
+    let id = params::req_id(p, "group")?;
+    // Each member stays where the group held it: that becomes its placement.
+    let members: Vec<u32> = s
+        .doc
+        .assembly
+        .group(id)
+        .map_err(|e| CommandError::Unavailable(e.to_string()))?
+        .members
+        .iter()
+        .map(|m| m.component)
+        .collect();
+    let world: Vec<(u32, Transform)> = members
+        .iter()
+        .map(|c| (*c, s.placements().of(*c)))
+        .collect();
+    let removed = s.doc.assembly.remove_group(id)?;
+    for (c, w) in world {
+        let parent = s
+            .doc
+            .assembly
+            .component(c)
+            .map(|x| x.parent)
+            .unwrap_or(ROOT);
+        if s.doc.assembly.driver_of(c).is_some() {
+            continue;
+        }
+        if let Some(local) = s
+            .placements()
+            .of(parent)
+            .inverse_rigid()
+            .map(|inv| w.then(&inv))
+            .filter(chamfera_doc::component::is_valid_placement)
+            && let Ok(x) = s.doc.assembly.component_mut(c)
+        {
+            x.placement = local;
+        }
+    }
+    s.rebuild();
+    super::joint::keep_solved(s);
+    Ok(json!({ "ungrouped": removed.id, "name": removed.name, "components": members }))
 }

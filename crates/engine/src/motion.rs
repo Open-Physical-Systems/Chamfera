@@ -240,6 +240,23 @@ impl Session {
                 j.value = *value;
             }
         }
+        // In a loop, the joints being shown at a value are its inputs.
+        let keyed: Vec<u32> = asm
+            .joints
+            .iter()
+            .map(|j| j.id)
+            .filter(|id| {
+                v.motion_time.is_some() && self.doc.motion.keys.iter().any(|k| k.joint == *id)
+            })
+            .collect();
+        for id in keyed {
+            if let Ok(j) = asm.joint_mut(id) {
+                j.driven = true;
+            }
+        }
+        for id in v.drag.keys() {
+            asm.make_driver(*id);
+        }
         Cow::Owned(asm)
     }
 
@@ -282,6 +299,9 @@ impl Session {
             chamfera_doc::OriginAt::Point { point, axis } => {
                 let t = self.placements().of(a);
                 Frame::from_normal(t.apply_point(*point), t.apply_vector(*axis))?
+            }
+            chamfera_doc::OriginAt::Frame { frame } => {
+                frame.transformed(&self.placements().of(a))?
             }
             at => origin_frame(
                 at,

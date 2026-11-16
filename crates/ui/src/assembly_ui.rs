@@ -24,6 +24,8 @@ pub struct JointTool {
     pub flip: bool,
     /// The origin under the pointer, shown as a preview.
     pub hover: Option<Frame>,
+    /// As-built: the parts stay where they sit; the first pick gives the axis.
+    pub as_built: bool,
 }
 
 impl Default for JointTool {
@@ -35,6 +37,7 @@ impl Default for JointTool {
             value: "0".into(),
             flip: false,
             hover: None,
+            as_built: false,
         }
     }
 }
@@ -67,7 +70,7 @@ fn origin_text(app: &ChamferaApp, o: &JointOrigin) -> String {
         OriginAt::Face { face } => format!("face {face}"),
         OriginAt::Edge { edge } => format!("edge {edge}"),
         OriginAt::Vertex { edge, .. } => format!("vertex of {edge}"),
-        OriginAt::Point { .. } => "point".to_owned(),
+        OriginAt::Point { .. } | OriginAt::Frame { .. } => "point".to_owned(),
     };
     let comp = if o.component == ROOT {
         app.design_name()
@@ -165,6 +168,69 @@ impl ChamferaApp {
             self.assembly.joint = Some(JointTool::default());
             self.message = Some((
                 "Joint: click a face or edge on the part that moves, then where it goes".into(),
+                false,
+            ));
+        }
+    }
+
+    /// As-built Joint: opens the Joint tool in as-built mode, or closes it.
+    pub(crate) fn toggle_as_built(&mut self) {
+        if self.assembly.joint.as_ref().is_some_and(|t| t.as_built) {
+            self.assembly.joint = None;
+        } else {
+            self.assembly.joint = Some(JointTool {
+                as_built: true,
+                ..JointTool::default()
+            });
+            self.message = Some((
+                "As-built Joint: click the axis on the part that moves, then the part it is \
+                 joined to; nothing moves"
+                    .into(),
+                false,
+            ));
+        }
+    }
+
+    /// The components of the selected bodies, in selection order, without the root.
+    pub(crate) fn selected_components(&self) -> Vec<u32> {
+        let mut out: Vec<u32> = Vec::new();
+        for b in self.session.scene.selected_bodies() {
+            if let Some(c) = self.session.component_of_body(b)
+                && c != ROOT
+                && !out.contains(&c)
+            {
+                out.push(c);
+            }
+        }
+        out
+    }
+
+    /// The rigid group every selected body's component is in, when it is one group.
+    pub(crate) fn selected_group(&self) -> Option<u32> {
+        let asm = &self.session.doc.assembly;
+        let comps = self.selected_components();
+        let first = asm.group_of(*comps.first()?)?.id;
+        comps
+            .iter()
+            .all(|c| asm.group_of(*c).is_some_and(|g| g.id == first))
+            .then_some(first)
+    }
+
+    /// Rigid Group: locks the selected bodies' components together, or ungroups them
+    /// when they already are one group.
+    pub(crate) fn rigid_group_selection(&mut self) {
+        if let Some(g) = self.selected_group() {
+            if let Some(r) = self.run("component.ungroup", json!({ "group": g })) {
+                let name = r["name"].as_str().unwrap_or("The group");
+                self.message = Some((format!("{name} ungrouped: its parts move freely"), false));
+            }
+            return;
+        }
+        let comps = self.selected_components();
+        if let Some(r) = self.run("component.rigid_group", json!({ "components": comps })) {
+            let name = r["name"].as_str().unwrap_or("Group");
+            self.message = Some((
+                format!("{name}: {} components now move as one", comps.len()),
                 false,
             ));
         }
@@ -291,7 +357,12 @@ impl ChamferaApp {
         };
         let mut ok = false;
         let mut cancel = false;
-        let title = label("joint.create");
+        let as_built = tool.as_built;
+        let (title, icon) = if as_built {
+            (label("joint.as_built"), Icon::JointAsBuilt)
+        } else {
+            (label("joint.create"), Icon::Joint)
+        };
         let ready = tool.moving.is_some() && tool.target.is_some();
         egui::Window::new(title)
             .id(egui::Id::unique("joint dialog"))
@@ -304,7 +375,7 @@ impl ChamferaApp {
             .resizable(false)
             .show(ctx, |ui| {
                 ui.set_width(WIDTH);
-                if widgets::dialog_title(ui, look, Icon::Joint, title) {
+                if widgets::dialog_title(ui, look, icon, title) {
                     cancel = true;
                 }
                 widgets::dialog_body(ui, |ui| {
@@ -312,10 +383,18 @@ impl ChamferaApp {
                         .num_columns(2)
                         .spacing([widgets::S3, widgets::S3])
                         .show(ui, |ui| {
-                            for (caption, text, hint) in [
-                                ("Moves", &moving_text, "Click the part that moves"),
-                                ("To", &target_text, "Click where it goes"),
-                            ] {
+                            let captions = if as_built {
+                                [
+                                    ("Axis on", &moving_text, "Click the axis on the moving part"),
+                                    ("Joined to", &target_text, "Click the part it is joined to"),
+                                ]
+                            } else {
+                                [
+                                    ("Moves", &moving_text, "Click the part that moves"),
+                                    ("To", &target_text, "Click where it goes"),
+                                ]
+                            };
+                            for (caption, text, hint) in captions {
                                 widgets::field_label(ui, look, caption);
                                 let (t, c) = match text {
                                     Some(t) => (t.as_str(), look.c(|t| t.text)),
@@ -334,7 +413,7 @@ impl ChamferaApp {
                                     }
                                 });
                             ui.end_row();
-                            if let Some(unit) = tool.kind.value_unit() {
+                            if let Some(unit) = tool.kind.value_unit().filter(|_| !as_built) {
                                 let angle = unit == Unit::Angle;
                                 widgets::field_label(
                                     ui,
@@ -354,9 +433,11 @@ impl ChamferaApp {
                                 }
                                 ui.end_row();
                             }
-                            widgets::field_label(ui, look, "Flip");
-                            ui.checkbox(&mut tool.flip, "Turn the moving part over");
-                            ui.end_row();
+                            if !as_built {
+                                widgets::field_label(ui, look, "Flip");
+                                ui.checkbox(&mut tool.flip, "Turn the moving part over");
+                                ui.end_row();
+                            }
                         });
                 });
                 widgets::dialog_footer(ui, look, |ui| {
@@ -373,7 +454,12 @@ impl ChamferaApp {
         }
         if ok && ready {
             let params = self.joint_params();
-            if let Some(r) = self.run("joint.create", params) {
+            let command = if as_built {
+                "joint.as_built"
+            } else {
+                "joint.create"
+            };
+            if let Some(r) = self.run(command, params) {
                 self.message = Some((
                     format!("{} created", r["name"].as_str().unwrap_or("Joint")),
                     false,
@@ -391,6 +477,16 @@ impl ChamferaApp {
         let Some(tool) = self.assembly.joint.as_ref() else {
             return json!({});
         };
+        if tool.as_built {
+            // The axis is where the first pick was, in the world; the parts stay put.
+            let frame = tool.moving.as_ref().map(|o| o.1);
+            return json!({
+                "type": tool.kind.key(),
+                "a": tool.target.as_ref().map(|o| o.0.component),
+                "b": tool.moving.as_ref().map(|o| o.0.component),
+                "origin": frame.map(|f| json!({"point": f.origin(), "axis": f.z()})),
+            });
+        }
         let mut p = json!({
             "type": tool.kind.key(),
             "a": tool.target.as_ref().map(|o| &o.0),

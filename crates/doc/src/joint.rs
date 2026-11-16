@@ -10,15 +10,21 @@
 //! the axis (revolute), a slide along it (slider), both (cylindrical), a slide in the
 //! plane across it plus a turn (planar), or nothing (rigid).
 //!
-//! Joints and grounding must form a tree: the engine solves positions by walking out from
-//! the grounded components along joints, an exact chain with no iteration. Loops are
-//! refused for now ([`check_tree`]).
+//! The engine solves positions by walking out from the grounded components along a
+//! spanning tree of the joints ([`topology`]), an exact chain with no iteration. A joint
+//! the tree does not use closes a loop (a closed kinematic chain, such as a four-bar
+//! linkage): the engine then solves the free values of the loop's joints so that every
+//! closing joint fits (format 41). A joint marked `driven` keeps its value in a loop.
+//!
+//! An as-built joint (`as_built`) joins two components where they already sit: its two
+//! origins are one frame in the world, stored in each component's coordinates
+//! ([`OriginAt::Frame`]), so at value 0 nothing moves.
 
 use crate::DocError;
 use crate::component::{Assembly, ROOT, check_name};
-use chamfera_geom::{MAX_COORDINATE, Point3, Vec3};
+use chamfera_geom::{Frame, MAX_COORDINATE, Point3, Vec3};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Most joints one design may hold.
 pub const MAX_JOINTS: usize = 2_000;
@@ -104,6 +110,9 @@ pub enum OriginAt {
     Edge { edge: String },
     /// One end of a named edge; the axis is the component's z axis.
     Vertex { edge: String, end: EdgeEnd },
+    /// A whole frame (origin and axes) in the component's own coordinates: what an
+    /// as-built joint stores, so the two sides keep their relative turn exactly.
+    Frame { frame: Frame },
 }
 
 /// A joint origin: a place on a component.
@@ -137,6 +146,12 @@ pub struct Joint {
     /// Turn B over (half a turn about the origin frame's x axis), so faces meet face to face.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub flip: bool,
+    /// In a loop, the value is held (the loop's input) instead of solved.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub driven: bool,
+    /// Made where the components already sat: at value 0 B keeps its placement exactly.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub as_built: bool,
 }
 
 fn is_zero(v: &f64) -> bool {
@@ -197,6 +212,12 @@ impl JointOrigin {
                     return Err(bad("a joint origin axis must be a finite, non-zero vector"));
                 }
             }
+            OriginAt::Frame { frame } => {
+                let o = frame.origin();
+                if ![o.x, o.y, o.z].iter().all(|c| c.abs() <= MAX_COORDINATE) {
+                    return Err(bad("a joint origin frame must be within range"));
+                }
+            }
             OriginAt::Face { face: n }
             | OriginAt::Edge { edge: n }
             | OriginAt::Vertex { edge: n, .. } => {
@@ -212,7 +233,7 @@ impl JointOrigin {
 }
 
 impl Joint {
-    /// Checks a joint against the assembly (not the tree rule: see [`check_tree`]).
+    /// Checks a joint against the assembly.
     pub fn check(&self, asm: &Assembly) -> Result<(), DocError> {
         check_name(&self.name)?;
         self.a.check(asm)?;
@@ -272,64 +293,6 @@ impl Joint {
     }
 }
 
-/// Union-find over component ids plus a virtual "ground" node.
-struct Forest {
-    parent: BTreeMap<u64, u64>,
-}
-
-/// The virtual node every grounded component (and the root) is tied to.
-const GROUND: u64 = u64::MAX;
-
-impl Forest {
-    fn find(&mut self, x: u64) -> u64 {
-        let mut root = x;
-        // Bounded: each step moves up a tree that only ever gets shallower.
-        for _ in 0..=self.parent.len() {
-            match self.parent.get(&root) {
-                Some(p) if *p != root => root = *p,
-                _ => break,
-            }
-        }
-        self.parent.insert(x, root);
-        root
-    }
-
-    /// Joins two sets; false when they were already one (the edge closes a loop).
-    fn union(&mut self, a: u64, b: u64) -> bool {
-        let (ra, rb) = (self.find(a), self.find(b));
-        if ra == rb {
-            return false;
-        }
-        self.parent.insert(ra, rb);
-        true
-    }
-}
-
-/// Refuses joints that close a loop: two joints between the same components, a ring of
-/// joints, or a chain of joints between two grounded components.
-pub fn check_tree(asm: &Assembly) -> Result<(), DocError> {
-    let mut forest = Forest {
-        parent: BTreeMap::new(),
-    };
-    forest.union(u64::from(ROOT), GROUND);
-    for c in asm.components.iter().filter(|c| c.grounded) {
-        forest.union(u64::from(c.id), GROUND);
-    }
-    for j in &asm.joints {
-        if !forest.union(u64::from(j.a.component), u64::from(j.b.component)) {
-            return Err(bad(format!(
-                "joint {:?} would close a loop: {} and {} are already held together by \
-                 other joints or by being grounded. Loops of joints are not supported yet; \
-                 delete a joint or unground a component",
-                j.name,
-                asm.name_of(j.a.component),
-                asm.name_of(j.b.component)
-            )));
-        }
-    }
-    Ok(())
-}
-
 /// How the engine reaches a component when it solves positions: through `joint`, from
 /// the already placed component `from`. `forward` is true when `from` is the joint's A.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -339,16 +302,39 @@ pub struct Driver {
     pub forward: bool,
 }
 
-/// For every component a joint positions, the joint and the side it is reached from.
+/// The joint graph as the engine walks it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Topology {
+    /// For every component a joint positions, the joint and the side it is reached from.
+    pub drivers: BTreeMap<u32, Driver>,
+    /// The joints the walk does not use, in order: each one closes a loop.
+    pub closing: Vec<u32>,
+    /// The joints of each loop group, sorted: loops that share a joint are one group, as
+    /// they must be solved together.
+    pub loops: Vec<Vec<u32>>,
+}
+
+impl Topology {
+    /// The loop group a joint is in, if any.
+    pub fn loop_of(&self, joint: u32) -> Option<&[u32]> {
+        self.loops
+            .iter()
+            .find(|l| l.contains(&joint))
+            .map(Vec::as_slice)
+    }
+}
+
+/// Walks the joints from the grounded components outward.
 ///
 /// Joints group components; each group is walked breadth-first from its anchors: its
 /// grounded components (the root counts as grounded), or, in a group with none, the A
 /// side of its first joint. Anchors keep their own placement; every other member is
-/// placed by the joint it was reached through. The tree rule ([`check_tree`]) guarantees
-/// each component is reached once.
-pub fn drivers(asm: &Assembly) -> BTreeMap<u32, Driver> {
+/// placed by the joint it was first reached through. A joint between two components
+/// already reached closes a loop: it, and the tree joints between its two ends (through
+/// the ground when both ends hang from grounded components), form the loop.
+pub fn topology(asm: &Assembly, joints: &[Joint]) -> Topology {
     let mut adjacent: BTreeMap<u32, Vec<(u32, u32, bool)>> = BTreeMap::new();
-    for j in &asm.joints {
+    for j in joints {
         adjacent
             .entry(j.a.component)
             .or_default()
@@ -359,21 +345,25 @@ pub fn drivers(asm: &Assembly) -> BTreeMap<u32, Driver> {
             .push((j.id, j.a.component, false));
     }
     let grounded = |id: u32| id == ROOT || asm.component(id).is_ok_and(|c| c.grounded);
-    let mut out: BTreeMap<u32, Driver> = BTreeMap::new();
-    let mut seen: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
-    // Anchors: every grounded member first, then the A side of each joint in id order
-    // for groups that have no grounded member.
-    let mut anchors: Vec<u32> = adjacent.keys().copied().filter(|c| grounded(*c)).collect();
-    anchors.extend(asm.joints.iter().map(|j| j.a.component));
+    let mut out = Topology::default();
+    let mut used: BTreeSet<u32> = BTreeSet::new();
+    // Every grounded member is an anchor before any walk starts, so no joint "reaches" a
+    // grounded component; then the A side of each joint, for groups with none grounded.
+    let mut seen: BTreeSet<u32> = adjacent.keys().copied().filter(|c| grounded(*c)).collect();
+    let mut anchors: Vec<u32> = seen.iter().copied().collect();
+    anchors.extend(joints.iter().map(|j| j.a.component));
+    let mut walked: BTreeSet<u32> = BTreeSet::new();
     for anchor in anchors {
-        if !seen.insert(anchor) {
+        if !walked.insert(anchor) || (!grounded(anchor) && !seen.insert(anchor)) {
             continue;
         }
         let mut queue = std::collections::VecDeque::from([anchor]);
         while let Some(at) = queue.pop_front() {
             for &(joint, other, forward) in adjacent.get(&at).map_or(&[][..], Vec::as_slice) {
                 if seen.insert(other) {
-                    out.insert(
+                    used.insert(joint);
+                    walked.insert(other);
+                    out.drivers.insert(
                         other,
                         Driver {
                             joint,
@@ -386,7 +376,85 @@ pub fn drivers(asm: &Assembly) -> BTreeMap<u32, Driver> {
             }
         }
     }
+    out.closing = joints
+        .iter()
+        .map(|j| j.id)
+        .filter(|id| !used.contains(id))
+        .collect();
+    // The chain of (component, joint that placed it) up to its anchor. Bounded: each step
+    // follows a tree edge and the tree has one per placed component.
+    let chain = |from: u32| -> Vec<(u32, Option<u32>)> {
+        let mut at = from;
+        let mut nodes = Vec::new();
+        for _ in 0..=out.drivers.len() {
+            match out.drivers.get(&at) {
+                Some(d) => {
+                    nodes.push((at, Some(d.joint)));
+                    at = d.from;
+                }
+                None => break,
+            }
+        }
+        nodes.push((at, None));
+        nodes
+    };
+    // Union-find over joint ids: the joints of one loop, and loops sharing a joint, join.
+    let mut parent: BTreeMap<u32, u32> = BTreeMap::new();
+    let find = |parent: &mut BTreeMap<u32, u32>, x: u32| -> u32 {
+        let mut root = x;
+        for _ in 0..=parent.len() {
+            match parent.get(&root) {
+                Some(p) if *p != root => root = *p,
+                _ => break,
+            }
+        }
+        parent.insert(x, root);
+        root
+    };
+    for &id in &out.closing {
+        let Some(j) = joints.iter().find(|j| j.id == id) else {
+            continue;
+        };
+        let (ca, cb) = (chain(j.a.component), chain(j.b.component));
+        // The lowest common component of the two chains; none when they hang from two
+        // different anchors (both grounded: the loop runs through the ground).
+        let meet = cb
+            .iter()
+            .map(|(n, _)| *n)
+            .find(|n| ca.iter().any(|(m, _)| m == n));
+        let mut cycle = vec![id];
+        for c in [&ca, &cb] {
+            for (node, joint) in c.iter() {
+                if Some(*node) == meet {
+                    break;
+                }
+                if let Some(t) = joint {
+                    cycle.push(*t);
+                }
+            }
+        }
+        let first = find(&mut parent, id);
+        for t in cycle {
+            let r = find(&mut parent, t);
+            if r != first {
+                parent.insert(r, first);
+            }
+        }
+    }
+    let mut groups: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
+    let members: Vec<u32> = parent.keys().copied().collect();
+    for id in members {
+        let r = find(&mut parent, id);
+        groups.entry(r).or_default().push(id);
+    }
+    out.loops = groups.into_values().collect();
     out
+}
+
+/// For every component a joint (or a rigid group) positions, the joint and the side it
+/// is reached from.
+pub fn drivers(asm: &Assembly) -> BTreeMap<u32, Driver> {
+    topology(asm, &asm.solving_joints()).drivers
 }
 
 impl Assembly {
@@ -415,12 +483,11 @@ impl Assembly {
             let n = self.joints.len() + 1;
             joint.name = format!("Joint{n}");
         }
-        joint.check(self)?;
-        self.joints.push(joint);
-        if let Err(e) = check_tree(self) {
+        if let Err(e) = joint.check(self) {
             *self = before;
             return Err(e);
         }
+        self.joints.push(joint);
         self.joints
             .last()
             .map(|j| j.id)
@@ -436,9 +503,26 @@ impl Assembly {
         Ok(self.joints.remove(i))
     }
 
-    /// The joint that positions a component, if any.
+    /// The joint that positions a component, if any (a rigid group's link counts: see
+    /// [`Assembly::group_of`]).
     pub fn driver_of(&self, component: u32) -> Option<Driver> {
         drivers(self).get(&component).copied()
+    }
+
+    /// The joint graph with every joint and rigid group link.
+    pub fn topology(&self) -> Topology {
+        topology(self, &self.solving_joints())
+    }
+
+    /// Makes a joint its loop's input: it is driven, and the other joints of its loop
+    /// group are solved. A joint in no loop is left as it is.
+    pub fn make_driver(&mut self, id: u32) {
+        let topo = self.topology();
+        if let Some(group) = topo.loop_of(id) {
+            for j in self.joints.iter_mut().filter(|j| group.contains(&j.id)) {
+                j.driven = j.id == id;
+            }
+        }
     }
 }
 
@@ -468,29 +552,56 @@ mod tests {
             offset: [0.0, 0.0],
             limits: None,
             flip: false,
+            driven: false,
+            as_built: false,
         }
     }
 
     #[test]
-    fn loops_of_joints_are_refused_and_change_nothing() {
+    fn a_ring_of_joints_is_one_loop_and_a_tail_off_it_is_not() {
+        let mut asm = Assembly::default();
+        let a = asm.add_component("A", ROOT, &[]).unwrap();
+        let b = asm.add_component("B", ROOT, &[]).unwrap();
+        let c = asm.add_component("C", ROOT, &[]).unwrap();
+        let d = asm.add_component("D", ROOT, &[]).unwrap();
+        asm.component_mut(a).unwrap().grounded = true;
+        let j1 = asm.add_joint(joint(JointKind::Revolute, a, b)).unwrap();
+        let j2 = asm.add_joint(joint(JointKind::Slider, b, c)).unwrap();
+        let tail = asm.add_joint(joint(JointKind::Rigid, c, d)).unwrap();
+        assert!(asm.topology().loops.is_empty());
+        // C back to A closes the ring A - B - C - A; D hangs off C, outside the ring. The
+        // walk goes out from grounded A along J1 and J3 first, so J2 is the one that closes.
+        let j3 = asm.add_joint(joint(JointKind::Revolute, c, a)).unwrap();
+        let t = asm.topology();
+        assert_eq!(t.closing, vec![j2]);
+        assert_eq!(t.loops, vec![vec![j1, j2, j3]]);
+        assert!(t.loop_of(tail).is_none());
+        // Making J2 the loop's input drives it alone.
+        asm.joint_mut(j1).unwrap().driven = true;
+        asm.make_driver(j2);
+        let driven: Vec<bool> = asm.joints.iter().map(|j| j.driven).collect();
+        assert_eq!(driven, vec![false, true, false, false]);
+        // A component jointed to itself is still refused, and changes nothing.
+        let before = asm.clone();
+        assert!(asm.add_joint(joint(JointKind::Rigid, a, a)).is_err());
+        assert_eq!(asm, before);
+    }
+
+    #[test]
+    fn a_chain_between_two_grounded_components_is_a_loop_through_the_ground() {
         let mut asm = Assembly::default();
         let a = asm.add_component("A", ROOT, &[]).unwrap();
         let b = asm.add_component("B", ROOT, &[]).unwrap();
         let c = asm.add_component("C", ROOT, &[]).unwrap();
         asm.component_mut(a).unwrap().grounded = true;
-        asm.add_joint(joint(JointKind::Revolute, a, b)).unwrap();
-        asm.add_joint(joint(JointKind::Slider, b, c)).unwrap();
-        let before = asm.clone();
-        // C back to A closes the ring A - B - C - A.
-        let e = asm.add_joint(joint(JointKind::Rigid, c, a)).unwrap_err();
-        assert!(e.to_string().contains("loop"), "{e}");
-        // A second joint between the same two.
-        assert!(asm.add_joint(joint(JointKind::Rigid, a, b)).is_err());
-        // C to the (grounded) root: C is already held through A, which is grounded.
-        assert!(asm.add_joint(joint(JointKind::Rigid, ROOT, c)).is_err());
-        assert_eq!(asm, before);
-        // A component jointed to itself.
-        assert!(asm.add_joint(joint(JointKind::Rigid, a, a)).is_err());
+        asm.component_mut(c).unwrap().grounded = true;
+        let j1 = asm.add_joint(joint(JointKind::Revolute, a, b)).unwrap();
+        let j2 = asm.add_joint(joint(JointKind::Revolute, b, c)).unwrap();
+        let t = asm.topology();
+        // Both grounded components are anchors: B is reached from A, and J2 closes.
+        assert_eq!(t.closing, vec![j2]);
+        assert_eq!(t.loops, vec![vec![j1, j2]]);
+        assert!(!t.drivers.contains_key(&c));
     }
 
     #[test]
