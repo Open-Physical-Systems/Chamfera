@@ -148,6 +148,8 @@ impl FeatureKind {
                 }
             }
             FeatureKind::Thicken(t) => o.push(("thickness".into(), L, &mut t.thickness)),
+            FeatureKind::Draft(d) => o.push(("angle".into(), A, &mut d.angle)),
+            FeatureKind::Rib(r) => o.push(("thickness".into(), L, &mut r.thickness)),
             FeatureKind::Pattern(p) => {
                 o.push(("count".into(), N, &mut p.count));
                 match &mut p.layout {
