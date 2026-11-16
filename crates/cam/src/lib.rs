@@ -16,7 +16,8 @@
 //!   on grids;
 //! - [`holder`]: the shank and holder, checked against the stock and the part;
 //!   [`cancel`]: stopping a job on a worker thread that is no longer wanted;
-//! - [`post`]: G-code for LinuxCNC and GRBL;
+//! - [`tabs`]: holding tabs on contours;
+//! - [`post`]: G-code for a controller described as data (LinuxCNC, GRBL and others);
 //! - [`generate`] and [`setup_geometry`]: the document's CAM section to toolpaths.
 //!
 //! Model decisions use the exact geometry; nothing here meshes.
@@ -34,10 +35,11 @@ pub mod pencil;
 pub mod post;
 pub mod scallop;
 pub mod sim;
+pub mod tabs;
 pub mod toolpath;
 
 pub use ops::{Cutter, Hole, Region};
-pub use post::{Dialect, Wcs};
+pub use post::{PostDef, PostOptions, Posted, Wcs};
 pub use toolpath::{Move, Stats, Toolpath};
 
 use chamfera_doc::cam::{Cam, CamOperation, OpKind, Setup, Stock, WcsOrigin};
@@ -217,6 +219,7 @@ pub fn generate(
             lead_radius,
             bottom_offset,
             climb,
+            tabs,
         } => {
             let (boundary, z) = match face {
                 Some(name) => {
@@ -240,7 +243,7 @@ pub fn generate(
                     model::edge_chain(body_of(i)?, &ids)?
                 }
             };
-            ops::contour(
+            ops::contour_with_tabs(
                 &boundary,
                 z,
                 *side,
@@ -251,6 +254,7 @@ pub fn generate(
                 *lead_radius,
                 *bottom_offset,
                 g.clearance_z,
+                tabs.as_ref(),
             )
         }
         OpKind::Pocket {
@@ -402,8 +406,19 @@ pub fn generate(
             peck,
             retract,
             breakthrough,
+            tap,
         } => {
             let holes = drill_holes(bodies, faces)?;
+            if let Some(pitch) = tap {
+                return ops::tap(
+                    &holes,
+                    &cutter,
+                    top + retract,
+                    *pitch,
+                    *breakthrough,
+                    g.clearance_z,
+                );
+            }
             ops::drill(
                 &holes,
                 &cutter,
@@ -478,3 +493,5 @@ mod tests;
 mod tests3d;
 #[cfg(test)]
 mod tests_v3;
+#[cfg(test)]
+mod tests_v4;

@@ -1,5 +1,5 @@
 //! Physical materials: what the bodies of a feature are made of, for their mass (format
-//! 40). Stored by feature id like appearances; a body without one has no density and
+//! 42). Stored by feature id like appearances; a body without one has no density and
 //! mass properties take the density they are given.
 //!
 //! Densities are in g/cm³. The library's values are rounded handbook figures for common

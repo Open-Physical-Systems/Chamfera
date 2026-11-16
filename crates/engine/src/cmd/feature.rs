@@ -941,6 +941,9 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
     if super::face_edit::is_face_edit(&s.doc.feature(id)?.kind) {
         return super::face_edit::edit(s, id, p);
     }
+    if super::draft_rib::is_draft_or_rib(&s.doc.feature(id)?.kind) {
+        return super::draft_rib::edit(s, id, p);
+    }
     if matches!(s.doc.feature(id)?.kind, FeatureKind::Surface(_)) {
         return super::surface::edit(s, id, p);
     }
@@ -1003,6 +1006,9 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
             FeatureKind::Thread(_) => return Err(bad("a thread has no operation")),
             FeatureKind::Primitive(pr) => pr.operation = o,
             FeatureKind::Scale(_) => return Err(bad("a scale has no operation")),
+            FeatureKind::Draft(_) | FeatureKind::Rib(_) => {
+                return Err(bad("a draft, rib or web has no operation"));
+            }
         }
     }
     super::sheet::edit(s, &mut kind, p)?;

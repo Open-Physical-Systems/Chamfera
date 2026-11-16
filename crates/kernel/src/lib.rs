@@ -58,9 +58,12 @@
 //!
 //! Body tools are here: [`split_body`] cuts a solid by a plane, [`split_faces`] imprints a
 //! plane on flat faces, and [`thicken`] gives a flat or cylindrical face a thickness.
+//!
+//! Draft and rib are here: [`draft_faces`] tilts planar faces about a neutral plane, and
+//! [`rib`] grows a thin wall from an open chain until it meets a solid (or through it).
 
 mod face_edit;
-pub use face_edit::{delete_faces, move_faces, offset_faces};
+pub use face_edit::{MAX_DRAFT_ANGLE, delete_faces, draft_faces, lumps, move_faces, offset_faces};
 mod blend;
 mod boolean;
 mod check;
@@ -73,6 +76,7 @@ mod mass;
 mod planar;
 mod plane_split;
 mod profile;
+mod rib;
 mod sheet;
 mod shell;
 #[cfg(test)]
@@ -108,6 +112,7 @@ pub use mass::{MASS_QUADRATURE_TOLERANCE, MAX_DENSITY, MassProperties};
 pub use planar::{Arc2, Circle2, Line2, Segment2};
 pub use plane_split::{split_body, split_faces, thicken};
 pub use profile::{PROFILE_JOIN_TOLERANCE, Profile, ProfileEdge, polygon_edges};
+pub use rib::{RibExtent, rib};
 pub use sheet::{
     BendPosition, BendReport, FlangeSpec, FlatEdge, MAX_FLANGES, Relief, ReliefKind, Sheet,
     bend_allowance, check_thickness, flat_outline, outside_setback, position_trim,

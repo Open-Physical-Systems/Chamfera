@@ -17,6 +17,7 @@ pub mod motion;
 pub mod naming;
 pub mod physical;
 pub mod primitive;
+pub mod rib;
 pub mod sheet;
 pub mod surface;
 pub mod thread;
@@ -33,7 +34,7 @@ pub use construct::{
     AxisRef, ConstructKind, Construction, EdgeRef, OriginAxis, OriginPlane, PlaneRef, PointRef,
 };
 pub use drawing::Drawing;
-pub use face_edit::{DeleteFace, FaceTurn, MoveFace, OffsetFace};
+pub use face_edit::{DeleteFace, Draft, FaceTurn, MoveFace, OffsetFace};
 pub use feature::{
     Blend, BlendKind, BlendSecond, Extrude, ExtrudeDirection, ExtrudeExtent, ExtrudeTo,
     ExtrudeValues, Feature, FeatureKind, Hole, HoleKind, HoleSizes, Loft, LoftSection, Mirror,
@@ -46,6 +47,7 @@ pub use model_params::{ModelMeta, ModelParameter};
 pub use motion::{Motion, MotionKey};
 pub use physical::PhysicalMaterial;
 pub use primitive::{Primitive, PrimitiveAxis, PrimitiveShape, PrimitiveValues, Scale};
+pub use rib::Rib;
 pub use sheet::{
     FlangePosition, FlangeSide, FlangeValues, ReliefShape, SheetBase, SheetFlange, SheetRule,
     SheetUnfold,
@@ -152,11 +154,14 @@ use thiserror::Error;
 ///   callouts (`hole_callout` annotations, their text worked out from the hole feature),
 ///   and more title block fields (`drawing_number`, `revision`, `material`,
 ///   `checked_by`). Older files open unchanged. (38 is another branch's.)
-/// - 40: modelling quick wins: primitives (`kind: primitive` with `shape`: `box`,
+/// - 40: drafts (`kind: draft`: faces tilted about a neutral plane by an angle) and ribs
+///   and webs (`kind: rib`: a wall grown from an open sketch chain to a solid, `web` to go
+///   through it). Older files open unchanged: they hold none.
+/// - 42: modelling quick wins: primitives (`kind: primitive` with `shape`: `box`,
 ///   `cylinder`, `sphere`, `torus` or `cone`), scale features (`kind: scale`) and physical
 ///   materials per feature's bodies (`materials`: name and density in g/cm³, used by mass
-///   properties). Older files open unchanged: they hold none.
-pub const FORMAT_VERSION: u32 = 40;
+///   properties). Older files open unchanged: they hold none. (41 is another branch's.)
+pub const FORMAT_VERSION: u32 = 42;
 /// The tag every design file starts with, so other JSON is not mistaken for a design.
 pub const FORMAT_TAG: &str = "chamfera";
 /// Longest parameter name.
@@ -347,7 +352,7 @@ pub struct Document {
     /// How the bodies a feature (or an import) made look, by its id. Display data only.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub appearances: BTreeMap<u32, Appearance>,
-    /// What the bodies a feature made are made of, by its id (format 40).
+    /// What the bodies a feature made are made of, by its id (format 42).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub materials: BTreeMap<u32, PhysicalMaterial>,
     /// Manufacturing: setups, tools and operations (format 20). Older files have none.

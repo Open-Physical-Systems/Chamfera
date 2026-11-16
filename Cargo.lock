@@ -306,6 +306,7 @@ dependencies = [
  "chamfera-doc",
  "chamfera-geom",
  "chamfera-kernel",
+ "serde",
  "serde_json",
  "thiserror 2.0.21",
 ]

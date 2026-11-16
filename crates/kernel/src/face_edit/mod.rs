@@ -55,6 +55,7 @@ mod delete;
 mod draft;
 #[cfg(test)]
 mod tests;
+mod tilt;
 
 use crate::boolean::{MAX_BOOLEAN_FACES, subtract};
 use crate::topology::{Body, FaceId};
@@ -62,6 +63,7 @@ use crate::{KernelError, KernelResult, Surface};
 use chamfera_geom::{LINEAR_TOLERANCE, MAX_COORDINATE, Transform};
 use draft::Draft;
 use std::collections::{BTreeMap, BTreeSet};
+pub use tilt::{MAX_DRAFT_ANGLE, draft_faces, lumps};
 
 /// Relative agreement of the volume identity in step 5. Volumes of curved faces come
 /// from adaptive quadrature (relative), so the check is relative too; a face crossing

@@ -340,6 +340,14 @@ pub const TOOLS: &[RibbonTool] = &[
         Icon::Thicken,
         "Thicken",
         "Give flat or cylindrical faces a thickness",
+    ),
+    tool(
+        P,
+        "CREATE",
+        Action::Tool("solid.rib"),
+        Icon::Rib,
+        "Rib",
+        "Grow a thin wall from a sketch line to the solid (or through it, a web)",
     )
     .sep(),
     tool(P, "CREATE", Action::Tool("solid.box"), Icon::Body, "Box", "A box of typed length, width and height at a point").sep(),
@@ -382,6 +390,14 @@ pub const TOOLS: &[RibbonTool] = &[
         Icon::Shell,
         "Shell",
         "Hollow a solid to walls of a thickness, with the faces you click removed",
+    ),
+    tool(
+        P,
+        "MODIFY",
+        Action::Tool("solid.draft"),
+        Icon::Draft,
+        "Draft",
+        "Tilt flat faces by an angle about a neutral plane, for parts that leave a mould",
     ),
     tool(
         P,
@@ -1304,7 +1320,7 @@ pub const TOOLS: &[RibbonTool] = &[
         Action::Tool("cam.post"),
         Icon::CamPost,
         "Post G-code",
-        "Write the setup's toolpaths as LinuxCNC G-code (Post GRBL writes GRBL)",
+        "Write the setup's toolpaths as G-code for the post you choose (LinuxCNC first)",
     )
     .primary()
     .short("Post"),
@@ -1770,6 +1786,8 @@ impl ChamferaApp {
             || s.transform.is_some()
             || s.inspect.is_some()
             || s.shell.is_some()
+            || s.draft.is_some()
+            || s.rib.is_some()
             || s.press_pull.is_some()
             || s.sweep.is_some()
             || s.body_tool.is_some()
@@ -1804,6 +1822,8 @@ impl ChamferaApp {
                 "sketch.text" => self.sketch.text.is_some(),
                 "solid.hole" => s.hole.is_some(),
                 "solid.shell" => s.shell.is_some(),
+                "solid.draft" => s.draft.is_some(),
+                "solid.rib" => s.rib.is_some(),
                 "solid.offset_face" => pull == Some(PullMode::Offset),
                 "solid.delete_face" => pull == Some(PullMode::Delete),
                 "inspect.measure" => inspect == Some(InspectMode::Measure),
@@ -1915,6 +1935,9 @@ impl ChamferaApp {
                     } else {
                         return None;
                     }
+                }
+                "solid.rib" if has_solids && !self.has_sketch_curves() => {
+                    format!("{name}: draw a line in a sketch first")
                 }
                 _ if crate::quick_ui::QuickKind::from_command(id)
                     .is_some_and(|k| !k.needs_solid() && !self.tool_open()) =>
@@ -2049,6 +2072,8 @@ impl ChamferaApp {
             "sketch.create" => self.ribbon.request = Some(MenuRequest::Tool(t.action)),
             "solid.hole" => self.open_hole_tool(),
             "solid.shell" => self.open_shell_tool(),
+            "solid.draft" => self.open_draft_tool(),
+            "solid.rib" => self.open_rib_tool(),
             "solid.offset_face" => self.open_press_pull(PullMode::Offset),
             "solid.delete_face" => self.open_press_pull(PullMode::Delete),
             "inspect.measure" => self.open_inspect(InspectMode::Measure),
@@ -2584,6 +2609,7 @@ mod tests {
             "body.rename",
             "body.visibility",
             "cam.list",
+            "cam.posts",  // the Post G-code dialog
             "cam.op_add", // the operation tools
             "cam.op_delete",
             "cam.op_edit", // the Manufacture tree

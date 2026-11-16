@@ -12,7 +12,7 @@ use crate::path2::{
     JOIN_TOLERANCE, Loop, Seg, loop_length, nearest_point, reverse_loop, signed_area, start_nearest,
 };
 use crate::toolpath::{Move, Toolpath};
-use chamfera_doc::cam::{Entry, Side, Tool};
+use chamfera_doc::cam::{Entry, Side, Tabs, Tool};
 use chamfera_geom::{Point2, Point3};
 use std::f64::consts::{PI, TAU};
 
@@ -129,7 +129,7 @@ pub fn depths(top: f64, bottom: f64, stepdown: f64) -> Result<Vec<f64>, CamError
 
 /// Moves along `s` from height `z0` to `z1` (linear in length): a line or an arc, a full
 /// circle split in two halves so every arc posts with distinct ends.
-fn seg_moves(s: &Seg, z0: f64, z1: f64, feed: f64, out: &mut Vec<Move>) {
+pub(crate) fn seg_moves(s: &Seg, z0: f64, z1: f64, feed: f64, out: &mut Vec<Move>) {
     match *s {
         Seg::Line { b, .. } => out.push(Move::Line {
             to: p3(b, z1),
@@ -263,12 +263,7 @@ fn ccw(l: &[Seg]) -> Loop {
     }
 }
 
-/// Contour: the tool runs round `boundary` (a closed loop at height `boundary_z`) at its
-/// radius from it, on `side` of the counter-clockwise loop (right is outside), from `top`
-/// down to `boundary_z - bottom_offset` in depths of at most `stepdown`.
-///
-/// With `lead_radius > 0` each pass starts and ends with a quarter-circle arc of that
-/// radius, tangent to the path, on the side away from the material.
+/// [`contour_with_tabs`] with no holding tabs.
 #[allow(clippy::too_many_arguments)]
 pub fn contour(
     boundary: &[Seg],
@@ -281,6 +276,44 @@ pub fn contour(
     lead_radius: f64,
     bottom_offset: f64,
     clearance: f64,
+) -> Result<Toolpath, CamError> {
+    contour_with_tabs(
+        boundary,
+        boundary_z,
+        side,
+        climb,
+        tool,
+        top,
+        stepdown,
+        lead_radius,
+        bottom_offset,
+        clearance,
+        None,
+    )
+}
+
+/// Contour: the tool runs round `boundary` (a closed loop at height `boundary_z`) at its
+/// radius from it, on `side` of the counter-clockwise loop (right is outside), from `top`
+/// down to `boundary_z - bottom_offset` in depths of at most `stepdown`.
+///
+/// With `lead_radius > 0` each pass starts and ends with a quarter-circle arc of that
+/// radius, tangent to the path, on the side away from the material.
+///
+/// With `tabs`, holding tabs stand at the bottom of the cut ([`crate::tabs`]): the passes
+/// below their tops rise over them.
+#[allow(clippy::too_many_arguments)]
+pub fn contour_with_tabs(
+    boundary: &[Seg],
+    boundary_z: f64,
+    side: Side,
+    climb: bool,
+    tool: &Cutter,
+    top: f64,
+    stepdown: f64,
+    lead_radius: f64,
+    bottom_offset: f64,
+    clearance: f64,
+    tabs: Option<&Tabs>,
 ) -> Result<Toolpath, CamError> {
     tool.check()?;
     finite("the clearance height", clearance)?;
@@ -331,6 +364,10 @@ pub fn contour(
         let c_out = p0 + away(t1) * lead_radius;
         let e_out = c_out + t1 * lead_radius;
         let entry = if lead { s_in } else { p0 };
+        let plan = match tabs {
+            Some(t) => Some(crate::tabs::plan(l, t, tool.radius(), bottom, top)?),
+            None => None,
+        };
         let mut prev = top.max(bottom);
         for &z in &zs {
             m.push(Move::Rapid {
@@ -351,7 +388,15 @@ pub fn contour(
                     feed: tool.feed,
                 });
             }
-            loop_moves(l, z, tool.feed, &mut m);
+            match &plan {
+                Some(plan) => {
+                    crate::tabs::pass(l, plan, z, tool.feed, tool.plunge_feed, &mut m);
+                }
+                None => loop_moves(l, z, tool.feed, &mut m),
+            }
+            if m.len() > MAX_MOVES {
+                return tool.path(m);
+            }
             let end = if lead {
                 m.push(Move::Arc {
                     to: p3(e_out, z),
@@ -563,7 +608,7 @@ fn last_point(m: &[Move]) -> Option<Point3> {
     m.last().map(|mv| match *mv {
         Move::Rapid { to } | Move::Line { to, .. } | Move::Plunge { to, .. } => to,
         Move::Arc { to, .. } => to,
-        Move::Drill { at, r, .. } => p3(at, r),
+        Move::Drill { at, r, .. } | Move::Tap { at, r, .. } => p3(at, r),
     })
 }
 
@@ -723,6 +768,93 @@ pub fn drill(
         at = Some(h.centre);
     }
     tool.path(m)
+}
+
+/// Tapping: one tapping cycle per hole, nearest hole next, each to its bottom minus
+/// `breakthrough`, with the retract plane `r`, at `pitch` mm per turn. The feed is the
+/// pitch times the spindle speed, so the tap advances one pitch per turn (G94 feed per
+/// minute). The tap is larger than the drilled hole it threads, so its size is not
+/// checked against the hole (see [`tap_warnings`]).
+pub fn tap(
+    holes: &[Hole],
+    tool: &Cutter,
+    r: f64,
+    pitch: f64,
+    breakthrough: f64,
+    clearance: f64,
+) -> Result<Toolpath, CamError> {
+    tool.check()?;
+    finite("the retract plane", r)?;
+    finite("the clearance height", clearance)?;
+    if !(pitch.is_finite() && pitch > 0.0 && pitch <= chamfera_doc::cam::MAX_TAP_PITCH) {
+        return Err(CamError::Invalid(format!(
+            "the thread pitch must be above 0 and at most {} mm",
+            chamfera_doc::cam::MAX_TAP_PITCH
+        )));
+    }
+    let feed = pitch * tool.spindle_rpm;
+    if !(feed.is_finite() && feed <= chamfera_doc::cam::MAX_FEED) {
+        return Err(CamError::Invalid(format!(
+            "a {} mm pitch at {} rpm feeds faster than {} mm/min",
+            fmt_mm(pitch),
+            fmt_mm(tool.spindle_rpm),
+            chamfera_doc::cam::MAX_FEED
+        )));
+    }
+    let drilled = drill(
+        holes,
+        &Cutter {
+            diameter: f64::MIN_POSITIVE,
+            ..tool.clone()
+        },
+        r,
+        None,
+        breakthrough,
+        clearance,
+    )?;
+    let moves = drilled
+        .moves
+        .into_iter()
+        .map(|m| match m {
+            Move::Drill { at, r, bottom, .. } => Move::Tap {
+                at,
+                r,
+                bottom,
+                pitch,
+                feed,
+            },
+            other => other,
+        })
+        .collect();
+    tool.path(moves)
+}
+
+/// What is worth telling the user about tapping `holes` with a tool of `diameter` that
+/// is (`is_tap`) or is not a tap: a tool that is not a tap, and holes at least as wide as
+/// the tap (it would cut no thread there).
+pub fn tap_warnings(diameter: f64, is_tap: bool, kind: &str, holes: &[Hole]) -> Vec<String> {
+    let mut out = Vec::new();
+    if !is_tap {
+        out.push(format!(
+            "the tool is a {kind}, not a tap: tapping feeds it in and out at the pitch"
+        ));
+    }
+    let n = holes
+        .iter()
+        .filter(|h| h.diameter + HOLE_FIT_TOLERANCE >= diameter)
+        .count();
+    if n > 0 {
+        out.push(format!(
+            "{} at least as wide as the {} mm tap: no thread would be cut there",
+            if n == 1 {
+                "a hole is".to_owned()
+            } else {
+                format!("{n} holes are")
+            },
+            fmt_mm(diameter)
+        ));
+    }
+    out
 }
 
 /// How much smaller than its hole a drill may be before it is worth a warning, mm.

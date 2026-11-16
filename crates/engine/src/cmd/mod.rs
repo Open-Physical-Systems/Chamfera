@@ -9,6 +9,7 @@ mod config;
 mod construct;
 mod debug;
 mod design;
+mod draft_rib;
 pub mod drawing;
 mod dxf;
 mod edit;
@@ -62,6 +63,7 @@ pub fn registry() -> Vec<&'static CommandSpec> {
         construct::COMMANDS,
         debug::COMMANDS,
         design::COMMANDS,
+        draft_rib::COMMANDS,
         drawing::COMMANDS,
         dxf::COMMANDS,
         edit::COMMANDS,

@@ -230,6 +230,10 @@ impl ChamferaApp {
             if self.session.active_sketch.is_some() && button == PointerButton::Primary {
                 drag = Drag::Nothing;
             }
+            // A press on a tool's drag handle belongs to the handle.
+            if button == PointerButton::Primary && self.manip_grabs(ui, rect) {
+                drag = Drag::Nothing;
+            }
             let pivot = if drag == Drag::Orbit && nav.orbit_about_cursor {
                 self.pivot_at(ui, rect)
             } else {

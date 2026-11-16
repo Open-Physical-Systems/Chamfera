@@ -228,6 +228,8 @@ impl FeatureKind {
             FeatureKind::DeleteFace(_) => Vec::new(),
             // A move's turn is an angle; its distance is a length.
             FeatureKind::MoveFace(m) => vec![&mut m.distance],
+            FeatureKind::Draft(_) => Vec::new(),
+            FeatureKind::Rib(r) => vec![&mut r.thickness],
             FeatureKind::Thicken(t) => vec![&mut t.thickness],
             FeatureKind::Primitive(p) => p.shape.sizes_mut().into_iter().map(|x| x.1).collect(),
             // Factors are plain numbers.

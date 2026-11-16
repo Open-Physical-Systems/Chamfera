@@ -281,6 +281,8 @@ impl Session {
 #[cfg(test)]
 mod body_tools_tests;
 #[cfg(test)]
+mod draft_rib_tests;
+#[cfg(test)]
 mod qa_tests;
 #[cfg(test)]
 mod surface_tests;

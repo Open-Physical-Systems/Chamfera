@@ -1,4 +1,5 @@
-//! STEP import: the advanced B-rep solids of an AP203/AP214/AP242 file as kernel bodies.
+//! STEP import: the B-rep solids of an AP203/AP214/AP242 file as kernel bodies, faceted
+//! shells as planar solids or meshes, and the assembly they sit in.
 //!
 //! Written from the public descriptions of ISO 10303-21 (the exchange structure),
 //! ISO 10303-42 (geometric and topological resources) and the CAx-IF recommended
@@ -15,6 +16,7 @@
 //! | `EDGE_CURVE(name, start, end, curve, same_sense)` | edge running along the curve: from `start` to `end` when `same_sense`, else from `end` to `start` |
 //! | `LINE` | a segment between the edge's vertices |
 //! | `CIRCLE`, `ELLIPSE` | a circle or ellipse for an edge that starts and ends at one vertex, else an arc of it |
+//! | `B_SPLINE_CURVE_WITH_KNOTS`, `BEZIER_CURVE`, `UNIFORM_CURVE`, `QUASI_UNIFORM_CURVE` (rational too), `POLYLINE` | a B-spline edge over the parameters of its vertices (`spline`) |
 //! | `SURFACE_CURVE`, `SEAM_CURVE`, `INTERSECTION_CURVE`, `TRIMMED_CURVE` | their 3D (basis) curve; the edge's vertices bound it |
 //! | `ORIENTED_EDGE(…, edge, orientation)` | a half-edge, along the edge when `orientation`; nested oriented edges compose |
 //! | `EDGE_LOOP` in a `FACE_OUTER_BOUND` / `FACE_BOUND` | a loop, reversed when the bound's orientation is `.F.`; the outer loop is the one running counter-clockwise about the outward normal (`FACE_OUTER_BOUND` is tried first) |
@@ -22,6 +24,14 @@
 //! | `PLANE`, `CYLINDRICAL_SURFACE`, `CONICAL_SURFACE`, `SPHERICAL_SURFACE`, `TOROIDAL_SURFACE` | the kernel surface on the same `AXIS2_PLACEMENT_3D` frame, `same_sense` kept |
 //! | `DEGENERATE_TOROIDAL_SURFACE` | a spindle torus (`select_outer` `.T.`), or the lemon torus of major radius `-R` with `same_sense` flipped (`.F.`), as `write::StepSurface` derives |
 //! | `RECTANGULAR_TRIMMED_SURFACE` | its basis surface (the bounds trim it), `same_sense` flipped when exactly one of `u_sense`, `v_sense` is `.F.` |
+//! | `B_SPLINE_SURFACE_WITH_KNOTS` and its siblings (rational too) | a plane when its net is flat, a surface of linear extrusion when it is one (degree 1 across two translated rows), else refused per solid (`spline`) |
+//! | `SURFACE_OF_LINEAR_EXTRUSION` | an extrusion of a B-spline, a plane (of a line), a cylinder (of a circle along its axis) |
+//!
+//! `FACETED_BREP`s and `SHELL_BASED_SURFACE_MODEL`s of `POLY_LOOP` faces become planar
+//! solids when they are closed valid solids, else meshes in [`StepImport::meshes`]
+//! (`faceted`). The product structure (`NEXT_ASSEMBLY_USAGE_OCCURRENCE`,
+//! `CONTEXT_DEPENDENT_SHAPE_REPRESENTATION`, `ITEM_DEFINED_TRANSFORMATION`) becomes
+//! [`StepImport::components`] with their placements (`assembly`).
 //!
 //! Complex instances are read by joining their partial records in the order of the
 //! Part 42 supertype chain (`REPRESENTATION_ITEM` first, then the geometric or
@@ -39,22 +49,29 @@
 //! # What is refused
 //! A solid is imported only when it is complete and passes [`Body::validate`]; otherwise
 //! it is reported as a [`SolidFailure`] naming the entities at fault, and the other
-//! solids still import. Not supported yet ([`FailureKind::Unsupported`]): B-spline,
-//! swept, offset and other free-form surfaces and curves (they come with K10), voids
-//! (`BREP_WITH_VOIDS`), faceted B-reps (`POLY_LOOP`), faces without edges and
-//! `ORIENTED_CLOSED_SHELL`s. Placements of assemblies (`MAPPED_ITEM`, representation
-//! relationships with a transformation) are not applied: each solid comes in its own
-//! coordinates. Files that break Part 42 (open shells, edges used other than twice,
+//! solids still import. Not supported yet ([`FailureKind::Unsupported`]): doubly
+//! curved B-spline surfaces (free-form faces come with K10), surfaces of revolution,
+//! offset and other swept surfaces, `PCURVE`-only edges, voids (`BREP_WITH_VOIDS`),
+//! faces without edges, `ORIENTED_CLOSED_SHELL`s and surface models of curved faces.
+//! Assembly placements other than `ITEM_DEFINED_TRANSFORMATION` (a
+//! `CARTESIAN_TRANSFORMATION_OPERATOR`, `MAPPED_ITEM`s) are not applied: those parts come
+//! at their parent's origin, with a warning. Files that break Part 42 (open shells, edges used other than twice,
 //! vertices off their curves or surfaces by more than
 //! [`chamfera_geom::LINEAR_TOLERANCE`]) give [`FailureKind::Invalid`].
 //!
 //! The file is hostile input: on top of the parser's limits, every reference is checked
 //! for its entity type, nesting is bounded, and nothing panics.
 
+mod assembly;
+mod faceted;
+mod spline;
+
+pub use assembly::{MAX_ASSEMBLY_DEPTH, MAX_STEP_COMPONENTS, StepComponent};
+
 use super::MAX_STEP_BYTES;
 use super::read::{self, Exchange, Param};
 use crate::IoError;
-use chamfera_geom::{Frame, Point3, Vec3};
+use chamfera_geom::{Frame, Point3, TriMesh, Vec3};
 use chamfera_kernel::{
     Arc3, Body, Circle3, Curve, Ellipse3, EllipticalArc3, MAX_NAME_LENGTH, Segment3, Surface,
     TopologyError,
@@ -103,12 +120,22 @@ impl fmt::Display for SolidFailure {
     }
 }
 
-/// The result of importing a file: the complete solids, and the ones left out.
+/// The result of importing a file: the complete solids, the faceted shells that came in
+/// as meshes, the assembly they sit in, and the solids left out.
 #[derive(Debug, Clone, Default)]
 pub struct StepImport {
     /// Each solid's name and body, in file order. Every body passed [`Body::validate`].
     pub solids: Vec<(String, Body)>,
+    /// Faceted shells that are not valid solids (open surface models, non-planar
+    /// facets), as triangle meshes in millimetres.
+    pub meshes: Vec<(String, TriMesh)>,
     pub failed: Vec<SolidFailure>,
+    /// The assembly's components, parents before children; empty for a single part.
+    /// Solids and meshes no component lists belong to the design itself.
+    pub components: Vec<StepComponent>,
+    /// What was read differently from the file (a faceted solid read as a mesh, a
+    /// placement that could not be read).
+    pub warnings: Vec<String>,
 }
 
 fn err(msg: impl Into<String>) -> IoError {
@@ -153,8 +180,15 @@ pub fn read_file(path: &std::path::Path) -> Result<Vec<(String, Body)>, IoError>
 }
 
 fn all_or_nothing(r: StepImport) -> Result<Vec<(String, Body)>, IoError> {
-    if r.failed.is_empty() {
+    if r.failed.is_empty() && r.meshes.is_empty() {
         return Ok(r.solids);
+    }
+    if r.failed.is_empty() {
+        return Err(err(format!(
+            "{} faceted shells are not valid solids and can only be imported as meshes: {}",
+            r.meshes.len(),
+            r.warnings.join("; ")
+        )));
     }
     let lines: Vec<String> = r.failed.iter().map(ToString::to_string).collect();
     Err(err(format!(
@@ -181,12 +215,19 @@ pub fn import_exchange(ex: &Exchange) -> Result<StepImport, IoError> {
     };
     let view = View { ex };
     let mut out = StepImport::default();
+    // The instance behind each solid and mesh, for the assembly.
+    let (mut solid_ids, mut mesh_ids) = (Vec::new(), Vec::new());
     let mut found = 0usize;
     for (&id, inst) in &ex.data {
-        let kind = ["MANIFOLD_SOLID_BREP", "BREP_WITH_VOIDS", "FACETED_BREP"]
-            .into_iter()
-            .rev()
-            .find(|n| inst.record(n).is_some());
+        let kind = [
+            "MANIFOLD_SOLID_BREP",
+            "BREP_WITH_VOIDS",
+            "FACETED_BREP",
+            "SHELL_BASED_SURFACE_MODEL",
+        ]
+        .into_iter()
+        .rev()
+        .find(|n| inst.record(n).is_some());
         let Some(kind) = kind else {
             continue;
         };
@@ -197,20 +238,48 @@ pub fn import_exchange(ex: &Exchange) -> Result<StepImport, IoError> {
             .and_then(|e| e.params.first().and_then(text_of))
             .filter(|n| !n.trim().is_empty())
             .unwrap_or_else(|| format!("Solid {found}"));
-        let result = match kind {
+        let units = units_for(ex, contexts.get(&id).copied().or(fallback));
+        let shells: R<Vec<(u64, bool)>> = match kind {
             "BREP_WITH_VOIDS" => Err(Fail::Unsupported(vec![format!(
                 "#{id} is a BREP_WITH_VOIDS: solids with inner voids are not supported yet"
             )])),
-            "FACETED_BREP" => Err(Fail::Unsupported(vec![format!(
-                "#{id} is a FACETED_BREP: faceted solids (POLY_LOOP bounds) are not supported yet"
-            )])),
-            _ => units_for(ex, contexts.get(&id).copied().or(fallback))
+            _ => units
+                .clone()
                 .map_err(Fail::Invalid)
-                .and_then(|units| Build::new(Ctx { view, units }).solid(id)),
+                .and_then(|units| faceted_shells(&Ctx { view, units }, id, kind)),
         };
+        let result: R<Vec<Shape>> = shells.and_then(|shells| {
+            let units = units.map_err(Fail::Invalid)?;
+            let ctx = || Ctx { view, units };
+            if shells.is_empty() {
+                return Build::new(ctx()).solid(id).map(|b| vec![Shape::Solid(b)]);
+            }
+            let mut shapes = Vec::new();
+            for (shell, solid) in shells {
+                shapes.push(faceted(&ctx(), shell, solid, &mut out.warnings)?);
+            }
+            Ok(shapes)
+        });
         let (kind, reasons) = match result {
-            Ok(body) => {
-                out.solids.push((name, body));
+            Ok(shapes) => {
+                let many = shapes.len() > 1;
+                for (k, shape) in shapes.into_iter().enumerate() {
+                    let name = if many {
+                        format!("{name} {}", k + 1)
+                    } else {
+                        name.clone()
+                    };
+                    match shape {
+                        Shape::Solid(body) => {
+                            out.solids.push((name, body));
+                            solid_ids.push(id);
+                        }
+                        Shape::Mesh(mesh) => {
+                            out.meshes.push((name, mesh));
+                            mesh_ids.push(id);
+                        }
+                    }
+                }
                 continue;
             }
             Err(Fail::Unsupported(reasons)) => (FailureKind::Unsupported, reasons),
@@ -224,17 +293,80 @@ pub fn import_exchange(ex: &Exchange) -> Result<StepImport, IoError> {
         });
     }
     if found == 0 {
-        let surfaces = ex
-            .data
-            .values()
-            .any(|i| i.record("SHELL_BASED_SURFACE_MODEL").is_some());
-        return Err(err(if surfaces {
-            "the file holds surface models but no B-rep solid (MANIFOLD_SOLID_BREP); surface models are not imported"
-        } else {
-            "the file holds no B-rep solid (MANIFOLD_SOLID_BREP)"
-        }));
+        return Err(err(
+            "the file holds no B-rep solid (MANIFOLD_SOLID_BREP, FACETED_BREP) or faceted surface model",
+        ));
+    }
+    let tree = assembly::read(ex, &solid_ids, &mesh_ids);
+    out.components = tree.components;
+    out.warnings.extend(tree.warnings);
+    Ok(out)
+}
+
+/// A solid or a mesh read from one shell.
+enum Shape {
+    Solid(Body),
+    Mesh(TriMesh),
+}
+
+/// The shells of item `id` (of entity `kind`) that are faceted (bounded by `POLY_LOOP`s),
+/// each with whether it should be a solid; empty for an advanced B-rep.
+fn faceted_shells(ctx: &Ctx<'_>, id: u64, kind: &str) -> R<Vec<(u64, bool)>> {
+    let e = ctx.ent(id)?;
+    let shells: Vec<u64> = match kind {
+        "SHELL_BASED_SURFACE_MODEL" => list_of(&arg(&e, 1, id)?, id, "shells")?
+            .iter()
+            .map(|s| ref_of(s, id, "shell"))
+            .collect::<R<_>>()?,
+        _ => vec![ref_of(&arg(&e, 1, id)?, id, "outer shell")?],
+    };
+    drop(e);
+    let mut out = Vec::new();
+    for shell in shells {
+        let se = ctx.ent(shell)?;
+        let first_face = match se.params.get(1) {
+            Some(Param::List(l)) => l.first().and_then(|f| match f {
+                Param::Ref(r) => Some(*r),
+                _ => None,
+            }),
+            _ => None,
+        };
+        let shell_kind = se.name.to_string();
+        drop(se);
+        let poly = first_face.is_some_and(|f| faceted::is_poly_face(ctx, f));
+        if poly || kind == "FACETED_BREP" {
+            out.push((
+                shell,
+                kind != "SHELL_BASED_SURFACE_MODEL" || shell_kind == "CLOSED_SHELL",
+            ));
+        } else if kind == "SHELL_BASED_SURFACE_MODEL" {
+            return Err(Fail::Unsupported(vec![format!(
+                "#{id} is a surface model of shell #{shell}, whose faces are not polygons; surface models of curved faces are not imported"
+            )]));
+        }
     }
     Ok(out)
+}
+
+/// One faceted shell as a planar-face solid when `solid` and it is a valid one, else as a
+/// mesh (noted in `warnings`).
+fn faceted(ctx: &Ctx<'_>, shell: u64, solid: bool, warnings: &mut Vec<String>) -> R<Shape> {
+    let facets = ctx.facets(shell)?;
+    let why = if solid && facets.closed {
+        match facets.to_body() {
+            Ok(body) => return Ok(Shape::Solid(body)),
+            Err(why) => why,
+        }
+    } else {
+        "it is an open shell".to_owned()
+    };
+    let mesh = facets
+        .to_mesh()
+        .map_err(|m| invalid(format!("shell #{shell}: {why}, and as a mesh: {m}")))?;
+    warnings.push(format!(
+        "shell #{shell} is not a valid solid ({why}); it is imported as a mesh"
+    ));
+    Ok(Shape::Mesh(mesh))
 }
 
 // --- Failures ---------------------------------------------------------------------------
@@ -290,6 +422,12 @@ const RANKS: &[(&str, u8)] = &[
     ("FACE_BOUND", 2),
     ("CONNECTED_FACE_SET", 2),
     ("SOLID_MODEL", 2),
+    ("SWEPT_SURFACE", 3),
+    ("POLY_LOOP", 3),
+    ("OPEN_SHELL", 3),
+    ("SHELL_BASED_SURFACE_MODEL", 3),
+    ("FACETED_BREP", 4),
+    ("SURFACE_OF_LINEAR_EXTRUSION", 4),
     ("CARTESIAN_POINT", 3),
     ("AXIS2_PLACEMENT_3D", 3),
     ("LINE", 3),
@@ -618,6 +756,8 @@ enum StepCurve {
     Line,
     Circle(Frame, f64),
     Ellipse(Frame, f64, f64),
+    /// A B-spline (or polyline) in millimetres, in its own parameter.
+    BSpline(chamfera_geom::BSplineCurve3),
 }
 
 impl Ctx<'_> {
@@ -717,6 +857,9 @@ impl Ctx<'_> {
         if depth > MAX_NESTING {
             return Err(invalid(format!("{what}: curves are nested too deeply")));
         }
+        if spline::is_spline_curve(self, id) {
+            return Ok(StepCurve::BSpline(self.spline_curve(id)?));
+        }
         let e = self.ent(id)?;
         match e.name.as_ref() {
             "LINE" => {
@@ -755,6 +898,9 @@ impl Ctx<'_> {
         if depth > MAX_NESTING {
             return Err(invalid(format!("{what}: surfaces are nested too deeply")));
         }
+        if spline::is_spline_surface(self, id) {
+            return self.spline_face_surface(id, what);
+        }
         let e = self.ent(id)?;
         let kernel = |r: chamfera_kernel::KernelResult<Surface>| {
             r.map_err(|k| invalid(format!("the surface #{id} of {what}: {k}")))
@@ -790,6 +936,10 @@ impl Ctx<'_> {
                     (kernel(Surface::torus(frame()?, -big, a))?, true)
                 }
             }
+            "SURFACE_OF_LINEAR_EXTRUSION" => {
+                drop(e);
+                return self.linear_extrusion(id, what);
+            }
             "RECTANGULAR_TRIMMED_SURFACE" => {
                 let basis = ref_of(&arg(&e, 1, id)?, id, "basis_surface")?;
                 let (s, flip) = self.surface(basis, what, depth + 1)?;
@@ -809,6 +959,42 @@ fn conic_angle(frame: &Frame, rx: f64, ry: f64, p: Point3) -> f64 {
     let t = (l.y / ry).atan2(l.x / rx);
     let t = if t < 0.0 { t + TAU } else { t };
     if t >= TAU { 0.0 } else { t }
+}
+
+/// The parameters on B-spline `c` of an edge from `pf` to `pt` along it (one vertex for
+/// a closed edge). The vertices are projected onto the curve; on a closed curve an end
+/// found at the wrong end of the domain is moved to the other, so the range increases.
+fn spline_range(
+    c: &chamfera_geom::BSplineCurve3,
+    pf: Point3,
+    pt: Point3,
+    closed: bool,
+) -> Result<(f64, f64), String> {
+    let (lo, hi) = c.domain();
+    let ends_meet = c.point_at(lo).distance(c.point_at(hi)) <= chamfera_geom::LINEAR_TOLERANCE;
+    if closed {
+        if !ends_meet {
+            return Err("starts and ends at one vertex, but its B-spline curve is open".into());
+        }
+        return Ok((lo, hi));
+    }
+    let (mut a, mut b) = (c.closest_point(pf).u, c.closest_point(pt).u);
+    if b <= a && ends_meet {
+        let near = |p: Point3, t: f64| c.point_at(t).distance(p) <= chamfera_geom::LINEAR_TOLERANCE;
+        if near(pf, lo) && a >= b {
+            a = lo;
+        }
+        if near(pt, hi) && b <= a {
+            b = hi;
+        }
+    }
+    if b <= a {
+        return Err(
+            "runs against its B-spline curve's direction, or across the seam of a closed one"
+                .into(),
+        );
+    }
+    Ok((a, b))
 }
 
 // --- One solid ----------------------------------------------------------------------------
@@ -1014,6 +1200,11 @@ impl<'a> Build<'a> {
                     let (lo, hi) = arc.range();
                     (arc, lo, hi)
                 }
+            }
+            StepCurve::BSpline(c) => {
+                let (t0, t1) = spline_range(&c, pf, pt, closed)
+                    .map_err(|why| invalid(format!("{what} {why}")))?;
+                (Curve::BSpline(c), t0, t1)
             }
         };
         let i = self.edges.len();
