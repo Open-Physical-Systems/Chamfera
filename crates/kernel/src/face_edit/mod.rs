@@ -236,8 +236,8 @@ fn offset_surface(s: &Surface, delta: f64, name: &str) -> KernelResult<Surface> 
             }
             Surface::torus(*t.frame(), t.major_radius(), a)
         }
-        Surface::Extrusion(_) => Err(KernelError::Unsupported(format!(
-            "offsetting the spline face {name} (K10): planes, cylinders, cones, spheres and tori only"
+        Surface::Extrusion(_) | Surface::Nurbs(_) => Err(KernelError::Unsupported(format!(
+            "offsetting the spline or free-form face {name} (K10): planes, cylinders, cones, spheres and tori only"
         ))),
     }
 }

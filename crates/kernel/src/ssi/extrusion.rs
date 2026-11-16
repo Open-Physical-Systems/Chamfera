@@ -391,7 +391,7 @@ pub(crate) fn spline_surface(
         Surface::Cylinder(k) => k.radius(),
         Surface::Sphere(s) => s.radius(),
         Surface::Torus(t) => t.minor_radius(),
-        Surface::Cone(_) | Surface::Extrusion(_) => 0.0,
+        Surface::Cone(_) | Surface::Extrusion(_) | Surface::Nurbs(_) => 0.0,
     };
     let roots = field_roots(c, t0, t1, &field, level_radius)?;
     Ok(points(&curve, roots.into_iter().map(|r| (r.t, r.tangent))))

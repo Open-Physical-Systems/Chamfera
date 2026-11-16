@@ -53,6 +53,7 @@
 mod assemble;
 mod build;
 mod euler;
+mod freeform;
 mod geometry;
 mod import;
 mod measure;
@@ -506,6 +507,18 @@ impl Body {
                 let b = x.curve();
                 heap = heap.saturating_add(spline(b.knots().len(), b.weights().len()));
             }
+            if let Surface::Nurbs(n) = s {
+                // Knots, control points (3 numbers) and weights, plus the inversion seeds
+                // (u, v and a point: 5 numbers each).
+                let b = n.surface();
+                let (cu, cv) = b.counts();
+                let count = cu.saturating_mul(cv);
+                heap = heap.saturating_add(
+                    spline(b.knots_u().len() + b.knots_v().len(), count)
+                        .saturating_add(count.saturating_mul(24))
+                        .saturating_add(crate::MAX_SEEDS.saturating_mul(40)),
+                );
+            }
         }
         [
             slots(&self.shells),
@@ -792,8 +805,10 @@ impl Body {
         Ok(out)
     }
 
-    /// The box around every vertex and edge (exact for the K1 curves); `None` for an
-    /// empty body or one whose geometry is missing or invalid.
+    /// The box around every vertex and edge (exact for the K1 curves) and around the
+    /// free-form faces, which can bulge past their edges (the control points of the
+    /// sub-patch over each face's parameter range); `None` for an empty body or one whose
+    /// geometry is missing or invalid.
     pub fn bounding_box(&self) -> Option<Aabb> {
         let mut out: Option<Aabb> = None;
         let mut add = |b: Aabb| {
@@ -809,6 +824,11 @@ impl Body {
         for (i, _) in self.edges.live() {
             if let Some((c, t0, t1)) = self.edge_curve(EdgeId::from_index(i)).ok()? {
                 add(c.bounding_box_on(t0, t1).ok()?);
+            }
+        }
+        for f in self.faces() {
+            if let Some(b) = self.freeform_face_box(f) {
+                add(b);
             }
         }
         out

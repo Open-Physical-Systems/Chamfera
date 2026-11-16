@@ -22,8 +22,8 @@
 //!   `QUASI_UNIFORM_SURFACE` and `RATIONAL_B_SPLINE_SURFACE(weights)`.
 //!
 //! # Surfaces in the kernel
-//! The kernel holds no free-form faces yet, so a B-spline surface is mapped to the exact
-//! kernel surface it is, or refused:
+//! A B-spline surface is mapped to the exact analytic kernel surface it is where there is
+//! one, else kept free-form:
 //! - every control point on one plane (within [`LINEAR_TOLERANCE`]): the surface lies in
 //!   that plane (the convex hull property, The NURBS Book §4.4, holds for positive
 //!   weights), so it is a [`Surface::Plane`] whose normal is Part 42's `σ_u × σ_v`;
@@ -33,7 +33,9 @@
 //!   [`Extrusion`] holds the curve projected along `d` onto the plane across it (the
 //!   same infinite surface), its normal `C' × d` is Part 42's when `d` runs along `v`
 //!   and against it when `d` runs along `u`;
-//! - anything else (doubly curved) is refused per face with [`Fail::Unsupported`].
+//! - anything else is a free-form face on [`Surface::Nurbs`] (rung K10, surfaces), whose
+//!   normal `S_u × S_v` is Part 42's; surfaces whose boundaries collapse to points in
+//!   both parameter directions are refused per face with [`Fail::Unsupported`].
 //!
 //! `SURFACE_OF_LINEAR_EXTRUSION(name, swept_curve, extrusion_axis)` (4.4.48,
 //! `σ(u, v) = C(u) + v V`) maps the same way: a B-spline curve to an [`Extrusion`], a
@@ -46,7 +48,7 @@ use chamfera_geom::{
     BSplineCurve2, BSplineCurve3, BSplineSurface3, Frame, LINEAR_TOLERANCE, MAX_CONTROL_POINTS,
     MAX_DEGREE, MAX_SURFACE_CONTROL_POINTS, Point2, Point3,
 };
-use chamfera_kernel::{Extrusion, Surface};
+use chamfera_kernel::{Extrusion, KernelError, Surface};
 
 /// The subtype that gives a B-spline's knots.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -442,11 +444,15 @@ impl Ctx<'_> {
                 .map_err(|e| invalid(format!("the surface #{id} of {what}: {e}")))?;
             return Ok((Surface::Extrusion(x), flip));
         }
-        let (p, q) = s.degrees();
-        let (n, m) = s.counts();
-        Err(Fail::Unsupported(vec![format!(
-            "the surface of {what} is #{id}, a free-form B-spline surface (degree {p} x {q}, {n} x {m} control points) that is neither a plane nor a linear extrusion; free-form faces come with kernel rung K10 (NURBS surfaces)"
-        )]))
+        // Free-form: the kernel's normal is `S_u × S_v`, Part 42's (a surface collapsed in
+        // u is reparameterised by the kernel with that normal kept).
+        match Surface::nurbs(s) {
+            Ok(n) => Ok((n, false)),
+            Err(KernelError::Unsupported(why)) => Err(Fail::Unsupported(vec![format!(
+                "the surface #{id} of {what}: {why}"
+            )])),
+            Err(e) => Err(invalid(format!("the surface #{id} of {what}: {e}"))),
+        }
     }
 
     /// `SURFACE_OF_LINEAR_EXTRUSION(name, swept_curve, extrusion_axis)` as a kernel
@@ -664,15 +670,15 @@ mod tests {
             );
             // The corner interpolates its control point: (1 in, 0, 0).
             assert!(s.point_at(1.0, 0.0).distance(Point3::new(25.4, 0.0, 0.0)) < 1e-12);
-            // Doubly curved: no exact kernel face for it yet, a clear refusal.
+            // Doubly curved: a free-form kernel surface with the same points and Part
+            // 42's normal (σ_u × σ_v = +z at the middle, where the patch is level).
             match ctx.spline_face_surface(id, "face #99") {
-                Err(Fail::Unsupported(why)) => {
-                    assert!(
-                        why[0].contains("free-form") && why[0].contains("face #99"),
-                        "{why:?}"
-                    );
+                Ok((k, false)) if matches!(k, Surface::Nurbs(_)) => {
+                    let mid = k.point_at(0.5, 0.5);
+                    assert!(mid.distance(Point3::new(12.7, 12.7, 2.54)) < 1e-12);
+                    assert!((k.normal_at(0.5, 0.5).z - 1.0).abs() < 1e-12);
                 }
-                _ => panic!("#{id} should be refused as unsupported"),
+                _ => panic!("#{id} should be a free-form surface"),
             }
         }
     }

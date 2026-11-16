@@ -158,7 +158,9 @@ use thiserror::Error;
 ///   given as a whole frame (`at: frame`), and rigid groups (`assembly.groups`: name and
 ///   members, each with its placement relative to the first). Older files open
 ///   unchanged: every new field is optional.
-pub const FORMAT_VERSION: u32 = 41;
+/// - 42: free-form faces: imported solids may hold rational B-spline surfaces (`nurbs`:
+///   degrees, knots, the control net and its weights). Older files open unchanged.
+pub const FORMAT_VERSION: u32 = 42;
 /// The tag every design file starts with, so other JSON is not mistaken for a design.
 pub const FORMAT_TAG: &str = "chamfera";
 /// Longest parameter name.

@@ -420,8 +420,8 @@ pub(super) fn implicit(s: &Surface, x: Point3) -> KernelResult<(f64, Vec3)> {
             }
             Ok((q - t.minor_radius(), (e * dr + f.z() * dz) * (1.0 / q)))
         }
-        Surface::Extrusion(_) => Err(KernelError::Unsupported(
-            "editing a face next to a spline surface (K10): planes, cylinders, cones, spheres and tori only".into(),
+        Surface::Extrusion(_) | Surface::Nurbs(_) => Err(KernelError::Unsupported(
+            "editing a face next to a spline or free-form surface (K10): planes, cylinders, cones, spheres and tori only".into(),
         )),
     }
 }

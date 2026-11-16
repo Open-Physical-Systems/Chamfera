@@ -746,6 +746,7 @@ pub(super) mod curved {
             Surface::Torus(t) if t.major_radius() >= t.minor_radius() => "TOROIDAL_SURFACE",
             Surface::Torus(_) => "DEGENERATE_TOROIDAL_SURFACE",
             Surface::Extrusion(_) => "SURFACE_OF_LINEAR_EXTRUSION",
+            Surface::Nurbs(_) => "B_SPLINE_SURFACE",
         }
     }
 

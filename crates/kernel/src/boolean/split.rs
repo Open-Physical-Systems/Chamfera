@@ -124,6 +124,9 @@ fn face_box(body: &Body, f: FaceId, surface: &Surface) -> KernelResult<Aabb> {
         // its boundary points on each ruling (segments along the extrusion), so in their
         // box too.
         Surface::Plane(_) | Surface::Extrusion(_) => {}
+        // A free-form face lies in its surface's control-point box (booleans refuse
+        // free-form faces before splitting; this keeps the box honest regardless).
+        Surface::Nurbs(n) => b = b.union(n.bounding_box()),
         Surface::Cylinder(c) => {
             let r = c.radius();
             b = meet(grow(b, 2.0 * r), frustum_box(surface, &b, |_| r));

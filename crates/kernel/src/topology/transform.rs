@@ -107,6 +107,7 @@ fn surface(s: &Surface, t: &Transform, mirror: bool) -> KernelResult<Surface> {
             curve_frame(e.frame(), t, mirror)?,
             e.curve().clone(),
         )?),
+        Surface::Nurbs(n) => Surface::Nurbs(n.transformed(t, mirror)?),
     })
 }
 

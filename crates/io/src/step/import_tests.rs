@@ -437,8 +437,12 @@ fn a_flat_b_spline_face_and_b_spline_edges_import_as_exact_planes_and_splines() 
 }
 
 #[test]
-fn a_doubly_curved_b_spline_face_is_refused_per_solid_with_a_clear_message() {
-    // The patch with its middle lifted: a biquadratic dome over the bottom face.
+fn a_doubly_curved_b_spline_face_imports_as_a_free_form_face() {
+    // The bottom face's patch with its middle pushed down to -4: a biquadratic dome. Its
+    // rows run along y (u) and its columns along x (v), so σ_u × σ_v = y × x = -z, out of
+    // the cube. The bottom is z = -4 B1(u) B1(v) with B1(t) = 2t(1 - t), ∫ B1 = 1/3, over
+    // x = 10v, y = 10u (linear precision), so the dome adds 4 · 100 / 9 = 400/9 mm³:
+    // V = 1000 + 400/9. Its lowest point is z = -4 · ¼ = -1 at (5, 5).
     let dome = "#360=B_SPLINE_SURFACE_WITH_KNOTS('',2,2,((#1,#600,#2),(#601,#602,#603),(#3,#604,#4)),.UNSPECIFIED.,.F.,.F.,.F.,(3,3),(3,3),(0.,1.),(0.,1.),.UNSPECIFIED.);
 #600=CARTESIAN_POINT('',(5.,0.,0.));
 #601=CARTESIAN_POINT('',(0.,5.,0.));
@@ -446,26 +450,96 @@ fn a_doubly_curved_b_spline_face_is_refused_per_solid_with_a_clear_message() {
 #603=CARTESIAN_POINT('',(10.,5.,0.));
 #604=CARTESIAN_POINT('',(5.,10.,0.));";
     let text = replaced("#360=", dome);
-    let r = import(&text).unwrap();
-    assert!(r.solids.is_empty());
-    let [f] = r.failed.as_slice() else {
-        panic!("one failure expected");
-    };
-    assert_eq!(
-        (f.entity, f.name.as_str(), f.kind),
-        (401, "cube", FailureKind::Unsupported)
-    );
-    let msg = f.to_string();
-    assert!(msg.contains("face #370"), "{msg}");
-    assert!(msg.contains("free-form B-spline surface"), "{msg}");
-    assert!(msg.contains("degree 2 x 2"), "{msg}");
-    assert!(msg.contains("K10"), "{msg}");
-    // read_* refuse the file as a whole, saying why.
-    let e = read_bytes(text.as_bytes()).unwrap_err().to_string();
-    assert!(
-        e.contains("1 of 1 solids") && e.contains("face #370"),
-        "{e}"
-    );
+    let body = only(&text);
+    let v = body.volume().unwrap();
+    assert!(rel(v, 1000.0 + 400.0 / 9.0) < 1e-10, "{v}");
+    let bottom = body.faces()[0];
+    let (s, _) = body.face_surface(bottom).unwrap().unwrap();
+    assert!(matches!(s, chamfera_kernel::Surface::Nurbs(_)), "{s:?}");
+    let b = body.bounding_box().unwrap();
+    assert!(b.min.z <= -1.0 + 1e-9 && b.min.z >= -4.0 - 1e-9, "{b:?}");
+    // And it goes back out as the same B-spline surface.
+    let again = only(&write(&[("dome", &body)], &StepOptions::default()).unwrap());
+    assert!(rel(again.volume().unwrap(), 1000.0 + 400.0 / 9.0) < 1e-10);
+    assert_eq!(again.summary(), body.summary());
+}
+
+/// The sphere of radius `r` about the origin as one free-form face (a rational surface of
+/// revolution, The NURBS Book §8.5: the nine-point circle along u times the half-circle
+/// meridian along v), with a seam meridian used twice and the two poles as vertices.
+fn nurbs_sphere(r: f64) -> Body {
+    use chamfera_geom::{BSplineCurve3, BSplineSurface3};
+    let w = std::f64::consts::FRAC_1_SQRT_2;
+    let circle = [
+        (1.0, 0.0),
+        (1.0, 1.0),
+        (0.0, 1.0),
+        (-1.0, 1.0),
+        (-1.0, 0.0),
+        (-1.0, -1.0),
+        (0.0, -1.0),
+        (1.0, -1.0),
+        (1.0, 0.0),
+    ];
+    let cw = [1.0, w, 1.0, w, 1.0, w, 1.0, w, 1.0];
+    let mer = [(0.0, -r), (r, -r), (r, 0.0), (r, r), (0.0, r)];
+    let mw = [1.0, w, 1.0, w, 1.0];
+    let ku = vec![
+        0.0, 0.0, 0.0, 0.25, 0.25, 0.5, 0.5, 0.75, 0.75, 1.0, 1.0, 1.0,
+    ];
+    let kv = vec![0.0, 0.0, 0.0, 0.5, 0.5, 1.0, 1.0, 1.0];
+    let net = circle
+        .iter()
+        .map(|(x, y)| {
+            mer.iter()
+                .map(|(rho, z)| Point3::new(rho * x, rho * y, *z))
+                .collect()
+        })
+        .collect();
+    let weights = cw
+        .iter()
+        .map(|a| mw.iter().map(|b| a * b).collect())
+        .collect();
+    let surface = BSplineSurface3::new(2, 2, ku, kv.clone(), net, Some(weights)).unwrap();
+    let seam = BSplineCurve3::new(
+        2,
+        kv,
+        mer.iter()
+            .map(|(rho, z)| Point3::new(*rho, 0.0, *z))
+            .collect(),
+        Some(mw.to_vec()),
+    )
+    .unwrap();
+    Body::from_boundary(
+        &[Point3::new(0.0, 0.0, -r), Point3::new(0.0, 0.0, r)],
+        &[(0, 1, Curve::BSpline(seam), 0.0, 1.0)],
+        &[(
+            chamfera_kernel::Surface::nurbs(surface).unwrap(),
+            true,
+            vec![vec![(0, true), (0, false)]],
+        )],
+    )
+    .unwrap()
+}
+
+#[test]
+fn a_free_form_sphere_round_trips_through_step_with_its_measures() {
+    // r = 3: V = 4/3 π 27 = 36π, A = 4π 9 = 36π. The file holds the rational surface
+    // as the complex B_SPLINE_SURFACE instance, closed in u.
+    let body = nurbs_sphere(3.0);
+    let pi = std::f64::consts::PI;
+    assert!(rel(body.volume().unwrap(), 36.0 * pi) < 1e-9);
+    let text = write(&[("ball", &body)], &StepOptions::default()).unwrap();
+    assert!(text.contains("RATIONAL_B_SPLINE_SURFACE"), "{text}");
+    assert!(text.contains("B_SPLINE_SURFACE(2,2,"), "{text}");
+    let back = only(&text);
+    assert_eq!(back.summary(), body.summary());
+    let v = back.volume().unwrap();
+    assert!(rel(v, 36.0 * pi) < 1e-9, "{v}");
+    let a = back.area().unwrap();
+    assert!(rel(a, 36.0 * pi) < 1e-9, "{a}");
+    let (s, same) = back.face_surface(back.faces()[0]).unwrap().unwrap();
+    assert!(same && matches!(s, chamfera_kernel::Surface::Nurbs(_)));
 }
 
 // --- A quarter cylinder on rational B-splines ---------------------------------------------
