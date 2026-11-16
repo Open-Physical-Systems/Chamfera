@@ -22,6 +22,7 @@ pub const PATH_COMMANDS: &[(&str, Access)] = &[
     ("cam.tool_library_export", Access::Write),
     ("cam.tool_library_import", Access::Read),
     // Its `dir` is resolved like a written path: the folder or its parent must be inside.
+    ("bom.export_csv", Access::Write),
     ("config.export_all", Access::Write),
     ("design.open", Access::Read),
     // Reads `path` and makes `design_path` the file Save writes: both are resolved as

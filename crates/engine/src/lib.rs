@@ -7,6 +7,7 @@
 pub mod agent;
 pub mod assembly;
 mod body_tools;
+pub mod bom;
 pub mod box_select;
 pub mod cam;
 pub mod cam_cache;
@@ -20,6 +21,8 @@ mod drawing_tests;
 pub mod face_edit;
 pub mod hole;
 mod imported;
+pub mod joint_solve;
+pub mod loop_solver;
 pub mod motion;
 pub mod naming;
 #[cfg(test)]

@@ -27,6 +27,8 @@ pub enum AssemblyDialog {
         limited: bool,
         min: String,
         max: String,
+        /// In a loop of joints: hold this value instead of solving it.
+        driven: bool,
     },
     /// Move Component: a move along X, Y and Z (the design's length unit), then a turn
     /// about an axis through the origin (or through `centre`, once the viewport's turn
@@ -87,6 +89,7 @@ impl ChamferaApp {
             limited: j.limits.is_some(),
             min,
             max,
+            driven: j.driven,
         });
         self.assembly.edit_error = None;
     }
@@ -134,8 +137,9 @@ impl ChamferaApp {
                 limited,
                 min,
                 max,
+                driven,
             } => {
-                let mut p = json!({ "joint": joint, "name": name.trim() });
+                let mut p = json!({ "joint": joint, "name": name.trim(), "driven": driven });
                 if *limited {
                     if min.trim().is_empty() || max.trim().is_empty() {
                         return Err("type both limits, or turn the limits off".into());
@@ -302,6 +306,7 @@ impl ChamferaApp {
                                     limited,
                                     min,
                                     max,
+                                    driven,
                                     ..
                                 } => {
                                     field(ui, "Name", name, "Joint name");
@@ -318,6 +323,9 @@ impl ChamferaApp {
                                                 field(ui, "Minimum", min, hint);
                                                 field(ui, "Maximum", max, hint);
                                             }
+                                            widgets::field_label(ui, look, "Driven");
+                                            ui.checkbox(driven, "In a loop, hold this value");
+                                            ui.end_row();
                                         }
                                     }
                                 }

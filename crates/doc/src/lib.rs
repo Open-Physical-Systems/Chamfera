@@ -26,7 +26,7 @@ pub use appearance::Appearance;
 pub use body_tools::{
     Combine, RemoveBodies, SplitBody, SplitFace, SplitFaceTool, Thicken, ThickenDirection,
 };
-pub use component::{Assembly, Component, ROOT};
+pub use component::{Assembly, Component, GroupMember, ROOT, RigidGroup};
 pub use config::{Configuration, Configurations};
 pub use construct::{
     AxisRef, ConstructKind, Construction, EdgeRef, OriginAxis, OriginPlane, PlaneRef, PointRef,
@@ -40,7 +40,7 @@ pub use feature::{
     Thin, ThinSide,
 };
 pub use imported::{ImportedBody, ImportedMesh, SharedMesh};
-pub use joint::{EdgeEnd, Joint, JointKind, JointOrigin, OriginAt};
+pub use joint::{EdgeEnd, Joint, JointKind, JointOrigin, OriginAt, Topology};
 pub use model_params::{ModelMeta, ModelParameter};
 pub use motion::{Motion, MotionKey};
 pub use rib::Rib;
@@ -153,7 +153,12 @@ use thiserror::Error;
 /// - 40: drafts (`kind: draft`: faces tilted about a neutral plane by an angle) and ribs
 ///   and webs (`kind: rib`: a wall grown from an open sketch chain to a solid, `web` to go
 ///   through it). Older files open unchanged: they hold none.
-pub const FORMAT_VERSION: u32 = 40;
+/// - 41: assemblies v3: loops of joints (closed kinematic chains, solved), a joint's
+///   `driven` mark (its value is the loop's input) and `as_built` mark, joint origins
+///   given as a whole frame (`at: frame`), and rigid groups (`assembly.groups`: name and
+///   members, each with its placement relative to the first). Older files open
+///   unchanged: every new field is optional.
+pub const FORMAT_VERSION: u32 = 41;
 /// The tag every design file starts with, so other JSON is not mistaken for a design.
 pub const FORMAT_TAG: &str = "chamfera";
 /// Longest parameter name.

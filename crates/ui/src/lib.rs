@@ -19,6 +19,7 @@ mod assembly_edit_ui;
 mod assembly_ui;
 mod assistant_ui;
 mod blend_ui;
+mod bom_ui;
 mod browser;
 mod cam_ui;
 #[cfg(not(target_arch = "wasm32"))]
@@ -240,6 +241,8 @@ pub struct ChamferaApp {
     assembly: assembly_ui::AssemblyUi,
     /// Drive Joint, Motion Study, Interference and Explode (`motion_ui`).
     motion: motion_ui::MotionUi,
+    /// The Bill of Materials panel (`bom_ui`).
+    bom: bom_ui::BomUi,
     drawing: drawing_ui::DrawingUi,
     construct: construct_ui::ConstructUi,
     file: file_ui::FileUi,
@@ -404,6 +407,7 @@ impl ChamferaApp {
             sheet_metal: sheet_ui::SheetUi::default(),
             assembly: assembly_ui::AssemblyUi::default(),
             motion: motion_ui::MotionUi::default(),
+            bom: bom_ui::BomUi::default(),
             drawing: drawing_ui::DrawingUi::default(),
             construct: construct_ui::ConstructUi::default(),
             file: file_ui::FileUi::default(),
@@ -455,6 +459,7 @@ impl ChamferaApp {
                     app.inspect_from_script(&options.script, &replies);
                     app.sheet_from_script(&options.script, &replies);
                     app.history_from_script(&options.script, &replies);
+                    app.bom_from_script(&options.script);
                 }
                 Err(e) => app.message = Some((e.to_string(), true)),
             }
@@ -1312,6 +1317,7 @@ impl eframe::App for ChamferaApp {
             self.text_dialog(&ctx);
             self.dxf_insert_dialog(&ctx);
             self.motion_panels(&ctx);
+            self.bom_panel(&ctx);
             self.hole_dialog(&ctx);
             self.transform_dialog(&ctx);
             self.inspect_dialog(&ctx);
