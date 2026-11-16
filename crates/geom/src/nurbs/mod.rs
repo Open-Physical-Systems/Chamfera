@@ -23,11 +23,13 @@ mod basis;
 mod core;
 mod fit;
 mod planar;
+mod surface;
 #[cfg(test)]
 mod tests;
 
 pub use self::core::LENGTH_RELATIVE_TOLERANCE;
 pub use fit::DEFAULT_SPLINE_DEGREE;
+pub use surface::{BSplineSurface3, MAX_SURFACE_CONTROL_POINTS};
 
 use self::core::{Arr, Nurbs};
 use crate::{Frame, Point2, Point3, Transform, Vec2, Vec3};

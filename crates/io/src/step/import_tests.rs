@@ -5,6 +5,8 @@
 use super::tests::curved::solids;
 use super::tests::{box_50_30_10, plate_with_two_holes};
 use super::*;
+use chamfera_geom::{Point3, Vec3};
+use chamfera_kernel::Curve;
 
 fn rel(a: f64, b: f64) -> f64 {
     (a - b).abs() / b.abs().max(f64::MIN_POSITIVE)
@@ -383,22 +385,67 @@ fn face_surface_faces_and_reversed_senses_import_the_same() {
     }
 }
 
-/// A bicubic B-spline patch as a complex instance, as other writers produce it.
+/// The cube's bottom face (z = 0, outward -z) as a bilinear B-spline patch, a complex
+/// instance as other writers produce it. Its net is the bottom corners: `P_00 = (0,0)`,
+/// `P_01 = (10,0)`, `P_10 = (0,10)`, `P_11 = (10,10)`, so `σ_u = (0,10,0)`, `σ_v =
+/// (10,0,0)` and `σ_u × σ_v = (0,0,-100)`: outward, as `same_sense .T.` says.
 const BSPLINE: &str = "#360=(BOUNDED_SURFACE()B_SPLINE_SURFACE(1,1,((#1,#2),(#3,#4)),.UNSPECIFIED.,.F.,.F.,.F.)B_SPLINE_SURFACE_WITH_KNOTS((2,2),(2,2),(0.,1.),(0.,1.),.UNSPECIFIED.)GEOMETRIC_REPRESENTATION_ITEM()RATIONAL_B_SPLINE_SURFACE(((1.,1.),(1.,1.)))REPRESENTATION_ITEM('')SURFACE());";
 
-#[test]
-fn a_b_spline_face_is_refused_with_a_clear_message() {
+fn replaced(prefix: &str, line: &str) -> String {
     let lines: Vec<String> = cube_lines("10.", MM, Style::default())
         .into_iter()
         .map(|l| {
-            if l.starts_with("#360=") {
-                BSPLINE.to_owned()
+            if l.starts_with(prefix) {
+                line.to_owned()
             } else {
                 l
             }
         })
         .collect();
-    let text = file(&lines);
+    file(&lines)
+}
+
+#[test]
+fn a_flat_b_spline_face_and_b_spline_edges_import_as_exact_planes_and_splines() {
+    // The bottom face on its B-spline patch: still a 10 mm cube, 1000 mm^3, 600 mm^2.
+    let body = only(&replaced("#360=", BSPLINE));
+    assert!(rel(body.volume().unwrap(), 1000.0) < 1e-12);
+    assert!(rel(body.area().unwrap(), 600.0) < 1e-12);
+    let bottom = body.faces()[0];
+    let (s, _) = body.face_surface(bottom).unwrap().unwrap();
+    let chamfera_kernel::Surface::Plane(frame) = s else {
+        panic!("a plane expected, got {s:?}");
+    };
+    assert!((frame.z() - Vec3::new(0.0, 0.0, -1.0)).length() < 1e-12);
+    // An edge on a degree-1 B_SPLINE_CURVE_WITH_KNOTS (and one on a POLYLINE) keeps its
+    // B-spline: the cube is unchanged.
+    for line in [
+        "#140=B_SPLINE_CURVE_WITH_KNOTS('',1,(#1,#2),.POLYLINE_FORM.,.F.,.F.,(2,2),(0.,1.),.UNSPECIFIED.);",
+        "#140=POLYLINE('',(#1,#2));",
+        "#140=QUASI_UNIFORM_CURVE('',1,(#1,#2),.POLYLINE_FORM.,.F.,.F.);",
+        "#140=BEZIER_CURVE('',1,(#1,#2),.POLYLINE_FORM.,.F.,.F.);",
+    ] {
+        let body = only(&replaced("#140=", line));
+        assert!(rel(body.volume().unwrap(), 1000.0) < 1e-12, "{line}");
+        let splines = body
+            .edges()
+            .into_iter()
+            .filter(|e| matches!(body.edge_curve(*e), Ok(Some((Curve::BSpline(_), _, _)))))
+            .count();
+        assert_eq!(splines, 1, "{line}");
+    }
+}
+
+#[test]
+fn a_doubly_curved_b_spline_face_is_refused_per_solid_with_a_clear_message() {
+    // The patch with its middle lifted: a biquadratic dome over the bottom face.
+    let dome = "#360=B_SPLINE_SURFACE_WITH_KNOTS('',2,2,((#1,#600,#2),(#601,#602,#603),(#3,#604,#4)),.UNSPECIFIED.,.F.,.F.,.F.,(3,3),(3,3),(0.,1.),(0.,1.),.UNSPECIFIED.);
+#600=CARTESIAN_POINT('',(5.,0.,0.));
+#601=CARTESIAN_POINT('',(0.,5.,0.));
+#602=CARTESIAN_POINT('',(5.,5.,-4.));
+#603=CARTESIAN_POINT('',(10.,5.,0.));
+#604=CARTESIAN_POINT('',(5.,10.,0.));";
+    let text = replaced("#360=", dome);
     let r = import(&text).unwrap();
     assert!(r.solids.is_empty());
     let [f] = r.failed.as_slice() else {
@@ -410,7 +457,8 @@ fn a_b_spline_face_is_refused_with_a_clear_message() {
     );
     let msg = f.to_string();
     assert!(msg.contains("face #370"), "{msg}");
-    assert!(msg.contains("B_SPLINE_SURFACE_WITH_KNOTS"), "{msg}");
+    assert!(msg.contains("free-form B-spline surface"), "{msg}");
+    assert!(msg.contains("degree 2 x 2"), "{msg}");
     assert!(msg.contains("K10"), "{msg}");
     // read_* refuse the file as a whole, saying why.
     let e = read_bytes(text.as_bytes()).unwrap_err().to_string();
@@ -418,23 +466,332 @@ fn a_b_spline_face_is_refused_with_a_clear_message() {
         e.contains("1 of 1 solids") && e.contains("face #370"),
         "{e}"
     );
-    // A simple B_SPLINE_CURVE_WITH_KNOTS under an edge is refused the same way.
-    let lines: Vec<String> = cube_lines("10.", MM, Style::default())
+}
+
+// --- A quarter cylinder on rational B-splines ---------------------------------------------
+
+/// `√2/2`, the middle weight of a rational quadratic quarter circle.
+const W: &str = "0.7071067811865476";
+
+/// A wedge face: first oriented edge id, its uses, its surface lines, its name.
+type WedgeFace<'a> = (u32, &'a [(u32, bool)], &'a str, &'a str);
+
+/// A quarter of a cylinder of radius 10 about the z axis, height 10, in the first
+/// quadrant: vertices `V0 = (0,0,0)`, `V1 = (10,0,0)`, `V2 = (0,10,0)` and `V3..V5` above
+/// them at z = 10. The arcs `V1 -> V2` and `V4 -> V5` are rational quadratic B-splines
+/// (control points `(10,0)`, `(10,10)`, `(0,10)`, weights 1, √2/2, 1: exactly the quarter
+/// circle, The NURBS Book §7.3). Loops run counter-clockwise about each outward normal,
+/// worked out by hand: bottom `V0 V2 V1`, top `V3 V4 V5`, the side on y = 0 `V0 V1 V4 V3`
+/// (x × z = -y), the side on x = 0 `V0 V3 V5 V2` (z × y = -x), the round side `V1 V2 V5
+/// V4` (at V1: +y then +z, y × z = +x, outward). `round` is the round face's surface
+/// line(s), `#192`, and its `same_sense`.
+fn wedge(round: &str, same_sense: bool) -> String {
+    let rational_arc = |id: u32, a: u32, m: u32, b: u32| {
+        format!(
+            "#{id}=(BOUNDED_CURVE()B_SPLINE_CURVE(2,(#{a},#{m},#{b}),.CIRCULAR_ARC.,.F.,.F.)B_SPLINE_CURVE_WITH_KNOTS((3,3),(0.,1.),.UNSPECIFIED.)CURVE()GEOMETRIC_REPRESENTATION_ITEM()RATIONAL_B_SPLINE_CURVE((1.,{W},1.))REPRESENTATION_ITEM(''));"
+        )
+    };
+    let mut l: Vec<String> = vec![
+        "#1=CARTESIAN_POINT('',(0.,0.,0.));".into(),
+        "#2=CARTESIAN_POINT('',(10.,0.,0.));".into(),
+        "#3=CARTESIAN_POINT('',(0.,10.,0.));".into(),
+        "#4=CARTESIAN_POINT('',(0.,0.,10.));".into(),
+        "#5=CARTESIAN_POINT('',(10.,0.,10.));".into(),
+        "#6=CARTESIAN_POINT('',(0.,10.,10.));".into(),
+        "#61=CARTESIAN_POINT('',(10.,10.,0.));".into(),
+        "#62=CARTESIAN_POINT('',(10.,10.,10.));".into(),
+        "#20=DIRECTION('',(1.,0.,0.));".into(),
+        "#21=DIRECTION('',(0.,1.,0.));".into(),
+        "#22=DIRECTION('',(0.,0.,1.));".into(),
+        "#23=DIRECTION('',(0.,0.,-1.));".into(),
+        "#24=DIRECTION('',(-1.,0.,0.));".into(),
+        "#25=DIRECTION('',(0.,-1.,0.));".into(),
+        "#30=VECTOR('',#20,1.);".into(),
+        "#31=VECTOR('',#21,1.);".into(),
+        "#32=VECTOR('',#22,1.);".into(),
+        "#40=LINE('',#1,#30);".into(),
+        "#41=LINE('',#1,#31);".into(),
+        rational_arc(42, 2, 61, 3),
+        "#43=LINE('',#4,#30);".into(),
+        "#44=LINE('',#4,#31);".into(),
+        rational_arc(45, 5, 62, 6),
+        "#46=LINE('',#1,#32);".into(),
+        "#47=LINE('',#2,#32);".into(),
+        "#48=LINE('',#3,#32);".into(),
+    ];
+    for v in 0..6 {
+        l.push(format!("#{}=VERTEX_POINT('',#{});", 11 + v, 1 + v));
+    }
+    // (edge id, from vertex, to vertex, curve)
+    for (e, a, b, c) in [
+        (50, 11, 12, 40),
+        (51, 11, 13, 41),
+        (52, 12, 13, 42),
+        (53, 14, 15, 43),
+        (54, 14, 16, 44),
+        (55, 15, 16, 45),
+        (56, 11, 14, 46),
+        (57, 12, 15, 47),
+        (58, 13, 16, 48),
+    ] {
+        l.push(format!("#{e}=EDGE_CURVE('',#{a},#{b},#{c},.T.);"));
+    }
+    // (first oriented edge id, uses, bound id, surface lines, face id, name, same_sense)
+    let faces: [WedgeFace; 5] = [
+        (
+            100,
+            &[(51, true), (52, false), (50, false)],
+            "#112=AXIS2_PLACEMENT_3D('',#1,#23,#20);\n#113=PLANE('',#112);",
+            "bottom",
+        ),
+        (
+            120,
+            &[(53, true), (55, true), (54, false)],
+            "#132=AXIS2_PLACEMENT_3D('',#4,#22,#20);\n#133=PLANE('',#132);",
+            "top",
+        ),
+        (
+            140,
+            &[(50, true), (57, true), (53, false), (56, false)],
+            "#152=AXIS2_PLACEMENT_3D('',#1,#25,#20);\n#153=PLANE('',#152);",
+            "y0",
+        ),
+        (
+            160,
+            &[(56, true), (54, true), (58, false), (51, false)],
+            "#172=AXIS2_PLACEMENT_3D('',#1,#24,#21);\n#173=PLANE('',#172);",
+            "x0",
+        ),
+        (
+            180,
+            &[(52, true), (58, true), (55, false), (57, false)],
+            round,
+            "round",
+        ),
+    ];
+    let mut face_ids = Vec::new();
+    for (first, uses, surface, name) in faces {
+        let mut oes = Vec::new();
+        for (k, (e, along)) in uses.iter().enumerate() {
+            let id = first + k as u32;
+            l.push(format!("#{id}=ORIENTED_EDGE('',*,*,#{e},{});", t(*along)));
+            oes.push(format!("#{id}"));
+        }
+        l.push(format!(
+            "#{}=EDGE_LOOP('',({}));",
+            first + 10,
+            oes.join(",")
+        ));
+        l.push(format!(
+            "#{}=FACE_OUTER_BOUND('',#{},.T.);",
+            first + 11,
+            first + 10
+        ));
+        l.extend(surface.lines().map(str::to_owned));
+        let sense = if name == "round" { same_sense } else { true };
+        l.push(format!(
+            "#{}=ADVANCED_FACE('{name}',(#{}),#{},{});",
+            first + 14,
+            first + 11,
+            first + 13 - u32::from(name == "round"),
+            t(sense)
+        ));
+        face_ids.push(format!("#{}", first + 14));
+    }
+    l.push(format!("#200=CLOSED_SHELL('',({}));", face_ids.join(",")));
+    l.push("#201=MANIFOLD_SOLID_BREP('wedge',#200);".into());
+    l.extend(MM.lines().map(str::to_owned));
+    l.push("#520=ADVANCED_BREP_SHAPE_REPRESENTATION('',(#201),#510);".into());
+    file(&l)
+}
+
+/// The round side as a rational B-spline patch of degree 2 along u (the arc) and 1 along
+/// v (up), rows `(arc point at z = 0, at z = 10)`: `σ_u × σ_v` is outward.
+fn round_patch() -> String {
+    format!(
+        "#192=(BOUNDED_SURFACE()B_SPLINE_SURFACE(2,1,((#2,#5),(#61,#62),(#3,#6)),.UNSPECIFIED.,.F.,.F.,.F.)B_SPLINE_SURFACE_WITH_KNOTS((3,3),(2,2),(0.,1.),(0.,1.),.UNSPECIFIED.)GEOMETRIC_REPRESENTATION_ITEM()RATIONAL_B_SPLINE_SURFACE(((1.,1.),({W},{W}),(1.,1.)))REPRESENTATION_ITEM('')SURFACE());"
+    )
+}
+
+/// Checks the wedge against its closed forms: volume `πr²h/4 = 250π`; area two quarter
+/// discs `2 · 25π`, two 10 x 10 squares and the round side `(πr/2) h = 50π`, in all
+/// `100π + 200`.
+fn check_wedge(text: &str) -> Body {
+    let body = only(text);
+    let pi = std::f64::consts::PI;
+    let v = body.volume().unwrap();
+    assert!(rel(v, 250.0 * pi) < 1e-9, "volume {v}");
+    let a = body.area().unwrap();
+    assert!(rel(a, 100.0 * pi + 200.0) < 1e-9, "area {a}");
+    let s = body.summary();
+    assert_eq!((s.vertices, s.edges, s.faces), (6, 9, 5));
+    let round = body
+        .faces()
         .into_iter()
-        .map(|l| {
-            if l.starts_with("#140=") {
-                "#140=B_SPLINE_CURVE_WITH_KNOTS('',1,(#1,#2),.POLYLINE_FORM.,.F.,.F.,(2,2),(0.,1.),.UNSPECIFIED.);".to_owned()
-            } else {
-                l
+        .find(|f| body.face_name(*f).unwrap() == Some("round"))
+        .unwrap();
+    let (surface, _) = body.face_surface(round).unwrap().unwrap();
+    assert!(matches!(surface, chamfera_kernel::Surface::Extrusion(_)));
+    body
+}
+
+#[test]
+fn a_rational_b_spline_quarter_cylinder_imports_as_an_exact_extrusion() {
+    let body = check_wedge(&wedge(&round_patch(), true));
+    // The arc edges stay rational B-splines: the midpoint of the bottom one is at 45°.
+    let arc = body
+        .edges()
+        .into_iter()
+        .find_map(|e| match body.edge_curve(e) {
+            Ok(Some((Curve::BSpline(c), t0, t1))) if c.point_at(t0).z.abs() < 1e-12 => {
+                Some(c.point_at(0.5 * (t0 + t1)))
             }
+            _ => None,
         })
-        .collect();
-    let r = import(&file(&lines)).unwrap();
-    let msg = r.failed[0].to_string();
-    assert!(
-        msg.contains("edge #160") && msg.contains("B_SPLINE_CURVE_WITH_KNOTS"),
-        "{msg}"
+        .unwrap();
+    let h = 10.0 * std::f64::consts::FRAC_1_SQRT_2;
+    assert!(arc.distance(Point3::new(h, h, 0.0)) < 1e-12, "{arc:?}");
+}
+
+#[test]
+fn a_patch_ruled_along_u_turns_the_normal_and_same_sense_turns_it_back() {
+    // The same patch with u and v swapped: rows (z = 0, z = 10), the arc along v. Now
+    // σ_u = (0,0,10) and σ_v runs along the arc, so σ_u × σ_v points at the axis and the
+    // face says .F. to be outward.
+    let swapped = format!(
+        "#192=(BOUNDED_SURFACE()B_SPLINE_SURFACE(1,2,((#2,#61,#3),(#5,#62,#6)),.UNSPECIFIED.,.F.,.F.,.F.)B_SPLINE_SURFACE_WITH_KNOTS((2,2),(3,3),(0.,1.),(0.,1.),.UNSPECIFIED.)GEOMETRIC_REPRESENTATION_ITEM()RATIONAL_B_SPLINE_SURFACE(((1.,{W},1.),(1.,{W},1.)))REPRESENTATION_ITEM('')SURFACE());"
     );
+    check_wedge(&wedge(&swapped, false));
+    // With .T. the face would point inward: not a valid solid.
+    let r = import(&wedge(&swapped, true)).unwrap();
+    assert!(r.solids.is_empty());
+    assert_eq!(r.failed[0].kind, FailureKind::Invalid);
+}
+
+#[test]
+fn a_surface_of_linear_extrusion_of_a_b_spline_imports_exactly() {
+    // The bottom arc swept along +z by 10: σ_u × σ_v = C' × z, outward.
+    check_wedge(&wedge(
+        "#196=VECTOR('',#22,10.);\n#192=SURFACE_OF_LINEAR_EXTRUSION('',#42,#196);",
+        true,
+    ));
+    // A circle swept along its axis is a cylinder.
+    let text = wedge(
+        "#196=VECTOR('',#22,10.);\n#197=AXIS2_PLACEMENT_3D('',#1,#22,#20);\n#198=CIRCLE('',#197,10.);\n#192=SURFACE_OF_LINEAR_EXTRUSION('',#198,#196);",
+        true,
+    );
+    let body = only(&text);
+    assert!(rel(body.volume().unwrap(), 250.0 * std::f64::consts::PI) < 1e-9);
+}
+
+#[test]
+fn hostile_b_spline_entities_are_refused_without_panicking() {
+    let arc = |body: &str| {
+        format!(
+            "#42=(BOUNDED_CURVE()B_SPLINE_CURVE({body})CURVE()GEOMETRIC_REPRESENTATION_ITEM()REPRESENTATION_ITEM(''));"
+        )
+    };
+    let good = wedge(&round_patch(), true);
+    let line42 = good
+        .lines()
+        .find(|l| l.starts_with("#42="))
+        .unwrap()
+        .to_owned();
+    let line192 = good
+        .lines()
+        .find(|l| l.starts_with("#192="))
+        .unwrap()
+        .to_owned();
+    let hostile = [
+        (
+            line42.clone(),
+            line42.replace("B_SPLINE_CURVE(2,", "B_SPLINE_CURVE(99,"),
+        ),
+        (
+            line42.clone(),
+            line42.replace("B_SPLINE_CURVE(2,", "B_SPLINE_CURVE(-1,"),
+        ),
+        (
+            line42.clone(),
+            line42.replace("((3,3),(0.,1.)", "((3,4000000000),(0.,1.)"),
+        ),
+        (
+            line42.clone(),
+            line42.replace("((3,3),(0.,1.)", "((3,3),(1.,0.)"),
+        ),
+        (
+            line42.clone(),
+            line42.replace("((3,3),(0.,1.)", "((3),(0.,1.)"),
+        ),
+        (
+            line42.clone(),
+            line42.replace("(1.,0.7071067811865476,1.)", "(1.,-1.,1.)"),
+        ),
+        (
+            line42.clone(),
+            line42.replace("(1.,0.7071067811865476,1.)", "(1.,1.)"),
+        ),
+        (
+            line42.clone(),
+            line42.replace("(#2,#61,#3)", "(#2,#61,#200)"),
+        ),
+        (line42.clone(), line42.replace("(#2,#61,#3)", "()")),
+        (line42.clone(), arc("2,(#2,#61,#3),.UNSPECIFIED.,.F.,.F.")),
+        (
+            line192.clone(),
+            line192.replace("(3,3),(2,2)", "(3,3),(2,9)"),
+        ),
+        (
+            line192.clone(),
+            line192.replace("((#2,#5),(#61,#62),(#3,#6))", "((#2,#5),(#61),(#3,#6))"),
+        ),
+        (line192.clone(), line192.replace("((1.,1.),", "((1.),")),
+        (
+            line192.clone(),
+            line192.replace("B_SPLINE_SURFACE(2,1,", "B_SPLINE_SURFACE(2,0,"),
+        ),
+        (
+            line192.clone(),
+            "#192=B_SPLINE_SURFACE('',1,1,((#2,#5),(#3,#6)),.UNSPECIFIED.,.F.,.F.,.F.);".to_owned(),
+        ),
+        (
+            line192.clone(),
+            "#192=SURFACE_OF_LINEAR_EXTRUSION('',#42,#1);".to_owned(),
+        ),
+        (
+            line192.clone(),
+            "#192=SURFACE_OF_LINEAR_EXTRUSION('',#192,#32);".to_owned(),
+        ),
+    ];
+    for (from, to) in hostile {
+        let r = import(&good.replace(&from, &to)).unwrap();
+        assert!(r.solids.is_empty(), "{to}");
+        assert_eq!(r.failed.len(), 1, "{to}");
+    }
+    for cut in (0..good.len()).step_by(7) {
+        let _ = import(&good[..cut]);
+    }
+}
+
+#[test]
+fn spline_solids_we_export_read_back_with_their_measures() {
+    // The arch (a parabola through (0,0), (10,10), (20,0) closed by a line, extruded by 5):
+    // the area under y = 10 - (x - 10)²/10 on [0, 20] is 200 - 2000/30 = 400/3, so the
+    // volume is 2000/3. The disc (a rational unit circle extruded by 1) is π.
+    for (name, body, volume) in [
+        ("arch", super::tests::splines::arch(), 2000.0 / 3.0),
+        ("disc", super::tests::splines::disc(), std::f64::consts::PI),
+    ] {
+        let text = write(&[(name, &body)], &StepOptions::default()).unwrap();
+        let back = only(&text);
+        assert_eq!(back.summary(), body.summary(), "{name}");
+        let v = back.volume().unwrap();
+        assert!(rel(v, volume) < 1e-9, "{name}: {v}");
+        assert!(
+            rel(back.area().unwrap(), body.area().unwrap()) < 1e-9,
+            "{name}"
+        );
+    }
 }
 
 #[test]
@@ -547,4 +904,322 @@ fn truncated_garbage_and_hostile_files_are_refused_without_panicking() {
     }
     // No solid at all.
     assert!(import(&file(&["#1=CARTESIAN_POINT('',(0.,0.,0.));".to_owned()])).is_err());
+}
+
+// --- Faceted B-reps -------------------------------------------------------------------------
+
+/// The faces of a cube of side 10 as corner rings `i = x + 2y + 4z`, each running
+/// counter-clockwise about its outward normal (worked out by hand: for -y, 0 -> 1 is +x
+/// and 1 -> 5 is +z, x × z = -y; the others likewise).
+const CUBE_RINGS: [[usize; 4]; 6] = [
+    [0, 2, 3, 1], // -z
+    [4, 5, 7, 6], // +z
+    [0, 1, 5, 4], // -y
+    [2, 6, 7, 3], // +y
+    [0, 4, 6, 2], // -x
+    [1, 3, 7, 5], // +x
+];
+
+fn corner(i: usize) -> String {
+    let c = |bit: usize| if i >> bit & 1 == 1 { "10." } else { "0." };
+    format!("({},{},{})", c(0), c(1), c(2))
+}
+
+/// A faceted cube: `quads` gives one POLY_LOOP per face over shared points, else two
+/// triangles per face, each with its own copies of its points (as mesh converters write
+/// them). `skip` leaves faces out; `shell` is `CLOSED_SHELL` or `OPEN_SHELL`; the shell
+/// is #900 and the item #901 is written by `item`.
+fn faceted_cube(quads: bool, skip: &[usize], shell: &str, item: &str) -> String {
+    let mut l: Vec<String> = (0..8)
+        .map(|i| format!("#{}=CARTESIAN_POINT('',{});", 1 + i, corner(i)))
+        .collect();
+    let mut faces = Vec::new();
+    let mut next = 100;
+    for (f, ring) in CUBE_RINGS.iter().enumerate() {
+        if skip.contains(&f) {
+            continue;
+        }
+        let polys: Vec<Vec<usize>> = if quads {
+            vec![ring.to_vec()]
+        } else {
+            vec![
+                vec![ring[0], ring[1], ring[2]],
+                vec![ring[0], ring[2], ring[3]],
+            ]
+        };
+        for poly in polys {
+            let pts: Vec<String> = poly
+                .iter()
+                .map(|c| {
+                    if quads {
+                        format!("#{}", 1 + c)
+                    } else {
+                        next += 1;
+                        l.push(format!("#{next}=CARTESIAN_POINT('',{});", corner(*c)));
+                        format!("#{next}")
+                    }
+                })
+                .collect();
+            let (lp, bound, face) = (next + 1, next + 2, next + 3);
+            next += 3;
+            l.push(format!("#{lp}=POLY_LOOP('',({}));", pts.join(",")));
+            l.push(format!("#{bound}=FACE_OUTER_BOUND('',#{lp},.T.);"));
+            l.push(format!("#{face}=FACE('',(#{bound}));"));
+            faces.push(format!("#{face}"));
+        }
+    }
+    l.push(format!("#900={shell}('',({}));", faces.join(",")));
+    l.push(item.to_owned());
+    l.extend(MM.lines().map(str::to_owned));
+    l.push("#520=FACETED_BREP_SHAPE_REPRESENTATION('',(#901),#510);".into());
+    file(&l)
+}
+
+#[test]
+fn a_faceted_cube_imports_as_an_exact_planar_solid() {
+    // 10^3 = 1000 mm^3 and 6 * 100 = 600 mm^2, quads over shared points or triangles
+    // with their own copies of the points.
+    for quads in [true, false] {
+        let text = faceted_cube(
+            quads,
+            &[],
+            "CLOSED_SHELL",
+            "#901=FACETED_BREP('facets',#900);",
+        );
+        let body = only(&text);
+        assert!(rel(body.volume().unwrap(), 1000.0) < 1e-12, "quads {quads}");
+        assert!(rel(body.area().unwrap(), 600.0) < 1e-12, "quads {quads}");
+        // The 8 corners are merged however many copies the file has.
+        assert_eq!(body.summary().vertices, 8, "quads {quads}");
+        assert_eq!(body.summary().faces, if quads { 6 } else { 12 });
+    }
+    // A closed shell-based surface model of polygons is a solid too.
+    let text = faceted_cube(
+        true,
+        &[],
+        "CLOSED_SHELL",
+        "#901=SHELL_BASED_SURFACE_MODEL('model',(#900));",
+    );
+    assert!(rel(only(&text).volume().unwrap(), 1000.0) < 1e-12);
+}
+
+#[test]
+fn an_open_or_broken_faceted_shell_comes_in_as_a_mesh() {
+    // Without its top: five faces, 10 triangles, area 500, open.
+    let text = faceted_cube(
+        false,
+        &[1],
+        "OPEN_SHELL",
+        "#901=SHELL_BASED_SURFACE_MODEL('cup',(#900));",
+    );
+    let r = import(&text).unwrap();
+    assert!(r.solids.is_empty() && r.failed.is_empty(), "{:?}", r.failed);
+    let [(name, mesh)] = r.meshes.as_slice() else {
+        panic!("one mesh expected");
+    };
+    assert_eq!(name, "cup");
+    assert_eq!(mesh.triangles.len(), 10);
+    assert!(rel(mesh.area(), 500.0) < 1e-12);
+    assert!(r.warnings[0].contains("open shell"), "{:?}", r.warnings);
+    // read_bytes wants solids only, and says why not.
+    let e = read_bytes(text.as_bytes()).unwrap_err().to_string();
+    assert!(e.contains("meshes"), "{e}");
+    // A FACETED_BREP whose shell is missing a face is not a solid: a mesh, with the
+    // reason from the kernel.
+    let text = faceted_cube(
+        true,
+        &[1],
+        "CLOSED_SHELL",
+        "#901=FACETED_BREP('broken',#900);",
+    );
+    let r = import(&text).unwrap();
+    assert_eq!(r.meshes.len(), 1);
+    assert!(
+        r.warnings[0].contains("not a valid solid"),
+        "{:?}",
+        r.warnings
+    );
+    // Faces mixing polygons and edge loops, and degenerate polygons, are refused.
+    let text = faceted_cube(
+        true,
+        &[],
+        "CLOSED_SHELL",
+        "#901=FACETED_BREP('facets',#900);",
+    );
+    let first = text
+        .lines()
+        .find(|l| l.contains("POLY_LOOP"))
+        .unwrap()
+        .to_owned();
+    for bad in [
+        first.replace("POLY_LOOP('',(#1,#3,#4,#2))", "POLY_LOOP('',(#1,#3))"),
+        first.replace("POLY_LOOP('',(#1,#3,#4,#2))", "POLY_LOOP('',(#1,#1,#1,#1))"),
+        first.replace(
+            "POLY_LOOP('',(#1,#3,#4,#2))",
+            "POLY_LOOP('',(#1,#3,#520,#2))",
+        ),
+        first.replace("POLY_LOOP('',(#1,#3,#4,#2))", "POLY_LOOP('',#1)"),
+    ] {
+        assert_ne!(bad, first);
+        let r = import(&text.replace(&first, &bad)).unwrap();
+        assert!(r.solids.is_empty() && r.meshes.is_empty(), "{bad}");
+        assert_eq!(r.failed.len(), 1, "{bad}");
+    }
+    for cut in (0..text.len()).step_by(7) {
+        let _ = import(&text[..cut]);
+    }
+}
+
+// --- Assemblies -----------------------------------------------------------------------------
+
+/// Product structure (entities #1000..): the assembly `asm` uses the part `block` (the
+/// 10 mm cube of [`cube_lines`], solid #401 in the representation #520) twice. Usage 1
+/// moves it by (100, 0, 0); usage 2 turns it a quarter turn about z (its x axis onto +y)
+/// and moves it by (0, 50, 0). `swap` writes usage 2's relationship with the parent's
+/// representation as `rep_1` (the other convention some writers use).
+fn assembly(swap: bool) -> String {
+    let mut l = cube_lines("10.", MM, Style::default());
+    l.extend(
+        [
+            "#1000=APPLICATION_CONTEXT('automotive design');",
+            "#1001=PRODUCT_CONTEXT('',#1000,'mechanical');",
+            "#1002=PRODUCT_DEFINITION_CONTEXT('part definition',#1000,'design');",
+            "#1003=CARTESIAN_POINT('',(0.,0.,0.));",
+            "#1010=PRODUCT('asm','Assembly','',(#1001));",
+            "#1011=PRODUCT_DEFINITION_FORMATION('','',#1010);",
+            "#1012=PRODUCT_DEFINITION('design','',#1011,#1002);",
+            "#1013=PRODUCT_DEFINITION_SHAPE('','',#1012);",
+            "#1015=AXIS2_PLACEMENT_3D('',#1003,$,$);",
+            "#1014=SHAPE_REPRESENTATION('',(#1015),#510);",
+            "#1016=SHAPE_DEFINITION_REPRESENTATION(#1013,#1014);",
+            "#1020=PRODUCT('block','Block','',(#1001));",
+            "#1021=PRODUCT_DEFINITION_FORMATION('','',#1020);",
+            "#1022=PRODUCT_DEFINITION('design','',#1021,#1002);",
+            "#1023=PRODUCT_DEFINITION_SHAPE('','',#1022);",
+            "#1025=AXIS2_PLACEMENT_3D('',#1003,$,$);",
+            "#1024=SHAPE_REPRESENTATION('',(#1025),#510);",
+            "#1026=SHAPE_DEFINITION_REPRESENTATION(#1023,#1024);",
+            "#1027=SHAPE_REPRESENTATION_RELATIONSHIP('','',#1024,#520);",
+            "#1030=NEXT_ASSEMBLY_USAGE_OCCURRENCE('1','block:1','',#1012,#1022,$);",
+            "#1031=PRODUCT_DEFINITION_SHAPE('','',#1030);",
+            "#1033=CARTESIAN_POINT('',(100.,0.,0.));",
+            "#1032=AXIS2_PLACEMENT_3D('',#1033,$,$);",
+            "#1034=ITEM_DEFINED_TRANSFORMATION('','',#1025,#1032);",
+            "#1035=(REPRESENTATION_RELATIONSHIP('','',#1024,#1014)REPRESENTATION_RELATIONSHIP_WITH_TRANSFORMATION(#1034)SHAPE_REPRESENTATION_RELATIONSHIP());",
+            "#1036=CONTEXT_DEPENDENT_SHAPE_REPRESENTATION(#1035,#1031);",
+            "#1040=NEXT_ASSEMBLY_USAGE_OCCURRENCE('2','block:2','',#1012,#1022,$);",
+            "#1041=PRODUCT_DEFINITION_SHAPE('','',#1040);",
+            "#1043=CARTESIAN_POINT('',(0.,50.,0.));",
+            "#1044=DIRECTION('',(0.,0.,1.));",
+            "#1045=DIRECTION('',(0.,1.,0.));",
+            "#1042=AXIS2_PLACEMENT_3D('',#1043,#1044,#1045);",
+            "#1048=CONTEXT_DEPENDENT_SHAPE_REPRESENTATION(#1047,#1041);",
+        ]
+        .map(str::to_owned),
+    );
+    l.push(if swap {
+        "#1046=ITEM_DEFINED_TRANSFORMATION('','',#1042,#1025);\n#1047=(REPRESENTATION_RELATIONSHIP('','',#1014,#1024)REPRESENTATION_RELATIONSHIP_WITH_TRANSFORMATION(#1046)SHAPE_REPRESENTATION_RELATIONSHIP());".to_owned()
+    } else {
+        "#1046=ITEM_DEFINED_TRANSFORMATION('','',#1025,#1042);\n#1047=(REPRESENTATION_RELATIONSHIP('','',#1024,#1014)REPRESENTATION_RELATIONSHIP_WITH_TRANSFORMATION(#1046)SHAPE_REPRESENTATION_RELATIONSHIP());".to_owned()
+    });
+    file(
+        &l.iter()
+            .flat_map(|x| x.lines().map(str::to_owned))
+            .collect::<Vec<_>>(),
+    )
+}
+
+#[test]
+fn a_two_part_assembly_places_each_usage_by_its_transformation() {
+    for swap in [false, true] {
+        let r = import(&assembly(swap)).unwrap();
+        assert!(
+            r.failed.is_empty() && r.warnings.is_empty(),
+            "{:?}",
+            r.warnings
+        );
+        assert_eq!(r.solids.len(), 1);
+        let [a, b] = r.components.as_slice() else {
+            panic!("two components expected, got {:?}", r.components);
+        };
+        // The single root (asm) is the design itself: both are at the top.
+        assert_eq!((a.parent, b.parent), (None, None));
+        assert_eq!((a.name.as_str(), b.name.as_str()), ("Block", "Block"));
+        assert_eq!(
+            (a.solids.as_slice(), b.solids.as_slice()),
+            (&[0][..], &[0][..])
+        );
+        // Usage 1: a translation by (100, 0, 0): the corner (10, 0, 0) goes to (110, 0, 0).
+        let p = a.placement.apply_point(Point3::new(10.0, 0.0, 0.0));
+        assert!(p.distance(Point3::new(110.0, 0.0, 0.0)) < 1e-12, "{p:?}");
+        // Usage 2: x onto +y, so (10, 0, 0) -> (0, 10, 0) + (0, 50, 0) = (0, 60, 0) and
+        // (0, 10, 0) -> (-10, 0, 0) + (0, 50, 0) = (-10, 50, 0).
+        let p = b.placement.apply_point(Point3::new(10.0, 0.0, 0.0));
+        assert!(
+            p.distance(Point3::new(0.0, 60.0, 0.0)) < 1e-12,
+            "swap {swap}: {p:?}"
+        );
+        let p = b.placement.apply_point(Point3::new(0.0, 10.0, 0.0));
+        assert!(
+            p.distance(Point3::new(-10.0, 50.0, 0.0)) < 1e-12,
+            "swap {swap}: {p:?}"
+        );
+        // The placed body keeps its volume.
+        let placed = r.solids[0].1.transformed(&b.placement).unwrap();
+        assert!(rel(placed.volume().unwrap(), 1000.0) < 1e-12);
+        let bb = placed.bounding_box().unwrap();
+        assert!(
+            bb.min.distance(Point3::new(-10.0, 50.0, 0.0)) < 1e-9,
+            "{bb:?}"
+        );
+        assert!(
+            bb.max.distance(Point3::new(0.0, 60.0, 10.0)) < 1e-9,
+            "{bb:?}"
+        );
+    }
+}
+
+#[test]
+fn hostile_assemblies_never_panic_and_say_what_was_left_out() {
+    let good = assembly(false);
+    // A usage without a placement stays at its parent's origin, with a warning; one
+    // whose transformation is not an item-defined one likewise.
+    let r = import(&good.replace(
+        "#1036=CONTEXT_DEPENDENT_SHAPE_REPRESENTATION(#1035,#1031);",
+        "",
+    ))
+    .unwrap();
+    assert_eq!(r.components.len(), 2);
+    assert_eq!(
+        r.components[0].placement,
+        chamfera_geom::Transform::IDENTITY
+    );
+    assert!(
+        r.warnings.iter().any(|w| w.contains("#1030")),
+        "{:?}",
+        r.warnings
+    );
+    let r = import(&good.replace(
+        "#1034=ITEM_DEFINED_TRANSFORMATION('','',#1025,#1032);",
+        "#1034=CARTESIAN_POINT('',(1.,2.,3.));",
+    ))
+    .unwrap();
+    assert!(
+        r.warnings
+            .iter()
+            .any(|w| w.contains("ITEM_DEFINED_TRANSFORMATION")),
+        "{:?}",
+        r.warnings
+    );
+    // A product that contains itself: the cycle is cut, nothing hangs.
+    let cyclic = good.replace(
+        "#1040=NEXT_ASSEMBLY_USAGE_OCCURRENCE('2','block:2','',#1012,#1022,$);",
+        "#1040=NEXT_ASSEMBLY_USAGE_OCCURRENCE('2','loop','',#1022,#1012,$);",
+    );
+    let r = import(&cyclic).unwrap();
+    assert_eq!(r.solids.len(), 1);
+    assert!(!r.warnings.is_empty());
+    for cut in (0..good.len()).step_by(11) {
+        let _ = import(&good[..cut]);
+    }
 }
