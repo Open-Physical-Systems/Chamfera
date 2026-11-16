@@ -253,6 +253,7 @@ fn describe(s: &Session, t: &Target) -> Result<Value, CommandError> {
                 Some((Surface::Sphere(_), _)) => "sphere",
                 Some((Surface::Torus(_), _)) => "torus",
                 Some((Surface::Extrusion(_), _)) => "extrusion",
+                Some((Surface::Nurbs(_), _)) => "nurbs",
                 None => "none",
             };
             out["surface"] = json!(surface);

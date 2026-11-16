@@ -281,6 +281,9 @@ fn hostile_params_never_panic() {
         json!({"item": 2, "to": 0, "position": 0.5, "items": [], "name": "\u{7}"}),
         json!({"item": 1, "to": 1, "position": 1e7, "items": [1, 1, 1], "group": 99, "name": long}),
         json!({"item": [1], "to": "end", "position": "0", "items": 3, "sketch": 1, "name": 5}),
+        json!({"item": "xy", "visible": true, "x": 1, "y": 1, "width": 10, "height": 10, "cycle": 4294967295u64}),
+        json!({"item": "all", "visible": "no", "x": 5, "y": 5, "width": 10, "height": 10, "cycle": "next"}),
+        json!({"item": long, "visible": false, "cycle": 1e300, "view": "top_front_right_left"}),
         json!({"view": "front", "x": 1e300, "y": -1e300, "scale": 0, "body": long, "sheet": 0}),
         json!({"view": "iso", "x": 100, "y": 100, "scale": 1e-300, "sheet": 4294967295u64}),
         json!({"view": 1, "kind": "angular", "x1": 1e300, "y1": 0, "x2": 0, "y2": 0, "offset": 1e300}),
@@ -571,6 +574,31 @@ fn zooming_toward_a_pixel_moves_the_camera_closer() {
     .unwrap();
     assert!((s.camera.distance - before * 0.5).abs() < 1e-9);
     assert!(s.execute("view.zoom", &json!({"factor": 0})).is_err());
+}
+
+#[test]
+fn view_cube_edges_and_corners_are_standard_views() {
+    let mut s = Session::new();
+    // The top-front edge looks from (0, -1, 1): yaw -90 degrees, pitch 45 degrees.
+    s.execute("view.standard", &json!({"view": "top_front"}))
+        .unwrap();
+    assert!((s.camera.yaw - 1.5 * std::f64::consts::PI).abs() < 1e-12); // -pi/2, kept in 0..2pi
+    assert!((s.camera.pitch - std::f64::consts::FRAC_PI_4).abs() < 1e-12);
+    // A corner: the eye lies along (-1, 1, -1) from the target.
+    s.execute("view.standard", &json!({"view": "bottom_back_left"}))
+        .unwrap();
+    let to_eye = (s.camera.eye() - s.camera.target).normalized().unwrap();
+    let want = chamfera_geom::Vec3::new(-1.0, 1.0, -1.0) * (1.0 / 3f64.sqrt());
+    assert!((to_eye - want).length() < 1e-9, "{to_eye:?}");
+    // The top-front-right corner is the isometric view.
+    s.execute("view.standard", &json!({"view": "iso"})).unwrap();
+    let iso = (s.camera.yaw, s.camera.pitch);
+    s.execute("view.standard", &json!({"view": "front_right_top"}))
+        .unwrap();
+    assert!((s.camera.yaw - iso.0).abs() < 1e-12 && (s.camera.pitch - iso.1).abs() < 1e-12);
+    for bad in ["top_bottom", "front_front", "north", ""] {
+        assert!(s.execute("view.standard", &json!({"view": bad})).is_err());
+    }
 }
 
 #[test]

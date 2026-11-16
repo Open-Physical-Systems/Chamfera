@@ -45,7 +45,10 @@ pub static COMMANDS: &[CommandSpec] = &[
                  on a miss), add, toggle (add, or remove if selected) or remove; a miss \
                  changes nothing unless replacing\n\
                  filter: list of strings (optional) - what may be picked: bodies, faces, \
-                 edges (an edge near the pixel comes first); without it, the body hit",
+                 edges (an edge near the pixel comes first); without it, the body hit\n\
+                 cycle: integer (optional) - select through: take the body this many places \
+                 behind the nearest under the pixel (0 is the nearest), wrapping around; \
+                 the reply's `candidates` lists them nearest first",
         mutates: false,
         run: pick,
     },
@@ -115,8 +118,32 @@ fn pick(s: &mut Session, p: &Value) -> CmdResult {
         .camera
         .ray_through(x, y, w, h, bounds.as_ref())
         .ok_or_else(|| CommandError::BadParams("no ray through that pixel".into()))?;
-    let (hit, edge) = match PickFilter::from_params(p)? {
-        None => (s.scene.pick(&ray), None),
+    let cycle = match p.get("cycle") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(v.as_u64().ok_or_else(|| {
+            CommandError::BadParams("`cycle` must be a whole number, 0 or more".into())
+        })?),
+    };
+    let candidates = s.scene.pick_all(&ray);
+    let filter = PickFilter::from_params(p)?;
+    if let Some(k) = cycle {
+        // Select through: the k-th body behind the nearest, wrapping around.
+        let hit = match candidates.len() {
+            0 => None,
+            n => candidates
+                .get(usize::try_from(k % n as u64).unwrap_or(0))
+                .copied(),
+        };
+        if how == Combine::Replace {
+            s.selected_edges.clear();
+        }
+        apply(s, how, hit);
+        let mut r = reply(s);
+        r["candidates"] = candidates_json(s, &candidates);
+        return Ok(r);
+    }
+    let (hit, edge) = match filter {
+        None => (candidates.first().copied(), None),
         Some(filter) => match s.pick_filtered(x, y, w, h, &filter) {
             Picked::Edge { name, .. } => (None, Some(name)),
             Picked::Face { hit, .. } | Picked::Body(hit) => (Some(hit), None),
@@ -141,6 +168,27 @@ fn pick(s: &mut Session, p: &Value) -> CmdResult {
     if how == Combine::Replace {
         s.selected_edges.clear();
     }
+    apply(s, how, hit);
+    let mut r = reply(s);
+    r["candidates"] = candidates_json(s, &candidates);
+    Ok(r)
+}
+
+/// The bodies under the pixel, nearest first.
+fn candidates_json(s: &Session, hits: &[chamfera_render::Hit]) -> Value {
+    json!(
+        hits.iter()
+            .map(|h| json!({
+                "body": h.body,
+                "name": s.scene.body(h.body).map(|b| b.name.clone()),
+                "distance": h.distance,
+            }))
+            .collect::<Vec<_>>()
+    )
+}
+
+/// Changes the body selection by a pick's hit.
+fn apply(s: &mut Session, how: Combine, hit: Option<chamfera_render::Hit>) {
     // Keep the set complete before changing it: the picked body belongs to it.
     s.scene.selected = s.scene.selected_bodies();
     match (how, hit) {
@@ -159,7 +207,6 @@ fn pick(s: &mut Session, p: &Value) -> CmdResult {
         }
         (Combine::Remove, Some(h)) => s.scene.deselect(|b| b == h.body),
     }
-    Ok(reply(s))
 }
 
 fn add(s: &mut Session, h: chamfera_render::Hit) {

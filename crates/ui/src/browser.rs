@@ -219,29 +219,10 @@ impl ChamferaApp {
             return;
         }
 
-        // Origin: the three planes; double-click one to sketch on it.
+        // Origin: the point, the three axes and the three planes, each shown in the
+        // viewport with its eye; double-click a plane to sketch on it.
         if self.section(ui, "origin", Icon::Origin, "Origin", 0) {
-            for (plane, text, view) in crate::sketch_ui::PLANES {
-                let r = tree_row(
-                    ui,
-                    self.look(),
-                    ui.scope_id().with(("plane", plane)),
-                    &Row {
-                        depth: 2,
-                        icon: Some(Icon::Plane),
-                        text,
-                        ..Row::default()
-                    },
-                );
-                let r = r.row.on_hover_text(if sketching {
-                    "Finish the sketch to start another"
-                } else {
-                    "Double-click to sketch on this plane"
-                });
-                if r.double_clicked() && !sketching {
-                    self.create_sketch(plane, view);
-                }
-            }
+            self.browser_origin(ui, sketching);
         }
 
         self.browser_construction(ui);

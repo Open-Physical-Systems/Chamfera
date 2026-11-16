@@ -37,6 +37,11 @@
 //! intersections against planes, parallel cylinders and parallel extrusions, so booleans
 //! take spline sides; blends still refuse spline faces.
 //!
+//! Rung K10 (surfaces) is here: free-form faces on rational B-spline surfaces
+//! ([`NurbsSurface`], [`Surface::Nurbs`]) with point inversion, trimmed-face images,
+//! measures, mass properties, tessellation, point classification and STEP exchange;
+//! booleans refuse them until surface marching (K10i).
+//!
 //! Inspect is here: [`Body::mass_properties`] (centre of mass and inertia from the exact
 //! faces, after Mirtich 1996) and [`closest_points`] / [`angle_between`] for measuring.
 //!
@@ -73,6 +78,9 @@ mod extrusion;
 mod intersect;
 mod loft;
 mod mass;
+mod nurbs;
+#[cfg(test)]
+mod nurbs_tests;
 mod planar;
 mod plane_split;
 mod profile;
@@ -109,6 +117,7 @@ pub use intersect::{
 };
 pub use loft::{LOFT_PARALLEL_TOLERANCE, MAX_LOFT_SECTIONS, loft};
 pub use mass::{MASS_QUADRATURE_TOLERANCE, MAX_DENSITY, MassProperties};
+pub use nurbs::{MAX_NEWTON_STEPS, MAX_SEEDS, NurbsSurface};
 pub use planar::{Arc2, Circle2, Line2, Segment2};
 pub use plane_split::{split_body, split_faces, thicken};
 pub use profile::{PROFILE_JOIN_TOLERANCE, Profile, ProfileEdge, polygon_edges};

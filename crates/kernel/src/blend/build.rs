@@ -420,6 +420,7 @@ impl<'a> Blend<'a> {
                 Some((Surface::Sphere(_), _)) => "a sphere",
                 Some((Surface::Torus(_), _)) => "a torus",
                 Some((Surface::Extrusion(_), _)) => "an extruded spline",
+                Some((Surface::Nurbs(_), _)) => "a free-form surface",
                 None => "no surface",
             }
             .to_owned())

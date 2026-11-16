@@ -1,19 +1,21 @@
 //! The view cube in the viewport's top-right corner: a small cube turned like the model,
-//! with labelled faces to look straight at, a chamfered corner (the brand's corner) for
-//! the isometric view, and Home and Fit buttons under it. Clicks run `view.*` commands.
+//! with labelled faces. Each of its 26 regions (faces, edges, corners; the geometry is
+//! `chamfera_render::viewcube`) is a view to click; a drag on the cube orbits. The
+//! chamfered corner (the brand's corner) is the isometric view. Home and Fit buttons sit
+//! under it. Clicks and drags run `view.*` commands.
 
 use crate::icons::Icon;
 use crate::widgets::{self, Look};
 use crate::{ChamferaApp, label};
 use chamfera_geom::Vec3;
-use egui::{Align2, Color32, FontId, Pos2, Rect, Sense, Shape, Stroke, Vec2, pos2, vec2};
+use chamfera_render::viewcube::{BAND, CubeRegion, RegionKind, region_at};
+use egui::{Align2, Color32, CursorIcon, FontId, Rect, Sense, Shape, Stroke, Vec2, pos2, vec2};
+use serde_json::json;
 
 /// The height the cube and its buttons take, from the viewport's top (points).
 pub const CUBE_AREA: f32 = 176.0;
 /// Half the cube's edge on screen (points, before projection).
 const HALF: f32 = 30.0;
-/// The chamfer's size along each edge, as a fraction of the half edge.
-const CHAMFER: f64 = 0.5;
 
 /// A face of the cube: the view it picks, its label, outward normal and corners.
 struct Face {
@@ -103,22 +105,31 @@ fn same(a: [f64; 3], b: [f64; 3]) -> bool {
     a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-9)
 }
 
-/// Point-in-convex-polygon, either winding.
-fn inside(poly: &[Pos2], p: Pos2) -> bool {
-    let mut sign = 0.0f32;
-    for k in 0..poly.len() {
-        let (a, b) = (poly[k], poly[(k + 1) % poly.len()]);
-        let cross = (b - a).x * (p - a).y - (b - a).y * (p - a).x;
-        if cross.abs() < 1e-6 {
-            continue;
-        }
-        if sign == 0.0 {
-            sign = cross.signum();
-        } else if cross.signum() != sign {
-            return false;
-        }
+/// The axis (0 = X, 1 = Y, 2 = Z) and sign of a face's outward normal.
+fn face_axis(normal: [f64; 3]) -> Option<(usize, i8)> {
+    let i = normal.iter().position(|c| c.abs() > 0.5)?;
+    Some((i, if normal.get(i)? > &0.0 { 1 } else { -1 }))
+}
+
+/// The `view.standard` name for a region: the iso corner keeps its own name.
+fn view_name(r: CubeRegion) -> String {
+    if r.0 == [1, -1, 1] {
+        "iso".to_owned()
+    } else {
+        r.name()
     }
-    sign != 0.0
+}
+
+/// The tooltip for a region.
+fn region_tip(r: CubeRegion) -> String {
+    let words = r.name().replace('_', " ");
+    let what = match r.kind() {
+        RegionKind::Face => format!("Look at the {words} face"),
+        RegionKind::Edge => format!("Look from the {words} edge"),
+        RegionKind::Corner if r.0 == [1, -1, 1] => "Isometric view".to_owned(),
+        RegionKind::Corner => format!("Look from the {words} corner"),
+    };
+    format!("{what}\nDrag the cube to orbit")
 }
 
 impl ChamferaApp {
@@ -138,9 +149,9 @@ impl ChamferaApp {
                 centre.y - (p.dot(basis.up) * scale) as f32,
             )
         };
-        // Visible faces, each with the iso corner cut off.
-        let t = CHAMFER;
-        let mut faces: Vec<(&Face, Vec<Pos2>, f64)> = Vec::new();
+        // Visible faces, each with the iso corner cut off where the corner region ends.
+        let cut = BAND * 0.5; // of an edge 2 half edges long
+        let mut faces: Vec<(&Face, Vec<egui::Pos2>, f64)> = Vec::new();
         for face in &FACES {
             let facing = v(face.normal).dot(toward_eye);
             if facing <= 0.02 {
@@ -153,8 +164,8 @@ impl ChamferaApp {
                     let prev = v(face.corners[(k + 3) % 4]);
                     let next = v(face.corners[(k + 1) % 4]);
                     let c = v(c);
-                    poly.push(project(c + (prev - c) * (t * 0.5)));
-                    poly.push(project(c + (next - c) * (t * 0.5)));
+                    poly.push(project(c + (prev - c) * cut));
+                    poly.push(project(c + (next - c) * cut));
                 } else {
                     poly.push(project(v(c)));
                 }
@@ -163,87 +174,105 @@ impl ChamferaApp {
         }
         let iso_normal = v(ISO) * (1.0 / 3f64.sqrt());
         let chamfer_facing = iso_normal.dot(toward_eye);
-        let chamfer: Vec<Pos2> = [
-            [1.0 - t, -1.0, 1.0],
-            [1.0, -1.0 + t, 1.0],
-            [1.0, -1.0, 1.0 - t],
+        let chamfer: Vec<egui::Pos2> = [
+            [1.0 - BAND, -1.0, 1.0],
+            [1.0, -1.0 + BAND, 1.0],
+            [1.0, -1.0, 1.0 - BAND],
         ]
         .iter()
         .map(|p| project(v(*p)))
         .collect();
 
         let area = Rect::from_center_size(centre, Vec2::splat(HALF * 4.0));
-        let response = ui.interact(area, ui.scope_id().with("view cube"), Sense::click());
-        let hover = response.hover_pos();
-        let over_chamfer = chamfer_facing > 0.02 && hover.is_some_and(|p| inside(&chamfer, p));
-        let over_face = if over_chamfer {
-            None
-        } else {
-            hover.and_then(|p| faces.iter().position(|(_, poly, _)| inside(poly, p)))
-        };
+        let response = ui.interact(
+            area,
+            ui.scope_id().with("view cube"),
+            Sense::click_and_drag(),
+        );
+        // The region under the pointer, from the same projection the cube is drawn with.
+        let hover = response
+            .hover_pos()
+            .filter(|_| !response.dragged())
+            .and_then(|p| {
+                let sx = f64::from((p.x - centre.x) / HALF);
+                let sy = f64::from((centre.y - p.y) / HALF);
+                region_at(&basis, sx, sy)
+            });
 
         let painter = ui.painter();
         let edge = Stroke::new(1.0, look.c(|t| t.cube_edge));
-        for (k, (face, poly, facing)) in faces.iter().enumerate() {
-            let fill = if over_face == Some(k) {
-                look.c(|t| t.selected)
-            } else {
-                // Faces turned away a little are drawn a little darker, for depth.
-                let shade = 0.82 + 0.18 * (*facing as f32);
-                let c = look.c(|t| t.cube_face);
-                Color32::from_rgba_unmultiplied(
-                    (f32::from(c.r()) * shade) as u8,
-                    (f32::from(c.g()) * shade) as u8,
-                    (f32::from(c.b()) * shade) as u8,
-                    c.a(),
-                )
-            };
+        for (_, poly, facing) in &faces {
+            // Faces turned away a little are drawn a little darker, for depth.
+            let shade = 0.82 + 0.18 * (*facing as f32);
+            let c = look.c(|t| t.cube_face);
+            let fill = Color32::from_rgba_unmultiplied(
+                (f32::from(c.r()) * shade) as u8,
+                (f32::from(c.g()) * shade) as u8,
+                (f32::from(c.b()) * shade) as u8,
+                c.a(),
+            );
             painter.add(Shape::convex_polygon(poly.clone(), fill, edge));
-            if *facing > 0.3 {
-                // The label, shrunk to fit the face as it turns away.
-                // The face's centre, nudged away from the chamfered corner.
-                let n = v(face.normal);
-                let away = if face.corners.iter().any(|c| same(*c, ISO)) {
-                    (n - v(ISO)) * 0.16
-                } else {
-                    Vec3::new(0.0, 0.0, 0.0)
-                };
-                let mid = project(n + away);
-                let (lo, hi) = poly.iter().fold((f32::MAX, f32::MIN), |(lo, hi), p| {
-                    (lo.min(p.x), hi.max(p.x))
-                });
-                let room = (hi - lo) * 0.78;
-                let alpha = ((*facing as f32 - 0.3) / 0.35).clamp(0.0, 1.0);
-                let colour = if over_face == Some(k) {
-                    look.c(|t| t.text)
-                } else {
-                    look.c(|t| t.text_muted)
+        }
+        // The hovered region's patch on every visible face it touches.
+        if let Some(r) = hover {
+            for (face, _, _) in &faces {
+                if let Some((axis, sign)) = face_axis(face.normal)
+                    && let Some(quad) = r.patch(axis, sign)
+                {
+                    let pts: Vec<egui::Pos2> = quad.iter().map(|p| project(*p)).collect();
+                    painter.add(Shape::convex_polygon(
+                        pts,
+                        look.c(|t| t.selected),
+                        Stroke::NONE,
+                    ));
                 }
-                .gamma_multiply(alpha);
-                let full = painter.layout_no_wrap(
-                    face.text.to_owned(),
-                    FontId::proportional(10.0),
+            }
+        }
+        for (face, poly, facing) in &faces {
+            if *facing <= 0.3 {
+                continue;
+            }
+            // The label, shrunk to fit the face as it turns away, at the face's centre
+            // nudged away from the chamfered corner.
+            let n = v(face.normal);
+            let away = if face.corners.iter().any(|c| same(*c, ISO)) {
+                (n - v(ISO)) * 0.12
+            } else {
+                Vec3::new(0.0, 0.0, 0.0)
+            };
+            let mid = project(n + away);
+            let (lo, hi) = poly.iter().fold((f32::MAX, f32::MIN), |(lo, hi), p| {
+                (lo.min(p.x), hi.max(p.x))
+            });
+            let room = (hi - lo) * 0.78;
+            let alpha = ((*facing as f32 - 0.3) / 0.35).clamp(0.0, 1.0);
+            let lit = hover.is_some_and(|r| r.name() == face.view);
+            let colour = if lit {
+                look.c(|t| t.text)
+            } else {
+                look.c(|t| t.text_muted)
+            }
+            .gamma_multiply(alpha);
+            let full =
+                painter.layout_no_wrap(face.text.to_owned(), FontId::proportional(10.0), colour);
+            let size = if full.size().x > room {
+                10.0 * room / full.size().x.max(1.0)
+            } else {
+                10.0
+            };
+            if size >= 7.0 {
+                painter.text(
+                    mid,
+                    Align2::CENTER_CENTER,
+                    face.text,
+                    FontId::proportional(size),
                     colour,
                 );
-                let size = if full.size().x > room {
-                    10.0 * room / full.size().x.max(1.0)
-                } else {
-                    10.0
-                };
-                if size >= 7.0 {
-                    painter.text(
-                        mid,
-                        Align2::CENTER_CENTER,
-                        face.text,
-                        FontId::proportional(size),
-                        colour,
-                    );
-                }
             }
         }
         if chamfer_facing > 0.02 {
             let accent = look.c(|t| t.icon_accent);
-            let fill = if over_chamfer {
+            let fill = if hover.is_some_and(|r| r.0 == [1, -1, 1]) {
                 accent
             } else {
                 accent.gamma_multiply(0.85)
@@ -277,22 +306,28 @@ impl ChamferaApp {
             }
         }
 
-        let mut view: Option<&str> = None;
-        let response = if over_chamfer {
-            response.on_hover_text("Isometric view")
-        } else if let Some(k) = over_face {
-            let text = faces.get(k).map_or("", |(f, _, _)| f.text);
-            response.on_hover_text(format!("Look at the {} face", text.to_lowercase()))
-        } else {
-            response
-        };
-        if response.clicked() {
-            if over_chamfer {
-                view = Some("iso");
-            } else if let Some(k) = over_face {
-                view = faces.get(k).map(|(f, _, _)| f.view);
+        // A drag on the cube orbits, through `view.orbit` like a drag in the viewport.
+        let mut orbit = None;
+        if response.dragged() {
+            ui.ctx().set_cursor_icon(CursorIcon::Grabbing);
+            let d = response.drag_delta();
+            if d != Vec2::ZERO {
+                let k = crate::navigation::ORBIT_PER_PX;
+                orbit = Some((
+                    (-f64::from(d.x) * k).clamp(-6.0, 6.0),
+                    (f64::from(d.y) * k).clamp(-6.0, 6.0),
+                ));
             }
         }
+        let response = match hover {
+            Some(r) => response.on_hover_text(region_tip(r)),
+            None => response,
+        };
+        let view = if response.clicked() {
+            hover.map(view_name)
+        } else {
+            None
+        };
 
         // Home and Fit under the cube.
         let mut home = false;
@@ -329,8 +364,11 @@ impl ChamferaApp {
         {
             fit = true;
         }
+        if let Some((yaw, pitch)) = orbit {
+            self.run("view.orbit", json!({ "yaw": yaw, "pitch": pitch }));
+        }
         if let Some(name) = view {
-            self.standard_view(name);
+            self.standard_view(&name);
         }
         if home {
             self.run("view.home", self.viewport_params());
@@ -366,16 +404,26 @@ mod tests {
     }
 
     #[test]
-    fn point_in_polygon() {
-        let square = [
-            pos2(0.0, 0.0),
-            pos2(10.0, 0.0),
-            pos2(10.0, 10.0),
-            pos2(0.0, 10.0),
-        ];
-        assert!(inside(&square, pos2(5.0, 5.0)));
-        assert!(!inside(&square, pos2(15.0, 5.0)));
-        let reversed: Vec<Pos2> = square.iter().rev().copied().collect();
-        assert!(inside(&reversed, pos2(1.0, 9.0)));
+    fn each_face_names_its_own_view_and_axis() {
+        for f in &FACES {
+            let (axis, sign) = face_axis(f.normal).unwrap();
+            let mut r = [0i8; 3];
+            r[axis] = sign;
+            assert_eq!(CubeRegion(r).name(), f.view);
+        }
+        assert_eq!(view_name(CubeRegion([1, -1, 1])), "iso");
+        assert_eq!(view_name(CubeRegion([-1, -1, 1])), "top_front_left");
+        assert!(region_tip(CubeRegion([0, -1, 1])).starts_with("Look from the top front edge"));
+    }
+
+    #[test]
+    fn a_click_on_a_cube_corner_turns_the_view_to_it() {
+        // Through the same command path a cube click takes.
+        let mut app = ChamferaApp::headless();
+        app.standard_view(&view_name(CubeRegion([-1, 1, 1])));
+        let c = &app.session.camera;
+        let to_eye = (c.eye() - c.target).normalized().unwrap();
+        let want = Vec3::new(-1.0, 1.0, 1.0) * (1.0 / 3f64.sqrt());
+        assert!((to_eye - want).length() < 1e-9, "{to_eye:?}");
     }
 }

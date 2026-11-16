@@ -4,7 +4,9 @@ use super::format::{logical, point, real, string, vector};
 use super::{MAX_STEP_TEXT, SCHEMA, StepOptions};
 use crate::IoError;
 use chamfera_geom::{BSplineCurve3, Frame, LINEAR_TOLERANCE, Point3, Vec3};
-use chamfera_kernel::{Body, Curve, EdgeId, Extrusion, HalfEdgeId, LoopId, Surface, VertexId};
+use chamfera_kernel::{
+    Body, Curve, EdgeId, Extrusion, HalfEdgeId, LoopId, NurbsSurface, Surface, VertexId,
+};
 use std::collections::HashMap;
 use std::fmt::{self, Write};
 
@@ -96,8 +98,14 @@ fn estimate(body: &Body) -> usize {
         }
     }
     for f in body.faces() {
-        if let Ok(Some((Surface::Extrusion(x), _))) = body.face_surface(f) {
-            splines = splines.saturating_add(x.curve().control_points().len() + 4);
+        match body.face_surface(f) {
+            Ok(Some((Surface::Extrusion(x), _))) => {
+                splines = splines.saturating_add(x.curve().control_points().len() + 4);
+            }
+            Ok(Some((Surface::Nurbs(n), _))) => {
+                splines = splines.saturating_add(n.surface().control_points().len() + 1);
+            }
+            _ => {}
         }
     }
     s.vertices
@@ -488,29 +496,9 @@ fn bspline_curve(out: &mut Out, c: &BSplineCurve3) -> Result<Ref, IoError> {
     for p in c.control_points() {
         points.push(out.point(p)?.to_string());
     }
-    let (mut values, mut mults): (Vec<f64>, Vec<usize>) = (Vec::new(), Vec::new());
-    for k in c.knots() {
-        match values.last() {
-            Some(last) if last == k => {
-                if let Some(m) = mults.last_mut() {
-                    *m += 1;
-                }
-            }
-            _ => {
-                values.push(*k);
-                mults.push(1);
-            }
-        }
-    }
     let list = |v: &[String]| v.join(",");
     let pts = list(&points);
-    let ms = list(&mults.iter().map(usize::to_string).collect::<Vec<_>>());
-    let ks = list(
-        &values
-            .iter()
-            .map(|k| real(*k))
-            .collect::<Result<Vec<_>, _>>()?,
-    );
+    let (ms, ks) = knot_lists(c.knots())?;
     let degree = c.degree();
     let closed = logical(c.is_closed());
     if !c.is_rational() {
@@ -526,6 +514,80 @@ fn bspline_curve(out: &mut Out, c: &BSplineCurve3) -> Result<Ref, IoError> {
     );
     out.add(&format!(
         "(BOUNDED_CURVE() B_SPLINE_CURVE({degree},({pts}),.UNSPECIFIED.,{closed},.F.) B_SPLINE_CURVE_WITH_KNOTS(({ms}),({ks}),.UNSPECIFIED.) CURVE() GEOMETRIC_REPRESENTATION_ITEM() RATIONAL_B_SPLINE_CURVE(({ws})) REPRESENTATION_ITEM(''))"
+    ))
+}
+
+/// A knot vector as Part 42's distinct knots and multiplicities, written as the two
+/// lists `(m1,m2,..)` and `(k1,k2,..)` without their brackets.
+fn knot_lists(knots: &[f64]) -> Result<(String, String), IoError> {
+    let (mut values, mut mults): (Vec<f64>, Vec<usize>) = (Vec::new(), Vec::new());
+    for k in knots {
+        match values.last() {
+            Some(last) if last == k => {
+                if let Some(m) = mults.last_mut() {
+                    *m += 1;
+                }
+            }
+            _ => {
+                values.push(*k);
+                mults.push(1);
+            }
+        }
+    }
+    let ms = mults
+        .iter()
+        .map(usize::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    let ks = values
+        .iter()
+        .map(|k| real(*k))
+        .collect::<Result<Vec<_>, _>>()?
+        .join(",");
+    Ok((ms, ks))
+}
+
+/// A B-spline surface (ISO 10303-42, 4.4.36): `B_SPLINE_SURFACE_WITH_KNOTS(name,
+/// u_degree, v_degree, control_points_list, surface_form, u_closed, v_closed,
+/// self_intersect, u_multiplicities, v_multiplicities, u_knots, v_knots, knot_spec)`, rows
+/// of the control net along `u`; a rational surface is the complex instance with
+/// `RATIONAL_B_SPLINE_SURFACE(weights_data)`, its records in alphabetical order. The
+/// parameterisation is the kernel's, so Part 42's `σ_u × σ_v` is the kernel's normal.
+fn bspline_surface(out: &mut Out, n: &NurbsSurface) -> Result<Ref, IoError> {
+    let s = n.surface();
+    let (net, weights) = s.net();
+    let mut rows = Vec::with_capacity(net.len());
+    for row in &net {
+        let mut refs = Vec::with_capacity(row.len());
+        for p in row {
+            refs.push(out.point(*p)?.to_string());
+        }
+        rows.push(format!("({})", refs.join(",")));
+    }
+    let pts = rows.join(",");
+    let (um, uk) = knot_lists(s.knots_u())?;
+    let (vm, vk) = knot_lists(s.knots_v())?;
+    let (p, q) = s.degrees();
+    let (uc, vc) = (
+        logical(n.period_u().is_some()),
+        logical(n.period_v().is_some()),
+    );
+    if !s.is_rational() {
+        return out.add(&format!(
+            "B_SPLINE_SURFACE_WITH_KNOTS('',{p},{q},({pts}),.UNSPECIFIED.,{uc},{vc},.F.,({um}),({vm}),({uk}),({vk}),.UNSPECIFIED.)"
+        ));
+    }
+    let mut wrows = Vec::with_capacity(weights.len());
+    for row in &weights {
+        let ws = row
+            .iter()
+            .map(|w| real(*w))
+            .collect::<Result<Vec<_>, _>>()?;
+        wrows.push(format!("({})", ws.join(",")));
+    }
+    let ws = wrows.join(",");
+    out.add(&format!(
+        "(BOUNDED_SURFACE() B_SPLINE_SURFACE({p},{q},({pts}),.UNSPECIFIED.,{uc},{vc},.F.) B_SPLINE_SURFACE_WITH_KNOTS(({um}),({vm}),({uk}),({vk}),.UNSPECIFIED.) GEOMETRIC_REPRESENTATION_ITEM() RATIONAL_B_SPLINE_SURFACE(({ws})) REPRESENTATION_ITEM('') SURFACE())"
     ))
 }
 
@@ -582,6 +644,9 @@ enum StepSurface {
     /// frame's plane and `V` the frame's unit z: the kernel's own parameterisation, so
     /// the normals agree.
     Extrusion(Extrusion),
+    /// `B_SPLINE_SURFACE_WITH_KNOTS` (rational: the complex instance) of the kernel's
+    /// free-form surface, in its parameterisation: the normals agree.
+    Nurbs(NurbsSurface),
     Plane(Frame),
     Cylinder {
         frame: Frame,
@@ -610,6 +675,7 @@ impl StepSurface {
     fn of(s: &Surface) -> StepSurface {
         match s {
             Surface::Extrusion(e) => StepSurface::Extrusion(e.clone()),
+            Surface::Nurbs(n) => StepSurface::Nurbs(n.clone()),
             Surface::Plane(frame) => StepSurface::Plane(*frame),
             Surface::Cylinder(c) => StepSurface::Cylinder {
                 frame: *c.frame(),
@@ -655,6 +721,7 @@ impl StepSurface {
                 let v = out.add(&format!("VECTOR('',{d},1.)"))?;
                 out.add(&format!("SURFACE_OF_LINEAR_EXTRUSION('',{c},{v})"))
             }
+            StepSurface::Nurbs(n) => bspline_surface(out, &n),
             StepSurface::Plane(frame) => {
                 let a = out.axis(&frame)?;
                 out.add(&format!("PLANE('',{a})"))
@@ -708,7 +775,7 @@ impl StepSurface {
             (e, l.x.hypot(l.y), l.z)
         };
         match self.clone() {
-            StepSurface::Extrusion(_) => None,
+            StepSurface::Extrusion(_) | StepSurface::Nurbs(_) => None,
             StepSurface::Plane(frame) => Some(frame.z()),
             // σ_u × σ_v = r e.
             StepSurface::Cylinder { frame, .. } => radial(&frame).0,
@@ -744,7 +811,7 @@ impl StepSurface {
     /// Whether Part 42's normal of this entity agrees with the kernel's normal of `s`,
     /// compared at a regular point of `s` (off its axis).
     fn normal_agrees(&self, s: &Surface, body: &str) -> Result<bool, IoError> {
-        if let StepSurface::Extrusion(_) = self {
+        if let StepSurface::Extrusion(_) | StepSurface::Nurbs(_) = self {
             return Ok(true);
         }
         let v = match s {

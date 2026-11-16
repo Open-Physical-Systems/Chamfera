@@ -171,11 +171,12 @@ use thiserror::Error;
 ///   `cylinder`, `sphere`, `torus` or `cone`), scale features (`kind: scale`) and physical
 ///   materials per feature's bodies (`materials`: name and density in g/cm³, used by mass
 ///   properties). Older files open unchanged: they hold none.
+/// - 44: free-form faces: imported solids may hold rational B-spline surfaces (`nurbs`:
+///   degrees, knots, the control net and its weights). Older files open unchanged.
 /// - 45: sketch gaps: intersection curves (`intersections` on a sketch: the body cut by
 ///   the sketch plane, by name and the feature that made it, the sketch curves the cut
 ///   gave, and whether they follow the body), and tangent handles on fit splines
-///   (`start_handle`, `end_handle`). Older files open unchanged: they hold none. (44 is
-///   another branch's.)
+///   (`start_handle`, `end_handle`). Older files open unchanged: they hold none.
 pub const FORMAT_VERSION: u32 = 45;
 /// The tag every design file starts with, so other JSON is not mistaken for a design.
 pub const FORMAT_TAG: &str = "chamfera";

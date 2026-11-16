@@ -193,7 +193,10 @@ impl Session {
             overlays.extend(by_style.into_iter().map(|(_, o)| o));
         }
         // Construction geometry goes first, so sketches draw over it.
-        let (mut construct, fills) = self.construct_overlays();
+        let (mut construct, fills) = self.origin_overlays();
+        let (mut more, more_fills) = self.construct_overlays();
+        construct.append(&mut more);
+        let fills: Vec<_> = fills.into_iter().chain(more_fills).collect();
         construct.append(&mut overlays);
         construct.extend(self.thread_overlays());
         construct.extend(self.toolpath_overlays());
@@ -203,6 +206,7 @@ impl Session {
         fills.append(&mut assembly_fills);
         self.scene.overlays = construct;
         self.scene.fills = fills;
+        self.fade_inactive();
     }
 
     /// Projects a point of the active sketch's plane to a pixel of a `w` x `h` viewport.

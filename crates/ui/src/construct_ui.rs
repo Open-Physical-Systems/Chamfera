@@ -317,6 +317,21 @@ impl ChamferaApp {
         ) else {
             return;
         };
+        // A shown origin plane, axis or point in front of the model fills the input too.
+        let takes = self
+            .construct
+            .tool
+            .as_ref()
+            .and_then(|t| t.kind.slots().get(t.active).copied())
+            .and_then(|(slot, _)| match slot {
+                Slot::Plane => Some("plane"),
+                Slot::Axis => Some("axis"),
+                Slot::Point => Some("point"),
+                _ => None,
+            });
+        let origin = takes
+            .and_then(|k| self.origin_pick_for(k, x, y, w, h))
+            .map(|(value, text)| Pick { value, text });
         let doc = &self.session.doc;
         let Some(tool) = self.construct.tool.as_mut() else {
             return;
@@ -386,7 +401,7 @@ impl ChamferaApp {
             }),
             _ => None,
         };
-        let Some(pick) = pick else {
+        let Some(pick) = origin.or(pick) else {
             self.message = Some((format!("{} for this input", slot.prompt()), true));
             return;
         };
@@ -895,6 +910,21 @@ mod tests {
         // Faces z = 10 and z = 0: the midplane is at z = 5.
         let r = app.construct_ok().unwrap();
         assert_eq!(r["geometry"]["origin"]["z"].as_f64(), Some(5.0));
+    }
+
+    #[test]
+    fn a_shown_origin_axis_fills_an_axis_input() {
+        // From the top the target (the origin) is the centre pixel and +Y points up the
+        // screen, so (400, 250) lies on the Y axis, 50 px from the X axis.
+        let mut app = ChamferaApp::headless();
+        app.run("view.standard", json!({ "view": "top" }));
+        app.open_construct(Kind::PlaneAngle);
+        let picked = |app: &ChamferaApp| app.construct.tool.as_ref().unwrap().pick(0);
+        app.construct_click(400.0, 250.0, 800.0, 600.0);
+        assert_ne!(picked(&app), Some(json!("y")), "hidden axes are not picked");
+        app.run("view.origin", json!({ "item": "all", "visible": true }));
+        app.construct_click(400.0, 250.0, 800.0, 600.0);
+        assert_eq!(picked(&app), Some(json!("y")));
     }
 
     #[test]

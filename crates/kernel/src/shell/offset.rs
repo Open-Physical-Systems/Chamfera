@@ -63,7 +63,7 @@ fn signed_distance(s: &Surface, x: Point3) -> KernelResult<(f64, Vec3)> {
                 radial()? * cs - f.z() * sn,
             ))
         }
-        Surface::Sphere(_) | Surface::Torus(_) | Surface::Extrusion(_) => {
+        Surface::Sphere(_) | Surface::Torus(_) | Surface::Extrusion(_) | Surface::Nurbs(_) => {
             Err(unsupported_surface())
         }
     }
@@ -71,7 +71,7 @@ fn signed_distance(s: &Surface, x: Point3) -> KernelResult<(f64, Vec3)> {
 
 fn unsupported_surface() -> KernelError {
     KernelError::Unsupported(
-        "shelling faces on spheres, tori or extruded splines: planes, cylinders and cones only for now".into(),
+        "shelling faces on spheres, tori, extruded splines or free-form surfaces: planes, cylinders and cones only for now".into(),
     )
 }
 
@@ -111,7 +111,7 @@ fn offset_surface(s: &Surface, delta: f64, name: &str) -> KernelResult<Surface> 
             })?;
             Surface::cone(frame, target, a)
         }
-        Surface::Sphere(_) | Surface::Torus(_) | Surface::Extrusion(_) => {
+        Surface::Sphere(_) | Surface::Torus(_) | Surface::Extrusion(_) | Surface::Nurbs(_) => {
             Err(unsupported_surface())
         }
     }

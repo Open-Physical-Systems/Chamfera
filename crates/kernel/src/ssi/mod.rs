@@ -59,6 +59,7 @@ mod classify;
 mod curve;
 mod cylinders;
 mod extrusion;
+mod nurbs;
 mod plane;
 mod poly;
 mod revolution;
@@ -111,6 +112,9 @@ pub enum UnsupportedIntersection {
     /// a cylinder along the extrusion, an extrusion along the same direction, or a sphere
     /// or torus clear of it: a space curve that needs surface marching.
     Spline,
+    /// A free-form (NURBS) surface against any surface: a space curve that needs surface
+    /// marching, which K10 does not have yet.
+    FreeForm,
 }
 
 impl std::fmt::Display for UnsupportedIntersection {
@@ -133,6 +137,9 @@ impl std::fmt::Display for UnsupportedIntersection {
             }
             UnsupportedIntersection::Spline => {
                 "a spline surface (an extruded spline or ellipse) meets this surface in a space curve; only planes, cylinders along the extrusion and extrusions along the same direction are supported"
+            }
+            UnsupportedIntersection::FreeForm => {
+                "a free-form (NURBS) surface meets this surface in a space curve, which needs surface-surface marching (not supported yet)"
             }
         })
     }
@@ -199,6 +206,9 @@ impl SurfaceIntersection {
 pub fn intersect_surfaces(a: &Surface, b: &Surface) -> KernelResult<SurfaceIntersection> {
     use Surface as S;
     match (a, b) {
+        (S::Nurbs(_), _) | (_, S::Nurbs(_)) => Ok(SurfaceIntersection::Unsupported(
+            UnsupportedIntersection::FreeForm,
+        )),
         (S::Extrusion(e), other) | (other, S::Extrusion(e)) => {
             extrusion::extrusion_surface(e, other)
         }

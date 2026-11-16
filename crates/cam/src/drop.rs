@@ -682,6 +682,11 @@ fn shape_of(surface: &Surface, sign: f64) -> Result<Shape, CamError> {
                 ));
             }
         }
+        Surface::Nurbs(_) => {
+            return Err(CamError::Refused(
+                "a free-form (NURBS) face cannot be machined in 3D yet".into(),
+            ));
+        }
         _ => {
             // Convex when the outward normal points away from the axis (the centre, the
             // tube's centre circle) at a sample point.

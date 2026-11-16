@@ -604,6 +604,7 @@ impl Session {
             Some((Surface::Sphere(_), _)) => "sphere",
             Some((Surface::Torus(_), _)) => "torus",
             Some((Surface::Extrusion(_), _)) => "extrusion",
+            Some((Surface::Nurbs(_), _)) => "nurbs",
             None => "unknown",
         };
         let p = hit.point;

@@ -189,7 +189,7 @@ pub fn anchor(body: &Body, e: Entity) -> Result<Anchor, String> {
             },
             Some((Surface::Sphere(c), _)) => Anchor::Point(c.frame().origin()),
             Some((Surface::Torus(c), _)) => Anchor::Point(c.frame().origin()),
-            Some((Surface::Extrusion(_), _)) => {
+            Some((Surface::Extrusion(_) | Surface::Nurbs(_), _)) => {
                 return Err("a curved spline face has no point, axis or plane to align".into());
             }
             None => return Err("the face has no surface".into()),

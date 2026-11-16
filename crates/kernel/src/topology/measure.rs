@@ -1,5 +1,5 @@
 //! Area and volume of faces and solids on planes, cylinders, cones, spheres and tori
-//! (faces on extruded splines: `spline.rs`).
+//! (faces on extruded splines: `spline.rs`; on free-form surfaces: `freeform.rs`).
 //!
 //! # Planar faces (exact)
 //! The vector area of a loop is `½ ∮ (p - r) × dp` (Stokes' theorem on the plane), summed
@@ -41,6 +41,7 @@
 //! constant on the plane through `o_f`. `c` is any point; a point of the body keeps the sum
 //! accurate.
 
+use super::freeform::FreeformIntegrand;
 use super::uv::{EdgeImage, LoopImage};
 use super::{Body, FaceId, ShellId, Surface};
 use crate::surface::Meridian;
@@ -69,7 +70,7 @@ enum Integrand {
 }
 
 /// 5-point Gauss-Legendre nodes and weights on `[-1, 1]`.
-const GAUSS5: [(f64, f64); 5] = [
+pub(super) const GAUSS5: [(f64, f64); 5] = [
     (0.0, 0.568_888_888_888_888_9),
     (-0.538_469_310_105_683_1, 0.478_628_670_499_366_5),
     (0.538_469_310_105_683_1, 0.478_628_670_499_366_5),
@@ -234,6 +235,15 @@ impl Body {
     /// `kind` (see the module documentation).
     fn curved_integral(&self, face: FaceId, kind: Integrand) -> KernelResult<(f64, f64)> {
         let (surface, orient) = self.face_orientation(face)?;
+        if let Surface::Nurbs(n) = &surface {
+            // The surface's frame is the world's, so the centre is already a world point.
+            let kind = match kind {
+                Integrand::Area => FreeformIntegrand::Area,
+                Integrand::Volume(c) => FreeformIntegrand::Volume(c),
+            };
+            let total = self.freeform_integral(face, &surface, n, orient, kind)?;
+            return Ok((total, orient));
+        }
         if let Surface::Extrusion(e) = &surface {
             let centre = match kind {
                 Integrand::Area => None,
