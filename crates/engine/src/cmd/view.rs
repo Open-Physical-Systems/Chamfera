@@ -2,7 +2,9 @@
 //! camera path for the UI, scripts and agents.
 
 use super::CommandSpec;
+use crate::origin::{ORIGIN_ITEMS, OriginItem};
 use crate::{CmdResult, CommandError, Session, params};
+use chamfera_render::viewcube::CubeRegion;
 use chamfera_render::{Projection, StandardView};
 use serde_json::{Value, json};
 
@@ -70,6 +72,26 @@ pub static COMMANDS: &[CommandSpec] = &[
         run: orbit,
     },
     CommandSpec {
+        id: "view.origin",
+        label: "Show Origin",
+        params: "item: string (required) - origin (the point), x, y, z (axes), xy, xz, yz \
+                 (planes) or all\n\
+                 visible: boolean (required) - show or hide it in the viewport\n\
+                 A view setting: the design does not change.",
+        mutates: false,
+        run: origin,
+    },
+    CommandSpec {
+        id: "view.origin_at",
+        label: "Origin Under Cursor",
+        params: "x, y, width, height: number (required) - a pixel of the viewport\nReplies \
+                 with `item` (origin, x, y, z, xy, xz or yz: the name construction \
+                 commands and sketch.create take) and `kind` (point, axis or plane) for \
+                 the shown origin item there, unless a body is in front; null for none",
+        mutates: false,
+        run: origin_at,
+    },
+    CommandSpec {
         id: "view.pan",
         label: "Pan",
         params: "dx, dy: number (required) - pixels, right and down\n\
@@ -114,7 +136,9 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         id: "view.standard",
         label: "Standard View",
-        params: "view: string (required) - front, back, left, right, top, bottom or iso",
+        params: "view: string (required) - front, back, left, right, top, bottom or iso; or \
+                 a view cube edge or corner: two or three of top/bottom, front/back and \
+                 left/right joined by `_` (top_front, front_right, top_front_right)",
         mutates: false,
         run: standard,
     },
@@ -148,6 +172,42 @@ fn reply(s: &Session) -> Value {
         "camera": s.camera,
         "eye": s.camera.eye(),
         "display": crate::display::display_json(s),
+        "origin": origin_json(s),
+    })
+}
+
+fn origin_json(s: &Session) -> Value {
+    let mut m = serde_json::Map::new();
+    for item in ORIGIN_ITEMS {
+        m.insert(item.name().into(), json!(s.view_state.origin.get(item)));
+    }
+    Value::Object(m)
+}
+
+fn origin(s: &mut Session, p: &Value) -> CmdResult {
+    let name = params::req_str(p, "item")?;
+    let visible = params::req_bool(p, "visible")?;
+    if name == "all" {
+        for item in ORIGIN_ITEMS {
+            s.view_state.origin.set(item, visible);
+        }
+    } else {
+        let item = OriginItem::parse(name).ok_or_else(|| {
+            CommandError::BadParams(format!(
+                "unknown origin item {name:?}: use origin, x, y, z, xy, xz, yz or all"
+            ))
+        })?;
+        s.view_state.origin.set(item, visible);
+    }
+    s.refresh_overlays();
+    Ok(json!({ "origin": origin_json(s) }))
+}
+
+fn origin_at(s: &mut Session, p: &Value) -> CmdResult {
+    let (x, y, w, h) = params::pixel(p)?;
+    Ok(match s.origin_at(x, y, w, h) {
+        Some(item) => json!({ "item": item.name(), "kind": item.kind() }),
+        None => json!({ "item": null, "kind": null }),
     })
 }
 
@@ -313,11 +373,17 @@ fn projection(s: &mut Session, p: &Value) -> CmdResult {
 
 fn standard(s: &mut Session, p: &Value) -> CmdResult {
     let name = params::req_str(p, "view")?;
-    let view = StandardView::parse(name).ok_or_else(|| {
-        CommandError::BadParams(format!(
-            "unknown view {name:?}: use front, back, left, right, top, bottom or iso"
-        ))
-    })?;
-    s.camera.set_view(view);
+    if let Some(view) = StandardView::parse(name) {
+        s.camera.set_view(view);
+    } else {
+        let region = CubeRegion::parse(name).ok_or_else(|| {
+            CommandError::BadParams(format!(
+                "unknown view {name:?}: use front, back, left, right, top, bottom, iso, \
+                 or an edge or corner such as top_front or top_front_right"
+            ))
+        })?;
+        (s.camera.yaw, s.camera.pitch) = region.angles();
+        s.camera.sanitize();
+    }
     Ok(reply(s))
 }

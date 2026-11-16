@@ -44,6 +44,13 @@ pub struct Theme {
     /// light teal tint, so sheets read apart from solids.
     pub surface_body: Rgba,
     pub body_selected: Rgba,
+    /// A body outside the active component while one is active: faded, see-through;
+    /// its alpha is how much of it shows.
+    pub body_inactive: Rgba,
+    /// The origin planes' outlines and the origin point, when shown from the Browser.
+    pub origin_plane: Rgba,
+    /// The origin planes' see-through fill.
+    pub origin_plane_fill: Rgba,
     pub edge: Rgba,
     /// The shape a tool would make (the extrude preview), drawn translucent over the
     /// model: its alpha is how much of the model shows through.
@@ -189,6 +196,9 @@ impl Theme {
             body: Rgba(176, 184, 196, 255),
             surface_body: Rgba(150, 196, 192, 255),
             body_selected: Rgba(64, 140, 230, 255),
+            body_inactive: Rgba(196, 202, 212, 90),
+            origin_plane: Rgba(86, 100, 128, 255),
+            origin_plane_fill: Rgba(110, 130, 170, 34),
             edge: Rgba(40, 46, 56, 255),
             preview_body: Rgba(30, 112, 214, 110),
             edge_hidden: Rgba(40, 46, 56, 110),
@@ -271,6 +281,9 @@ impl Theme {
             body: Rgba(150, 158, 170, 255),
             surface_body: Rgba(118, 168, 164, 255),
             body_selected: Rgba(84, 160, 255, 255),
+            body_inactive: Rgba(120, 128, 140, 90),
+            origin_plane: Rgba(170, 184, 210, 255),
+            origin_plane_fill: Rgba(150, 170, 210, 30),
             edge: Rgba(18, 20, 24, 255),
             preview_body: Rgba(84, 160, 255, 110),
             edge_hidden: Rgba(200, 206, 216, 90),

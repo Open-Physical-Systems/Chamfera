@@ -54,6 +54,8 @@ It uses the GPU if there is one, else a software Vulkan driver (lavapipe, `mesa-
 - `construct.plane_offset {"base": "xy" | {"feature", "face"} | plane id, "distance"}`, `construct.plane_angle`, `construct.plane_midplane`, `construct.plane_three_points`, `construct.plane_tangent`, `construct.axis_cylinder`, `construct.axis_edge`, `construct.axis_two_points`, `construct.axis_two_planes`, `construct.point_vertex`, `construct.point_centre`, `construct.point_coordinates`; each replies with its `geometry` (origin, normal, direction or point) to check against hand values.
 - `construct.visibility {feature, visible}` hides or shows one in the viewport (a view setting; nothing built on it changes).
 - `construct.pick {x, y, width, height}` names the face, nearest edge and vertex under a pixel in the form these commands take.
+- `view.origin {item: origin|x|y|z|xy|xz|yz|all, visible}` shows the origin point, axes and planes (the Browser's Origin folder eyes; a view setting); `view.origin_at {x, y, width, height}` names the shown one under a pixel (`"xy"`, `"x"`, `"origin"`), so a click on it sketches on it or fills a construction input.
+- `view.standard` also takes the view cube's edges and corners (`top_front`, `bottom_back_left`); `select.pick {..., cycle: n}` takes the body n places behind the nearest and replies with every `candidates` body under the pixel, nearest first.
 - `sketch.create {"plane": <plane id>}` sketches on a construction plane and follows it; `solid.revolve` and `solid.pattern_circular` take `axis_feature` (`examples/construction-planes.json`).
 
 ## Surfaces

@@ -27,6 +27,7 @@ pub mod motion;
 pub mod naming;
 #[cfg(test)]
 mod naming_tests;
+pub mod origin;
 mod params;
 #[cfg(test)]
 mod params_tests;

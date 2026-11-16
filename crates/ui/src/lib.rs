@@ -48,6 +48,7 @@ mod body_tools_ui;
 mod icons;
 mod motion_ui;
 mod navigation;
+mod origin_ui;
 mod params_ui;
 mod prefs;
 mod prefs_ui;
@@ -280,6 +281,8 @@ pub struct ChamferaApp {
     prefs_ui: prefs_ui::PrefsUi,
     /// The drag in progress and what the navigation preset made of it.
     nav_drag: Option<navigation::NavDrag>,
+    /// The last Alt+click select-through (`origin_ui.rs`).
+    select_through: origin_ui::SelectThrough,
     /// The design file last added to the recent list.
     recent_seen: Option<std::path::PathBuf>,
     /// The Assistant panel (`assistant_ui`).
@@ -430,6 +433,7 @@ impl ChamferaApp {
             prefs_store: false,
             prefs_ui: prefs_ui::PrefsUi::default(),
             nav_drag: None,
+            select_through: origin_ui::SelectThrough::default(),
             recent_seen: None,
             assistant: assistant_ui::AssistantUi::default(),
             history: history_ui::HistoryUi::default(),
@@ -792,7 +796,9 @@ impl ChamferaApp {
             && let Some(pos) = response.interact_pointer_pos()
         {
             let (x, y) = local(pos);
-            self.face_click(x, y, w, h);
+            if !self.origin_plane_click(x, y, w, h) {
+                self.face_click(x, y, w, h);
+            }
             return;
         }
         if self.assembly.joint.is_some() {
@@ -932,12 +938,19 @@ impl ChamferaApp {
             && let Some(pos) = response.interact_pointer_pos()
         {
             let (x, y) = local(pos);
-            let mode = sketch_select::pick_mode(ui.input(|i| i.modifiers));
-            self.run(
-                "select.pick",
-                json!({ "x": x, "y": y, "width": w, "height": h, "mode": mode,
-                        "filter": self.filter_param() }),
-            );
+            let modifiers = ui.input(|i| i.modifiers);
+            if modifiers.alt {
+                // Alt+click selects through to the body behind.
+                self.select_through((x as f32, y as f32), w, h);
+            } else {
+                self.select_through = origin_ui::SelectThrough::default();
+                let mode = sketch_select::pick_mode(modifiers);
+                self.run(
+                    "select.pick",
+                    json!({ "x": x, "y": y, "width": w, "height": h, "mode": mode,
+                            "filter": self.filter_param() }),
+                );
+            }
         }
         let typing = ui.ctx().egui_wants_keyboard_input();
         if !typing {
