@@ -628,9 +628,9 @@ pub enum FeatureKind {
     Draft(crate::face_edit::Draft),
     /// A rib or web grown from an open sketch chain to a solid (format 40).
     Rib(crate::rib::Rib),
-    /// A box, cylinder, sphere, torus or cone (format 42).
+    /// A box, cylinder, sphere, torus or cone (format 43).
     Primitive(crate::primitive::Primitive),
-    /// Bodies scaled about a point (format 42).
+    /// Bodies scaled about a point (format 43).
     Scale(crate::primitive::Scale),
 }
 

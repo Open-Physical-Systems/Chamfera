@@ -1,4 +1,4 @@
-//! Primitives and scale on the timeline (format 42).
+//! Primitives and scale on the timeline (format 43).
 //!
 //! A primitive is a box, cylinder, sphere, torus or cone made in one step at a point,
 //! with its axis along x, y or z, as a new body or joined, cut or intersected like an

@@ -157,11 +157,12 @@ use thiserror::Error;
 /// - 40: drafts (`kind: draft`: faces tilted about a neutral plane by an angle) and ribs
 ///   and webs (`kind: rib`: a wall grown from an open sketch chain to a solid, `web` to go
 ///   through it). Older files open unchanged: they hold none.
-/// - 42: modelling quick wins: primitives (`kind: primitive` with `shape`: `box`,
+/// - 43: modelling quick wins: primitives (`kind: primitive` with `shape`: `box`,
 ///   `cylinder`, `sphere`, `torus` or `cone`), scale features (`kind: scale`) and physical
 ///   materials per feature's bodies (`materials`: name and density in g/cm³, used by mass
-///   properties). Older files open unchanged: they hold none. (41 is another branch's.)
-pub const FORMAT_VERSION: u32 = 42;
+///   properties). Older files open unchanged: they hold none. (41 and 42 are other
+///   branches'.)
+pub const FORMAT_VERSION: u32 = 43;
 /// The tag every design file starts with, so other JSON is not mistaken for a design.
 pub const FORMAT_TAG: &str = "chamfera";
 /// Longest parameter name.
@@ -352,7 +353,7 @@ pub struct Document {
     /// How the bodies a feature (or an import) made look, by its id. Display data only.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub appearances: BTreeMap<u32, Appearance>,
-    /// What the bodies a feature made are made of, by its id (format 42).
+    /// What the bodies a feature made are made of, by its id (format 43).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub materials: BTreeMap<u32, PhysicalMaterial>,
     /// Manufacturing: setups, tools and operations (format 20). Older files have none.
