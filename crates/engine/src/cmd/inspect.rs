@@ -42,7 +42,8 @@ pub static COMMANDS: &[CommandSpec] = &[
         params: "body: string or number (required) - the solid's name, or the scene id that shows it\n\
                  density: number or string (optional) - mass per mm³ (default 1), or with a unit: \
                  \"7.85 g/cm3\", \"7850 kg/m3\", \"0.284 lb/in3\" (also g/mm3, g/cc, kg/dm3, lb/ft3); \
-                 with a unit the mass is in g, kg or lb (`mass_unit`)",
+                 with a unit the mass is in g, kg or lb (`mass_unit`); left out, the body's \
+                 physical material (body.material) gives it in g/cm³ and the mass in g",
         mutates: false,
         run: mass,
     },
@@ -70,9 +71,9 @@ fn bad(msg: impl Into<String>) -> CommandError {
 }
 
 /// A resolved entity: the solid it is on (none for a free point) and the kernel entity.
-struct Target {
-    solid: Option<usize>,
-    entity: Entity,
+pub(super) struct Target {
+    pub(super) solid: Option<usize>,
+    pub(super) entity: Entity,
     /// The reference that names it, echoed in replies.
     reference: Value,
 }
@@ -93,7 +94,7 @@ fn point_of(v: &Value, key: &str) -> Result<Point3, CommandError> {
 }
 
 /// The solid a parameter names: a solid name, or the scene id that shows it.
-fn find_solid(s: &Session, v: &Value, key: &str) -> Result<usize, CommandError> {
+pub(super) fn find_solid(s: &Session, v: &Value, key: &str) -> Result<usize, CommandError> {
     let found = match v {
         Value::String(name) => s.solids().iter().position(|x| x.name == *name),
         Value::Number(n) => n
@@ -122,7 +123,7 @@ fn named(v: &Value, key: &str) -> Result<String, CommandError> {
         .ok_or_else(|| bad(format!("`{key}` must be a name")))
 }
 
-fn resolve(s: &Session, r: &Value, key: &str) -> Result<Target, CommandError> {
+pub(super) fn resolve(s: &Session, r: &Value, key: &str) -> Result<Target, CommandError> {
     let obj = r
         .as_object()
         .ok_or_else(|| bad(format!("`{key}` must be an entity object")))?;
@@ -314,8 +315,16 @@ fn mass(s: &mut Session, p: &Value) -> CmdResult {
         .get("body")
         .ok_or_else(|| bad("`body` is required"))?;
     let si = find_solid(s, which, "body")?;
+    let stored = s
+        .solids()
+        .get(si)
+        .and_then(|x| s.doc.materials.get(&x.feature))
+        .cloned();
     let (density, mass_unit) = match p.get("density") {
-        None | Some(Value::Null) => (1.0, None),
+        None | Some(Value::Null) => match &stored {
+            Some(m) => (m.grams_per_mm3(), Some("g")),
+            None => (1.0, None),
+        },
         Some(Value::String(text)) => density_with_unit(text).ok_or_else(|| {
             bad(format!(
                 "`density` {:?} is not a density: a number above 0, with a unit such as \
@@ -324,6 +333,12 @@ fn mass(s: &mut Session, p: &Value) -> CmdResult {
             ))
         })?,
         Some(_) => (params::opt_f64(p, "density")?.unwrap_or(1.0), None),
+    };
+    // The stored material's name, when its density is the one used.
+    let material = if matches!(p.get("density"), None | Some(Value::Null)) {
+        stored.map(|m| m.name)
+    } else {
+        None
     };
     let solid = s
         .solids()
@@ -338,6 +353,7 @@ fn mass(s: &mut Session, p: &Value) -> CmdResult {
         "area": m.area,
         "mass": m.mass,
         "mass_unit": mass_unit,
+        "material": material,
         "centre_of_mass": xyz(m.centre_of_mass),
         "inertia": m.inertia,
         "principal_moments": m.principal_moments,

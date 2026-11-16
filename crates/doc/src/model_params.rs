@@ -148,6 +148,16 @@ impl FeatureKind {
                 }
             }
             FeatureKind::Thicken(t) => o.push(("thickness".into(), L, &mut t.thickness)),
+            FeatureKind::Primitive(p) => {
+                for (name, e) in p.shape.sizes_mut() {
+                    o.push((name.into(), L, e));
+                }
+            }
+            FeatureKind::Scale(sc) => {
+                o.push(("x".into(), N, &mut sc.x));
+                o.push(("y".into(), N, &mut sc.y));
+                o.push(("z".into(), N, &mut sc.z));
+            }
             FeatureKind::Draft(d) => o.push(("angle".into(), A, &mut d.angle)),
             FeatureKind::Rib(r) => o.push(("thickness".into(), L, &mut r.thickness)),
             FeatureKind::Pattern(p) => {

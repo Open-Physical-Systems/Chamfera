@@ -87,7 +87,7 @@ fn main() -> ExitCode {
                 None => {
                     return fail(
                         "--dialog takes joint-edit:ID, component-move:ID, component-rename:ID, \
-                         edit-feature:ID, dxf-insert:PATH, move:BODY or fillet:EDGE",
+                         edit-feature:ID, dxf-insert:PATH, move:BODY, fillet:EDGE or tool:ID (a ribbon tool, such as tool:solid.box)",
                     );
                 }
             },

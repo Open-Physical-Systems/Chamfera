@@ -16,6 +16,8 @@ pub mod joint;
 pub mod model_params;
 pub mod motion;
 pub mod naming;
+pub mod physical;
+pub mod primitive;
 pub mod rib;
 pub mod sheet;
 pub mod surface;
@@ -44,6 +46,8 @@ pub use imported::{ImportedBody, ImportedMesh, SharedMesh};
 pub use joint::{EdgeEnd, Joint, JointKind, JointOrigin, OriginAt, Topology};
 pub use model_params::{ModelMeta, ModelParameter};
 pub use motion::{Motion, MotionKey};
+pub use physical::PhysicalMaterial;
+pub use primitive::{Primitive, PrimitiveAxis, PrimitiveShape, PrimitiveValues, Scale};
 pub use rib::Rib;
 pub use sheet::{
     FlangePosition, FlangeSide, FlangeValues, ReliefShape, SheetBase, SheetFlange, SheetRule,
@@ -163,11 +167,15 @@ use thiserror::Error;
 ///   line type, line weight, on/off, frozen and locked; the current layer; a line type
 ///   scale; and lines, circles, arcs and polylines drawn on those layers. Older files open
 ///   unchanged: their sheets have layer 0 only.
+/// - 43: modelling quick wins: primitives (`kind: primitive` with `shape`: `box`,
+///   `cylinder`, `sphere`, `torus` or `cone`), scale features (`kind: scale`) and physical
+///   materials per feature's bodies (`materials`: name and density in g/cm³, used by mass
+///   properties). Older files open unchanged: they hold none.
 /// - 45: sketch gaps: intersection curves (`intersections` on a sketch: the body cut by
 ///   the sketch plane, by name and the feature that made it, the sketch curves the cut
 ///   gave, and whether they follow the body), and tangent handles on fit splines
-///   (`start_handle`, `end_handle`). Older files open unchanged: they hold none. (43 and
-///   44 are other branches'.)
+///   (`start_handle`, `end_handle`). Older files open unchanged: they hold none. (44 is
+///   another branch's.)
 pub const FORMAT_VERSION: u32 = 45;
 /// The tag every design file starts with, so other JSON is not mistaken for a design.
 pub const FORMAT_TAG: &str = "chamfera";
@@ -381,6 +389,9 @@ pub struct Document {
     /// How the bodies a feature (or an import) made look, by its id. Display data only.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub appearances: BTreeMap<u32, Appearance>,
+    /// What the bodies a feature made are made of, by its id (format 43).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub materials: BTreeMap<u32, PhysicalMaterial>,
     /// Manufacturing: setups, tools and operations (format 20). Older files have none.
     #[serde(default, skip_serializing_if = "cam::Cam::is_empty")]
     pub cam: cam::Cam,
@@ -423,6 +434,7 @@ impl Default for Document {
             assembly: Assembly::default(),
             drawing: Drawing::default(),
             appearances: BTreeMap::new(),
+            materials: BTreeMap::new(),
             cam: cam::Cam::default(),
             units: DisplayUnits::default(),
             motion: Motion::default(),
@@ -832,6 +844,8 @@ impl Document {
         checked.drawing = doc.drawing;
         appearance::check(&doc.appearances, checked.last_feature_id)?;
         checked.appearances = doc.appearances;
+        physical::check(&doc.materials, checked.last_feature_id)?;
+        checked.materials = doc.materials;
         doc.cam.validate()?;
         checked.cam = doc.cam;
         naming::check(&doc.references, &seen)?;

@@ -950,6 +950,12 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
     if matches!(s.doc.feature(id)?.kind, FeatureKind::Thread(_)) {
         return super::thread::edit(s, id, p);
     }
+    if matches!(
+        s.doc.feature(id)?.kind,
+        FeatureKind::Primitive(_) | FeatureKind::Scale(_)
+    ) {
+        return super::primitive::edit(s, id, p);
+    }
     refuse_unknown_edit_keys(p)?;
     let new_distance = distance(p)?;
     let new_direction = direction(p)?;
@@ -998,6 +1004,8 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
                 return Err(bad("a split or remove has no operation"));
             }
             FeatureKind::Thread(_) => return Err(bad("a thread has no operation")),
+            FeatureKind::Primitive(pr) => pr.operation = o,
+            FeatureKind::Scale(_) => return Err(bad("a scale has no operation")),
             FeatureKind::Draft(_) | FeatureKind::Rib(_) => {
                 return Err(bad("a draft, rib or web has no operation"));
             }
