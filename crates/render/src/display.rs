@@ -353,7 +353,7 @@ pub fn draw_order(scene: &Scene, camera: &Camera) -> (Vec<u32>, Vec<u32>) {
     let mut opaque = Vec::new();
     let mut transparent: Vec<(f64, u32)> = Vec::new();
     for b in scene.bodies.iter().filter(|b| b.visible) {
-        if b.appearance.is_transparent() {
+        if b.appearance.is_transparent() || b.faded {
             // Depth along the view direction (the same for every point of a plane facing
             // the viewer, in both projections).
             let depth = b

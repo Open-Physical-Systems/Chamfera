@@ -11,6 +11,7 @@ pub mod manipulator;
 pub mod material;
 pub mod normals;
 mod theme;
+pub mod viewcube;
 pub use display::{Appearance, Display, Section, VisualStyle};
 pub use environment::{Environment, EnvironmentPreset};
 pub use material::Material;
@@ -361,6 +362,10 @@ pub struct SceneBody {
     /// `surface_body` colour.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub surface: bool,
+    /// Outside the active component while one is active: drawn faded and see-through
+    /// in the theme's `body_inactive` colour. Display only.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub faded: bool,
 }
 
 /// What a click picked.
@@ -401,6 +406,12 @@ pub enum OverlayStyle {
     ExplodeTrail,
     /// The rings of a cosmetic thread, drawn like model edges.
     Thread,
+    /// The origin planes' outlines and the origin point (`theme.origin_plane`).
+    OriginPlane,
+    /// The origin axes, in the axis colours.
+    AxisX,
+    AxisY,
+    AxisZ,
 }
 
 impl OverlayStyle {
@@ -421,6 +432,10 @@ impl OverlayStyle {
             OverlayStyle::Interference => theme.interference,
             OverlayStyle::ExplodeTrail => theme.explode_trail,
             OverlayStyle::Thread => theme.edge,
+            OverlayStyle::OriginPlane => theme.origin_plane,
+            OverlayStyle::AxisX => theme.axis_x,
+            OverlayStyle::AxisY => theme.axis_y,
+            OverlayStyle::AxisZ => theme.axis_z,
         }
     }
 }
@@ -433,6 +448,8 @@ pub enum FillStyle {
     Construct,
     /// Where bodies overlap, see-through.
     Interference,
+    /// The origin planes, see-through.
+    Origin,
 }
 
 impl FillStyle {
@@ -440,6 +457,7 @@ impl FillStyle {
         match self {
             FillStyle::Construct => theme.construct_fill,
             FillStyle::Interference => theme.interference_fill,
+            FillStyle::Origin => theme.origin_plane_fill,
         }
     }
 }
@@ -587,6 +605,7 @@ impl Scene {
             appearance: Appearance::default(),
             tint: None,
             surface: false,
+            faded: false,
         });
         Some(id)
     }
@@ -652,8 +671,15 @@ impl Scene {
     /// The nearest visible body the ray hits. With a section plane, only the part on its
     /// kept side can be hit (what is cut away is not there to click).
     pub fn pick(&self, ray: &Ray) -> Option<Hit> {
+        self.pick_all(ray).into_iter().next()
+    }
+
+    /// Every visible body the ray passes through, each once at its nearest hit, nearest
+    /// first: the candidates "select other" cycles through.
+    pub fn pick_all(&self, ray: &Ray) -> Vec<Hit> {
         let section = self.display.section;
-        self.bodies
+        let mut hits: Vec<Hit> = self
+            .bodies
             .iter()
             .filter(|b| b.visible)
             .filter_map(|b| {
@@ -672,7 +698,9 @@ impl Scene {
                     distance,
                 })
             })
-            .min_by(|a, b| a.distance.total_cmp(&b.distance))
+            .collect();
+        hits.sort_by(|a, b| a.distance.total_cmp(&b.distance));
+        hits
     }
 }
 
@@ -843,6 +871,48 @@ mod tests {
         assert!((hit.point.z - 20.0).abs() < 1e-9);
         s.body_mut(near).unwrap().visible = false;
         assert_eq!(s.pick(&ray).unwrap().body, far);
+    }
+
+    #[test]
+    fn candidates_under_a_ray_come_nearest_first_one_per_body() {
+        // Three stacked boxes; the ray goes down from z = 100 at (5, 5). Each is met at
+        // its top face: z = 30 (distance 70), z = 20 (80), z = 5 (95). Added out of order.
+        let mut s = Scene::default();
+        let mid = s
+            .add(
+                "mid",
+                TriMesh::cuboid(Point3::new(0.0, 0.0, 10.0), Point3::new(10.0, 10.0, 20.0)),
+            )
+            .unwrap();
+        let low = s
+            .add(
+                "low",
+                TriMesh::cuboid(Point3::ORIGIN, Point3::new(10.0, 10.0, 5.0)),
+            )
+            .unwrap();
+        let top = s
+            .add(
+                "top",
+                TriMesh::cuboid(Point3::new(0.0, 0.0, 25.0), Point3::new(10.0, 10.0, 30.0)),
+            )
+            .unwrap();
+        // Off to the side: not under the ray.
+        s.add(
+            "aside",
+            TriMesh::cuboid(Point3::new(50.0, 0.0, 0.0), Point3::new(60.0, 10.0, 50.0)),
+        )
+        .unwrap();
+        let ray = Ray::new(Point3::new(5.0, 5.0, 100.0), -Vec3::Z).unwrap();
+        let all = s.pick_all(&ray);
+        let ids: Vec<u32> = all.iter().map(|h| h.body).collect();
+        assert_eq!(ids, [top, mid, low]);
+        let d: Vec<f64> = all.iter().map(|h| h.distance).collect();
+        for (got, want) in d.iter().zip([70.0, 80.0, 95.0]) {
+            assert!((got - want).abs() < 1e-9, "{d:?}");
+        }
+        s.body_mut(mid).unwrap().visible = false;
+        let ids: Vec<u32> = s.pick_all(&ray).iter().map(|h| h.body).collect();
+        assert_eq!(ids, [top, low]);
     }
 
     #[test]

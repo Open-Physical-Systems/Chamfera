@@ -39,6 +39,8 @@ pub struct AssemblyView {
     /// Construction features hidden in the viewport (`construct.visibility`): a view
     /// setting, so hiding one changes nothing built on it.
     pub hidden_constructs: std::collections::BTreeSet<u32>,
+    /// The origin planes, axes and point shown in the viewport (`view.origin`).
+    pub origin: crate::origin::OriginShown,
 }
 
 /// An overlap as drawn: its triangles and its edges.

@@ -113,8 +113,9 @@ struct LineVertex {
 }
 
 struct GpuBody {
-    /// Triangle, vertex and edge counts of the body the buffers were built from.
-    key: (usize, usize, usize),
+    /// Triangle, vertex and edge counts of the body the buffers were built from, and
+    /// whether it was faded (its edges fade with it).
+    key: (usize, usize, usize, bool),
     triangles: wgpu::Buffer,
     triangle_vertices: u32,
     edges: wgpu::Buffer,
@@ -717,12 +718,20 @@ impl ViewRenderer {
                 b.mesh.triangles.len(),
                 b.mesh.positions.len(),
                 b.edges.len(),
+                b.faded,
             );
             if self.bodies.get(&b.id).is_some_and(|g| g.key == key) {
                 continue;
             }
             let tris = mesh_vertices(&b.mesh);
-            let edges = edge_vertices(b, theme.edge.linear());
+            // A faded body's edges fade with it.
+            let edge = if b.faded {
+                let e = theme.edge;
+                chamfera_render::Rgba(e.0, e.1, e.2, theme.body_inactive.3)
+            } else {
+                theme.edge
+            };
+            let edges = edge_vertices(b, edge.linear());
             let buffer = |label, contents: &[u8]| {
                 device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some(label),
@@ -850,6 +859,10 @@ impl ViewRenderer {
                 };
                 let mut c = c.linear();
                 c[3] = b.appearance.opacity();
+                if b.faded && !selected {
+                    // Outside the active component: the theme's faded colour, see-through.
+                    c = frame.theme.body_inactive.linear();
+                }
                 let m = b.appearance.material(chamfera_render::Rgba(0, 0, 0, 255));
                 let data: BodyUniform = [c, [m.metallic, m.roughness, m.transmission, m.ior]];
                 queue.write_buffer(&g.uniform, 0, bytemuck::cast_slice(&data));

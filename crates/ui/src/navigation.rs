@@ -74,8 +74,8 @@ impl Preset {
             .find(|(_, does)| *does == "Box select")
             .map_or("Left-drag", |(gesture, _)| gesture);
         format!(
-            "Click: select · Shift/Ctrl+click: add or remove · {boxed}: box (right: \
-             window, left: crossing) · {moves} · Wheel: zoom · F: fit"
+            "Click: select · Shift/Ctrl+click: add or remove · Alt+click: the one behind · \
+             {boxed}: box (right: window, left: crossing) · {moves} · Wheel: zoom · F: fit"
         )
     }
 
@@ -187,7 +187,7 @@ pub const MIN_SENSITIVITY: f64 = 0.25;
 pub const MAX_SENSITIVITY: f64 = 4.0;
 
 /// Radians of orbit per pixel of drag at sensitivity 1.
-const ORBIT_PER_PX: f64 = 0.008;
+pub(crate) const ORBIT_PER_PX: f64 = 0.008;
 /// Wheel zoom: the exponent per point of scroll at sensitivity 1.
 const ZOOM_PER_SCROLL: f64 = 0.0025;
 

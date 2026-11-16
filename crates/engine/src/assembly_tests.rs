@@ -1226,3 +1226,56 @@ fn the_bill_of_materials_counts_nested_linked_copies() {
     );
     assert!(text.contains("\r\n2,Wheel,4,,2000.000,,\r\n"), "{text}");
 }
+
+#[test]
+fn activating_a_component_fades_the_others_and_select_through_goes_by_depth() {
+    let mut s = Session::new();
+    let (a, b) = two_plates(&mut s);
+    // B lifted 10 mm: A is z 0..4 and B z 10..14; both cover x 0..40, y 0..10.
+    s.execute(
+        "component.move",
+        &json!({"component": b, "transform": {"translate": {"x": 0, "y": 0, "z": 10}}}),
+    )
+    .unwrap();
+    s.execute("component.activate", &json!({"component": 0}))
+        .unwrap();
+    assert!(
+        s.scene.bodies.iter().all(|x| !x.faded),
+        "the design is active"
+    );
+    s.execute("component.activate", &json!({"component": a}))
+        .unwrap();
+    let ids: Vec<u32> = s.scene.bodies.iter().map(|x| x.id).collect();
+    assert_eq!(ids.len(), 2);
+    for id in ids {
+        let comp = s.component_of_body(id).map(u64::from);
+        let faded = s.scene.body(id).unwrap().faded;
+        assert_eq!(faded, comp != Some(a), "body {id} of component {comp:?}");
+    }
+    s.execute("component.activate", &json!({"component": 0}))
+        .unwrap();
+    assert!(s.scene.bodies.iter().all(|x| !x.faded));
+
+    // From the top, over (20, 5): B's top (z 14) is nearest, then A's top (z 4), 10
+    // further along the ray.
+    s.execute("view.standard", &json!({"view": "top"})).unwrap();
+    s.camera.target = chamfera_geom::Point3::new(20.0, 5.0, 0.0);
+    let at = |cycle: i64| json!({"x": 400, "y": 300, "width": 800, "height": 600, "cycle": cycle});
+    let r = s.execute("select.pick", &at(0)).unwrap();
+    let c = r["candidates"].as_array().unwrap().clone();
+    assert_eq!(c.len(), 2);
+    let gap = c[1]["distance"].as_f64().unwrap() - c[0]["distance"].as_f64().unwrap();
+    assert!((gap - 10.0).abs() < 1e-6, "{gap}");
+    assert_eq!(r["component"].as_u64(), Some(b));
+    let r = s.execute("select.pick", &at(1)).unwrap();
+    assert_eq!(r["component"].as_u64(), Some(a));
+    assert_eq!(r["count"], 1, "replacing selects only the one behind");
+    // Past the last it wraps to the nearest again.
+    let r = s.execute("select.pick", &at(2)).unwrap();
+    assert_eq!(r["component"].as_u64(), Some(b));
+    // A plain pick still takes the nearest; a negative cycle is refused.
+    let plain = json!({"x": 400, "y": 300, "width": 800, "height": 600});
+    let r = s.execute("select.pick", &plain).unwrap();
+    assert_eq!(r["component"].as_u64(), Some(b));
+    assert!(s.execute("select.pick", &at(-1)).is_err());
+}
