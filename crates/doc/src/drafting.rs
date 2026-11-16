@@ -1,4 +1,4 @@
-//! 2D drafting on a drawing sheet (format 41): user layers, line types and weights, and
+//! 2D drafting on a drawing sheet (format 42): user layers, line types and weights, and
 //! the lines, circles, arcs and polylines drawn on them.
 //!
 //! Every sheet has its own [`Drafting`]: a list of [`DraftLayer`]s (layer `0` always

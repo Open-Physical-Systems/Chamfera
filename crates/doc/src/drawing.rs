@@ -763,7 +763,7 @@ pub struct Sheet {
     /// The parts list table, if the sheet shows one (format 31).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parts_list: Option<PartsList>,
-    /// User layers, line types and drafted 2D entities (format 41).
+    /// User layers, line types and drafted 2D entities (format 42).
     #[serde(default, skip_serializing_if = "crate::drafting::Drafting::is_default")]
     pub drafting: crate::drafting::Drafting,
 }
