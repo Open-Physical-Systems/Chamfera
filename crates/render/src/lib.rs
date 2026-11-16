@@ -7,6 +7,7 @@ pub use chamfera_geom as geom;
 
 pub mod display;
 pub mod environment;
+pub mod manipulator;
 pub mod material;
 pub mod normals;
 mod theme;

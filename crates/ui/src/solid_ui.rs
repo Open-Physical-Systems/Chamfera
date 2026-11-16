@@ -433,6 +433,15 @@ impl ExtrudeTool {
         }
     }
 
+    /// The sketch and a point inside the first picked profile (where the distance arrow
+    /// stands), for an extrude (not a revolve).
+    pub(crate) fn first_profile(&self) -> Option<(u32, Point2)> {
+        if self.revolve {
+            return None;
+        }
+        Some((self.sketch?, *self.seeds.first()?))
+    }
+
     /// The `solid.extrude` parameters for what the dialog shows, once a profile is picked.
     fn params(&self) -> Option<Value> {
         if self.revolve || self.seeds.is_empty() {
@@ -480,6 +489,8 @@ pub struct SolidUi {
     pub pick_centre: bool,
     /// The Measure or Mass Properties tool (`inspect_ui.rs`).
     pub inspect: Option<crate::inspect_ui::InspectTool>,
+    /// The viewport drag handles of the open tool (`manipulator_ui.rs`).
+    pub manip: crate::manipulator_ui::ManipState,
 }
 
 impl ChamferaApp {

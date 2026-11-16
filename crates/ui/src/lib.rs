@@ -37,6 +37,7 @@ mod file_ui;
 mod history_ui;
 mod hole_ui;
 mod inspect_ui;
+mod manipulator_ui;
 
 /// `--screenshot` gives up after this long without a drawn frame.
 const SHOT_TIMEOUT_SECS: f64 = 30.0;
@@ -158,8 +159,12 @@ pub struct Options {
     /// Start this guided tour (`tutorial_ui`, such as `first-part`).
     pub tutorial: Option<String>,
     /// Open a dialog at start, for screenshots: `joint-edit:ID`, `component-move:ID`,
-    /// `component-rename:ID`, `edit-feature:ID` or `dxf-insert:PATH`.
+    /// `component-rename:ID`, `edit-feature:ID`, `dxf-insert:PATH`, `move:BODY,...` or
+    /// `fillet:EDGE`.
     pub dialog: Option<String>,
+    /// Set the open tool's viewport handle as a drag would on the first frame, and show
+    /// it held: `value=15`, `x=20`, `xy=10,5` or `turn-z=30` (`manipulator_ui`).
+    pub manipulate: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -568,14 +573,37 @@ impl ChamferaApp {
         {
             app.message = Some((e, true));
         }
+        app.solid.manip.demo = options.manipulate.clone();
         app
     }
 
     /// Opens the dialog `--dialog` names: `joint-edit:ID`, `component-move:ID`,
-    /// `component-rename:ID`, `edit-feature:ID`, `dxf-insert:PATH`, or the Draft or Rib
-    /// tool filled in (`draft:JSON`, `rib:JSON`).
+    /// `component-rename:ID`, `edit-feature:ID`, `dxf-insert:PATH`, `move:BODY,...` (Move
+    /// on those bodies), `fillet:EDGE` (Fillet on that edge), or the Draft or Rib tool
+    /// filled in (`draft:JSON`, `rib:JSON`).
     fn open_named_dialog(&mut self, spec: &str) -> Result<(), String> {
         let (name, arg) = spec.split_once(':').unwrap_or((spec, ""));
+        match name {
+            "move" => {
+                self.open_transform(transform_ui::TransformKind::Move);
+                if let Some(t) = self.solid.transform.as_mut()
+                    && !arg.trim().is_empty()
+                {
+                    t.bodies = arg.split(',').map(|b| b.trim().to_owned()).collect();
+                }
+                return Ok(());
+            }
+            "fillet" => {
+                self.open_blend(false);
+                if let Some(t) = self.solid.blend.as_mut()
+                    && !arg.trim().is_empty()
+                {
+                    t.edges = vec![arg.trim().to_owned()];
+                }
+                return Ok(());
+            }
+            _ => {}
+        }
         let id = || {
             arg.trim()
                 .parse::<u32>()
@@ -615,8 +643,8 @@ impl ChamferaApp {
             _ => {
                 return Err(format!(
                     "--dialog takes joint-edit:ID, component-move:ID, component-rename:ID, \
-                     edit-feature:ID, dxf-insert:PATH, constraint-conflict:JSON, draft:JSON \
-                     or rib:JSON, not {spec:?}"
+                     edit-feature:ID, dxf-insert:PATH, constraint-conflict:JSON, move:BODY, \
+                     fillet:EDGE, draft:JSON or rib:JSON, not {spec:?}"
                 ));
             }
         }
@@ -730,6 +758,9 @@ impl ChamferaApp {
         {
             let (x, y) = local(pos);
             self.cam_click(x, y, w, h);
+            return;
+        }
+        if self.manip_input(ui, response, rect) {
             return;
         }
         if self.press_pull_input(response, rect) {
@@ -1058,6 +1089,7 @@ impl ChamferaApp {
         }
         self.inspect_labels(ui, rect);
         self.press_pull_labels(ui, rect);
+        self.manipulators(ui, rect);
         self.paint_box(ui, rect);
         self.view_cube(ui, rect);
         if !self.welcome.open {

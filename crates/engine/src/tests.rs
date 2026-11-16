@@ -3349,6 +3349,127 @@ fn moving_and_copying_bodies_shift_and_turn_them() {
     assert!(zero_axis.is_err());
 }
 
+/// A drag of the Move or Move Component handle shows the bodies moved without changing
+/// the design: `preview` builds no feature and records no undo step.
+#[test]
+fn move_previews_show_the_bodies_moved_and_change_nothing() {
+    // Box x 0..50, y 0..30, z 0..10.
+    let mut s = Session::new();
+    box_feature(&mut s, [0.0, 0.0, 50.0, 30.0], 10.0, "new_body");
+    let before = s.doc.clone();
+    let mark = s.undo_mark();
+    // A quarter turn about +Z through the box's centre (25, 15, 5): the 50 x 30 footprint
+    // turns into 30 x 50 about (25, 15): x 10..40, y -10..40.
+    let r = s
+        .execute(
+            "solid.move",
+            &json!({"bodies": ["Extrude1"], "angle": 90, "origin": {"x": 25, "y": 15, "z": 5},
+                    "preview": true}),
+        )
+        .unwrap();
+    assert_eq!(r["previews"], json!(1), "{r}");
+    let (min, max) = (&r["bounds"]["min"], &r["bounds"]["max"]);
+    let got = [&min[0], &min[1], &min[2], &max[0], &max[1], &max[2]].map(|v| v.as_f64().unwrap());
+    let want = [10.0, -10.0, 0.0, 40.0, 40.0, 10.0];
+    assert!(
+        got.iter().zip(want).all(|(g, w)| (g - w).abs() < 1e-6),
+        "{got:?}"
+    );
+    assert_eq!(s.doc, before);
+    assert_eq!(s.group_undo_since(mark), 0);
+    // An unknown body is refused and shows nothing; clear removes the preview.
+    assert!(
+        s.execute(
+            "solid.move",
+            &json!({"bodies": ["Nope"], "dx": 1, "preview": true})
+        )
+        .is_err()
+    );
+    assert!(s.scene.previews.is_empty());
+    s.execute(
+        "solid.move",
+        &json!({"bodies": ["Extrude1"], "dz": 7, "preview": true}),
+    )
+    .unwrap();
+    assert_eq!(s.scene.previews.len(), 1);
+    s.execute("solid.move", &json!({"clear": true})).unwrap();
+    assert!(s.scene.previews.is_empty());
+    // A component's bodies, moved 12 along Z from where the component is: z 12..22.
+    let c = s
+        .execute("component.new", &json!({"from_bodies": [2]}))
+        .unwrap()["component"]
+        .clone();
+    let before = s.doc.clone();
+    let r = s
+        .execute(
+            "component.move",
+            &json!({"component": c, "transform": {"translate": {"x": 0, "y": 0, "z": 12}},
+                    "preview": true}),
+        )
+        .unwrap();
+    assert_eq!(r["previews"], json!(1), "{r}");
+    let b =
+        chamfera_geom::Aabb::from_points(s.scene.previews[0].positions.iter().copied()).unwrap();
+    assert!(
+        (b.min.z - 12.0).abs() < 1e-6 && (b.max.z - 22.0).abs() < 1e-6,
+        "{b:?}"
+    );
+    assert_eq!(s.doc, before);
+    // Moving it for real removes the preview.
+    s.execute(
+        "component.move",
+        &json!({"component": c, "transform": {"translate": {"x": 0, "y": 0, "z": 12}}}),
+    )
+    .unwrap();
+    assert!(s.scene.previews.is_empty());
+}
+
+/// The fillet size handle stands on the edge's middle and points into the solid.
+#[test]
+fn the_edge_handle_is_the_edge_middle_and_the_inward_bisector() {
+    let mut s = Session::new();
+    box_feature(&mut s, [0.0, 0.0, 50.0, 30.0], 10.0, "new_body");
+    // Every edge of the box: its handle is at the middle of its two end points, and
+    // points against the sum of the two faces' outward normals (for a box edge, half
+    // way between the two inward axis directions).
+    let edges = s.execute("solid.edges", &json!({})).unwrap();
+    let names: Vec<String> = edges["solids"][0]["edges"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|e| e["edge"].as_str().map(str::to_owned))
+        .collect();
+    assert_eq!(names.len(), 12, "{edges}");
+    use chamfera_geom::{Point3, Vec3};
+    let centre = Point3::new(25.0, 15.0, 5.0);
+    for n in &names {
+        let (mid, inward) = s.edge_handle(n).unwrap();
+        // The middle of a box edge lies on two of the box's planes and halfway along
+        // the third axis.
+        let on = |v: f64, a: f64, b: f64| (v - a).abs() < 1e-9 || (v - b).abs() < 1e-9;
+        let flags = [
+            on(mid.x, 0.0, 50.0),
+            on(mid.y, 0.0, 30.0),
+            on(mid.z, 0.0, 10.0),
+        ];
+        assert_eq!(flags.iter().filter(|f| **f).count(), 2, "{n}: {mid:?}");
+        assert!((inward.length() - 1.0).abs() < 1e-12);
+        // Into the box: towards its centre line along the edge, at 45 degrees.
+        let to_centre = centre - mid;
+        let along = [!flags[0], !flags[1], !flags[2]];
+        let perp = Vec3::new(
+            if along[0] { 0.0 } else { to_centre.x.signum() },
+            if along[1] { 0.0 } else { to_centre.y.signum() },
+            if along[2] { 0.0 } else { to_centre.z.signum() },
+        ) * 0.5f64.sqrt();
+        assert!(
+            (inward - perp).length() < 1e-9,
+            "{n}: {inward:?} vs {perp:?}"
+        );
+    }
+    assert!(s.edge_handle("no such edge").is_none());
+}
+
 #[test]
 fn a_mirror_or_move_without_bodies_uses_the_selected_body() {
     let mut s = Session::new();

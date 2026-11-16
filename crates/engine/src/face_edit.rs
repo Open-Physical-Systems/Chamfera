@@ -377,4 +377,50 @@ impl crate::Session {
         }
         None
     }
+
+    /// Where a fillet or chamfer size handle sits on the edge `name` (as `solid.fillet`
+    /// takes it): the middle of its first piece, and the unit direction into the solid
+    /// there (against the sum of the two faces' outward normals, the bisector of a
+    /// convex edge). `None` when no built edge has that name.
+    pub fn edge_handle(&self, name: &str) -> Option<(chamfera_geom::Point3, Vec3)> {
+        use crate::naming::{Kind, Want};
+        let found = self
+            .resolve_reference(None, Kind::Edge, name, Want::All)
+            .ok()?;
+        let f = found.first()?;
+        let e = f.edge()?;
+        let body = &self.solids().get(f.body)?.body;
+        let (c, t0, t1) = body.edge_curve(e).ok()??;
+        let mid = c.point_at(0.5 * (t0 + t1));
+        let [a, b] = body.edge_faces(e).ok()?;
+        let n = outward_normal(body, a, mid)? + outward_normal(body, b, mid)?;
+        Some((mid, -n.normalized()?))
+    }
+
+    /// Shows the scene meshes of the solids `which` accepts, moved rigidly by `t`, as the
+    /// translucent tool previews (a Move or Move Component being dragged), replacing any
+    /// preview. Display only: the design does not change. Returns how many bodies are
+    /// shown and their moved bounds.
+    pub fn show_moved_preview(
+        &mut self,
+        t: &Transform,
+        which: impl Fn(&crate::solids::Solid) -> bool,
+    ) -> (usize, Option<chamfera_geom::Aabb>) {
+        self.scene.previews.clear();
+        let meshes: Vec<chamfera_geom::TriMesh> = self
+            .solids()
+            .iter()
+            .filter(|s| which(s))
+            .filter_map(|s| self.scene.body(s.scene_id?))
+            .map(|b| chamfera_geom::TriMesh {
+                positions: b.mesh.positions.iter().map(|p| t.apply_point(*p)).collect(),
+                triangles: b.mesh.triangles.clone(),
+            })
+            .collect();
+        let bounds =
+            chamfera_geom::Aabb::from_points(meshes.iter().flat_map(|m| m.positions.clone()));
+        let n = meshes.len();
+        self.scene.previews.extend(meshes);
+        (n, bounds)
+    }
 }

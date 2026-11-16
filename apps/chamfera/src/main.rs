@@ -8,7 +8,7 @@
 //!          [--press-pull X,Y,D] [--ribbon-menu GROUP] [--assistant-demo]
 //!          [--assistant-ask REQUEST] [--about] [--size WxH]
 //!          [--history] [--recovery-demo] [--tutorial ID]
-//!          [--zoom F] [--dialog NAME:ARG] [--screenshot shot.png]
+//!          [--zoom F] [--dialog NAME:ARG] [--manipulate PART=VALUE] [--screenshot shot.png]
 //!          [--sketch-input "tool line; click 0,0; hover 30,12; type 25"]
 //! ```
 
@@ -22,7 +22,7 @@ const USAGE: &str = "usage: chamfera [part.stl ...] [--sample] [--theme light|da
 [--extrude-with JSON] [--hole] [--chamfer] \
 [--box X1,Y1,X2,Y2] [--drawing-drag X1,Y1,X2,Y2] [--search QUERY] [--context-menu X,Y] [--press-pull X,Y,D] \
 [--ribbon-menu GROUP] [--assistant-demo] [--assistant-ask REQUEST] [--about] [--history] [--recovery-demo] [--tutorial ID] [--render] [--render-window WxH,SAMPLES] [--size WxH] \
-[--zoom F] [--dialog NAME:ARG] \
+[--zoom F] [--dialog NAME:ARG] [--manipulate PART=VALUE] \
 [--screenshot shot.png] \
 [--sketch-input \"tool line; click X,Y; hover X,Y; shift; type 25; tab\"]";
 
@@ -87,7 +87,15 @@ fn main() -> ExitCode {
                 None => {
                     return fail(
                         "--dialog takes joint-edit:ID, component-move:ID, component-rename:ID, \
-                         edit-feature:ID or dxf-insert:PATH",
+                         edit-feature:ID, dxf-insert:PATH, move:BODY or fillet:EDGE",
+                    );
+                }
+            },
+            "--manipulate" => match args.next() {
+                Some(m) => options.manipulate = Some(m),
+                None => {
+                    return fail(
+                        "--manipulate takes PART=VALUE: value=15, x=20, xy=10,5 or turn-z=30",
                     );
                 }
             },

@@ -5,7 +5,7 @@ use super::feature::{expression, feature_reply, operation, vec3};
 use crate::{CmdResult, CommandError, Session, params};
 use chamfera_doc::{FeatureKind, Mirror, MirrorPlane, Move, MoveTransform, Operation};
 use chamfera_geom::{Point3, Vec3};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec {
@@ -28,7 +28,9 @@ pub static COMMANDS: &[CommandSpec] = &[
                  axis: {x, y, z} (optional) - rotation axis, default z\n\
                  origin: {x, y, z} (optional) - a point on the rotation axis, default 0\n\
                  from, to: {x, y, z} (optional) - move by the vector between two points\n\
-                 copy: boolean (optional) - keep the originals and add moved copies",
+                 copy: boolean (optional) - keep the originals and add moved copies\n\
+                 preview: boolean (optional) - show the moved bodies translucent and change nothing (a drag in progress)\n\
+                 clear: boolean (optional) - true removes that preview instead",
         mutates: true,
         run: move_bodies,
     },
@@ -242,6 +244,10 @@ pub(super) fn edit_transform(kind: &mut FeatureKind, p: &Value) -> Result<(), Co
 }
 
 fn move_bodies(s: &mut Session, p: &Value) -> CmdResult {
+    if matches!(p.get("clear"), Some(Value::Bool(true))) {
+        s.scene.previews.clear();
+        return Ok(json!({ "cleared": true }));
+    }
     let bodies = bodies(s, p, true)?;
     let transform =
         move_transform(p)?.ok_or_else(|| bad("give dx/dy/dz, an angle, or from and to"))?;
@@ -249,12 +255,34 @@ fn move_bodies(s: &mut Session, p: &Value) -> CmdResult {
         None | Some(Value::Null) => false,
         Some(_) => params::req_bool(p, "copy")?,
     };
-    add(
-        s,
-        FeatureKind::Move(Move {
-            bodies,
-            transform,
-            copy,
-        }),
-    )
+    let m = Move {
+        bodies,
+        transform,
+        copy,
+    };
+    if matches!(p.get("preview"), Some(Value::Bool(true))) {
+        return move_preview(s, &m);
+    }
+    s.scene.previews.clear();
+    add(s, FeatureKind::Move(m))
+}
+
+/// `solid.move` with `preview`: the named bodies' meshes moved as the feature would move
+/// them, shown translucent; the design does not change.
+fn move_preview(s: &mut Session, m: &Move) -> CmdResult {
+    s.scene.previews.clear();
+    if let Some(missing) = m
+        .bodies
+        .iter()
+        .find(|b| !s.solids().iter().any(|x| x.name == **b))
+    {
+        return Err(bad(format!("there is no body named {missing:?}")));
+    }
+    let t = s.doc.move_transform(m)?;
+    let (n, bounds) = s.show_moved_preview(&t, |x| m.bodies.contains(&x.name));
+    let pt = |q: Point3| json!([q.x, q.y, q.z]);
+    Ok(json!({
+        "previews": n,
+        "bounds": bounds.map(|b| json!({ "min": pt(b.min), "max": pt(b.max) })),
+    }))
 }
