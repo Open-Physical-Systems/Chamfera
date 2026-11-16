@@ -17,6 +17,10 @@ use serde_json::{Value, json};
 
 mod annot;
 mod dimset;
+mod drafting;
+
+pub use drafting::COMMANDS as DRAFTING_COMMANDS;
+pub use drafting::parse_colour;
 
 pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec {
@@ -448,6 +452,7 @@ fn make_sheet(s: &mut Session, p: &Value) -> Result<u32, CommandError> {
         dimensions: Vec::new(),
         annotations: Vec::new(),
         parts_list: None,
+        drafting: Default::default(),
     };
     apply_settings(&mut sheet, p)?;
     sheet.id = s.doc.drawing.next_id()?;
@@ -1052,6 +1057,7 @@ fn list(s: &mut Session, p: &Value) -> CmdResult {
             "views": views,
             "dimensions": dims,
             "annotations": annotations,
+            "drafting": sheet.drafting,
             "parts_list": sheet.parts_list.as_ref().map(|pl| json!({
                 "id": pl.id, "x": pl.x, "y": pl.y, "rows": parts,
             })),

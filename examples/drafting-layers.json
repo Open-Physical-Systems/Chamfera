@@ -1,0 +1,23 @@
+[
+  { "command": "drawing.new_sheet", "params": { "paper": "a3", "part_name": "Drafted plate" } },
+  { "command": "drawing.layer.add", "params": { "name": "Outline", "weight": 0.5, "current": true } },
+  { "command": "drawing.layer.add", "params": { "name": "Centre", "colour": "#dc2828", "line_type": "center" } },
+  { "command": "drawing.layer.add", "params": { "name": "HiddenEdges", "colour": "#285adc", "line_type": "hidden", "weight": 0.35 } },
+  { "command": "drawing.layer.add", "params": { "name": "Phantom", "colour": "#b932a5", "line_type": "phantom" } },
+  { "command": "drawing.layer.add", "params": { "name": "Construction", "colour": "#28963c", "line_type": "dashed", "weight": 0.18 } },
+  { "command": "drawing.layer.add", "params": { "name": "Notes", "colour": "#eb8214", "line_type": "dot" } },
+  { "command": "drawing.draw.rectangle", "params": { "x1": 60, "y1": 80, "x2": 260, "y2": 220 } },
+  { "command": "drawing.draw.circle", "params": { "cx": 160, "cy": 150, "radius": 40 } },
+  { "command": "drawing.draw.circle", "params": { "cx": 90, "cy": 190, "radius": 10 } },
+  { "command": "drawing.draw.circle", "params": { "cx": 230, "cy": 110, "radius": 10 } },
+  { "command": "drawing.draw.line", "params": { "x1": 110, "y1": 150, "x2": 210, "y2": 150, "layer": "Centre" } },
+  { "command": "drawing.draw.line", "params": { "x1": 160, "y1": 100, "x2": 160, "y2": 200, "layer": "Centre" } },
+  { "command": "drawing.draw.line", "params": { "x1": 60, "y1": 130, "x2": 260, "y2": 130, "layer": "HiddenEdges" } },
+  { "command": "drawing.draw.line", "params": { "x1": 60, "y1": 170, "x2": 260, "y2": 170, "layer": "HiddenEdges" } },
+  { "command": "drawing.draw.arc", "params": { "cx": 160, "cy": 150, "radius": 58, "start": 0.3, "end": 2.8, "layer": "Phantom" } },
+  { "command": "drawing.draw.rectangle", "params": { "x1": 280, "y1": 80, "x2": 340, "y2": 220, "layer": "Phantom" } },
+  { "command": "drawing.draw.line", "params": { "x1": 40, "y1": 60, "x2": 360, "y2": 250, "layer": "Construction" } },
+  { "command": "drawing.draw.polyline", "params": { "points": [{ "x": 290, "y": 240 }, { "x": 360, "y": 240 }, { "x": 360, "y": 275 }], "layer": "Notes" } },
+  { "command": "drawing.linetype_scale", "params": { "scale": 1.5 } },
+  { "command": "drawing.layer.list" }
+]

@@ -125,6 +125,17 @@ fn main() -> ExitCode {
                 }
                 None => return fail("--drawing-drag takes X1,Y1,X2,Y2: sheet mm, 0 to 8192"),
             },
+            "--command-line" => match args.next() {
+                Some(t) => {
+                    options.command_line = Some(t);
+                    options.drawing = true;
+                }
+                None => {
+                    return fail(
+                        "--command-line takes command lines separated by ;, such as \"LA; SEL ALL\"",
+                    );
+                }
+            },
             "--search" => match args.next() {
                 Some(q) => options.search = Some(q),
                 None => return fail(USAGE),

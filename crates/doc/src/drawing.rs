@@ -763,6 +763,9 @@ pub struct Sheet {
     /// The parts list table, if the sheet shows one (format 31).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parts_list: Option<PartsList>,
+    /// User layers, line types and drafted 2D entities (format 42).
+    #[serde(default, skip_serializing_if = "crate::drafting::Drafting::is_default")]
+    pub drafting: crate::drafting::Drafting,
 }
 
 impl Sheet {
@@ -984,6 +987,12 @@ impl Drawing {
                     )));
                 }
             }
+            s.drafting
+                .check()
+                .map_err(|e| bad(format!("sheet {}: {e}", s.id)))?;
+            for e in &s.drafting.entities {
+                id_ok(e.id, "entity")?;
+            }
             for d in &s.dimensions {
                 id_ok(d.id, "dimension")?;
                 if s.view(d.view).is_none() {
@@ -1045,6 +1054,7 @@ mod tests {
             dimensions: Vec::new(),
             annotations: Vec::new(),
             parts_list: None,
+            drafting: Default::default(),
         }
     }
 
