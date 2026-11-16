@@ -75,6 +75,8 @@ pub enum ToolKind {
     BullNose,
     Drill,
     ChamferMill,
+    /// A tap for cutting threads in a drilled hole (a drill operation with a pitch).
+    Tap,
 }
 
 impl ToolKind {
@@ -85,6 +87,7 @@ impl ToolKind {
             "bull_nose" => ToolKind::BullNose,
             "drill" => ToolKind::Drill,
             "chamfer_mill" => ToolKind::ChamferMill,
+            "tap" => ToolKind::Tap,
             _ => return None,
         })
     }
@@ -96,6 +99,7 @@ impl ToolKind {
             ToolKind::BullNose => "bull_nose",
             ToolKind::Drill => "drill",
             ToolKind::ChamferMill => "chamfer_mill",
+            ToolKind::Tap => "tap",
         }
     }
 
@@ -107,6 +111,7 @@ impl ToolKind {
             ToolKind::BullNose => "bull nose mill",
             ToolKind::Drill => "drill",
             ToolKind::ChamferMill => "chamfer mill",
+            ToolKind::Tap => "tap",
         }
     }
 }
@@ -263,6 +268,62 @@ impl Entry {
     }
 }
 
+/// Most holding tabs one contour pass may have.
+pub const MAX_TABS: u32 = 1_000;
+
+/// The cross-section of a holding tab along the path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum TabShape {
+    /// Flat-topped: the tool rises at the tabs' ramp angle and runs over at tab height.
+    #[default]
+    Rectangular,
+    /// A triangle `width` wide at its foot and `height` tall: the tool climbs and comes
+    /// down along its sides.
+    Triangular,
+}
+
+impl TabShape {
+    pub fn parse(s: &str) -> Option<TabShape> {
+        match s {
+            "rectangular" | "rectangle" => Some(TabShape::Rectangular),
+            "triangular" | "triangle" => Some(TabShape::Triangular),
+            _ => None,
+        }
+    }
+
+    pub fn key(self) -> &'static str {
+        match self {
+            TabShape::Rectangular => "rectangular",
+            TabShape::Triangular => "triangular",
+        }
+    }
+}
+
+/// Holding tabs on a contour: bridges of material left standing at the bottom of the
+/// cut so the part stays attached to the stock. The tool rises over each tab on the
+/// passes below its top.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Tabs {
+    /// How many tabs, spread evenly along each closed path; or `spacing` instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub count: Option<u32>,
+    /// The largest distance between tab centres along the path (mm).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spacing: Option<f64>,
+    /// The tab's width along the part's edge, at its top (rectangular) or its foot
+    /// (triangular), mm.
+    pub width: f64,
+    /// The tab's height above the bottom of the cut, mm.
+    pub height: f64,
+    #[serde(default)]
+    pub shape: TabShape,
+    /// Rectangular tabs: the angle the tool climbs onto and leaves a tab at, from the
+    /// horizontal (radians); a right angle is straight up and down.
+    pub ramp_angle: f64,
+}
+
 /// What an operation does, with its own settings.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -291,6 +352,9 @@ pub enum OpKind {
         bottom_offset: f64,
         /// Climb milling (tool rotating clockwise, material on the right of travel).
         climb: bool,
+        /// Holding tabs; `None` cuts all the way round.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tabs: Option<Tabs>,
     },
     /// Clears a flat-bottomed region with contour-parallel passes.
     Pocket {
@@ -316,6 +380,10 @@ pub enum OpKind {
         retract: f64,
         /// How far below each hole's bottom to drill.
         breakthrough: f64,
+        /// Tapping instead of drilling: the thread pitch (mm per turn). The tool feeds
+        /// at the pitch times the spindle speed (G84, or the post's rigid tapping).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tap: Option<f64>,
     },
     /// 3D finishing in raster passes over the stock, the tool dropped onto the model.
     Parallel {
@@ -622,6 +690,35 @@ fn check_refs(what: &str, refs: &[String]) -> Result<(), DocError> {
     refs.iter().try_for_each(|r| check_name(what, r))
 }
 
+/// Coarsest thread pitch a tapping cycle takes (mm per turn).
+pub const MAX_TAP_PITCH: f64 = 10.0;
+
+fn check_tabs(t: &Tabs) -> Result<(), DocError> {
+    match (t.count, t.spacing) {
+        (Some(n), None) => {
+            if n == 0 || n > MAX_TABS {
+                return Err(bad(format!(
+                    "the tab count must be from 1 to {MAX_TABS}, not {n}"
+                )));
+            }
+        }
+        (None, Some(s)) => check_len("the tab spacing", s, 0.0, chamfera_geom::MAX_COORDINATE)?,
+        _ => {
+            return Err(bad(
+                "tabs need either a `count` or a `spacing`, not both".into()
+            ));
+        }
+    }
+    check_len("the tab width", t.width, 0.0, MAX_TOOL_SIZE)?;
+    check_len("the tab height", t.height, 0.0, MAX_TOOL_SIZE)?;
+    check_len(
+        "the tab ramp angle",
+        t.ramp_angle,
+        0.0,
+        std::f64::consts::FRAC_PI_2,
+    )
+}
+
 fn check_op(op: &OpKind) -> Result<(), DocError> {
     let half_turn = std::f64::consts::FRAC_PI_2;
     match op {
@@ -635,8 +732,12 @@ fn check_op(op: &OpKind) -> Result<(), DocError> {
             stepdown,
             lead_radius,
             bottom_offset,
+            tabs,
             ..
         } => {
+            if let Some(t) = tabs {
+                check_tabs(t)?;
+            }
             if face.is_none() == edges.is_empty() {
                 return Err(bad(
                     "a contour follows either a face or a chain of edges".into()
@@ -669,10 +770,19 @@ fn check_op(op: &OpKind) -> Result<(), DocError> {
             peck,
             retract,
             breakthrough,
+            tap,
         } => {
             check_refs("faces", faces)?;
             if let Some(p) = peck {
                 check_len("the peck depth", *p, 0.0, MAX_TOOL_SIZE)?;
+            }
+            if let Some(p) = tap {
+                check_len("the tap pitch", *p, 0.0, MAX_TAP_PITCH)?;
+                if peck.is_some() {
+                    return Err(bad(
+                        "a tapping cycle has no peck: give `tap` or `peck`, not both".into(),
+                    ));
+                }
             }
             check_len("the retract height", *retract, 0.0, MAX_TOOL_SIZE)?;
             check_range("the breakthrough", *breakthrough, 0.0, MAX_TOOL_SIZE)?;

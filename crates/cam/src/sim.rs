@@ -385,7 +385,7 @@ pub fn segments(tp: &Toolpath) -> Vec<Piece> {
                 }
                 at = to;
             }
-            Move::Drill { .. } => {}
+            Move::Drill { .. } | Move::Tap { .. } => {}
         }
     }
     out

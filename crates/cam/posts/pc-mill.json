@@ -1,0 +1,18 @@
+{
+  "format": "chamfera-post",
+  "version": 1,
+  "name": "pc-mill",
+  "title": "PC mill (Mach-style)",
+  "description": "Generic G-code for PC-hosted mill controllers in the Mach3 manner: incremental arc centres set with G91.1, tool length offsets with G43, G81, G83 and G84 (floating tap holder) cycles.",
+  "aliases": ["mach", "mach3"],
+  "header": ["{comment:{program}}"],
+  "start": ["{units} G90 G17 G40 G49 G80", "G91.1"],
+  "first_tool_change": ["T{tool} M6"],
+  "tool_change": ["M5", "T{tool} M6"],
+  "length_offset": "G43 H{tool}",
+  "spindle_on": "S{rpm} M3",
+  "coolant": {"flood": "M8", "mist": "M7", "off": "M9"},
+  "arcs": "ij",
+  "cycles": {"drill": true, "peck": true, "retract": "G98", "tapping": {"style": "g84"}},
+  "end": ["M5", "M30"]
+}

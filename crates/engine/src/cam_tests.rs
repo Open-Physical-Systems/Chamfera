@@ -269,6 +269,14 @@ fn hostile_cam_params_never_panic() {
         json!({"kind": "bull_nose", "diameter": 6, "corner_radius": 4, "tip_angle": 1e300}),
         json!({"kind": "drill", "diameter": "0 mm", "feed": f64::NAN, "plunge_feed": -1}),
         json!({"dialect": "fanuc", "setup": 99, "path": "/nonexistent/dir/x.nc"}),
+        json!({"post": {"format": "chamfera-post", "version": 1, "name": "x", "title": "x", "tool_change": ["{"], "spindle_on": "", "cycles": {}}}),
+        json!({"post": "iso-mill", "units": "inch", "coolant": "mist", "program_number": 4294967295u64, "name": long}),
+        json!({"post_file": "/dev/zero", "post": null, "dialect": null}),
+        json!({"kind": "contour", "tool": 3, "face": "2:bottom", "tabs": {"count": 1e9, "width": "(((", "height": 1e300, "shape": 5, "spacing": -1}}),
+        json!({"operation": 7, "tabs": {"count": 1000, "width": 0.001, "height": 0.001, "ramp_angle": 1e-9}}),
+        json!({"kind": "drill", "tool": 4, "tap": 1e9, "peck": 1}),
+        json!({"operation": 6, "tap": "-1 mm", "faces": [long]}),
+        json!({"kind": "tap", "diameter": 6, "spindle_rpm": 1e9}),
         json!({"visible": "yes", "operation": 4294967296u64}),
         json!({"kind": "parallel", "tool": 3, "scallop": 1e9, "angle": "(((", "tolerance": 0}),
         json!({"kind": "parallel", "tool": 2, "stepover": 1e-9, "tolerance": 1e-300, "stock_to_leave": -1}),
@@ -873,4 +881,227 @@ fn a_tool_library_round_trips_through_its_file() {
         .unwrap();
     assert!(t.execute("cam.tool_delete", &json!({"tool": id})).is_err());
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ---- Holding tabs, tapping and posts as data ----
+
+/// The (X, Y, Z) after each G1 line of `gcode`, read back word by word.
+fn feed_positions(gcode: &str) -> Vec<[f64; 3]> {
+    let mut at = [0.0; 3];
+    let mut out = Vec::new();
+    for line in gcode.lines() {
+        let words: Vec<&str> = line.split('(').next().unwrap().split_whitespace().collect();
+        let mut moved = false;
+        for w in &words {
+            let (l, v) = w.split_at(1);
+            if let Some(i) = "XYZ".find(l) {
+                at[i] = v.parse().unwrap();
+                moved = true;
+            }
+        }
+        if moved && words.first() == Some(&"G1") {
+            out.push(at);
+        }
+    }
+    out
+}
+
+#[test]
+fn tabs_on_the_plate_contour_stand_in_the_g_code_as_worked_out_by_hand() {
+    let mut s = hole_plate();
+    let op = s.doc.cam.operations[3].id;
+    // The outside contour of the 12 mm plate cuts from the stock top (13) to 0.5 below the
+    // plate (-0.5) in 4 equal passes of 3.375: 9.625, 6.25, 2.875, -0.5. Tabs 2 high stand
+    // to 1.5, above only the last pass. Work Z is measured from the stock top: the tab
+    // top is Z-11.5, the last pass Z-13.5. Each tab is 6 wide; with the 6 mm tool the path
+    // runs 6 + 6 = 12 at the tab top, straight up and down (90°).
+    let r = s
+        .execute(
+            "cam.op_edit",
+            &json!({"operation": op, "tabs": {"count": 4, "width": 6, "height": "2 mm", "ramp_angle": 90}}),
+        )
+        .unwrap();
+    assert!(r.get("error").is_none(), "{r}");
+    assert_eq!(r["tabs"]["count"], 4);
+    let g = s.execute("cam.post", &json!({})).unwrap()["gcode"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let pts = feed_positions(&g);
+    let top: Vec<[f64; 3]> = pts
+        .iter()
+        .copied()
+        .filter(|p| (p[2] + 11.5).abs() < 1e-9)
+        .collect();
+    // Per tab the climb's end and the run's end.
+    assert_eq!(top.len(), 8, "{g}");
+    for pair in top.chunks(2) {
+        let run = (pair[1][0] - pair[0][0]).hypot(pair[1][1] - pair[0][1]);
+        assert!((run - 12.0).abs() < 2e-3, "{run}");
+    }
+    assert!(pts.iter().any(|p| (p[2] + 13.5).abs() < 1e-9));
+    // Spacing instead, triangular; then no tabs again; each one undo step.
+    let r = s
+        .execute(
+            "cam.op_edit",
+            &json!({"operation": op, "tabs": {"spacing": "100 mm", "shape": "triangular"}}),
+        )
+        .unwrap();
+    assert_eq!(r["tabs"]["shape"], "triangular");
+    assert_eq!(r["tabs"]["spacing"], 100.0);
+    s.execute("cam.op_edit", &json!({"operation": op, "tabs": null}))
+        .unwrap();
+    assert!(matches!(
+        &s.doc.cam.operations[3].op,
+        chamfera_doc::cam::OpKind::Contour { tabs: None, .. }
+    ));
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(matches!(
+        &s.doc.cam.operations[3].op,
+        chamfera_doc::cam::OpKind::Contour { tabs: Some(_), .. }
+    ));
+    // Hostile tabs change nothing.
+    let before = s.doc.clone();
+    for bad in [
+        json!({"count": 0}),
+        json!({"width": -1}),
+        json!({"spacing": 0}),
+        json!({"shape": "round"}),
+        json!({"ramp_angle": 120}),
+        json!("four"),
+    ] {
+        assert!(
+            s.execute("cam.op_edit", &json!({"operation": op, "tabs": bad}))
+                .is_err(),
+            "{bad}"
+        );
+        assert_eq!(s.doc, before);
+    }
+}
+
+#[test]
+fn tapping_the_plate_holes_posts_for_each_controller() {
+    let mut s = hole_plate();
+    // An M8 x 1.25 tap at 300 rpm: the feed is 1.25 x 300 = 375 mm/min. The holes run
+    // from the plate top (12) to its bottom (0); the stock top is 13, the retract plane
+    // 2 above it. Work coordinates from the stock's corner (-3, -3, 13): the hole at
+    // (8, 8) is X11 Y11, its bottom Z-13, R2.
+    let t = s
+        .execute(
+            "cam.tool_add",
+            &json!({"kind": "tap", "diameter": 8, "spindle_rpm": 300, "feed": 375}),
+        )
+        .unwrap()["tool"]
+        .clone();
+    let r = s
+        .execute(
+            "cam.op_add",
+            &json!({"kind": "drill", "tool": t, "tap": "1.25 mm"}),
+        )
+        .unwrap();
+    assert_eq!(r["cycle"], "tap");
+    assert!(
+        r.get("error").is_none() && r.get("warnings").is_none(),
+        "{r}"
+    );
+    let iso = s
+        .execute("cam.post", &json!({"post": "iso-mill", "coolant": "flood"}))
+        .unwrap();
+    let g = iso["gcode"].as_str().unwrap();
+    assert!(g.starts_with("%\nO1000 (CHAMFERA SETUP 1)\nN10 G21"), "{g}");
+    let lines: Vec<&str> = g
+        .lines()
+        .map(|l| l.split_once(' ').map_or(l, |x| x.1))
+        .collect();
+    let i = lines
+        .iter()
+        .position(|l| *l == "G98 G84 X11. Y11. Z-13. R2. F375.")
+        .unwrap_or_else(|| panic!("{g}"));
+    assert_eq!(lines[i - 1], "M29 S300");
+    assert!(lines.contains(&"M8") && lines.contains(&"M9"));
+    let linuxcnc = s.execute("cam.post", &json!({"post": "linuxcnc"})).unwrap();
+    assert!(
+        linuxcnc["gcode"]
+            .as_str()
+            .unwrap()
+            .contains("G0 Z2\nG33.1 Z-13 K1.25\nG0 Z10"),
+        "{linuxcnc}"
+    );
+    let err = s
+        .execute("cam.post", &json!({"dialect": "grbl"}))
+        .unwrap_err();
+    assert!(err.to_string().contains("no tapping cycle"), "{err}");
+    // A drill back: a peck clears the pitch.
+    let op = r["operation"].clone();
+    let r = s
+        .execute("cam.op_edit", &json!({"operation": op, "peck": 3}))
+        .unwrap();
+    assert_eq!(r["cycle"], "drill");
+    // A tap no larger than its holes is warned about.
+    s.execute("cam.op_edit", &json!({"operation": op, "tap": 1}))
+        .unwrap();
+    s.execute("cam.tool_edit", &json!({"tool": t, "diameter": 5}))
+        .unwrap();
+    let r = s.execute("cam.generate", &json!({})).unwrap();
+    assert!(
+        r["warnings"].to_string().contains("no thread would be cut"),
+        "{r}"
+    );
+}
+
+#[test]
+fn posts_are_listed_and_a_changed_definition_posts_as_data() {
+    let mut s = hole_plate();
+    let r = s.execute("cam.posts", &json!({})).unwrap();
+    let names: Vec<&str> = r["posts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        names,
+        ["linuxcnc", "grbl", "pc-mill", "iso-mill", "vmc-mill"]
+    );
+    // Take the Mach-style post, turn its comments off and number its lines from 1.
+    let mut def = s.execute("cam.posts", &json!({"name": "mach3"})).unwrap()["definition"].clone();
+    assert_eq!(def["name"], "pc-mill");
+    def["name"] = json!("my-mill");
+    def["comments"] = json!("none");
+    def["line_numbers"] = json!({"start": 1, "step": 1});
+    let r = s.execute("cam.post", &json!({"post": def})).unwrap();
+    assert_eq!(r["post"], "my-mill");
+    let g = r["gcode"].as_str().unwrap();
+    assert!(!g.contains('('), "{g}");
+    assert!(
+        g.starts_with("N1 G21 G90 G17 G40 G49 G80\nN2 G91.1\nN3 T1 M6\n"),
+        "{g}"
+    );
+    // The same from a file.
+    let path = std::env::temp_dir().join(format!("chamfera-post-{}.json", std::process::id()));
+    std::fs::write(&path, serde_json::to_string(&def).unwrap()).unwrap();
+    let r = s
+        .execute("cam.post", &json!({"post_file": path.to_string_lossy()}))
+        .unwrap();
+    let _ = std::fs::remove_file(&path);
+    assert_eq!(r["gcode"].as_str().unwrap(), g);
+    // Inches: the facing passes start 7 mm (the 12 mm mill's radius plus 1) before the
+    // stock's corner, the work origin: X-7 is -0.2756 in.
+    let r = s.execute("cam.post", &json!({"units": "inch"})).unwrap();
+    let g = r["gcode"].as_str().unwrap();
+    assert!(g.contains("G20 G90 G17") && g.contains("X-0.2756"), "{g}");
+    // Refused: unknown post, two at once, a broken definition, a device as the file.
+    for bad in [
+        json!({"post": "fanuc-9000"}),
+        json!({"post": "grbl", "dialect": "grbl"}),
+        json!({"post": {"format": "chamfera-post"}}),
+        json!({"post": 5}),
+        json!({"post_file": "/dev/zero"}),
+        json!({"coolant": "lots"}),
+        json!({"units": "furlong"}),
+        json!({"program_number": 0}),
+        json!({"program_number": 100000}),
+    ] {
+        assert!(s.execute("cam.post", &bad).is_err(), "{bad}");
+    }
 }

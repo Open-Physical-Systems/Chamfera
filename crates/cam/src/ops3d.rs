@@ -45,7 +45,7 @@ pub fn tool_shape(t: &Tool) -> Result<ToolShape, CamError> {
         ToolKind::FlatEndMill => ToolShape::new(r, 0.0),
         ToolKind::BallEndMill => ToolShape::new(r, r),
         ToolKind::BullNose => ToolShape::new(r, t.corner_radius),
-        ToolKind::Drill | ToolKind::ChamferMill => Err(CamError::Refused(format!(
+        ToolKind::Drill | ToolKind::ChamferMill | ToolKind::Tap => Err(CamError::Refused(format!(
             "a {} cannot cut a 3D operation: use a flat, ball or bull nose mill",
             t.kind.words()
         ))),

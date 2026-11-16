@@ -1,0 +1,17 @@
+{
+  "format": "chamfera-post",
+  "version": 1,
+  "name": "linuxcnc",
+  "title": "LinuxCNC (RS274/NGC)",
+  "description": "RS274/NGC as the NIST interpreter specification v3 writes it: tool changes with M6, G81 and G83 canned cycles, rigid tapping with G33.1.",
+  "aliases": ["rs274ngc", "generic"],
+  "header": ["{comment:{program}}"],
+  "start": ["{units} G90 G17"],
+  "first_tool_change": ["T{tool} M6"],
+  "tool_change": ["M5", "T{tool} M6"],
+  "spindle_on": "S{rpm} M3",
+  "coolant": {"flood": "M8", "mist": "M7", "off": "M9"},
+  "arcs": "ij",
+  "cycles": {"drill": true, "peck": true, "retract": "G98", "tapping": {"style": "g33_1"}},
+  "end": ["M5", "M30"]
+}

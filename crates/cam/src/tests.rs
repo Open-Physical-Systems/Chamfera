@@ -2,7 +2,7 @@
 
 use crate::ops::{self, Cutter, Region};
 use crate::path2::{Loop, Seg, distance_to, winding};
-use crate::post::{Dialect, Wcs, post};
+use crate::post::{PostOptions, Wcs, find_post, post_with};
 use crate::toolpath::Move;
 use crate::{CamError, model};
 use chamfera_doc::cam::{Entry, Side};
@@ -21,6 +21,19 @@ fn rect(x0: f64, y0: f64, x1: f64, y1: f64) -> Loop {
         Seg::line(p(x1, y1), p(x0, y1)),
         Seg::line(p(x0, y1), p(x0, y0)),
     ]
+}
+
+/// The program `ops` posted for the built-in post `name`, default options.
+fn post(name: &str, ops: &[(String, crate::Toolpath)], post_name: &str) -> String {
+    post_with(
+        name,
+        ops,
+        &Wcs::default(),
+        &find_post(post_name).unwrap(),
+        &PostOptions::default(),
+    )
+    .unwrap()
+    .text
 }
 
 fn cutter(d: f64) -> Cutter {
@@ -68,7 +81,7 @@ fn feed_points(tp: &crate::Toolpath) -> Vec<Point3> {
                 }
                 at = to;
             }
-            Move::Drill { .. } => {}
+            Move::Drill { .. } | Move::Tap { .. } => {}
         }
     }
     out
@@ -157,7 +170,7 @@ fn a_contour_round_a_50_by_30_rectangle_has_radius_3_corners_and_length_160_plus
                 at = to;
             }
             Move::Rapid { to } | Move::Plunge { to, .. } => at = to,
-            Move::Drill { .. } => panic!("no drilling in a contour"),
+            Move::Drill { .. } | Move::Tap { .. } => panic!("no drilling in a contour"),
         }
     }
     assert_eq!(arcs, 4);
@@ -375,12 +388,7 @@ fn the_post_for_a_square_contour_matches_hand_written_g_code() {
         10.0,
     )
     .unwrap();
-    let text = post(
-        "square",
-        &[("Contour".into(), tp.clone())],
-        &Wcs::default(),
-        Dialect::LinuxCnc,
-    );
+    let text = post("square", &[("Contour".into(), tp.clone())], "linuxcnc");
     let expected = "\
 (square)
 G21 G90 G17
@@ -405,12 +413,7 @@ M30
 ";
     assert_eq!(text, expected);
     // GRBL: the same moves, with the tool named in a comment instead of an M6.
-    let grbl = post(
-        "square",
-        &[("Contour".into(), tp)],
-        &Wcs::default(),
-        Dialect::Grbl,
-    );
+    let grbl = post("square", &[("Contour".into(), tp)], "grbl");
     assert_eq!(grbl, expected.replace("T1 M6", "(T1 6 mm flat end mill)"));
 }
 
@@ -434,14 +437,14 @@ fn grbl_gets_no_canned_cycles_and_no_tool_changes() {
     let mut b = ops::drill(&holes, &cutter(5.0), 2.0, None, 0.5, 10.0).unwrap();
     b.tool_number = 2;
     let ops = vec![("Peck".to_owned(), a), ("Drill".to_owned(), b)];
-    let linuxcnc = post("holes", &ops, &Wcs::default(), Dialect::LinuxCnc);
+    let linuxcnc = post("holes", &ops, "linuxcnc");
     assert!(
         linuxcnc.contains("G98 G83 X0 Y0 Z-10.5 R2 Q3 F200"),
         "{linuxcnc}"
     );
     assert!(linuxcnc.contains("G98 G81 X20 Y0 Z-10.5 R2"), "{linuxcnc}");
     assert!(linuxcnc.contains("T2 M6") && linuxcnc.contains("G80"));
-    let grbl = post("holes", &ops, &Wcs::default(), Dialect::Grbl);
+    let grbl = post("holes", &ops, "grbl");
     for word in ["G81", "G83", "G80", "M6", "G98"] {
         assert!(!grbl.contains(word), "{word} in\n{grbl}");
     }

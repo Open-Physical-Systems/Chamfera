@@ -22,6 +22,20 @@ pub struct CamUi {
     pub sim_panel: Option<SimPanel>,
     /// The Tool Library panel is open.
     pub library_open: bool,
+    /// The Post G-code dialog while it is open.
+    pub post: Option<PostDialog>,
+}
+
+/// The Post G-code dialog: which post, coolant and units.
+#[derive(Debug, Clone)]
+pub struct PostDialog {
+    /// The chosen post's name.
+    pub post: String,
+    /// The posts to choose from: (name, title, description), from `cam.posts`.
+    pub posts: Vec<(String, String, String)>,
+    pub coolant: &'static str,
+    /// "post" for the post's own units, or mm or inch.
+    pub units: &'static str,
 }
 
 /// The Simulate panel: the time slider, the resolution and the last result.
@@ -61,6 +75,16 @@ pub struct OpDialog {
     pub min_angle: String,
     /// Scallop: steeper than this is a border (degrees).
     pub max_slope: String,
+    /// Contour: holding tabs, their count, width, height, shape and ramp angle (degrees).
+    pub tabs: bool,
+    pub tab_count: String,
+    pub tab_width: String,
+    pub tab_height: String,
+    pub tab_shape: &'static str,
+    pub tab_ramp: String,
+    /// Drill: a tapping cycle at this thread pitch instead of drilling.
+    pub tap: bool,
+    pub pitch: String,
 }
 
 /// The Add Tool dialog, or Edit Tool for `edit`.
@@ -186,12 +210,13 @@ impl ToolDialog {
 }
 
 /// The tool kinds the dialog offers.
-const TOOL_KINDS: [&str; 5] = [
+const TOOL_KINDS: [&str; 6] = [
     "flat_end_mill",
     "ball_end_mill",
     "bull_nose",
     "drill",
     "chamfer_mill",
+    "tap",
 ];
 
 /// A number for a text field: at most 3 decimals, no trailing zeros.
@@ -268,6 +293,14 @@ impl OpDialog {
             holder_check: "ignore",
             min_angle: "10".into(),
             max_slope: "60".into(),
+            tabs: false,
+            tab_count: "4".into(),
+            tab_width: "6 mm".into(),
+            tab_height: "2 mm".into(),
+            tab_shape: "rectangular",
+            tab_ramp: "45".into(),
+            tap: false,
+            pitch: "1 mm".into(),
         }
     }
 
@@ -336,6 +369,22 @@ impl OpDialog {
                     p["face"] = json!(f);
                 }
                 p["side"] = json!(if self.outside { "outside" } else { "inside" });
+                if self.tabs {
+                    let mut t = json!({
+                        "width": self.tab_width.trim(),
+                        "height": self.tab_height.trim(),
+                        "shape": self.tab_shape,
+                    });
+                    if let Ok(n) = self.tab_count.trim().parse::<u32>() {
+                        t["count"] = json!(n);
+                    }
+                    if let Some(a) = degrees(&self.tab_ramp) {
+                        t["ramp_angle"] = json!(a);
+                    }
+                    p["tabs"] = t;
+                } else if self.edit.is_some() {
+                    p["tabs"] = Value::Null;
+                }
             }
             "pocket" => {
                 if let Some(f) = &self.face {
@@ -369,10 +418,13 @@ impl OpDialog {
                 }
             }
             "drill" => {
-                if !self.peck.trim().is_empty() {
+                if self.tap {
+                    p["tap"] = json!(self.pitch.trim());
+                } else if !self.peck.trim().is_empty() {
                     p["peck"] = json!(self.peck.trim());
                 } else if self.edit.is_some() {
                     p["peck"] = Value::Null;
+                    p["tap"] = Value::Null;
                 }
             }
             _ => {}
@@ -454,9 +506,123 @@ impl ChamferaApp {
         }
     }
 
-    /// File > Post G-code: asks where, then runs `cam.post`.
+    /// File > Post G-code: opens the Post G-code dialog with `post` chosen.
+    pub(crate) fn post_dialog(&mut self, post: &str) {
+        let posts: Vec<(String, String, String)> = self
+            .run("cam.posts", json!({}))
+            .and_then(|r| r["posts"].as_array().cloned())
+            .unwrap_or_default()
+            .iter()
+            .map(|p| {
+                let text = |k: &str| p[k].as_str().unwrap_or("").to_owned();
+                (text("name"), text("title"), text("description"))
+            })
+            .collect();
+        self.cam.post = Some(PostDialog {
+            post: post.to_owned(),
+            posts,
+            coolant: "none",
+            units: "post",
+        });
+    }
+
+    /// The Post G-code dialog: the post, coolant and units; Post asks where and runs
+    /// `cam.post`.
+    fn post_window(&mut self, ctx: &egui::Context) {
+        const WIDTH: f32 = 340.0;
+        let pos = self.tool_dialog_pos(WIDTH);
+        let look = Look {
+            theme: &self.theme,
+            icons: &self.icons,
+        };
+        let Some(d) = self.cam.post.as_mut() else {
+            return;
+        };
+        let (mut ok, mut cancel) = (false, false);
+        let title = label("cam.post");
+        egui::Window::new(title)
+            .id(egui::Id::unique("cam post dialog"))
+            .title_bar(false)
+            .frame(widgets::dialog_frame(look))
+            .default_pos(pos)
+            .fade_in(false)
+            .default_width(WIDTH)
+            .min_width(WIDTH)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.set_width(WIDTH);
+                if widgets::dialog_title(ui, look, Icon::CamPost, title) {
+                    cancel = true;
+                }
+                widgets::dialog_body(ui, |ui| {
+                    egui::Grid::new("cam post grid")
+                        .num_columns(2)
+                        .spacing([widgets::S3, widgets::S3])
+                        .show(ui, |ui| {
+                            widgets::field_label(ui, look, "Post");
+                            let current = d
+                                .posts
+                                .iter()
+                                .find(|p| p.0 == d.post)
+                                .map_or(d.post.clone(), |p| p.1.clone());
+                            egui::ComboBox::from_id_salt("cam post kind")
+                                .selected_text(current)
+                                .width(widgets::FIELD_WIDTH)
+                                .show_ui(ui, |ui| {
+                                    for (name, title, about) in &d.posts {
+                                        ui.selectable_value(&mut d.post, name.clone(), title)
+                                            .on_hover_text(about);
+                                    }
+                                });
+                            ui.end_row();
+                            widgets::field_label(ui, look, "Coolant");
+                            ui.horizontal(|ui| {
+                                for c in ["none", "flood", "mist"] {
+                                    ui.radio_value(&mut d.coolant, c, c);
+                                }
+                            });
+                            ui.end_row();
+                            widgets::field_label(ui, look, "Units");
+                            ui.horizontal(|ui| {
+                                ui.radio_value(&mut d.units, "post", "post's");
+                                ui.radio_value(&mut d.units, "mm", "mm");
+                                ui.radio_value(&mut d.units, "inch", "inch");
+                            });
+                            ui.end_row();
+                        });
+                    if let Some(about) = d.posts.iter().find(|p| p.0 == d.post).map(|p| &p.2) {
+                        ui.add_space(widgets::S2);
+                        ui.add(egui::Label::new(about.as_str()).wrap());
+                    }
+                });
+                widgets::dialog_footer(ui, look, |ui| {
+                    if widgets::primary_button(ui, look, "Post…", true).clicked() {
+                        ok = true;
+                    }
+                    if widgets::secondary_button(ui, look, "Cancel").clicked() {
+                        cancel = true;
+                    }
+                });
+            });
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) && !ctx.egui_wants_keyboard_input() {
+            cancel = true;
+        }
+        if ok {
+            let d = d.clone();
+            let mut params = json!({ "post": d.post, "coolant": d.coolant });
+            if d.units != "post" {
+                params["units"] = json!(d.units);
+            }
+            self.cam.post = None;
+            self.post_to_file(params);
+        } else if cancel {
+            self.cam.post = None;
+        }
+    }
+
+    /// Asks where, then runs `cam.post` with `params` and the path.
     #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn post_dialog(&mut self, dialect: &str) {
+    fn post_to_file(&mut self, mut params: Value) {
         let stem = self
             .session
             .path
@@ -474,19 +640,22 @@ impl ChamferaApp {
         if path.extension().is_none() {
             path.set_extension("nc");
         }
-        if let Some(r) = self.run(
-            "cam.post",
-            json!({ "path": path.to_string_lossy(), "dialect": dialect }),
-        ) {
+        params["path"] = json!(path.to_string_lossy());
+        if let Some(r) = self.run("cam.post", params) {
             self.message = Some((
-                format!("Posted {} lines to {}", r["lines"], path.display()),
+                format!(
+                    "Posted {} lines to {}{}",
+                    r["lines"],
+                    path.display(),
+                    warning_text(&r["warnings"])
+                ),
                 false,
             ));
         }
     }
 
     #[cfg(target_arch = "wasm32")]
-    pub(crate) fn post_dialog(&mut self, _dialect: &str) {
+    fn post_to_file(&mut self, _params: Value) {
         self.message = Some(("Posting G-code is in the desktop app for now".into(), true));
     }
 
@@ -653,8 +822,17 @@ impl ChamferaApp {
                 edges,
                 side,
                 stepdown,
+                tabs,
                 ..
             } => {
+                if let Some(t) = tabs {
+                    d.tabs = true;
+                    d.tab_count = t.count.map(|n| n.to_string()).unwrap_or_default();
+                    d.tab_width = mm(t.width);
+                    d.tab_height = mm(t.height);
+                    d.tab_shape = t.shape.key();
+                    d.tab_ramp = num(t.ramp_angle.to_degrees());
+                }
                 d.pick_edges = face.is_none();
                 d.face = face;
                 d.edges = edges;
@@ -677,8 +855,12 @@ impl ChamferaApp {
                     Entry::Plunge => "plunge",
                 };
             }
-            OpKind::Drill { peck, .. } => {
+            OpKind::Drill { peck, tap, .. } => {
                 d.peck = peck.map(mm).unwrap_or_default();
+                d.tap = tap.is_some();
+                if let Some(p) = tap {
+                    d.pitch = mm(p);
+                }
             }
             OpKind::Parallel {
                 stepover,
@@ -769,6 +951,7 @@ impl ChamferaApp {
 
     /// The operation dialog and the Add Tool dialog.
     pub(crate) fn cam_dialogs(&mut self, ctx: &egui::Context) {
+        self.post_window(ctx);
         if !self.cam.active {
             return;
         }
@@ -868,6 +1051,45 @@ impl ChamferaApp {
                                     ui.radio_value(&mut d.outside, false, "Inside");
                                 });
                                 ui.end_row();
+                                widgets::field_label(ui, look, "Tabs");
+                                ui.checkbox(&mut d.tabs, "Holding tabs");
+                                ui.end_row();
+                                if d.tabs {
+                                    for (name, text) in [
+                                        ("Tab count", &mut d.tab_count),
+                                        ("Tab width", &mut d.tab_width),
+                                        ("Tab height", &mut d.tab_height),
+                                    ] {
+                                        widgets::field_label(ui, look, name);
+                                        ui.add_sized(
+                                            widgets::FIELD,
+                                            egui::TextEdit::singleline(text),
+                                        );
+                                        ui.end_row();
+                                    }
+                                    widgets::field_label(ui, look, "Tab shape");
+                                    ui.horizontal(|ui| {
+                                        ui.radio_value(
+                                            &mut d.tab_shape,
+                                            "rectangular",
+                                            "Rectangular",
+                                        );
+                                        ui.radio_value(
+                                            &mut d.tab_shape,
+                                            "triangular",
+                                            "Triangular",
+                                        );
+                                    });
+                                    ui.end_row();
+                                    if d.tab_shape == "rectangular" {
+                                        widgets::field_label(ui, look, "Ramp °");
+                                        ui.add_sized(
+                                            widgets::FIELD,
+                                            egui::TextEdit::singleline(&mut d.tab_ramp),
+                                        );
+                                        ui.end_row();
+                                    }
+                                }
                             }
                             if matches!(d.kind, "facing" | "pocket" | "parallel" | "scallop") {
                                 widgets::field_label(
@@ -962,11 +1184,27 @@ impl ChamferaApp {
                                 ui.end_row();
                             }
                             if d.kind == "drill" {
-                                widgets::field_label(ui, look, "Peck");
-                                ui.add_sized(
-                                    widgets::FIELD,
-                                    egui::TextEdit::singleline(&mut d.peck).hint_text("none (G81)"),
-                                );
+                                widgets::field_label(ui, look, "Cycle");
+                                ui.horizontal(|ui| {
+                                    ui.radio_value(&mut d.tap, false, "Drill");
+                                    ui.radio_value(&mut d.tap, true, "Tap");
+                                });
+                                ui.end_row();
+                                if d.tap {
+                                    widgets::field_label(ui, look, "Pitch");
+                                    ui.add_sized(
+                                        widgets::FIELD,
+                                        egui::TextEdit::singleline(&mut d.pitch)
+                                            .hint_text("thread pitch"),
+                                    );
+                                } else {
+                                    widgets::field_label(ui, look, "Peck");
+                                    ui.add_sized(
+                                        widgets::FIELD,
+                                        egui::TextEdit::singleline(&mut d.peck)
+                                            .hint_text("none (G81)"),
+                                    );
+                                }
                                 ui.end_row();
                             }
                         });
@@ -1519,6 +1757,45 @@ mod tests {
                 .overlays
                 .iter()
                 .any(|o| o.style == chamfera_render::OverlayStyle::ToolpathFeed)
+        );
+    }
+
+    #[test]
+    fn the_contour_and_drill_dialogs_send_tabs_and_a_tapping_pitch() {
+        let mut d = OpDialog::new("contour", Some(1));
+        d.face = Some("2:bottom".into());
+        d.tabs = true;
+        d.tab_count = "6".into();
+        d.tab_shape = "triangular";
+        let p = d.params();
+        assert_eq!(
+            p["tabs"],
+            json!({"count": 6, "width": "6 mm", "height": "2 mm", "shape": "triangular",
+                   "ramp_angle": 45.0})
+        );
+        // Editing with tabs turned off removes them.
+        d.tabs = false;
+        d.edit = Some(4);
+        assert_eq!(d.params()["tabs"], Value::Null);
+        let mut d = OpDialog::new("drill", Some(2));
+        d.tap = true;
+        d.pitch = "1.25 mm".into();
+        d.peck = "3 mm".into();
+        let p = d.params();
+        assert_eq!(p["tap"], json!("1.25 mm"));
+        assert!(p.get("peck").is_none());
+    }
+
+    #[test]
+    fn the_post_dialog_lists_every_post_and_starts_on_the_chosen_one() {
+        let mut app = ChamferaApp::headless();
+        app.post_dialog("grbl");
+        let d = app.cam.post.as_ref().unwrap();
+        assert_eq!(d.post, "grbl");
+        let names: Vec<&str> = d.posts.iter().map(|p| p.0.as_str()).collect();
+        assert_eq!(
+            names,
+            ["linuxcnc", "grbl", "pc-mill", "iso-mill", "vmc-mill"]
         );
     }
 }

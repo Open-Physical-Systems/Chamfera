@@ -1295,7 +1295,7 @@ pub const TOOLS: &[RibbonTool] = &[
         Action::Tool("cam.post"),
         Icon::CamPost,
         "Post G-code",
-        "Write the setup's toolpaths as LinuxCNC G-code (Post GRBL writes GRBL)",
+        "Write the setup's toolpaths as G-code for the post you choose (LinuxCNC first)",
     )
     .primary()
     .short("Post"),
@@ -2565,6 +2565,7 @@ mod tests {
             "body.rename",
             "body.visibility",
             "cam.list",
+            "cam.posts",  // the Post G-code dialog
             "cam.op_add", // the operation tools
             "cam.op_delete",
             "cam.op_edit", // the Manufacture tree

@@ -27,7 +27,7 @@ Worked example (`examples/cam-plate.json`): a 100 × 60 × 12 mm plate with `sid
 ## Add tools
 
 1. Click **MANUFACTURE > SETUP > Add Tool**. The Add Tool dialog opens with a 6 mm flat end mill.
-2. Pick the **Kind**: flat end mill, ball end mill, drill or chamfer mill.
+2. Pick the **Kind**: flat end mill, ball end mill, bull nose, drill, chamfer mill or tap.
 3. Type the **Diameter** (a length such as `6 mm` or `0.25 in`), **Feed mm/min** and **Spindle rpm**.
 4. Click **OK**. The tool appears under TOOLS as `T1 6 mm flat end mill`; T numbers count up.
 
@@ -51,6 +51,8 @@ Each operation dialog starts with the last tool you added; pick another under **
 
 Outside contours climb-mill and get tangent lead-in arcs of the tool's radius; inside contours plunge at the plunge feed. Lead radius, a cut below the boundary (`bottom_offset`, handy for cutting through) and conventional milling are script options.
 
+**Holding tabs** keep a part cut out of a plate attached to it. Tick **Tabs** and set the **Tab count**, **Tab width** (along the part's edge), **Tab height** (above the bottom of the cut) and **Tab shape**: rectangular (flat-topped; the tool climbs on and off along a **Ramp °**, 90 for straight up) or triangular (the tool climbs along the triangle's sides). Tabs are spread evenly round the path and slid onto straight stretches, never onto corners. Only the passes below the tab tops rise over them; the path runs over each flat-topped tab for its width plus the tool diameter. From a script: `"tabs": {"count": 4, "width": 6, "height": 2, "shape": "rectangular", "ramp_angle": 45}` (or `"spacing"` instead of `"count"`; `"tabs": null` removes them). `examples/cam-tabs.json` cuts a plate free on six tabs.
+
 ### 2D Pocket
 
 **MANUFACTURE > 2D > 2D Pocket** clears a flat-bottomed pocket.
@@ -61,6 +63,8 @@ Outside contours climb-mill and get tangent lead-in arcs of the tool's radius; i
 ### Drill
 
 **MANUFACTURE > 2D > Drill** (in the 2D group's list) drills **every vertical hole** of the model, top to bottom. Leave **Peck** empty for a plain drilling cycle (G81) or give a peck depth for a peck cycle (G83). The reply lists the holes it found with their diameters and depths. A tool that is not a drill, or a drill smaller than a hole (a 5 mm drill in a 6 mm hole comes out 5 mm), is drilled anyway but warned about: the reply's `warnings`, `cam.generate`'s `warnings` (each named after its operation) and the status bar say so. A drill bigger than a hole is refused. Choosing particular holes, the retract plane (default 2 mm above the stock) and a breakthrough below the hole are script options.
+
+Under **Cycle** pick **Tap** and give the thread **Pitch** to tap the holes instead (G84, or rigid tapping where the post has it). The feed is the pitch times the spindle speed: an M8 × 1.25 tap at 300 rpm feeds at 375 mm/min. Use a tap tool (kind tap) whose diameter is the thread's; the drilled holes are smaller. A tool that is not a tap, or a hole at least as wide as the tap, is warned about. From a script: `{"kind": "drill", "tool": …, "tap": "1.25 mm"}`.
 
 ## 3D operations
 
@@ -95,14 +99,19 @@ Example (`examples/cam-3d-simulate.json`): a 60 × 40 × 20 mm block with 8 mm f
 ## Post G-code
 
 1. Generate first, and check the simulation.
-2. Pick the dialect: **MANUFACTURE > ACTIONS > Post** (LinuxCNC) or **Post GRBL** beside it, or **File > Post G-code (LinuxCNC)…** or **File > Post G-code (GRBL)…**.
+2. Click **MANUFACTURE > ACTIONS > Post** (or **Post GRBL** beside it, or one of the **File > Post G-code** items). The Post G-code dialog opens: pick the **Post** (the controller), **Coolant** (none, flood or mist) and **Units** (the post's, mm or inch), then click **Post…**.
 3. Choose where to save (the name defaults to the design's name with `.nc`; `.ngc` and `.gcode` are offered too).
-4. The status bar says "Posted 406 lines to …".
+4. The status bar says "Posted 406 lines to …", with any warnings (such as a post with no mist code).
 
-What the two dialects write:
+The posts that come with Chamfera:
 
-- **LinuxCNC**: metric absolute (`G21 G90 G17`), one comment per operation, `T1 M6` tool changes, `S… M3`, canned drilling cycles (`G98 G83 … R2 Q3` and `G80`), `M5 M30` at the end.
-- **GRBL**: the same moves, but no `M6` (each tool change is `M5` then `M0 (change to T2 6 mm flat end mill)`, a pause for you to change the tool and set its length) and no canned cycles (pecks are written out as moves).
+- **LinuxCNC (RS274/NGC)** (`linuxcnc`): metric absolute (`G21 G90 G17`), one comment per operation, `T1 M6` tool changes, `S… M3`, canned drilling cycles (`G98 G83 … R2 Q3` and `G80`), rigid tapping with `G33.1 Z… K…`, `M5 M30` at the end.
+- **GRBL** (`grbl`): the same moves, but no `M6` (each tool change is `M5` then `M0 (change to T2 6 mm flat end mill)`, a pause for you to change the tool and set its length) and no canned cycles (pecks are written out as moves). GRBL cannot tap: a tapping operation is refused.
+- **PC mill (Mach-style)** (`pc-mill`): for PC-hosted controllers in the Mach3 manner: `G91.1` incremental arc centres, `G43 H…` length offsets, `G81`/`G83` and `G84` tapping for a floating tap holder.
+- **ISO mill (Fanuc-style)** (`iso-mill`): `%` and `O1000`, `N10 N20 …` sequence numbers, a decimal point on every coordinate (`X10.`), comments in capitals, `G43 H…`, rigid tapping with `M29 S…` before `G84`, `G91 G28 Z0.` home at the end.
+- **Vertical machining centre (Haas-style)** (`vmc-mill`): `%` and `O1000`, `G43 H…`, arcs by radius (`R`), `G84` tapping (rigid where the machine has it), `G28` home at the end.
+
+A post is data, not code: `cam.posts {"name": "iso-mill"}` replies with its whole definition (JSON: opening and closing lines, tool change, coolant codes, arcs as `ij`, `r` or `linear`, which canned cycles there are, tapping, units, decimals, line numbers, comments). Copy it, change it, save it as a file and post with `cam.post {"post_file": "my-mill.json"}`, or pass the object as `post`. The shipped ones are in `crates/cam/posts/`.
 
 Coordinates are relative to part zero, so set your work offset (G54) to the top corner of the stock that the setup used.
 
@@ -120,18 +129,19 @@ Only the first setup is posted. Suppressed operations are left out.
   { "command": "cam.op_add", "params": { "kind": "contour", "tool": "$mill.tool", "face": "2:bottom", "side": "outside", "stepdown": 4, "bottom_offset": 0.5 } },
   { "command": "cam.generate" },
   { "command": "cam.simulate", "params": { "resolution": 256, "time": 1 } },
-  { "command": "cam.post", "params": { "dialect": "grbl", "path": "plate.nc" } }
+  { "command": "cam.post", "params": { "post": "grbl", "path": "plate.nc" } }
 ]
 ```
 
 - `cam.setup` also takes `{"kind": "fixed", "x", "y", "z"}` stock, `origin` (`stock_top_corner`, `stock_top_centre`, `stock_bottom_corner`, `model_origin` or a point), `x_axis` (a straight edge along the work X axis), `clearance` and `rapid_rate`; with `setup` it edits an existing one.
 - `cam.op_edit {operation, suppressed, …}`, `cam.op_delete {operation}`, `cam.list` and `cam.generate {operation?}` replies give each operation's moves, `feed_length`, `rapid_length` and `minutes`, or its `error`.
-- `cam.post` without `path` replies with the program as `gcode`.
+- `cam.post` without `path` replies with the program as `gcode`; it takes `post` (a name or a definition), `post_file`, `coolant`, `units` and `program_number` (the O number). `cam.posts` lists the posts.
 - `cam.simulate {"clear": true}` ends a simulation. Complete examples: `examples/cam-plate.json`, `examples/cam-3d-finish.json`, `examples/cam-3d-simulate.json`.
 
 ## Limits
 
-- 3-axis milling only: no lathe, no 4th or 5th axis, no tool-length or cutter-radius compensation in the code, no coolant codes.
+- 3-axis milling only: no lathe, no 4th or 5th axis, no cutter-radius compensation in the code; coolant is one choice for the whole program.
+- Tabs are placed by count or spacing, not picked one by one.
 - One posted setup per file (the first); no setup dialog, no stock or origin picking in the UI yet.
 - Drill finds every vertical hole; the UI cannot pick some of them. Drilling under a deep pocket starts its pecks at the stock's retract plane, so it pecks through air.
 - There is no check that a tool is long enough or that the holder clears the part.

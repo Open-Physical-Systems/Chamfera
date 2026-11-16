@@ -1,0 +1,22 @@
+{
+  "format": "chamfera-post",
+  "version": 1,
+  "name": "iso-mill",
+  "title": "ISO mill (Fanuc-style)",
+  "description": "ISO 6983 style for industrial controls in the Fanuc manner: % and an O program number, N sequence numbers, a decimal point on every coordinate, comments in capitals, G43 length offsets, rigid tapping with M29 before G84, a G28 return home at the end.",
+  "aliases": ["iso", "fanuc"],
+  "trailing_point": true,
+  "line_numbers": {"start": 10, "step": 10, "max": 99999},
+  "upper_case": true,
+  "header": ["%", "O{program_number} {comment:{program}}"],
+  "start": ["{units} G17 G40 G49 G80 G90", "G54"],
+  "first_tool_change": ["T{tool} M6"],
+  "tool_change": ["M5", "G91 G28 Z0.", "G90", "T{tool} M6"],
+  "length_offset": "G43 H{tool}",
+  "spindle_on": "S{rpm} M3",
+  "coolant": {"flood": "M8", "mist": "M7", "off": "M9"},
+  "arcs": "ij",
+  "cycles": {"drill": true, "peck": true, "retract": "G98", "tapping": {"style": "g84", "before": ["M29 S{rpm}"]}},
+  "end": ["M5", "G91 G28 Z0.", "G90", "M30"],
+  "footer": ["%"]
+}

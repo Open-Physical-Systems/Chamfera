@@ -1,0 +1,16 @@
+{
+  "format": "chamfera-post",
+  "version": 1,
+  "name": "grbl",
+  "title": "GRBL",
+  "description": "GRBL hobby controllers: no tool changer (a tool change is a pause with the tool named) and no canned cycles (drilling is written out as G0 and G1 moves). No tapping.",
+  "header": ["{comment:{program}}"],
+  "start": ["{units} G90 G17"],
+  "first_tool_change": ["{comment:T{tool} {tool_name}}"],
+  "tool_change": ["M5", "M0 {comment:change to T{tool} {tool_name}}"],
+  "spindle_on": "S{rpm} M3",
+  "coolant": {"flood": "M8", "mist": "M7", "off": "M9"},
+  "arcs": "ij",
+  "cycles": {"drill": false, "peck": false},
+  "end": ["M5", "M30"]
+}
