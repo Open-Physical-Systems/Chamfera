@@ -76,6 +76,9 @@ pub struct TransformTool {
     /// Circular Pattern: a construction axis to turn around instead of `axis`.
     pub axis_feature: Option<u32>,
     pub angle: String,
+    /// Move: the point a rotation's axis passes through, in mm, once the viewport's turn
+    /// handle set it; `None` for the origin.
+    pub centre: Option<[f64; 3]>,
     pub copy: bool,
     /// Patterns: the feature to repeat, how many, and the spacing (linear) along `axis`.
     pub feature: Option<u32>,
@@ -106,6 +109,7 @@ impl TransformTool {
                 "90 deg"
             }
             .into(),
+            centre: None,
             copy: false,
             feature,
             count: if kind == TransformKind::PatternCircular {
@@ -162,12 +166,16 @@ impl TransformTool {
             }
             TransformKind::Move if self.bodies.is_empty() => None,
             TransformKind::Move if self.rotate => filled(&self.angle).then(|| {
-                json!({
+                let mut p = json!({
                     "bodies": self.bodies,
                     "angle": self.angle.trim(),
                     "axis": self.axis_vector(),
                     "copy": self.copy,
-                })
+                });
+                if let Some([x, y, z]) = self.centre {
+                    p["origin"] = json!({ "x": x, "y": y, "z": z });
+                }
+                p
             }),
             TransformKind::Move => {
                 [&self.dx, &self.dy, &self.dz]
@@ -483,6 +491,7 @@ fn transform_fields(
             if tool.rotate {
                 choice(ui, look, "Axis", &mut tool.axis, &axes);
                 enter |= field(ui, look, "Angle", &mut tool.angle, "90 deg");
+                crate::manipulator_ui::turn_centre_row(ui, look, &mut tool.centre);
             } else {
                 enter |= field(ui, look, "X distance", &mut tool.dx, "0 mm");
                 enter |= field(ui, look, "Y distance", &mut tool.dy, "0 mm");

@@ -48,7 +48,8 @@ pub static COMMANDS: &[CommandSpec] = &[
         id: "component.move",
         label: "Move Component",
         params: "component: integer (required)\n\
-                 transform: object (required) - {translate?: {x, y, z} mm, rotate?: {axis: {x, y, z}, angle: degrees or an expression, origin?: {x, y, z}}, absolute?: boolean}; the turn comes first, then the move; relative to the current placement unless absolute",
+                 transform: object (required) - {translate?: {x, y, z} mm, rotate?: {axis: {x, y, z}, angle: degrees or an expression, origin?: {x, y, z}}, absolute?: boolean}; the turn comes first, then the move; relative to the current placement unless absolute\n\
+                 preview: boolean (optional) - show the component's bodies moved, translucent, and change nothing (a drag in progress)",
         mutates: true,
         run: move_component,
     },
@@ -353,12 +354,24 @@ fn move_component(s: &mut Session, p: &Value) -> CmdResult {
         )));
     }
     let (t, absolute) = transform(s, p)?;
-    let c = s.doc.assembly.component_mut(id)?;
-    let placement = if absolute { t } else { c.placement.then(&t) };
+    let old = s.doc.assembly.component(id)?.placement;
+    let placement = if absolute { t } else { old.then(&t) };
     if !chamfera_doc::component::is_valid_placement(&placement) {
         return Err(bad("the move takes the component out of the working range"));
     }
-    c.placement = placement;
+    if matches!(p.get("preview"), Some(Value::Bool(true))) {
+        // What its bodies go through in the world: back from the old placement to the
+        // component's own coordinates, then out by the new one.
+        let delta = old
+            .inverse_rigid()
+            .map(|back| back.then(&placement))
+            .ok_or_else(|| bad("the component's placement cannot be inverted"))?;
+        let assembly = s.doc.assembly.clone();
+        let (n, _) = s.show_moved_preview(&delta, |x| assembly.is_inside(x.component, id));
+        return Ok(json!({ "component": id, "previews": n }));
+    }
+    s.scene.previews.clear();
+    s.doc.assembly.component_mut(id)?.placement = placement;
     s.rebuild();
     Ok(component_json(s, id))
 }

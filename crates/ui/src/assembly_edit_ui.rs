@@ -29,7 +29,8 @@ pub enum AssemblyDialog {
         max: String,
     },
     /// Move Component: a move along X, Y and Z (the design's length unit), then a turn
-    /// about an axis through the origin; relative to where it is unless `absolute`.
+    /// about an axis through the origin (or through `centre`, once the viewport's turn
+    /// handle set it); relative to where it is unless `absolute`.
     MoveComponent {
         component: u32,
         dx: String,
@@ -39,6 +40,8 @@ pub enum AssemblyDialog {
         axis: usize,
         angle: String,
         absolute: bool,
+        /// The point the turn's axis passes through, in mm; `None` for the origin.
+        centre: Option<[f64; 3]>,
     },
     /// Rename Component.
     RenameComponent { component: u32, name: String },
@@ -101,6 +104,7 @@ impl ChamferaApp {
             axis: 2,
             angle: "0".into(),
             absolute: false,
+            centre: None,
         });
         self.assembly.edit_error = None;
     }
@@ -151,6 +155,7 @@ impl ChamferaApp {
                 axis,
                 angle,
                 absolute,
+                centre,
             } => {
                 let unit = self.session.doc.units.length.mm();
                 let length = |what: &str, v: &str| -> Result<f64, String> {
@@ -174,6 +179,9 @@ impl ChamferaApp {
                             Err(_) => json!(angle),
                         },
                     });
+                    if let Some([x, y, z]) = centre {
+                        transform["rotate"]["origin"] = json!({ "x": x, "y": y, "z": z });
+                    }
                 }
                 (
                     "component.move",
@@ -320,6 +328,7 @@ impl ChamferaApp {
                                     axis,
                                     angle,
                                     absolute,
+                                    centre,
                                     ..
                                 } => {
                                     widgets::field_label(ui, look, "Component");
@@ -339,6 +348,7 @@ impl ChamferaApp {
                                         });
                                     ui.end_row();
                                     field(ui, "Angle", angle, "deg");
+                                    crate::manipulator_ui::turn_centre_row(ui, look, centre);
                                     widgets::field_label(ui, look, "From");
                                     ui.checkbox(absolute, "The origin, not where it is");
                                     ui.end_row();
