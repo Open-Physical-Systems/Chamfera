@@ -6,6 +6,7 @@ pub mod cam;
 pub mod component;
 pub mod config;
 pub mod construct;
+pub mod drafting;
 pub mod drawing;
 pub mod expr;
 pub mod face_edit;
@@ -153,7 +154,11 @@ use thiserror::Error;
 /// - 40: drafts (`kind: draft`: faces tilted about a neutral plane by an angle) and ribs
 ///   and webs (`kind: rib`: a wall grown from an open sketch chain to a solid, `web` to go
 ///   through it). Older files open unchanged: they hold none.
-pub const FORMAT_VERSION: u32 = 40;
+/// - 41: 2D drafting on drawing sheets (`drafting` on a sheet): user layers with colour,
+///   line type, line weight, on/off, frozen and locked; the current layer; a line type
+///   scale; and lines, circles, arcs and polylines drawn on those layers. Older files open
+///   unchanged: their sheets have layer 0 only.
+pub const FORMAT_VERSION: u32 = 41;
 /// The tag every design file starts with, so other JSON is not mistaken for a design.
 pub const FORMAT_TAG: &str = "chamfera";
 /// Longest parameter name.

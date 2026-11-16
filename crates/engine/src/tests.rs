@@ -298,6 +298,13 @@ fn hostile_params_never_panic() {
         json!({"bodies": ["Sample bracket"], "dx": "1e7 mm", "angle": "5 mm", "plane": 3}),
         json!({"body": "Extrude 1", "density": -1, "a": {"solid": 5}, "b": {"point": [1, 2]}}),
         json!({"body": 1e300, "density": 1e300, "a": {"point": [f64::MAX, 0, 0]}, "b": null}),
+        // 2D drafting: layers, entities, grips.
+        json!({"name": "HIDDEN", "colour": "#zzzzzz", "line_type": "zigzag", "weight": 1e300, "current": "yes", "layer": long}),
+        json!({"name": "A", "colour": [255, 0, 0], "line_type": 5, "weight": f64::NAN, "on": 1, "frozen": "no", "locked": null, "layer": "0"}),
+        json!({"layer": "0", "name": "0", "frozen": true, "scale": 0, "entities": [], "entity": 0, "grip": -1}),
+        json!({"entities": vec![1; 20_000], "dx": 1e300, "dy": 0, "copy": 1, "layer": "\u{0}", "grip": 1e300, "entity": 1, "x": f64::MAX, "y": 0}),
+        json!({"entities": ["a", null], "points": vec![json!({"x": 0, "y": 0}); 5000], "closed": "yes", "cx": 0, "cy": 0, "radius": 1e300, "start": f64::NAN, "end": 1e300}),
+        json!({"entities": [4294967296u64], "points": [{"x": 0, "y": 0}, {"x": 0, "y": 0}, {"x": 0, "y": 0}], "closed": true, "start": 0, "end": 100, "radius": 5, "cx": 0, "cy": 0, "scale": 1e300}),
         json!({"body": [1], "a": {"solid": "Extrude 1", "face": long}, "b": {"solid": "x", "edge": 3}}),
         json!({"a": {"solid": "Extrude 1", "vertex": [1, "a", 3]}, "b": {"body": -4, "face": "#99999999999"}}),
         json!({"a": "solid", "x": 400, "y": 300, "width": 800, "height": 600, "from": {"point": "here"}}),

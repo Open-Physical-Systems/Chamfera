@@ -64,6 +64,7 @@ pub fn registry() -> Vec<&'static CommandSpec> {
         design::COMMANDS,
         draft_rib::COMMANDS,
         drawing::COMMANDS,
+        drawing::DRAFTING_COMMANDS,
         dxf::COMMANDS,
         edit::COMMANDS,
         face_edit::COMMANDS,

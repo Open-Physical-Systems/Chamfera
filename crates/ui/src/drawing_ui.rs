@@ -73,6 +73,8 @@ pub(crate) struct DrawingUi {
     drag: Option<(Point2, Point2)>,
     /// The Sheet Settings dialog, while it is open (`drawing_sheet_ui.rs`).
     pub settings: Option<crate::drawing_sheet_ui::SheetForm>,
+    /// Layers, drafted entities, grips and the command line (`drafting_ui.rs`).
+    pub drafting: crate::drafting_ui::DraftingUi,
 }
 
 /// Sheet mm to screen points and back (y up on paper, down on screen).
@@ -173,7 +175,7 @@ impl ChamferaApp {
     }
 
     /// The laid-out sheet, worked out again only when the design changed.
-    fn drawing_geometry(&mut self) -> Option<&SheetGeometry> {
+    pub(crate) fn drawing_geometry(&mut self) -> Option<&SheetGeometry> {
         let id = self.drawing_sheet()?;
         let fresh = self
             .drawing
@@ -209,6 +211,9 @@ impl ChamferaApp {
     /// A click on the sheet at `p` (sheet mm) with the current tool. Tests call this
     /// instead of moving a mouse.
     pub(crate) fn drawing_click(&mut self, p: Point2) {
+        if self.drafting_click(p) {
+            return;
+        }
         let sheet = self.drawing_sheet();
         match self.drawing.tool {
             None => self.drawing_select(p),
@@ -339,7 +344,10 @@ impl ChamferaApp {
             self.drawing.tool = None;
             self.drawing.picks.clear();
             self.drawing.selected = None;
+            self.drawing.drafting.escape();
         }
+        self.drawing.drafting.shift = ui.input(|i| i.modifiers.shift);
+        self.drawing.drafting.hover = response.hover_pos().map(|h| m.to_sheet(h));
         let enter =
             !ui.ctx().egui_wants_keyboard_input() && ui.input(|i| i.key_pressed(egui::Key::Enter));
         if enter
@@ -349,6 +357,8 @@ impl ChamferaApp {
             )
         {
             self.drawing_finish_set();
+        } else if enter && self.drawing.drafting.cmd.pending.is_some() {
+            self.drafting_submit("");
         }
         // The paper and its shadow.
         let lo = m.to_screen(Point2::new(0.0, size.1));
@@ -434,9 +444,13 @@ impl ChamferaApp {
                 painter.line_segment([a, b], stroke);
             }
         }
+        self.drafting_paint(&painter, &m);
         // With no tool: a drag moves what it starts on, Delete removes the selection.
+        // Drags on drafted entities and their grips are drafting's.
+        let drafting_drag = self.drawing.tool.is_none() && self.drafting_pointer(ui, &response, &m);
         if self.drawing.tool.is_none() {
-            if response.drag_started_by(egui::PointerButton::Primary)
+            if !drafting_drag
+                && response.drag_started_by(egui::PointerButton::Primary)
                 && let Some(o) = ui.input(|i| i.pointer.press_origin())
             {
                 let p = m.to_sheet(o);
@@ -498,6 +512,9 @@ impl ChamferaApp {
         self.drawing_options_dialog(ui.ctx(), rect);
         self.sheet_picker(ui.ctx(), rect);
         self.sheet_settings_dialog(ui.ctx());
+        self.layer_panel(ui.ctx(), rect);
+        self.drafting_type_anywhere(ui.ctx());
+        self.drafting_command_line(ui.ctx(), rect);
     }
 
     /// Fits the sheet in the canvas on the next frame (after its size changed).
@@ -562,6 +579,9 @@ impl ChamferaApp {
     /// A click with no tool: selects the view, dimension or annotation under `p` (sheet
     /// mm) through `drawing.pick`, or clears the selection on empty paper.
     pub(crate) fn drawing_select(&mut self, p: Point2) {
+        if self.drafting_select_at(p) {
+            return;
+        }
         let mut params = json!({ "x": p.x, "y": p.y, "tolerance": PICK_MM });
         if let Some(s) = self.drawing_sheet() {
             params["sheet"] = json!(s);
@@ -608,6 +628,9 @@ impl ChamferaApp {
 
     /// Delete with a selection: removes it through `drawing.delete`.
     pub(crate) fn drawing_delete_selected(&mut self) {
+        if self.drafting_delete_selected() {
+            return;
+        }
         let Some(owner) = self.drawing.selected.take() else {
             return;
         };
