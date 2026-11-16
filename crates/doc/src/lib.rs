@@ -15,6 +15,7 @@ pub mod joint;
 pub mod model_params;
 pub mod motion;
 pub mod naming;
+pub mod rib;
 pub mod sheet;
 pub mod surface;
 pub mod thread;
@@ -31,7 +32,7 @@ pub use construct::{
     AxisRef, ConstructKind, Construction, EdgeRef, OriginAxis, OriginPlane, PlaneRef, PointRef,
 };
 pub use drawing::Drawing;
-pub use face_edit::{DeleteFace, FaceTurn, MoveFace, OffsetFace};
+pub use face_edit::{DeleteFace, Draft, FaceTurn, MoveFace, OffsetFace};
 pub use feature::{
     Blend, BlendKind, BlendSecond, Extrude, ExtrudeDirection, ExtrudeExtent, ExtrudeTo,
     ExtrudeValues, Feature, FeatureKind, Hole, HoleKind, HoleSizes, Loft, LoftSection, Mirror,
@@ -42,6 +43,7 @@ pub use imported::{ImportedBody, ImportedMesh, SharedMesh};
 pub use joint::{EdgeEnd, Joint, JointKind, JointOrigin, OriginAt};
 pub use model_params::{ModelMeta, ModelParameter};
 pub use motion::{Motion, MotionKey};
+pub use rib::Rib;
 pub use sheet::{
     FlangePosition, FlangeSide, FlangeValues, ReliefShape, SheetBase, SheetFlange, SheetRule,
     SheetUnfold,
@@ -148,7 +150,10 @@ use thiserror::Error;
 ///   callouts (`hole_callout` annotations, their text worked out from the hole feature),
 ///   and more title block fields (`drawing_number`, `revision`, `material`,
 ///   `checked_by`). Older files open unchanged. (38 is another branch's.)
-pub const FORMAT_VERSION: u32 = 39;
+/// - 40: drafts (`kind: draft`: faces tilted about a neutral plane by an angle) and ribs
+///   and webs (`kind: rib`: a wall grown from an open sketch chain to a solid, `web` to go
+///   through it). Older files open unchanged: they hold none.
+pub const FORMAT_VERSION: u32 = 40;
 /// The tag every design file starts with, so other JSON is not mistaken for a design.
 pub const FORMAT_TAG: &str = "chamfera";
 /// Longest parameter name.
