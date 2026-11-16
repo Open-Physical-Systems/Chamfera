@@ -1023,7 +1023,7 @@ pub(super) mod curved {
 }
 
 /// Splines (K10) export as B_SPLINE_CURVE_WITH_KNOTS and SURFACE_OF_LINEAR_EXTRUSION.
-mod splines {
+pub(super) mod splines {
     use super::*;
     use chamfera_geom::BSplineCurve2;
     use chamfera_kernel::{Profile, ProfileEdge, extrude};
@@ -1031,7 +1031,7 @@ mod splines {
     /// The arch: the quadratic through (0, 0), (10, 10), (20, 0), closed by a line, extruded
     /// by 5. Faces: two caps, the spline side and the flat side; edges: the spline and the
     /// line at both ends and the two struts.
-    fn arch() -> Body {
+    pub(crate) fn arch() -> Body {
         let pts = [
             Point2::new(0.0, 0.0),
             Point2::new(10.0, 10.0),
@@ -1067,15 +1067,14 @@ mod splines {
             .find(|f| f.entity == "SURFACE_OF_LINEAR_EXTRUSION")
             .unwrap();
         assert_eq!(ext.axis, [0.0, 0.0, 1.0]);
-        // Importing splines comes later: refused per solid, never a broken body.
+        // It imports back (measures are checked in `import_tests`).
         let imported = import::import(&text).unwrap();
-        assert!(imported.solids.is_empty());
-        assert_eq!(imported.failed.len(), 1);
+        assert_eq!(imported.solids.len(), 1);
+        assert!(imported.failed.is_empty());
     }
 
-    #[test]
-    fn a_rational_spline_is_a_complex_instance_with_its_weights() {
-        // The unit circle as two rational quadratic halves, extruded by 1.
+    /// The unit circle as two rational quadratic halves, extruded by 1.
+    pub(crate) fn disc() -> Body {
         let w = std::f64::consts::FRAC_1_SQRT_2;
         let corners = [
             (1.0, 0.0),
@@ -1099,8 +1098,12 @@ mod splines {
         .unwrap();
         let (a, b) = c.split_at(0.5).unwrap();
         let p = Profile::new(vec![ProfileEdge::Spline(a), ProfileEdge::Spline(b)], vec![]);
-        let body = extrude(&Frame::XY, &p, 1.0).unwrap();
-        let (text, ex) = export(&[("disc", &body)]);
+        extrude(&Frame::XY, &p, 1.0).unwrap()
+    }
+
+    #[test]
+    fn a_rational_spline_is_a_complex_instance_with_its_weights() {
+        let (text, ex) = export(&[("disc", &disc())]);
         assert!(text.contains("RATIONAL_B_SPLINE_CURVE(("));
         // The first half: knots 0, 0.25, 0.5 with multiplicities 3, 2, 3.
         assert!(text.contains("B_SPLINE_CURVE_WITH_KNOTS((3,2,3),(0.,0.25,0.5),.UNSPECIFIED.)"));

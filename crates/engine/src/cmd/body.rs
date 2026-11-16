@@ -59,7 +59,7 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         id: "body.import_step",
         label: "Insert STEP Solids",
-        params: "path: string (required) - a .step/.stp file (AP203, AP214, AP242); its B-rep solids become exact bodies, solids it cannot import yet are listed in `skipped`; a name a body already has gets a number (`Extrude1 (2)`)",
+        params: "path: string (required) - a .step/.stp file (AP203, AP214, AP242); its B-rep solids (analytic, B-spline and faceted) become exact bodies, faceted shells that are not solids become meshes, an assembly's parts become components at their placements; solids it cannot import yet are listed in `skipped`; a name a body already has gets a number (`Extrude1 (2)`)",
         mutates: true,
         run: import_step,
     },
@@ -291,18 +291,86 @@ fn import_step(s: &mut Session, p: &Value) -> CmdResult {
             })
         })
         .collect();
-    if report.solids.is_empty() {
+    if report.solids.is_empty() && report.meshes.is_empty() {
         let why: Vec<String> = report.failed.iter().map(ToString::to_string).collect();
         return Err(CommandError::Unavailable(format!(
             "no solid of {path} can be imported: {}",
             why.join(" | ")
         )));
     }
-    // A name a body already has gets a number, so names keep telling bodies apart.
+    if s.scene.bodies.len() + report.meshes.len() > chamfera_render::MAX_BODIES {
+        return Err(CommandError::Unavailable(format!(
+            "the scene holds at most {} bodies",
+            chamfera_render::MAX_BODIES
+        )));
+    }
+    // Solids and meshes no component holds go to the design itself. A name a body
+    // already has gets a number, so names keep telling bodies apart.
+    let held = |k: usize, solids: bool| {
+        report.components.iter().any(|c| {
+            if solids {
+                c.solids.contains(&k)
+            } else {
+                c.meshes.contains(&k)
+            }
+        })
+    };
     let mut ids = Vec::new();
-    for (name, body) in report.solids {
-        let name = s.doc.unique_body_name(&name);
-        ids.push(s.doc.add_imported(&name, body)?);
+    for (k, (name, body)) in report.solids.iter().enumerate() {
+        if !held(k, true) {
+            let name = s.doc.unique_body_name(name);
+            ids.push(s.doc.add_imported(&name, body.clone())?);
+        }
+    }
+    let mut mesh_ids = Vec::new();
+    for (k, (name, mesh)) in report.meshes.iter().enumerate() {
+        if !held(k, false) {
+            let name = s.doc.unique_body_name(name);
+            mesh_ids.push(s.doc.add_imported_mesh(&name, mesh.clone())?);
+        }
+    }
+    // Components, parents first: each gets its own copy of its solids, placed by the
+    // component. Meshes are not placed by components, so they get the component's
+    // placement in the design built in.
+    let mut component_ids: Vec<u32> = Vec::with_capacity(report.components.len());
+    let mut world: Vec<chamfera_geom::Transform> = Vec::with_capacity(report.components.len());
+    for c in &report.components {
+        let (parent, above) = match c
+            .parent
+            .and_then(|p| component_ids.get(p).zip(world.get(p)))
+        {
+            Some((id, w)) => (*id, *w),
+            None => (chamfera_doc::ROOT, chamfera_geom::Transform::IDENTITY),
+        };
+        let mut features = Vec::new();
+        for k in &c.solids {
+            if let Some((name, body)) = report.solids.get(*k) {
+                let name = s.doc.unique_body_name(name);
+                let id = s.doc.add_imported(&name, body.clone())?;
+                ids.push(id);
+                features.push(id);
+            }
+        }
+        let id = s.doc.assembly.add_component(&c.name, parent, &features)?;
+        s.doc.assembly.component_mut(id)?.placement = c.placement;
+        let placed = c.placement.then(&above);
+        for k in &c.meshes {
+            if let Some((name, mesh)) = report.meshes.get(*k) {
+                let mut mesh = mesh.clone();
+                for p in &mut mesh.positions {
+                    *p = placed.apply_point(*p);
+                }
+                let name = s.doc.unique_body_name(name);
+                mesh_ids.push(s.doc.add_imported_mesh(&name, mesh)?);
+            }
+        }
+        component_ids.push(id);
+        world.push(placed);
+    }
+    if !mesh_ids.is_empty() && !s.sync_meshes() {
+        return Err(CommandError::Unavailable(
+            "the scene holds no more bodies".into(),
+        ));
     }
     s.rebuild();
     let solids: Vec<Value> = ids
@@ -318,7 +386,31 @@ fn import_step(s: &mut Session, p: &Value) -> CmdResult {
             })
         })
         .collect();
-    Ok(json!({ "path": path, "solids": solids, "skipped": skipped }))
+    let meshes: Vec<Value> = mesh_ids
+        .iter()
+        .filter_map(|id| s.doc.imported_mesh(*id))
+        .map(|m| {
+            json!({
+                "id": m.id,
+                "name": m.name,
+                "body": s.mesh_scene.get(&m.id),
+                "triangles": m.mesh.0.triangles.len(),
+            })
+        })
+        .collect();
+    let components: Vec<Value> = component_ids
+        .iter()
+        .filter_map(|id| s.doc.assembly.component(*id).ok())
+        .map(|c| json!({ "id": c.id, "name": c.name, "parent": c.parent }))
+        .collect();
+    Ok(json!({
+        "path": path,
+        "solids": solids,
+        "meshes": meshes,
+        "components": components,
+        "warnings": report.warnings,
+        "skipped": skipped,
+    }))
 }
 
 /// The sample: an L-bracket, 80 x 50 x 8 mm base, 40 mm upright, a 20 mm boss.

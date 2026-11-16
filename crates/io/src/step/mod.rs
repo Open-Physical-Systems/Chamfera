@@ -61,8 +61,8 @@ mod import_tests;
 mod tests;
 
 pub use import::{
-    FailureKind, SolidFailure, StepImport, import, import_bytes, import_exchange, import_file,
-    read_bytes, read_file,
+    FailureKind, MAX_ASSEMBLY_DEPTH, MAX_STEP_COMPONENTS, SolidFailure, StepComponent, StepImport,
+    import, import_bytes, import_exchange, import_file, read_bytes, read_file,
 };
 pub use read::{
     BrepSummary, Exchange, Instance, Param, Record, SolidSummary, SurfaceSummary, summarize,

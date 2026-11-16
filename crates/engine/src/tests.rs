@@ -2731,6 +2731,138 @@ fn body_import_step_adds_exact_solids_that_undo_save_and_open_keep() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// A hand-written STEP assembly: the part `Block`, a faceted 10 mm cube (FACETED_BREP of
+/// six POLY_LOOP quads, corners `i = x + 2y + 4z`, each loop counter-clockwise about its
+/// outward normal), used twice in `asm`: moved by (100, 0, 0), and turned a quarter turn
+/// about z (x onto +y) and moved by (0, 50, 0).
+fn step_assembly_text() -> String {
+    let mut l: Vec<String> = (0..8)
+        .map(|i: usize| {
+            let c = |bit: usize| if i >> bit & 1 == 1 { "10." } else { "0." };
+            format!(
+                "#{}=CARTESIAN_POINT('',({},{},{}));",
+                1 + i,
+                c(0),
+                c(1),
+                c(2)
+            )
+        })
+        .collect();
+    let rings = [
+        [0, 2, 3, 1],
+        [4, 5, 7, 6],
+        [0, 1, 5, 4],
+        [2, 6, 7, 3],
+        [0, 4, 6, 2],
+        [1, 3, 7, 5],
+    ];
+    let mut faces = Vec::new();
+    for (f, r) in rings.iter().enumerate() {
+        let id = 100 + 3 * f;
+        let pts: Vec<String> = r.iter().map(|c| format!("#{}", 1 + c)).collect();
+        l.push(format!("#{id}=POLY_LOOP('',({}));", pts.join(",")));
+        l.push(format!("#{}=FACE_OUTER_BOUND('',#{id},.T.);", id + 1));
+        l.push(format!("#{}=FACE('',(#{}));", id + 2, id + 1));
+        faces.push(format!("#{}", id + 2));
+    }
+    l.push(format!("#200=CLOSED_SHELL('',({}));", faces.join(",")));
+    l.extend(
+        [
+            "#201=FACETED_BREP('cube',#200);",
+            "#501=(LENGTH_UNIT()NAMED_UNIT(*)SI_UNIT(.MILLI.,.METRE.));",
+            "#510=(GEOMETRIC_REPRESENTATION_CONTEXT(3)GLOBAL_UNIT_ASSIGNED_CONTEXT((#501))REPRESENTATION_CONTEXT('3D',''));",
+            "#520=FACETED_BREP_SHAPE_REPRESENTATION('',(#201),#510);",
+            "#1000=APPLICATION_CONTEXT('automotive design');",
+            "#1001=PRODUCT_CONTEXT('',#1000,'mechanical');",
+            "#1002=PRODUCT_DEFINITION_CONTEXT('part definition',#1000,'design');",
+            "#1003=CARTESIAN_POINT('',(0.,0.,0.));",
+            "#1010=PRODUCT('asm','Assembly','',(#1001));",
+            "#1011=PRODUCT_DEFINITION_FORMATION('','',#1010);",
+            "#1012=PRODUCT_DEFINITION('design','',#1011,#1002);",
+            "#1013=PRODUCT_DEFINITION_SHAPE('','',#1012);",
+            "#1015=AXIS2_PLACEMENT_3D('',#1003,$,$);",
+            "#1014=SHAPE_REPRESENTATION('',(#1015),#510);",
+            "#1016=SHAPE_DEFINITION_REPRESENTATION(#1013,#1014);",
+            "#1020=PRODUCT('block','Block','',(#1001));",
+            "#1021=PRODUCT_DEFINITION_FORMATION('','',#1020);",
+            "#1022=PRODUCT_DEFINITION('design','',#1021,#1002);",
+            "#1023=PRODUCT_DEFINITION_SHAPE('','',#1022);",
+            "#1025=AXIS2_PLACEMENT_3D('',#1003,$,$);",
+            "#1024=SHAPE_REPRESENTATION('',(#1025),#510);",
+            "#1026=SHAPE_DEFINITION_REPRESENTATION(#1023,#1024);",
+            "#1027=SHAPE_REPRESENTATION_RELATIONSHIP('','',#1024,#520);",
+            "#1030=NEXT_ASSEMBLY_USAGE_OCCURRENCE('1','block:1','',#1012,#1022,$);",
+            "#1031=PRODUCT_DEFINITION_SHAPE('','',#1030);",
+            "#1033=CARTESIAN_POINT('',(100.,0.,0.));",
+            "#1032=AXIS2_PLACEMENT_3D('',#1033,$,$);",
+            "#1034=ITEM_DEFINED_TRANSFORMATION('','',#1025,#1032);",
+            "#1035=(REPRESENTATION_RELATIONSHIP('','',#1024,#1014)REPRESENTATION_RELATIONSHIP_WITH_TRANSFORMATION(#1034)SHAPE_REPRESENTATION_RELATIONSHIP());",
+            "#1036=CONTEXT_DEPENDENT_SHAPE_REPRESENTATION(#1035,#1031);",
+            "#1040=NEXT_ASSEMBLY_USAGE_OCCURRENCE('2','block:2','',#1012,#1022,$);",
+            "#1041=PRODUCT_DEFINITION_SHAPE('','',#1040);",
+            "#1043=CARTESIAN_POINT('',(0.,50.,0.));",
+            "#1044=DIRECTION('',(0.,0.,1.));",
+            "#1045=DIRECTION('',(0.,1.,0.));",
+            "#1042=AXIS2_PLACEMENT_3D('',#1043,#1044,#1045);",
+            "#1046=ITEM_DEFINED_TRANSFORMATION('','',#1025,#1042);",
+            "#1047=(REPRESENTATION_RELATIONSHIP('','',#1024,#1014)REPRESENTATION_RELATIONSHIP_WITH_TRANSFORMATION(#1046)SHAPE_REPRESENTATION_RELATIONSHIP());",
+            "#1048=CONTEXT_DEPENDENT_SHAPE_REPRESENTATION(#1047,#1041);",
+        ]
+        .map(str::to_owned),
+    );
+    format!(
+        "ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION((''),'2;1');\nFILE_NAME('asm','',(''),(''),'','','');\nFILE_SCHEMA(('AUTOMOTIVE_DESIGN'));\nENDSEC;\nDATA;\n{}\nENDSEC;\nEND-ISO-10303-21;\n",
+        l.join("\n")
+    )
+}
+
+#[test]
+fn body_import_step_makes_components_at_the_assembly_placements() {
+    use chamfera_geom::Point3;
+    let dir = std::env::temp_dir().join(format!("chamfera-step-asm-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("asm.step");
+    std::fs::write(&path, step_assembly_text()).unwrap();
+    let mut s = Session::new();
+    let r = s
+        .execute(
+            "body.import_step",
+            &json!({ "path": path.to_str().unwrap() }),
+        )
+        .unwrap();
+    assert_eq!(r["components"].as_array().unwrap().len(), 2, "{r}");
+    assert_eq!(r["solids"].as_array().unwrap().len(), 2, "{r}");
+    assert_eq!(r["warnings"], json!([]));
+    assert_eq!(s.doc.assembly.components.len(), 2);
+    assert!(s.doc.assembly.components.iter().all(|c| c.name == "Block"));
+    // Each component holds its own copy of the cube, shown at its placement: usage 1 at
+    // [100, 110] x [0, 10], usage 2 turned onto [-10, 0] x [50, 60]; z in [0, 10].
+    let mut boxes: Vec<(Point3, Point3)> = s
+        .solids()
+        .iter()
+        .map(|x| {
+            let b = x.body.bounding_box().unwrap();
+            assert!((x.body.volume().unwrap() - 1000.0).abs() < 1e-9);
+            (b.min, b.max)
+        })
+        .collect();
+    boxes.sort_by(|a, b| a.0.x.total_cmp(&b.0.x));
+    let want = [
+        (Point3::new(-10.0, 50.0, 0.0), Point3::new(0.0, 60.0, 10.0)),
+        (Point3::new(100.0, 0.0, 0.0), Point3::new(110.0, 10.0, 10.0)),
+    ];
+    for ((lo, hi), (wlo, whi)) in boxes.iter().zip(want) {
+        assert!(
+            lo.distance(wlo) < 1e-9 && hi.distance(whi) < 1e-9,
+            "{boxes:?}"
+        );
+    }
+    // One undo step removes the bodies and the components.
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(s.doc.imported.is_empty() && s.doc.assembly.components.is_empty());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 /// A 50 x 30 x 10 plate with a through hole of diameter 6 at (25, 15), by commands.
 fn plate_with_hole(s: &mut Session) {
     s.execute("sketch.create", &json!({"plane": "xy"})).unwrap();
