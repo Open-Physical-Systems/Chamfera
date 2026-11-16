@@ -1,9 +1,15 @@
 //! DXF R12 (AC1009) ASCII export, from the public DXF reference: a HEADER, the LTYPE,
 //! LAYER and STYLE tables, an empty BLOCKS section and LINE, CIRCLE, ARC, TEXT and
 //! SOLID entities on the layers VISIBLE, HIDDEN, CENTER, DIM and BORDER. Units are mm.
+//! The sheet's user layers follow with their colour (the nearest basic colour index),
+//! line type (scaled for the sheet, named `CH-...`), frozen and locked flags, and a
+//! negative colour when off; entities of layers that are off or frozen are left out.
+//! R12 has no line weights, so those reach SVG and PDF only.
 
+use crate::linetype;
 use crate::sheet::SheetGeometry;
 use crate::{Align, Layer, Shape};
+use chamfera_doc::drafting::LineType;
 use std::fmt::Write;
 
 /// A number for DXF: plain decimal, at most 10 places, no trailing zeros. Sketches go out
@@ -100,10 +106,33 @@ pub fn write(sheet: &SheetGeometry) -> String {
         ("DASHED", "Dashed __ __ __", &[3.0, -1.5]),
         ("CENTER", "Center ____ . ____", &[8.0, -1.5, 0.5, -1.5]),
     ];
+    // The user's line types at this sheet's scale (gaps negative, as DXF wants).
+    let user: Vec<(&str, &str, Vec<f64>)> = LineType::ALL
+        .into_iter()
+        .filter(|t| *t != LineType::Continuous)
+        .map(|t| {
+            let k = if sheet.linetype_scale > 0.0 {
+                sheet.linetype_scale
+            } else {
+                1.0
+            };
+            let signed = linetype::scaled(t, k)
+                .iter()
+                .enumerate()
+                .map(|(i, x)| if i % 2 == 0 { *x } else { -*x })
+                .collect();
+            (linetype::dxf_name(t), linetype::describe(t), signed)
+        })
+        .collect();
+    let all: Vec<(&str, &str, &[f64])> = types
+        .iter()
+        .map(|(n, s, p)| (*n, *s, *p))
+        .chain(user.iter().map(|(n, s, p)| (*n, *s, p.as_slice())))
+        .collect();
     d.pair(0, "TABLE");
     d.pair(2, "LTYPE");
-    d.pair(70, &types.len().to_string());
-    for (name, desc, dashes) in types {
+    d.pair(70, &all.len().to_string());
+    for (name, desc, dashes) in all {
         d.pair(0, "LTYPE");
         d.pair(2, name);
         d.pair(70, "0");
@@ -118,12 +147,26 @@ pub fn write(sheet: &SheetGeometry) -> String {
     d.pair(0, "ENDTAB");
     d.pair(0, "TABLE");
     d.pair(2, "LAYER");
-    d.pair(70, &(Layer::ALL.len() + 1).to_string());
-    d.pair(0, "LAYER");
-    d.pair(2, "0");
-    d.pair(70, "0");
-    d.pair(62, "7");
-    d.pair(6, "CONTINUOUS");
+    let zero_is_user = sheet.draft_layers.iter().any(|s| s.name == "0");
+    let count = Layer::ALL.len() + sheet.draft_layers.len() + usize::from(!zero_is_user);
+    d.pair(70, &count.to_string());
+    if !zero_is_user {
+        d.pair(0, "LAYER");
+        d.pair(2, "0");
+        d.pair(70, "0");
+        d.pair(62, "7");
+        d.pair(6, "CONTINUOUS");
+    }
+    // User layers: flags 1 frozen, 4 locked; a negative colour is a layer that is off.
+    for s in &sheet.draft_layers {
+        d.pair(0, "LAYER");
+        d.pair(2, &s.name);
+        let flags = i32::from(s.frozen) + 4 * i32::from(s.locked);
+        d.pair(70, &flags.to_string());
+        let aci = i32::from(nearest_aci(s.colour));
+        d.pair(62, &(if s.on { aci } else { -aci }).to_string());
+        d.pair(6, linetype::dxf_name(s.line_type));
+    }
     for layer in Layer::ALL {
         d.pair(0, "LAYER");
         d.pair(2, layer.name());
@@ -155,69 +198,101 @@ pub fn write(sheet: &SheetGeometry) -> String {
     d.pair(0, "SECTION");
     d.pair(2, "ENTITIES");
     for item in &sheet.items {
-        let layer = item.layer.name();
-        match &item.shape {
-            Shape::Line { a, b } => {
-                d.pair(0, "LINE");
-                d.pair(8, layer);
-                d.point(10, a.x, a.y);
-                d.point(11, b.x, b.y);
-            }
-            Shape::Circle { centre, radius } => {
-                d.pair(0, "CIRCLE");
-                d.pair(8, layer);
-                d.point(10, centre.x, centre.y);
-                d.num(40, *radius);
-            }
-            Shape::Arc {
-                centre,
-                radius,
-                start,
-                end,
-            } => {
-                d.pair(0, "ARC");
-                d.pair(8, layer);
-                d.point(10, centre.x, centre.y);
-                d.num(40, *radius);
-                d.num(50, start.to_degrees().rem_euclid(360.0));
-                d.num(51, end.to_degrees().rem_euclid(360.0));
-            }
-            Shape::Text {
-                at,
-                height,
-                angle,
-                align,
-                text,
-            } => {
-                d.pair(0, "TEXT");
-                d.pair(8, layer);
-                d.point(10, at.x, at.y);
-                d.num(40, *height);
-                d.pair(1, &dxf_text(text));
-                d.num(50, angle.to_degrees());
-                let justify = match align {
-                    Align::Left => "0",
-                    Align::Centre => "1",
-                    Align::Right => "2",
-                };
-                if justify != "0" {
-                    d.pair(72, justify);
-                    d.point(11, at.x, at.y);
-                }
-            }
-            Shape::Fill { points } => {
-                // A triangle is a SOLID with its third corner given twice.
-                d.pair(0, "SOLID");
-                d.pair(8, layer);
-                let [a, b, c] = *points;
-                d.point(10, a.x, a.y);
-                d.point(11, b.x, b.y);
-                d.point(12, c.x, c.y);
-                d.point(13, c.x, c.y);
-            }
+        entity(&mut d, item.layer.name(), &item.shape);
+    }
+    for s in &sheet.drafted {
+        if let Some(style) = sheet.draft_layers.get(s.layer) {
+            entity(&mut d, &style.name, &s.shape);
         }
     }
     d.pair(0, "ENDSEC");
     d.pair(0, "EOF");
     d.0
+}
+
+/// One shape as a DXF entity on `layer`.
+fn entity(d: &mut Dxf, layer: &str, shape: &Shape) {
+    match shape {
+        Shape::Line { a, b } => {
+            d.pair(0, "LINE");
+            d.pair(8, layer);
+            d.point(10, a.x, a.y);
+            d.point(11, b.x, b.y);
+        }
+        Shape::Circle { centre, radius } => {
+            d.pair(0, "CIRCLE");
+            d.pair(8, layer);
+            d.point(10, centre.x, centre.y);
+            d.num(40, *radius);
+        }
+        Shape::Arc {
+            centre,
+            radius,
+            start,
+            end,
+        } => {
+            d.pair(0, "ARC");
+            d.pair(8, layer);
+            d.point(10, centre.x, centre.y);
+            d.num(40, *radius);
+            d.num(50, start.to_degrees().rem_euclid(360.0));
+            d.num(51, end.to_degrees().rem_euclid(360.0));
+        }
+        Shape::Text {
+            at,
+            height,
+            angle,
+            align,
+            text,
+        } => {
+            d.pair(0, "TEXT");
+            d.pair(8, layer);
+            d.point(10, at.x, at.y);
+            d.num(40, *height);
+            d.pair(1, &dxf_text(text));
+            d.num(50, angle.to_degrees());
+            let justify = match align {
+                Align::Left => "0",
+                Align::Centre => "1",
+                Align::Right => "2",
+            };
+            if justify != "0" {
+                d.pair(72, justify);
+                d.point(11, at.x, at.y);
+            }
+        }
+        Shape::Fill { points } => {
+            // A triangle is a SOLID with its third corner given twice.
+            d.pair(0, "SOLID");
+            d.pair(8, layer);
+            let [a, b, c] = *points;
+            d.point(10, a.x, a.y);
+            d.point(11, b.x, b.y);
+            d.point(12, c.x, c.y);
+            d.point(13, c.x, c.y);
+        }
+    }
+}
+
+/// The nearest of the seven basic AutoCAD Color Index colours (1 red, 2 yellow, 3 green,
+/// 4 cyan, 5 blue, 6 magenta, 7 white or black): what DXF R12 can store.
+pub fn nearest_aci(c: Option<[u8; 3]>) -> u8 {
+    let Some([r, g, b]) = c else {
+        return 7;
+    };
+    let basic: [(u8, [i32; 3]); 8] = [
+        (1, [255, 0, 0]),
+        (2, [255, 255, 0]),
+        (3, [0, 255, 0]),
+        (4, [0, 255, 255]),
+        (5, [0, 0, 255]),
+        (6, [255, 0, 255]),
+        (7, [255, 255, 255]),
+        (7, [0, 0, 0]),
+    ];
+    let (r, g, b) = (i32::from(r), i32::from(g), i32::from(b));
+    basic
+        .iter()
+        .min_by_key(|(_, [x, y, z])| (r - x).pow(2) + (g - y).pow(2) + (b - z).pow(2))
+        .map_or(7, |(i, _)| *i)
 }

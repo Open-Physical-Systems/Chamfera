@@ -4,10 +4,23 @@ use super::CommandSpec;
 use super::component::{angle, bad, component_id, component_json, xyz};
 use crate::{CmdResult, CommandError, Session, params};
 use chamfera_doc::{EdgeEnd, Joint, JointKind, JointOrigin, OriginAt, Unit};
-use chamfera_geom::{MAX_COORDINATE, Point3};
+use chamfera_geom::{Frame, MAX_COORDINATE, Point3};
 use serde_json::{Value, json};
+use std::collections::BTreeSet;
 
 pub static COMMANDS: &[CommandSpec] = &[
+    CommandSpec {
+        id: "joint.as_built",
+        label: "As-built Joint",
+        params: "type: string (required) - rigid, revolute, slider, cylindrical or planar\n\
+                 a, b: integer (required) - the two components, where they sit now; B moves when the joint is driven unless B is grounded\n\
+                 origin: object (optional) - where the joint's axis is: {point: {x, y, z}, axis: {x, y, z}} in world coordinates, {component?, face} or {component?, edge} (as in joint.create, where it is now), or {pick: {x, y, width, height}}; default B's origin and z axis\n\
+                 min, max: number or expression (optional) - limits for the value, which starts at 0\n\
+                 name: string (optional)\n\
+                 Joins the two components where they already are: nothing moves.",
+        mutates: true,
+        run: as_built,
+    },
     CommandSpec {
         id: "joint.create",
         label: "Joint",
@@ -47,7 +60,8 @@ pub static COMMANDS: &[CommandSpec] = &[
         params: "joint: integer (required)\n\
                  name: string (optional) - the joint's new name\n\
                  min, max: number or expression (optional) - new limits for the value, degrees or mm; give both. A value outside them moves to the nearer limit\n\
-                 limits: boolean (optional) - false removes the limits",
+                 limits: boolean (optional) - false removes the limits\n\
+                 driven: boolean (optional) - in a loop of joints, true holds the value (the loop's input) and false lets the loop solve it",
         mutates: true,
         run: edit,
     },
@@ -65,7 +79,8 @@ pub static COMMANDS: &[CommandSpec] = &[
         params: "joint: integer (required)\n\
                  value: number or expression (optional) - the new angle (degrees) or distance (mm); it must be inside the joint's limits\n\
                  distance: number (optional) - cylindrical: the slide along the axis, mm\n\
-                 offset: {x, y} (optional) - planar: the slide across the axis, mm",
+                 offset: {x, y} (optional) - planar: the slide across the axis, mm\n\
+                 In a loop of joints, this joint becomes the loop's input (driven) and the loop's other joints follow.",
         mutates: true,
         run: set_value,
     },
@@ -96,8 +111,62 @@ pub(crate) fn joint_json(s: &Session, id: u32) -> Value {
         "offset": j.offset,
         "limits": j.limits.map(|[lo, hi]| [shown(lo), shown(hi)]),
         "flip": j.flip,
+        "driven": j.driven,
+        "as_built": j.as_built,
+        "loop": s.placements().loops.iter().find(|l| l.joints.contains(&id)).map(|l| json!({
+            "joints": l.joints,
+            "freedom": l.freedom,
+            "residual": l.residual,
+        })),
         "error": s.placements().errors.get(&id),
     })
+}
+
+/// The joints and rigid groups the last solve could not place.
+pub(crate) fn failures(s: &Session) -> (BTreeSet<u32>, BTreeSet<u32>) {
+    let p = s.placements();
+    (
+        p.errors.keys().copied().collect(),
+        p.group_errors.keys().copied().collect(),
+    )
+}
+
+/// Fails when the last rebuild left a joint or rigid group unsolved that solved before
+/// the change (`before`, from [`failures`]); the command then changes nothing.
+pub(crate) fn refuse_new_failures(
+    s: &Session,
+    before: &(BTreeSet<u32>, BTreeSet<u32>),
+) -> Result<(), CommandError> {
+    let p = s.placements();
+    if let Some((_, e)) = p.errors.iter().find(|(id, _)| !before.0.contains(id)) {
+        return Err(CommandError::Unavailable(format!(
+            "the assembly cannot be solved: {e}"
+        )));
+    }
+    if let Some((g, e)) = p.group_errors.iter().find(|(id, _)| !before.1.contains(id)) {
+        let name = s
+            .doc
+            .assembly
+            .group(*g)
+            .map_or_else(|_| g.to_string(), |g| g.name.clone());
+        return Err(CommandError::Unavailable(format!(
+            "rigid group {name:?} cannot be held together: {e}"
+        )));
+    }
+    Ok(())
+}
+
+/// Keeps the values the loop solve found in the design, so the next solve starts there
+/// (and a saved file holds them). Positions do not change.
+pub(crate) fn keep_solved(s: &mut Session) {
+    let solved = s.placements().solved.clone();
+    for (id, v) in solved {
+        if let Ok(j) = s.doc.assembly.joint_mut(id) {
+            j.value = v.value;
+            j.distance = v.distance;
+            j.offset = v.offset;
+        }
+    }
 }
 
 /// A value in the joint's unit: degrees or an angle expression for turning joints, mm or
@@ -162,7 +231,7 @@ fn component_with(s: &Session, at: &OriginAt) -> Option<u32> {
         OriginAt::Edge { edge } | OriginAt::Vertex { edge, .. } => {
             s.resolve_reference(None, Kind::Edge, edge, Want::All)
         }
-        OriginAt::Point { .. } => return None,
+        OriginAt::Point { .. } | OriginAt::Frame { .. } => return None,
     };
     let f = found.ok()?.into_iter().next()?;
     s.solids().get(f.body).map(|x| x.component)
@@ -273,7 +342,10 @@ fn create(s: &mut Session, p: &Value) -> CmdResult {
         offset: offset(p)?.unwrap_or([0.0, 0.0]),
         limits,
         flip,
+        driven: false,
+        as_built: false,
     };
+    let before = failures(s);
     let id = s.doc.assembly.add_joint(joint)?;
     s.rebuild();
     if let Some(e) = s.placements().errors.get(&id) {
@@ -281,6 +353,113 @@ fn create(s: &mut Session, p: &Value) -> CmdResult {
             "the joint cannot be solved: {e}"
         )));
     }
+    refuse_new_failures(s, &before)?;
+    keep_solved(s);
+    Ok(reply(s, id))
+}
+
+/// The world frame an as-built joint's `origin` names.
+fn world_origin(s: &Session, p: &Value, b: u32) -> Result<Frame, CommandError> {
+    let o = match p.get("origin") {
+        None | Some(Value::Null) => {
+            // B's own origin and axes, where B is now.
+            return Frame::XY
+                .transformed(&s.placements().of(b))
+                .ok_or_else(|| bad("the component's placement is not a move and rotation"));
+        }
+        Some(o) if o.is_object() => o,
+        Some(_) => return Err(bad("`origin` must be an object")),
+    };
+    if let Some(px) = o.get("pick").filter(|v| !v.is_null()) {
+        let (x, y, w, h) = params::pixel(px)?;
+        return s
+            .joint_origin_at(x, y, w, h)
+            .map(|(_, f)| f)
+            .ok_or_else(|| {
+                CommandError::Unavailable(
+                    "`origin`: nothing under that pixel (pick a flat face or an edge)".into(),
+                )
+            });
+    }
+    if let Some(point) = o.get("point").filter(|v| !v.is_null()) {
+        let point = Point3::ORIGIN + xyz(point, "origin.point")?;
+        let axis = xyz(
+            o.get("axis")
+                .ok_or_else(|| bad("`origin.axis` is required with a point"))?,
+            "origin.axis",
+        )?;
+        return Frame::from_normal(point, axis)
+            .ok_or_else(|| bad("`origin.axis` must not be zero"));
+    }
+    let at = origin(s, p, "origin")?;
+    let solids: Vec<&chamfera_kernel::Body> = s
+        .solids()
+        .iter()
+        .filter(|x| x.component == at.component)
+        .map(|x| &x.body)
+        .collect();
+    crate::assembly::origin_frame(&at.at, solids.into_iter())
+        .map_err(|e| CommandError::Unavailable(format!("`origin`: {e}")))
+}
+
+fn as_built(s: &mut Session, p: &Value) -> CmdResult {
+    let kind = JointKind::parse(params::req_str(p, "type")?)
+        .ok_or_else(|| bad("`type` must be rigid, revolute, slider, cylindrical or planar"))?;
+    let a = component_id(s, p, "a")?;
+    let b = component_id(s, p, "b")?;
+    if a == b {
+        return Err(bad("a joint connects two different components"));
+    }
+    let w = world_origin(s, p, b)?;
+    let local = |c: u32| -> Result<Frame, CommandError> {
+        s.placements()
+            .of(c)
+            .inverse_rigid()
+            .and_then(|inv| w.transformed(&inv))
+            .ok_or_else(|| bad("a component's placement is not a move and rotation"))
+    };
+    let (fa, fb) = (local(a)?, local(b)?);
+    let limit = |k: &str| -> Result<Option<f64>, CommandError> {
+        match p.get(k) {
+            None | Some(Value::Null) => Ok(None),
+            v => joint_value(s, kind, v, &format!("`{k}`")).map(Some),
+        }
+    };
+    let limits = match (limit("min")?, limit("max")?) {
+        (None, None) => None,
+        (Some(lo), Some(hi)) => Some([lo, hi]),
+        _ => return Err(bad("give both `min` and `max`, or neither")),
+    };
+    let joint = Joint {
+        id: 0,
+        name: params::opt_str(p, "name")?.unwrap_or_default().to_owned(),
+        kind,
+        a: JointOrigin {
+            component: a,
+            at: OriginAt::Frame { frame: fa },
+        },
+        b: JointOrigin {
+            component: b,
+            at: OriginAt::Frame { frame: fb },
+        },
+        value: 0.0,
+        distance: 0.0,
+        offset: [0.0, 0.0],
+        limits,
+        flip: false,
+        driven: false,
+        as_built: true,
+    };
+    let before = failures(s);
+    let id = s.doc.assembly.add_joint(joint)?;
+    s.rebuild();
+    if let Some(e) = s.placements().errors.get(&id) {
+        return Err(CommandError::Unavailable(format!(
+            "the joint cannot be solved: {e}"
+        )));
+    }
+    refuse_new_failures(s, &before)?;
+    keep_solved(s);
     Ok(reply(s, id))
 }
 
@@ -319,6 +498,7 @@ fn set_value(s: &mut Session, p: &Value) -> CmdResult {
     // Driving a joint leaves a drag or a motion study's time, so the new value shows.
     s.view_state.drag.remove(&id);
     s.view_state.motion_time = None;
+    let before = failures(s);
     let j = s.doc.assembly.joint_mut(id)?;
     if let Some(v) = value {
         j.check_value(v)?;
@@ -330,12 +510,15 @@ fn set_value(s: &mut Session, p: &Value) -> CmdResult {
     if let Some(o) = offset {
         j.offset = o;
     }
+    s.doc.assembly.make_driver(id);
     s.rebuild();
     if let Some(e) = s.placements().errors.get(&id) {
         return Err(CommandError::Unavailable(format!(
             "the joint cannot be solved: {e}"
         )));
     }
+    refuse_new_failures(s, &before)?;
+    keep_solved(s);
     Ok(reply(s, id))
 }
 
@@ -370,13 +553,23 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
         return Err(bad("give `min` and `max`, or `limits: false`, not both"));
     }
     let limits = if remove { Some(None) } else { new_limits };
-    if name.is_none() && limits.is_none() {
-        return Err(bad("give a `name`, `min` and `max`, or `limits: false`"));
+    let driven = match p.get("driven") {
+        None | Some(Value::Null) => None,
+        Some(_) => Some(params::req_bool(p, "driven")?),
+    };
+    if name.is_none() && limits.is_none() && driven.is_none() {
+        return Err(bad(
+            "give a `name`, `min` and `max`, `limits: false`, or `driven`",
+        ));
     }
     s.view_state.drag.remove(&id);
+    let before = failures(s);
     let j = s.doc.assembly.joint_mut(id)?;
     if let Some(n) = name {
         j.name = n;
+    }
+    if let Some(d) = driven {
+        j.driven = d;
     }
     if let Some(l) = limits {
         j.limits = l;
@@ -392,6 +585,8 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
             "the joint cannot be solved: {e}"
         )));
     }
+    refuse_new_failures(s, &before)?;
+    keep_solved(s);
     Ok(reply(s, id))
 }
 
@@ -421,6 +616,7 @@ fn delete(s: &mut Session, p: &Value) -> CmdResult {
         }
     }
     s.rebuild();
+    keep_solved(s);
     Ok(json!({ "deleted": removed.id, "name": removed.name }))
 }
 

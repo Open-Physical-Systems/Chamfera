@@ -1,9 +1,10 @@
 //! Solving assemblies: where each component is, from its placement and its joints.
 //!
 //! Positions are worked out by walking from the grounded components along the joint tree
-//! (`chamfera_doc::joint::drivers`): each joint places its far component exactly from the
-//! near one, so a chain composes transforms and needs no iterative solver. A component no
-//! joint reaches keeps its placement inside its parent.
+//! (`chamfera_doc::joint::topology`): each joint places its far component exactly from the
+//! near one, so a chain composes transforms. Loops of joints are solved first
+//! (`crate::joint_solve`). A component no joint reaches keeps its placement inside its
+//! parent.
 //!
 //! For joint `j` with origin frames `Fa` (on A, in A's coordinates) and `Fb` (on B), and
 //! the joint's motion `M` (a turn and/or slide in the origin frame), B's coordinates map
@@ -12,7 +13,6 @@
 use crate::Session;
 use crate::naming::{Kind, Want};
 use crate::solids::{Built, face_plane};
-use chamfera_doc::component::ROOT;
 use chamfera_doc::{Assembly, EdgeEnd, Joint, JointKind, JointOrigin, OriginAt};
 use chamfera_geom::{Frame, Point3, Transform, Vec3};
 use chamfera_kernel::{Body, Curve, EdgeId, FaceId};
@@ -24,8 +24,40 @@ pub struct Placements {
     /// Component id → its world transform (from its own coordinates to the world).
     pub world: BTreeMap<u32, Transform>,
     /// Joint id → why it could not place its component (that component keeps its own
-    /// placement).
+    /// placement), or why its loop could not be solved.
     pub errors: BTreeMap<u32, String>,
+    /// Rigid group id → why the group could not be held together.
+    pub group_errors: BTreeMap<u32, String>,
+    /// Joint id → the values the loop solve found, for joints a loop solved.
+    pub solved: BTreeMap<u32, JointValues>,
+    /// How each loop group was solved.
+    pub loops: Vec<LoopReport>,
+}
+
+/// A joint's movable values.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct JointValues {
+    pub value: f64,
+    pub distance: f64,
+    pub offset: [f64; 2],
+}
+
+/// How one loop group (closed chain of joints) was solved.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LoopReport {
+    /// The joints of the loop group (rigid group links have ids above `last_id`).
+    pub joints: Vec<u32>,
+    /// Joint values solved (those not driven).
+    pub unknowns: usize,
+    /// Closure equations (seven per closing joint).
+    pub equations: usize,
+    /// Ways the loop can still move with its driven values held.
+    pub freedom: usize,
+    /// The largest closure error at the end, mm.
+    pub residual: f64,
+    pub iterations: usize,
+    /// Why it could not be solved.
+    pub error: Option<String>,
 }
 
 impl Placements {
@@ -73,86 +105,7 @@ pub fn joint_relative(j: &Joint, fa: &Frame, fb: &Frame) -> Option<Transform> {
     )
 }
 
-/// Solves every component's world transform. `frame` finds a joint origin's frame in its
-/// component's own coordinates.
-pub fn solve(asm: &Assembly, frame: &dyn Fn(&JointOrigin) -> Result<Frame, String>) -> Placements {
-    let mut out = Placements::default();
-    out.world.insert(ROOT, Transform::IDENTITY);
-    let drivers = chamfera_doc::joint::drivers(asm);
-    // What each component's position depends on: a joint and the component it is reached
-    // from, or its own placement inside its parent.
-    enum Rule {
-        Joint(Transform, u32),
-        Parent(Transform, u32),
-    }
-    let mut rules: Vec<(u32, Rule)> = Vec::new();
-    for c in &asm.components {
-        let own = Rule::Parent(c.placement, c.parent);
-        let rule = match drivers.get(&c.id) {
-            None => own,
-            Some(d) => {
-                let made = asm.joint(d.joint).map_err(|e| e.to_string()).and_then(|j| {
-                    let fa = frame(&j.a).map_err(|e| format!("its origin on A: {e}"))?;
-                    let fb = frame(&j.b).map_err(|e| format!("its origin on B: {e}"))?;
-                    let rel = joint_relative(j, &fa, &fb)
-                        .ok_or("its origins do not make a proper move")?;
-                    if d.forward {
-                        Ok(rel)
-                    } else {
-                        rel.inverse_rigid()
-                            .ok_or_else(|| "its origins do not make a proper move".to_owned())
-                    }
-                });
-                match made {
-                    Ok(t) => Rule::Joint(t, d.from),
-                    Err(e) => {
-                        out.errors.insert(d.joint, e);
-                        own
-                    }
-                }
-            }
-        };
-        rules.push((c.id, rule));
-    }
-    // Resolve in passes: each pass places every component whose reference is placed. A
-    // tree needs at most one pass per level; anything left after that depends on itself
-    // (a joint against the component's own parent chain) and keeps its plain placement.
-    for _ in 0..=rules.len() {
-        let mut progress = false;
-        for (id, rule) in &rules {
-            if out.world.contains_key(id) {
-                continue;
-            }
-            let (t, from) = match rule {
-                Rule::Joint(t, from) | Rule::Parent(t, from) => (t, from),
-            };
-            if let Some(base) = out.world.get(from).copied() {
-                out.world.insert(*id, t.then(&base));
-                progress = true;
-            }
-        }
-        if !progress {
-            break;
-        }
-    }
-    for (id, rule) in &rules {
-        if !out.world.contains_key(id) {
-            if let (Rule::Joint(..), Some(d)) = (rule, drivers.get(id)) {
-                out.errors.insert(
-                    d.joint,
-                    "it positions a component against that component's own parent; \
-                     joint it to another component"
-                        .into(),
-                );
-            }
-            let own = asm
-                .component(*id)
-                .map_or(Transform::IDENTITY, |c| c.placement);
-            out.world.insert(*id, own);
-        }
-    }
-    out
-}
+pub use crate::joint_solve::solve;
 
 /// The centre of a flat face: a circle's centre if its outer boundary is one, else the
 /// mean of the outer boundary's corners.
@@ -244,6 +197,7 @@ pub fn origin_frame<'a>(
         OriginAt::Point { point, axis } => {
             Frame::from_normal(*point, *axis).ok_or_else(|| "the axis has no length".to_owned())
         }
+        OriginAt::Frame { frame } => Ok(*frame),
         // Through the resolver (rung K8): a joint needs one face or edge, so a name shared
         // by split pieces must say which (`2:top#2`).
         OriginAt::Face { face } => {
@@ -423,6 +377,8 @@ mod tests {
             offset: [0.0, 0.0],
             limits: None,
             flip: false,
+            driven: false,
+            as_built: false,
         }
     }
 

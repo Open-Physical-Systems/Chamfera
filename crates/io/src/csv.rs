@@ -33,6 +33,32 @@ fn field(s: &str) -> String {
     }
 }
 
+/// A table as CSV with CRLF line ends: the header, then each row. Text cells that a
+/// spreadsheet would run as a formula (starting with `=`, `+`, `-`, `@`, a tab or a
+/// carriage return) get a leading `'`, so a hostile part name stays text; cells in
+/// `numeric` columns are written as they are.
+pub fn write_table(header: &[&str], numeric: &[usize], rows: &[Vec<String>]) -> String {
+    let mut out = String::new();
+    let line = |cells: Vec<String>| cells.join(",") + "\r\n";
+    out.push_str(&line(header.iter().map(|h| field(h)).collect()));
+    for row in rows {
+        let cells = row
+            .iter()
+            .enumerate()
+            .map(|(i, c)| {
+                let risky = c.starts_with(['=', '+', '-', '@', '\t', '\r']);
+                if risky && !numeric.contains(&i) {
+                    field(&format!("'{c}"))
+                } else {
+                    field(c)
+                }
+            })
+            .collect();
+        out.push_str(&line(cells));
+    }
+    out
+}
+
 fn unit_name(u: Unit) -> &'static str {
     match u {
         Unit::Length => "length",
@@ -216,5 +242,20 @@ mod tests {
         let r = read_parameters("Name,Unit,Expression\nw,,5\n").unwrap();
         assert_eq!(r[0].unit, Unit::Length);
         assert_eq!(r[0].expression, "5");
+    }
+
+    #[test]
+    fn a_table_quotes_commas_and_keeps_formulas_as_text() {
+        let rows = vec![
+            vec!["1".to_owned(), "Wheel, front".to_owned(), "-2.5".to_owned()],
+            vec!["2".to_owned(), "=1+1".to_owned(), "3".to_owned()],
+        ];
+        let text = write_table(&["item", "part", "volume"], &[0, 2], &rows);
+        assert_eq!(
+            text,
+            "item,part,volume\r\n1,\"Wheel, front\",-2.5\r\n2,'=1+1,3\r\n"
+        );
+        let back = parse(&text).unwrap();
+        assert_eq!(back[1][1], "Wheel, front");
     }
 }

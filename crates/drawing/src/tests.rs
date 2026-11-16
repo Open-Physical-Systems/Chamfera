@@ -59,6 +59,7 @@ pub(crate) fn sheet_with(views: Vec<SheetView>, dims: Vec<SheetDimension>) -> Sh
         dimensions: dims,
         annotations: Vec::new(),
         parts_list: None,
+        drafting: Default::default(),
     }
 }
 

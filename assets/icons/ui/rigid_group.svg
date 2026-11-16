@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+  <!-- Chamfera interface icon: rigid group. Original artwork, MIT OR Apache-2.0. -->
+  <rect x="3" y="3" width="8" height="8" rx="1" stroke="#2B313B"/>
+  <rect x="13" y="13" width="8" height="8" rx="1" stroke="#2B313B"/>
+  <path stroke="#E8770E" d="M7 11v4.5A1.5 1.5 0 0 0 8.5 17H13M17 13V8.5A1.5 1.5 0 0 0 15.5 7H11"/>
+</svg>

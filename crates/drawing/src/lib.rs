@@ -15,6 +15,8 @@
 //! - Version 3: ordinate dimensions, hole callouts (their text handed in as
 //!   [`HoleNote`]s by the caller, from the hole features), and a title block with the
 //!   drawing number, revision, material and checker.
+//! - Version 4: 2D drafting (`drafting.rs`, `linetype.rs`): user layers with colour,
+//!   line type and weight, lines, circles, arcs and polylines on them, and grips.
 //! - [`svg::write`], [`dxf::write`] and [`pdf::write`]: SVG 1.1, DXF R12 (AC1009) ASCII
 //!   and a minimal hand-written PDF 1.4, from public specifications only.
 //!
@@ -22,8 +24,10 @@
 
 pub mod annot;
 mod dims;
+pub mod drafting;
 pub mod dxf;
 mod hlr;
+pub mod linetype;
 pub mod pdf;
 pub mod refs;
 pub mod section;
@@ -33,6 +37,8 @@ mod text;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_drafting;
 #[cfg(test)]
 mod tests_v2;
 #[cfg(test)]

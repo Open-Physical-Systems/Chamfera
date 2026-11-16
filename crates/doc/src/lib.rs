@@ -6,6 +6,7 @@ pub mod cam;
 pub mod component;
 pub mod config;
 pub mod construct;
+pub mod drafting;
 pub mod drawing;
 pub mod expr;
 pub mod face_edit;
@@ -28,7 +29,7 @@ pub use appearance::Appearance;
 pub use body_tools::{
     Combine, RemoveBodies, SplitBody, SplitFace, SplitFaceTool, Thicken, ThickenDirection,
 };
-pub use component::{Assembly, Component, ROOT};
+pub use component::{Assembly, Component, GroupMember, ROOT, RigidGroup};
 pub use config::{Configuration, Configurations};
 pub use construct::{
     AxisRef, ConstructKind, Construction, EdgeRef, OriginAxis, OriginPlane, PlaneRef, PointRef,
@@ -42,7 +43,7 @@ pub use feature::{
     Thin, ThinSide,
 };
 pub use imported::{ImportedBody, ImportedMesh, SharedMesh};
-pub use joint::{EdgeEnd, Joint, JointKind, JointOrigin, OriginAt};
+pub use joint::{EdgeEnd, Joint, JointKind, JointOrigin, OriginAt, Topology};
 pub use model_params::{ModelMeta, ModelParameter};
 pub use motion::{Motion, MotionKey};
 pub use physical::PhysicalMaterial;
@@ -157,11 +158,19 @@ use thiserror::Error;
 /// - 40: drafts (`kind: draft`: faces tilted about a neutral plane by an angle) and ribs
 ///   and webs (`kind: rib`: a wall grown from an open sketch chain to a solid, `web` to go
 ///   through it). Older files open unchanged: they hold none.
+/// - 41: assemblies v3: loops of joints (closed kinematic chains, solved), a joint's
+///   `driven` mark (its value is the loop's input) and `as_built` mark, joint origins
+///   given as a whole frame (`at: frame`), and rigid groups (`assembly.groups`: name and
+///   members, each with its placement relative to the first). Older files open
+///   unchanged: every new field is optional.
+/// - 42: 2D drafting on drawing sheets (`drafting` on a sheet): user layers with colour,
+///   line type, line weight, on/off, frozen and locked; the current layer; a line type
+///   scale; and lines, circles, arcs and polylines drawn on those layers. Older files open
+///   unchanged: their sheets have layer 0 only.
 /// - 43: modelling quick wins: primitives (`kind: primitive` with `shape`: `box`,
 ///   `cylinder`, `sphere`, `torus` or `cone`), scale features (`kind: scale`) and physical
 ///   materials per feature's bodies (`materials`: name and density in g/cm³, used by mass
-///   properties). Older files open unchanged: they hold none. (41 and 42 are other
-///   branches'.)
+///   properties). Older files open unchanged: they hold none.
 pub const FORMAT_VERSION: u32 = 43;
 /// The tag every design file starts with, so other JSON is not mistaken for a design.
 pub const FORMAT_TAG: &str = "chamfera";

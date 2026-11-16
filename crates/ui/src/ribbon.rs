@@ -156,6 +156,7 @@ pub const GROUPS: &[Group] = &[
     group(Tab::Drawing, "VIEWS"),
     group(Tab::Drawing, "DIMENSIONS"),
     group(Tab::Drawing, "ANNOTATE"),
+    group(Tab::Drawing, "DRAFTING"),
     group(Tab::Drawing, "TABLES"),
     group(Tab::Drawing, "EXPORT"),
     group(Tab::Manufacture, "SETUP"),
@@ -598,6 +599,33 @@ pub const TOOLS: &[RibbonTool] = &[
         "Show the components moved apart along the assembly's axes, with trails; the \
          model does not change",
     ),
+    tool(
+        P,
+        "ASSEMBLE",
+        Action::Tool("joint.as_built"),
+        Icon::JointAsBuilt,
+        "As-built Joint",
+        "Joint two components where they already sit: pick the axis on the part that \
+         moves, then the other part; nothing moves until you drive it",
+    ),
+    tool(
+        P,
+        "ASSEMBLE",
+        Action::Tool("component.rigid_group"),
+        Icon::RigidGroup,
+        "Rigid Group",
+        "Lock the selected bodies' components together so they move as one; on a \
+         grouped part, ungroup it",
+    ),
+    tool(
+        P,
+        "ASSEMBLE",
+        Action::Tool("bom.list"),
+        Icon::Bom,
+        "Bill of Materials",
+        "List the parts with their quantities, material and volume; export it as CSV",
+    )
+    .short("BOM"),
     // SOLID > CONSTRUCT
     construct(
         "construct.plane_offset",
@@ -1172,6 +1200,13 @@ pub const TOOLS: &[RibbonTool] = &[
         "Centre Line",
         "Click two circles of a view: a centre line through both centres",
     ),
+    // DRAWING > DRAFTING
+    draft("drawing.draw.line", Icon::Line, "Sheet Line", "Line", "Lines point to point on the sheet's current layer; type points or click (L)").primary(),
+    draft("drawing.draw.polyline", Icon::Polygon, "Sheet Polyline", "Polyline", "One connected line through the points; C closes it, Enter ends (PL)").primary(),
+    draft("drawing.draw.circle", Icon::Circle, "Sheet Circle", "Circle", "Centre, then the radius or a point on the circle (C)"),
+    draft("drawing.draw.arc", Icon::Arc, "Sheet Arc", "Arc", "Centre, start point, end point, counter-clockwise (A)"),
+    draft("drawing.draw.rectangle", Icon::Rectangle, "Sheet Rectangle", "Rectangle", "Two opposite corners (REC)"),
+    draft("drawing.layer.list", Icon::Eye, "Layers", "Layers", "The sheet's layers: current, on, freeze, lock, colour, line type, weight (LA)").primary().sep(),
     // DRAWING > TABLES
     tool(
         D,
@@ -1431,6 +1466,16 @@ const fn dimension(
     what: &'static str,
 ) -> RibbonTool {
     tool(D, "DIMENSIONS", Action::Tool(id), icon, name, what).short(short)
+}
+
+const fn draft(
+    id: &'static str,
+    icon: Icon,
+    name: &'static str,
+    short: &'static str,
+    what: &'static str,
+) -> RibbonTool {
+    tool(D, "DRAFTING", Action::Tool(id), icon, name, what).short(short)
 }
 
 const fn export(id: &'static str, name: &'static str, short: &'static str) -> RibbonTool {
@@ -1834,6 +1879,9 @@ impl ChamferaApp {
                 "motion.set_time" => self.motion.study.is_some(),
                 "inspect.interference" => self.motion.interference.is_some(),
                 "view.explode" => self.motion.explode.is_some(),
+                "joint.as_built" => self.assembly.joint.as_ref().is_some_and(|t| t.as_built),
+                "component.rigid_group" => self.selected_group().is_some(),
+                "bom.list" => self.bom.open,
                 "cam.tool_add" => self.cam.tool_dialog.is_some(),
                 "cam.tool_library" => self.cam.library_open,
                 "cam.simulate" => self.cam.sim_panel.is_some(),
@@ -1849,6 +1897,7 @@ impl ChamferaApp {
                 }
                 "render.start" => self.render.window.is_some(),
                 "drawing.edit_sheet" => self.drawing.settings.is_some(),
+                "drawing.layer.list" => self.drawing.drafting.layers.open,
                 _ => {
                     if let Some(k) = body_tool_kind(id) {
                         s.body_tool.as_ref().is_some_and(|t| t.kind == k)
@@ -1862,6 +1911,8 @@ impl ChamferaApp {
                         self.construct.tool.as_ref().is_some_and(|t| t.kind == k)
                     } else if let Some(t) = draw_tool(id) {
                         self.drawing.tool == Some(t)
+                    } else if let Some(what) = id.strip_prefix("drawing.draw.") {
+                        self.drafting_tool_active(what)
                     } else if let Some(k) = cam_op(id) {
                         self.cam.dialog.as_ref().is_some_and(|d| d.kind == k)
                     } else {
@@ -1902,7 +1953,7 @@ impl ChamferaApp {
                     format!("{name}: select a body of a component, or activate one, first")
                 }
                 "component.ground" => return None,
-                "joint.create" if !has_solids => {
+                "joint.create" | "joint.as_built" if !has_solids => {
                     format!("{name}: build bodies in two components first")
                 }
                 "joint.drag" | "motion.set_time" if self.session.doc.assembly.joints.is_empty() => {
@@ -1917,6 +1968,12 @@ impl ChamferaApp {
                     format!("{name}: group bodies into components first")
                 }
                 "view.explode" => return None,
+                "component.rigid_group" if self.selected_group().is_some() => return None,
+                "component.rigid_group" if self.selected_components().len() < 2 => {
+                    format!("{name}: select bodies of two or more components first")
+                }
+                "component.rigid_group" => return None,
+                "bom.list" => return None,
                 "config.list" => return None,
                 "solid.remove" if has_solids && self.session.scene.selected_bodies().is_empty() => {
                     format!("{name}: select the bodies to remove first")
@@ -1989,6 +2046,11 @@ impl ChamferaApp {
                     format!("{name}: make components first")
                 }
                 "drawing.add_parts_list" if self.drawing_sheet().is_none() => {
+                    format!("{name}: add a sheet first")
+                }
+                _ if (id.starts_with("drawing.draw.") || id == "drawing.layer.list")
+                    && self.drawing_sheet().is_none() =>
+                {
                     format!("{name}: add a sheet first")
                 }
                 "drawing.add_note"
@@ -2080,6 +2142,9 @@ impl ChamferaApp {
             "inspect.mass" => self.open_inspect(InspectMode::Mass),
             "component.new" => self.new_component(),
             "joint.create" => self.toggle_joint(),
+            "joint.as_built" => self.toggle_as_built(),
+            "component.rigid_group" => self.rigid_group_selection(),
+            "bom.list" => self.bom.open = !self.bom.open,
             "component.ground" => self.toggle_ground(),
             "joint.drag" => self.toggle_drive(),
             "motion.set_time" => self.toggle_study(),
@@ -2097,6 +2162,7 @@ impl ChamferaApp {
             "drawing.projection" => self.drawing_toggle_projection(),
             "drawing.edit_sheet" => self.toggle_sheet_settings(),
             "drawing.add_parts_list" => self.drawing_parts_list(),
+            "drawing.layer.list" => self.toggle_layer_panel(),
             "cam.setup" => self.cam_setup(),
             "cam.tool_add" => self.open_cam_tool_dialog(),
             "cam.tool_library" => self.cam.library_open = !self.cam.library_open,
@@ -2136,6 +2202,8 @@ impl ChamferaApp {
                     self.open_construct(k);
                 } else if let Some(tool) = draw_tool(id) {
                     self.drawing_pick_tool(tool);
+                } else if let Some(what) = id.strip_prefix("drawing.draw.") {
+                    self.drafting_tool(what);
                 } else if let Some(f) = id.strip_prefix("drawing.export.") {
                     self.export_drawing(f);
                 } else if let Some(k) = cam_op(id) {
@@ -2154,9 +2222,13 @@ impl ChamferaApp {
                     || id.starts_with("drawing.view.")
                     || id.starts_with("drawing.dim.")
                     || draw_tool(id).is_some()
+                    || id.starts_with("drawing.draw.")
+                    || id == "drawing.layer.list"
                     || matches!(
                         id,
                         "joint.create"
+                            | "joint.as_built"
+                            | "bom.list"
                             | "component.ground"
                             | "joint.drag"
                             | "motion.set_time"
@@ -2630,14 +2702,27 @@ mod tests {
             "drawing.add_dimension", // the dimension tools
             "drawing.add_view",      // the view tools
             "drawing.delete",
-            "drawing.edit_sheet", // Sheet Settings and Projection
-            "drawing.export",     // the export tools
+            "drawing.edit_sheet",    // Sheet Settings and Projection
+            "drawing.entity.delete", // the sheet canvas and the command line (E)
+            "drawing.entity.grip",   // dragging a grip on the sheet canvas
+            "drawing.entity.grips",
+            "drawing.entity.layer", // scripts, agents and the command line
+            "drawing.entity.move",  // a drag on the canvas, the command line (M, CP)
+            "drawing.entity.pick",
+            "drawing.layer.add", // the Layers panel
+            "drawing.layer.current",
+            "drawing.layer.delete",
+            "drawing.layer.edit",
+            "drawing.linetype_scale",
+            "drawing.export", // the export tools
             "drawing.export_bytes",
             "drawing.list",
             "drawing.move", // a drag on the sheet canvas
             "drawing.pick", // a click on the sheet canvas
             "inspect.measure_at",
-            "joint.delete", // the Browser's joint rows
+            "bom.export_csv",    // the Bill of Materials panel's Export CSV
+            "component.ungroup", // Rigid Group on a grouped part
+            "joint.delete",      // the Browser's joint rows
             "joint.edit",
             "joint.origin_at",
             "joint.set_value",

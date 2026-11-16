@@ -19,17 +19,20 @@ mod assembly_edit_ui;
 mod assembly_ui;
 mod assistant_ui;
 mod blend_ui;
+mod bom_ui;
 mod browser;
 mod cam_ui;
 #[cfg(not(target_arch = "wasm32"))]
 mod cam_worker;
 mod chrome;
+mod command_line;
 mod config_ui;
 mod constraint_ui;
 mod construct_ui;
 mod context_menu;
 mod display_ui;
 mod draft_rib_ui;
+mod drafting_ui;
 mod drawing_sheet_ui;
 mod drawing_tools_ui;
 mod drawing_ui;
@@ -37,6 +40,7 @@ mod file_ui;
 mod history_ui;
 mod hole_ui;
 mod inspect_ui;
+mod layer_ui;
 mod manipulator_ui;
 
 /// `--screenshot` gives up after this long without a drawn frame.
@@ -127,6 +131,9 @@ pub struct Options {
     /// In the DRAWING workspace, select what is at sheet point (x1, y1) and show it
     /// being dragged to (x2, y2), for screenshots of moving drawing items.
     pub drawing_drag: Option<[f32; 4]>,
+    /// In the DRAWING workspace, lines typed into the command line at start, separated
+    /// by `;` (such as `LA; SEL ALL`), for screenshots of the Layers panel and grips.
+    pub command_line: Option<String>,
     /// Open the search palette at start with this query typed.
     pub search: Option<String>,
     /// Open the viewport's right-click menu at this viewport point once it has drawn.
@@ -241,6 +248,8 @@ pub struct ChamferaApp {
     assembly: assembly_ui::AssemblyUi,
     /// Drive Joint, Motion Study, Interference and Explode (`motion_ui`).
     motion: motion_ui::MotionUi,
+    /// The Bill of Materials panel (`bom_ui`).
+    bom: bom_ui::BomUi,
     drawing: drawing_ui::DrawingUi,
     construct: construct_ui::ConstructUi,
     file: file_ui::FileUi,
@@ -405,6 +414,7 @@ impl ChamferaApp {
             sheet_metal: sheet_ui::SheetUi::default(),
             assembly: assembly_ui::AssemblyUi::default(),
             motion: motion_ui::MotionUi::default(),
+            bom: bom_ui::BomUi::default(),
             drawing: drawing_ui::DrawingUi::default(),
             construct: construct_ui::ConstructUi::default(),
             file: file_ui::FileUi::default(),
@@ -456,6 +466,7 @@ impl ChamferaApp {
                     app.inspect_from_script(&options.script, &replies);
                     app.sheet_from_script(&options.script, &replies);
                     app.history_from_script(&options.script, &replies);
+                    app.bom_from_script(&options.script);
                 }
                 Err(e) => app.message = Some((e.to_string(), true)),
             }
@@ -534,6 +545,12 @@ impl ChamferaApp {
                 chamfera_geom::Point2::new(f64::from(x1), f64::from(y1)),
                 chamfera_geom::Point2::new(f64::from(x2), f64::from(y2)),
             );
+        }
+        if let Some(text) = &options.command_line {
+            app.drawing.active = true;
+            for line in text.split(';').take(64) {
+                app.drafting_submit(line.trim());
+            }
         }
         if let Some(q) = &options.search {
             app.run_action(shortcuts::Action::Search);
@@ -1326,6 +1343,7 @@ impl eframe::App for ChamferaApp {
             self.text_dialog(&ctx);
             self.dxf_insert_dialog(&ctx);
             self.motion_panels(&ctx);
+            self.bom_panel(&ctx);
             self.hole_dialog(&ctx);
             self.transform_dialog(&ctx);
             self.inspect_dialog(&ctx);
