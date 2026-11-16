@@ -722,3 +722,19 @@ fn hostile_free_form_input_never_panics() {
     );
     let _ = NurbsSurface::new(bicubic(0.0, 0.0)).unwrap();
 }
+
+#[test]
+fn a_free_form_sphere_scales_non_uniformly_into_an_exact_ellipsoid() {
+    // Scaling x by 2 about the centre maps the sphere r = 5 to the ellipsoid with
+    // semi-axes 10, 5, 5: V = 4/3 π · 10 · 5 · 5 = 1000π/3 (affine invariance keeps it
+    // an exact NURBS surface).
+    let b = nurbs_sphere(5.0)
+        .scaled(Point3::ORIGIN, [2.0, 1.0, 1.0])
+        .unwrap();
+    let v = b.volume().unwrap();
+    assert!(close(v, 1000.0 * PI / 3.0, 1e-9), "{v}");
+    assert_eq!(
+        classify_point(&b, p(9.0, 0.5, 0.5)).unwrap(),
+        PointInSolid::Inside
+    );
+}
