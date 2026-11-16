@@ -21,6 +21,7 @@ pub mod inspect;
 mod joint;
 mod motion;
 pub mod param;
+mod primitive;
 mod render;
 mod select;
 mod sheet;
@@ -66,6 +67,7 @@ pub fn registry() -> Vec<&'static CommandSpec> {
         design::COMMANDS,
         draft_rib::COMMANDS,
         drawing::COMMANDS,
+        drawing::DRAFTING_COMMANDS,
         dxf::COMMANDS,
         edit::COMMANDS,
         face_edit::COMMANDS,
@@ -75,6 +77,7 @@ pub fn registry() -> Vec<&'static CommandSpec> {
         joint::COMMANDS,
         motion::COMMANDS,
         param::COMMANDS,
+        primitive::COMMANDS,
         render::COMMANDS,
         select::COMMANDS,
         sheet::COMMANDS,

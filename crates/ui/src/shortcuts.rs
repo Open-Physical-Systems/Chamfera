@@ -416,7 +416,9 @@ impl ChamferaApp {
     /// events, so nothing else reads them. Does nothing while a text box has the keyboard
     /// or the search palette is open.
     pub(crate) fn shortcut_keys(&mut self, ctx: &egui::Context) {
-        if ctx.egui_wants_keyboard_input() || self.search.open {
+        // On a drawing sheet, letters go to the command line (`drafting_ui.rs`).
+        let drafting = self.drawing.active && self.session.active_sketch.is_none();
+        if ctx.egui_wants_keyboard_input() || self.search.open || drafting {
             return;
         }
         let mut actions: Vec<Action> = Vec::new();

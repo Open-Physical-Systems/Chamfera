@@ -106,6 +106,12 @@ pub struct SheetGeometry {
     pub dangling_annotations: Vec<(u32, String)>,
     /// Which `items` each dimension, annotation and the parts list drew, for picking.
     pub owners: Vec<(Owner, std::ops::Range<usize>)>,
+    /// The sheet's user layers, as they draw (`drafting.rs`).
+    pub draft_layers: Vec<crate::drafting::DraftStyle>,
+    /// The drafted entities of the layers that are on and thawed, drawn over the rest.
+    pub drafted: Vec<crate::drafting::DraftShape>,
+    /// The sheet's line type scale (0 in a default value: read it as 1).
+    pub linetype_scale: f64,
 }
 
 /// What a part of a laid-out sheet belongs to, for picking and moving it.
@@ -729,6 +735,8 @@ pub fn render_full(
             .push((Owner::Annotation(pl.id), start..out.items.len()));
         out.parts = parts.to_vec();
     }
+    (out.draft_layers, out.drafted) = crate::drafting::draft(&sheet.drafting);
+    out.linetype_scale = sheet.drafting.linetype_scale;
     Ok(out)
 }
 

@@ -156,6 +156,7 @@ pub const GROUPS: &[Group] = &[
     group(Tab::Drawing, "VIEWS"),
     group(Tab::Drawing, "DIMENSIONS"),
     group(Tab::Drawing, "ANNOTATE"),
+    group(Tab::Drawing, "DRAFTING"),
     group(Tab::Drawing, "TABLES"),
     group(Tab::Drawing, "EXPORT"),
     group(Tab::Manufacture, "SETUP"),
@@ -350,6 +351,11 @@ pub const TOOLS: &[RibbonTool] = &[
         "Grow a thin wall from a sketch line to the solid (or through it, a web)",
     )
     .sep(),
+    tool(P, "CREATE", Action::Tool("solid.box"), Icon::Body, "Box", "A box of typed length, width and height at a point").sep(),
+    tool(P, "CREATE", Action::Tool("solid.cylinder"), Icon::Extrude, "Cylinder", "A cylinder of typed radius and height at a point"),
+    tool(P, "CREATE", Action::Tool("solid.sphere"), Icon::Revolve, "Sphere", "A sphere of typed radius centred on a point"),
+    tool(P, "CREATE", Action::Tool("solid.torus"), Icon::Revolve, "Torus", "A ring of typed major and minor radius about an axis"),
+    tool(P, "CREATE", Action::Tool("solid.cone"), Icon::Loft, "Cone", "A pointed or cut-off cone of typed radii and height"),
     // SOLID > MODIFY
     tool(
         P,
@@ -453,6 +459,9 @@ pub const TOOLS: &[RibbonTool] = &[
         "Move or rotate bodies by typed values, or copy them",
     )
     .sep(),
+    tool(P, "MODIFY", Action::Tool("solid.align"), Icon::Move, "Align", "Move a body so a face, edge or vertex meets another"),
+    tool(P, "MODIFY", Action::Tool("solid.scale"), Icon::SketchTransform, "Scale", "Scale bodies about a point, uniformly or per axis"),
+    tool(P, "MODIFY", Action::Tool("body.material"), Icon::Mass, "Physical Material", "What a body is made of: its density, for its mass"),
     tool(
         P,
         "MODIFY",
@@ -699,6 +708,7 @@ pub const TOOLS: &[RibbonTool] = &[
         "Mass Properties",
         "Volume, mass, centre of mass and inertia of a solid",
     ),
+    tool(P, "INSPECT", Action::Tool("inspect.check"), Icon::Warning, "Check Bodies", "Check every body's topology and geometry with the kernel"),
     // SOLID > INSERT
     tool(
         P,
@@ -1190,6 +1200,13 @@ pub const TOOLS: &[RibbonTool] = &[
         "Centre Line",
         "Click two circles of a view: a centre line through both centres",
     ),
+    // DRAWING > DRAFTING
+    draft("drawing.draw.line", Icon::Line, "Sheet Line", "Line", "Lines point to point on the sheet's current layer; type points or click (L)").primary(),
+    draft("drawing.draw.polyline", Icon::Polygon, "Sheet Polyline", "Polyline", "One connected line through the points; C closes it, Enter ends (PL)").primary(),
+    draft("drawing.draw.circle", Icon::Circle, "Sheet Circle", "Circle", "Centre, then the radius or a point on the circle (C)"),
+    draft("drawing.draw.arc", Icon::Arc, "Sheet Arc", "Arc", "Centre, start point, end point, counter-clockwise (A)"),
+    draft("drawing.draw.rectangle", Icon::Rectangle, "Sheet Rectangle", "Rectangle", "Two opposite corners (REC)"),
+    draft("drawing.layer.list", Icon::Eye, "Layers", "Layers", "The sheet's layers: current, on, freeze, lock, colour, line type, weight (LA)").primary().sep(),
     // DRAWING > TABLES
     tool(
         D,
@@ -1449,6 +1466,16 @@ const fn dimension(
     what: &'static str,
 ) -> RibbonTool {
     tool(D, "DIMENSIONS", Action::Tool(id), icon, name, what).short(short)
+}
+
+const fn draft(
+    id: &'static str,
+    icon: Icon,
+    name: &'static str,
+    short: &'static str,
+    what: &'static str,
+) -> RibbonTool {
+    tool(D, "DRAFTING", Action::Tool(id), icon, name, what).short(short)
 }
 
 const fn export(id: &'static str, name: &'static str, short: &'static str) -> RibbonTool {
@@ -1809,6 +1836,7 @@ impl ChamferaApp {
             || s.press_pull.is_some()
             || s.sweep.is_some()
             || s.body_tool.is_some()
+            || s.quick.is_some()
             || s.surface.is_some()
             || self.construct.tool.is_some()
             || self.assembly.joint.is_some()
@@ -1869,17 +1897,22 @@ impl ChamferaApp {
                 }
                 "render.start" => self.render.window.is_some(),
                 "drawing.edit_sheet" => self.drawing.settings.is_some(),
+                "drawing.layer.list" => self.drawing.drafting.layers.open,
                 _ => {
                     if let Some(k) = body_tool_kind(id) {
                         s.body_tool.as_ref().is_some_and(|t| t.kind == k)
                     } else if let Some(k) = surface_kind(id) {
                         s.surface.as_ref().is_some_and(|t| t.kind == k)
+                    } else if let Some(k) = crate::quick_ui::QuickKind::from_command(id) {
+                        s.quick.as_ref().is_some_and(|t| t.kind == k)
                     } else if let Some(k) = transform_kind(id) {
                         s.transform.as_ref().is_some_and(|t| t.kind == k)
                     } else if let Some(k) = construct_kind(id) {
                         self.construct.tool.as_ref().is_some_and(|t| t.kind == k)
                     } else if let Some(t) = draw_tool(id) {
                         self.drawing.tool == Some(t)
+                    } else if let Some(what) = id.strip_prefix("drawing.draw.") {
+                        self.drafting_tool_active(what)
                     } else if let Some(k) = cam_op(id) {
                         self.cam.dialog.as_ref().is_some_and(|d| d.kind == k)
                     } else {
@@ -1963,6 +1996,11 @@ impl ChamferaApp {
                 "solid.rib" if has_solids && !self.has_sketch_curves() => {
                     format!("{name}: draw a line in a sketch first")
                 }
+                _ if crate::quick_ui::QuickKind::from_command(id)
+                    .is_some_and(|k| !k.needs_solid() && !self.tool_open()) =>
+                {
+                    return None;
+                }
                 _ if !has_solids && construct_kind(id).is_none_or(|k| k.needs_solid()) => {
                     format!("{name}: build a solid first")
                 }
@@ -2008,6 +2046,11 @@ impl ChamferaApp {
                     format!("{name}: make components first")
                 }
                 "drawing.add_parts_list" if self.drawing_sheet().is_none() => {
+                    format!("{name}: add a sheet first")
+                }
+                _ if (id.starts_with("drawing.draw.") || id == "drawing.layer.list")
+                    && self.drawing_sheet().is_none() =>
+                {
                     format!("{name}: add a sheet first")
                 }
                 "drawing.add_note"
@@ -2119,6 +2162,7 @@ impl ChamferaApp {
             "drawing.projection" => self.drawing_toggle_projection(),
             "drawing.edit_sheet" => self.toggle_sheet_settings(),
             "drawing.add_parts_list" => self.drawing_parts_list(),
+            "drawing.layer.list" => self.toggle_layer_panel(),
             "cam.setup" => self.cam_setup(),
             "cam.tool_add" => self.open_cam_tool_dialog(),
             "cam.tool_library" => self.cam.library_open = !self.cam.library_open,
@@ -2150,12 +2194,16 @@ impl ChamferaApp {
                     self.open_surface_tool(k);
                 } else if let Some(kind) = id.strip_prefix("constraint.") {
                     self.constrain_selection_checked(kind);
+                } else if let Some(k) = crate::quick_ui::QuickKind::from_command(id) {
+                    self.open_quick_tool(k);
                 } else if let Some(k) = transform_kind(id) {
                     self.open_transform(k);
                 } else if let Some(k) = construct_kind(id) {
                     self.open_construct(k);
                 } else if let Some(tool) = draw_tool(id) {
                     self.drawing_pick_tool(tool);
+                } else if let Some(what) = id.strip_prefix("drawing.draw.") {
+                    self.drafting_tool(what);
                 } else if let Some(f) = id.strip_prefix("drawing.export.") {
                     self.export_drawing(f);
                 } else if let Some(k) = cam_op(id) {
@@ -2174,6 +2222,8 @@ impl ChamferaApp {
                     || id.starts_with("drawing.view.")
                     || id.starts_with("drawing.dim.")
                     || draw_tool(id).is_some()
+                    || id.starts_with("drawing.draw.")
+                    || id == "drawing.layer.list"
                     || matches!(
                         id,
                         "joint.create"
@@ -2652,8 +2702,19 @@ mod tests {
             "drawing.add_dimension", // the dimension tools
             "drawing.add_view",      // the view tools
             "drawing.delete",
-            "drawing.edit_sheet", // Sheet Settings and Projection
-            "drawing.export",     // the export tools
+            "drawing.edit_sheet",    // Sheet Settings and Projection
+            "drawing.entity.delete", // the sheet canvas and the command line (E)
+            "drawing.entity.grip",   // dragging a grip on the sheet canvas
+            "drawing.entity.grips",
+            "drawing.entity.layer", // scripts, agents and the command line
+            "drawing.entity.move",  // a drag on the canvas, the command line (M, CP)
+            "drawing.entity.pick",
+            "drawing.layer.add", // the Layers panel
+            "drawing.layer.current",
+            "drawing.layer.delete",
+            "drawing.layer.edit",
+            "drawing.linetype_scale",
+            "drawing.export", // the export tools
             "drawing.export_bytes",
             "drawing.list",
             "drawing.move", // a drag on the sheet canvas
