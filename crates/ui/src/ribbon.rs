@@ -2658,9 +2658,9 @@ mod tests {
             "drawing.move", // a drag on the sheet canvas
             "drawing.pick", // a click on the sheet canvas
             "inspect.measure_at",
-            "bom.export_csv",       // the Bill of Materials panel's Export CSV
-            "component.ungroup",    // Rigid Group on a grouped part
-            "joint.delete", // the Browser's joint rows
+            "bom.export_csv",    // the Bill of Materials panel's Export CSV
+            "component.ungroup", // Rigid Group on a grouped part
+            "joint.delete",      // the Browser's joint rows
             "joint.edit",
             "joint.origin_at",
             "joint.set_value",

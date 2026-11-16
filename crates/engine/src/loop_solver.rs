@@ -40,11 +40,7 @@ fn dot(a: &[f64], b: &[f64]) -> f64 {
 
 /// The Jacobian of `f` at `x` by central differences, row-major `m x n`, or `None` when
 /// `f` fails near `x`.
-pub fn jacobian(
-    f: &dyn Fn(&[f64]) -> Option<Vec<f64>>,
-    x: &[f64],
-    m: usize,
-) -> Option<Vec<f64>> {
+pub fn jacobian(f: &dyn Fn(&[f64]) -> Option<Vec<f64>>, x: &[f64], m: usize) -> Option<Vec<f64>> {
     let n = x.len();
     let mut jac = vec![0.0; m * n];
     let mut probe = x.to_vec();
@@ -296,7 +292,10 @@ mod tests {
         let mut x = vec![2.0, 2.0];
         let out = levenberg_marquardt(&f, &mut x, 2);
         assert!(out.max_residual <= SOLVE_TARGET, "{out:?}");
-        assert!((x[0] - 3.0).abs() < 1e-9 && (x[1] - 4.0).abs() < 1e-9, "{x:?}");
+        assert!(
+            (x[0] - 3.0).abs() < 1e-9 && (x[1] - 4.0).abs() < 1e-9,
+            "{x:?}"
+        );
     }
 
     #[test]

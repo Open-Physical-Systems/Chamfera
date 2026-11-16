@@ -208,7 +208,12 @@ fn a_loop_that_fits_is_solved_and_one_that_cannot_close_is_refused() {
                     "b": at_origin(a, [0.0, 0.0, 1.0]), "value": 30}),
         )
         .unwrap();
-    let v = s.doc.assembly.joint(r["joint"].as_u64().unwrap() as u32).unwrap().value;
+    let v = s
+        .doc
+        .assembly
+        .joint(r["joint"].as_u64().unwrap() as u32)
+        .unwrap()
+        .value;
     assert!(v.abs() < 1e-9, "{v}");
     assert!(close(bounds(&mut s, b), [0.0, 0.0, 0.0, 40.0, 10.0, 4.0]));
     // A rigid joint that holds B's origin 5 mm from where the first one holds it cannot
@@ -935,7 +940,11 @@ fn point_on(component: u64, x: f64) -> Value {
 /// `C = K1 − (K2 + 1) cos θ2 + K3`; the open branch (coupler above the ground link)
 /// is the root with the minus sign.
 fn freudenstein(a: f64, b: f64, c: f64, d: f64, theta2: f64) -> f64 {
-    let (k1, k2, k3) = (d / a, d / c, (a * a - b * b + c * c + d * d) / (2.0 * a * c));
+    let (k1, k2, k3) = (
+        d / a,
+        d / c,
+        (a * a - b * b + c * c + d * d) / (2.0 * a * c),
+    );
     let (s2, c2) = theta2.sin_cos();
     let qa = c2 - k1 - k2 * c2 + k3;
     let qb = -2.0 * s2;
@@ -963,7 +972,12 @@ fn four_bar(s: &mut Session) -> (u64, u64, u64, u64) {
             .as_u64()
             .unwrap()
     };
-    let (g, crank, coupler, rocker) = (part("Ground"), part("Crank"), part("Coupler"), part("Rocker"));
+    let (g, crank, coupler, rocker) = (
+        part("Ground"),
+        part("Crank"),
+        part("Coupler"),
+        part("Rocker"),
+    );
     s.execute("component.ground", &json!({"component": g}))
         .unwrap();
     let mut joint = |a: Value, b: Value, value: f64| -> u64 {
@@ -1016,7 +1030,8 @@ fn a_four_bar_linkage_follows_the_freudenstein_equation() {
     // The crank is the loop's input; the rocker joint is solved, not driven.
     let list = s.execute("component.list", &json!({})).unwrap();
     let joints = list["joints"].as_array().unwrap();
-    let driven = |id: u64| joints.iter().find(|j| j["joint"] == json!(id)).unwrap()["driven"].clone();
+    let driven =
+        |id: u64| joints.iter().find(|j| j["joint"] == json!(id)).unwrap()["driven"].clone();
     assert_eq!(driven(input), json!(true));
     assert_eq!(driven(output), json!(false));
     let loops = list["loops"].as_array().unwrap();
@@ -1164,8 +1179,11 @@ fn the_bill_of_materials_counts_nested_linked_copies() {
     // Wheel: two copies of it, and a copy of a copy (which copies the original), all
     // inside Axle: four wheels. Axle: one copy, which shows the shaft only (a linked
     // copy shows its original's own bodies): two shafts.
-    let w2 = s.execute("component.copy", &json!({"component": w})).unwrap();
-    s.execute("component.copy", &json!({"component": w})).unwrap();
+    let w2 = s
+        .execute("component.copy", &json!({"component": w}))
+        .unwrap();
+    s.execute("component.copy", &json!({"component": w}))
+        .unwrap();
     s.execute("component.copy", &json!({"component": w2["component"]}))
         .unwrap();
     s.execute("component.copy", &json!({"component": axle}))
@@ -1202,6 +1220,9 @@ fn the_bill_of_materials_counts_nested_linked_copies() {
     // CSV: a header and a line per row.
     let csv = s.execute("bom.export_csv", &json!({})).unwrap();
     let text = csv["csv"].as_str().unwrap();
-    assert!(text.starts_with("item,part,quantity,material,volume_mm3"), "{text}");
+    assert!(
+        text.starts_with("item,part,quantity,material,volume_mm3"),
+        "{text}"
+    );
     assert!(text.contains("\r\n2,Wheel,4,,2000.000,,\r\n"), "{text}");
 }

@@ -431,10 +431,7 @@ impl Assembly {
         }
         let mut grouped = BTreeSet::new();
         for g in &self.groups {
-            if g.id == ROOT
-                || g.id > self.last_id
-                || ids.contains(&g.id)
-                || !joint_ids.insert(g.id)
+            if g.id == ROOT || g.id > self.last_id || ids.contains(&g.id) || !joint_ids.insert(g.id)
             {
                 return Err(bad(format!(
                     "rigid group {} has a duplicate or out-of-range id",
@@ -542,11 +539,7 @@ impl Assembly {
 
     /// Adds a rigid group of `members`, each given with its world placement now (from its
     /// coordinates to the world): they keep these relative positions. Returns its id.
-    pub fn add_group(
-        &mut self,
-        name: &str,
-        members: &[(u32, Transform)],
-    ) -> Result<u32, DocError> {
+    pub fn add_group(&mut self, name: &str, members: &[(u32, Transform)]) -> Result<u32, DocError> {
         if self.groups.len() >= MAX_GROUPS {
             return Err(bad(format!(
                 "a design holds at most {MAX_GROUPS} rigid groups"
@@ -606,7 +599,10 @@ impl Assembly {
     /// others' relative positions are re-based on it.
     fn drop_from_groups(&mut self, gone: &[u32]) {
         for g in &mut self.groups {
-            let first_gone = g.members.first().is_some_and(|m| gone.contains(&m.component));
+            let first_gone = g
+                .members
+                .first()
+                .is_some_and(|m| gone.contains(&m.component));
             g.members.retain(|m| !gone.contains(&m.component));
             if first_gone
                 && let Some(base) = g.members.first().and_then(|m| m.relative.inverse_rigid())
@@ -706,11 +702,14 @@ mod tests {
         let g = a
             .add_group("G", &[(c1, at(10.0)), (c2, at(30.0)), (c3, at(70.0))])
             .unwrap();
-        let rel = |a: &Assembly, i: usize| {
-            a.group(g).unwrap().members[i].relative.translation_part().x
-        };
+        let rel =
+            |a: &Assembly, i: usize| a.group(g).unwrap().members[i].relative.translation_part().x;
         assert_eq!((rel(&a, 0), rel(&a, 1), rel(&a, 2)), (0.0, 20.0, 60.0));
-        assert_eq!(a.solving_joints().len(), 2, "two links from the first member");
+        assert_eq!(
+            a.solving_joints().len(),
+            2,
+            "two links from the first member"
+        );
         assert_eq!(a.link_group(a.last_id + 1), Some(g));
         a.check(10).unwrap();
         // A component is in one group at most.

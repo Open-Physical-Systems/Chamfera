@@ -372,11 +372,14 @@ fn world_origin(s: &Session, p: &Value, b: u32) -> Result<Frame, CommandError> {
     };
     if let Some(px) = o.get("pick").filter(|v| !v.is_null()) {
         let (x, y, w, h) = params::pixel(px)?;
-        return s.joint_origin_at(x, y, w, h).map(|(_, f)| f).ok_or_else(|| {
-            CommandError::Unavailable(
-                "`origin`: nothing under that pixel (pick a flat face or an edge)".into(),
-            )
-        });
+        return s
+            .joint_origin_at(x, y, w, h)
+            .map(|(_, f)| f)
+            .ok_or_else(|| {
+                CommandError::Unavailable(
+                    "`origin`: nothing under that pixel (pick a flat face or an edge)".into(),
+                )
+            });
     }
     if let Some(point) = o.get("point").filter(|v| !v.is_null()) {
         let point = Point3::ORIGIN + xyz(point, "origin.point")?;

@@ -67,11 +67,7 @@ fn place(
                 };
                 let made = joints.iter().find(|j| j.id == d.joint).and_then(|j| {
                     let rel = joint_relative(j, fa, fb)?;
-                    let t = if d.forward {
-                        rel
-                    } else {
-                        rel.inverse_rigid()?
-                    };
+                    let t = if d.forward { rel } else { rel.inverse_rigid()? };
                     Some((t, j.as_built))
                 });
                 match made {

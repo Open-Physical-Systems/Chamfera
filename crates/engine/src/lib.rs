@@ -6,8 +6,8 @@
 
 pub mod agent;
 pub mod assembly;
-pub mod bom;
 mod body_tools;
+pub mod bom;
 pub mod box_select;
 pub mod cam;
 pub mod cam_cache;

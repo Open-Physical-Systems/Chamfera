@@ -55,6 +55,7 @@ impl ChamferaApp {
         };
         let title = crate::label("bom.list");
         let mut close = false;
+        #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
         let mut export = false;
         egui::Window::new(title)
             .id(egui::Id::unique("bom panel"))
@@ -86,8 +87,7 @@ impl ChamferaApp {
                                 .striped(true)
                                 .spacing([widgets::S3, widgets::S2])
                                 .show(ui, |ui| {
-                                    for h in ["Item", "Part", "Qty", "Material", "Volume", "Mass"]
-                                    {
+                                    for h in ["Item", "Part", "Qty", "Material", "Volume", "Mass"] {
                                         ui.label(
                                             egui::RichText::new(h)
                                                 .strong()
@@ -104,14 +104,16 @@ impl ChamferaApp {
                                         } else {
                                             r.material.as_str()
                                         });
-                                        ui.label(r.volume.map_or_else(
-                                            || "-".to_owned(),
-                                            |v| units.volume(v),
-                                        ));
                                         ui.label(
-                                            r.mass
-                                                .map_or_else(|| "-".to_owned(), |m| format!("{m:.1} g")),
+                                            r.volume.map_or_else(
+                                                || "-".to_owned(),
+                                                |v| units.volume(v),
+                                            ),
                                         );
+                                        ui.label(r.mass.map_or_else(
+                                            || "-".to_owned(),
+                                            |m| format!("{m:.1} g"),
+                                        ));
                                         ui.end_row();
                                     }
                                 });
@@ -128,8 +130,7 @@ impl ChamferaApp {
                 });
                 widgets::dialog_footer(ui, look, |ui| {
                     #[cfg(not(target_arch = "wasm32"))]
-                    if widgets::primary_button(ui, look, "Export CSV", !rows.is_empty()).clicked()
-                    {
+                    if widgets::primary_button(ui, look, "Export CSV", !rows.is_empty()).clicked() {
                         export = true;
                     }
                     if widgets::secondary_button(ui, look, "Close").clicked() {

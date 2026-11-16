@@ -2,8 +2,8 @@
 
 mod app;
 mod body;
-mod bom;
 mod body_tools;
+mod bom;
 mod cam;
 mod component;
 mod config;

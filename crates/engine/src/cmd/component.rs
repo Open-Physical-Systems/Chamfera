@@ -516,7 +516,12 @@ fn ungroup(s: &mut Session, p: &Value) -> CmdResult {
         .collect();
     let removed = s.doc.assembly.remove_group(id)?;
     for (c, w) in world {
-        let parent = s.doc.assembly.component(c).map(|x| x.parent).unwrap_or(ROOT);
+        let parent = s
+            .doc
+            .assembly
+            .component(c)
+            .map(|x| x.parent)
+            .unwrap_or(ROOT);
         if s.doc.assembly.driver_of(c).is_some() {
             continue;
         }
