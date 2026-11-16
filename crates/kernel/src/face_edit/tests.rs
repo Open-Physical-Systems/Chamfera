@@ -328,3 +328,109 @@ fn moving_the_top_face_tilts_or_lifts_it() {
     let t = Transform::translation(Vec3::new(1.0, 0.0, 0.0)).unwrap();
     assert!(move_faces(&p, &wall, &t).is_err());
 }
+
+/// The 40 x 20 x 10 block on the XY plane: 8000 mm³.
+fn block_40x20() -> Body {
+    extrude(&Frame::XY, &Profile::polygon(&rect(40.0, 20.0)), 10.0).unwrap()
+}
+
+/// The volume of the 40 x 20 block of height `h` with its four sides drafted by `a`
+/// radians from the bottom (narrower towards the top for a positive angle): every
+/// cross-section at height z is (40 - 2 z tan a)(20 - 2 z tan a), so
+/// V = ∫₀ʰ (800 - 120 t z + 4 t² z²) dz = 800 h - 60 t h² + (4/3) t² h³ with t = tan a.
+fn drafted_block_volume(h: f64, a: f64) -> f64 {
+    let t = a.tan();
+    800.0 * h - 60.0 * t * h * h + 4.0 / 3.0 * t * t * h * h * h
+}
+
+fn sides(b: &Body) -> Vec<FaceId> {
+    (0..4).map(|k| face(b, &format!("side {k}"))).collect()
+}
+
+#[test]
+fn drafting_the_four_sides_of_a_block_from_its_bottom_makes_a_frustum() {
+    let b = block_40x20();
+    let a = 5f64.to_radians();
+    // Neutral plane: the bottom (z = 0); pull +z, into the block.
+    let out = draft_faces(&b, &sides(&b), &Frame::XY, a).unwrap();
+    assert_close("frustum", volume(&out), drafted_block_volume(10.0, a));
+    // Same faces, same names; the bottom keeps 40 x 20, the top shrinks by 2·10·tan 5°
+    // each way.
+    assert_eq!(out.faces().len(), 6);
+    let t = 10.0 * a.tan();
+    assert_close(
+        "bottom",
+        out.face_area(face(&out, "bottom")).unwrap(),
+        800.0,
+    );
+    assert_close(
+        "top",
+        out.face_area(face(&out, "top")).unwrap(),
+        (40.0 - 2.0 * t) * (20.0 - 2.0 * t),
+    );
+    // A negative angle widens it: t → -t.
+    let wide = draft_faces(&b, &sides(&b), &Frame::XY, -a).unwrap();
+    assert_close("wider", volume(&wide), drafted_block_volume(10.0, -a));
+}
+
+#[test]
+fn a_neutral_plane_at_the_top_with_the_pull_down_keeps_the_top() {
+    let b = block_40x20();
+    let a = 5f64.to_radians();
+    let top = Frame::from_normal(Point3::new(0.0, 0.0, 10.0), Vec3::new(0.0, 0.0, -1.0)).unwrap();
+    let out = draft_faces(&b, &sides(&b), &top, a).unwrap();
+    // The mirror image of the frustum above.
+    assert_close("frustum", volume(&out), drafted_block_volume(10.0, a));
+    assert_close("top", out.face_area(face(&out, "top")).unwrap(), 800.0);
+}
+
+#[test]
+fn drafting_one_side_tilts_only_that_wall() {
+    // Side 1 is the wall x = 40 (the profile runs (0,0) → (40,0) → (40,20) ...). Drafted
+    // by 10° from the bottom it becomes x = 40 - z tan 10°: the block loses a wedge
+    // 20 · ½ · 10 · 10 tan 10°.
+    let b = block_40x20();
+    let a = 10f64.to_radians();
+    let out = draft_faces(&b, &[face(&b, "side 1")], &Frame::XY, a).unwrap();
+    assert_close(
+        "wedge",
+        volume(&out),
+        8000.0 - 20.0 * 0.5 * 10.0 * 10.0 * a.tan(),
+    );
+}
+
+#[test]
+fn hostile_drafts_are_refused() {
+    let b = block_40x20();
+    let s = sides(&b);
+    for a in [0.0, f64::NAN, f64::INFINITY, 1.5, -1.5, 1e300] {
+        assert!(draft_faces(&b, &s, &Frame::XY, a).is_err(), "angle {a}");
+    }
+    // The top is parallel to the neutral plane.
+    let e = draft_faces(&b, &[face(&b, "top")], &Frame::XY, 0.1).unwrap_err();
+    assert!(e.to_string().contains("parallel"), "{e}");
+    assert!(draft_faces(&b, &[], &Frame::XY, 0.1).is_err());
+    // A side next to a fillet cylinder is refused with the reason.
+    let round = fillet(&b, &[edge(&b, "sweep 1")], 3.0).unwrap();
+    let e = draft_faces(&round, &sides(&round), &Frame::XY, 0.1).unwrap_err();
+    assert!(matches!(e, KernelError::Unsupported(_)), "{e}");
+    assert!(e.to_string().contains("curved"), "{e}");
+    // A draft so steep the walls would cross: a 4 mm wide block 10 high at 30°.
+    let thin = extrude(&Frame::XY, &Profile::polygon(&rect(4.0, 20.0)), 10.0).unwrap();
+    let ss = sides(&thin);
+    assert!(draft_faces(&thin, &ss, &Frame::XY, 30f64.to_radians()).is_err());
+}
+
+#[test]
+fn lumps_split_a_two_lump_body() {
+    let a = block_40x20();
+    let far = Frame::XY.with_origin(Point3::new(100.0, 0.0, 0.0)).unwrap();
+    let b = extrude(&far, &Profile::polygon(&rect(10.0, 10.0)), 10.0).unwrap();
+    let both = crate::union(&a, &b).unwrap();
+    let parts = lumps(&both).unwrap();
+    assert_eq!(parts.len(), 2);
+    let mut v: Vec<f64> = parts.iter().map(volume).collect();
+    v.sort_by(f64::total_cmp);
+    assert_close("small", v[0], 1000.0);
+    assert_close("large", v[1], 8000.0);
+}

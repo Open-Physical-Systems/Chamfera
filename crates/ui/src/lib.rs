@@ -29,6 +29,7 @@ mod constraint_ui;
 mod construct_ui;
 mod context_menu;
 mod display_ui;
+mod draft_rib_ui;
 mod drawing_sheet_ui;
 mod drawing_tools_ui;
 mod drawing_ui;
@@ -578,7 +579,8 @@ impl ChamferaApp {
 
     /// Opens the dialog `--dialog` names: `joint-edit:ID`, `component-move:ID`,
     /// `component-rename:ID`, `edit-feature:ID`, `dxf-insert:PATH`, `move:BODY,...` (Move
-    /// on those bodies) or `fillet:EDGE` (Fillet on that edge).
+    /// on those bodies), `fillet:EDGE` (Fillet on that edge), or the Draft or Rib tool
+    /// filled in (`draft:JSON`, `rib:JSON`).
     fn open_named_dialog(&mut self, spec: &str) -> Result<(), String> {
         let (name, arg) = spec.split_once(':').unwrap_or((spec, ""));
         match name {
@@ -628,6 +630,7 @@ impl ChamferaApp {
                 })?;
                 self.open_conflict_for(&c)?;
             }
+            "draft" | "rib" => self.open_draft_rib_with(name == "rib", arg)?,
             "dxf-insert" if !arg.is_empty() => {
                 let file = std::path::Path::new(arg)
                     .file_name()
@@ -640,8 +643,8 @@ impl ChamferaApp {
             _ => {
                 return Err(format!(
                     "--dialog takes joint-edit:ID, component-move:ID, component-rename:ID, \
-                     edit-feature:ID, dxf-insert:PATH, constraint-conflict:JSON, move:BODY or \
-                     fillet:EDGE, not {spec:?}"
+                     edit-feature:ID, dxf-insert:PATH, constraint-conflict:JSON, move:BODY, \
+                     fillet:EDGE, draft:JSON or rib:JSON, not {spec:?}"
                 ));
             }
         }
@@ -853,6 +856,18 @@ impl ChamferaApp {
         {
             let (x, y) = local(pos);
             self.shell_click(x, y, w, h);
+            return;
+        }
+        if (self.solid.draft.is_some() || self.solid.rib.is_some())
+            && response.clicked()
+            && let Some(pos) = response.interact_pointer_pos()
+        {
+            let (x, y) = local(pos);
+            if self.solid.draft.is_some() {
+                self.draft_click(x, y, w, h);
+            } else {
+                self.rib_click(x, y, w, h);
+            }
             return;
         }
         if self.sheet_tool_open() {
@@ -1301,6 +1316,7 @@ impl eframe::App for ChamferaApp {
             self.transform_dialog(&ctx);
             self.inspect_dialog(&ctx);
             self.shell_dialog(&ctx);
+            self.draft_rib_dialog(&ctx);
             self.sheet_dialogs(&ctx);
             self.press_pull_dialog(&ctx);
             self.body_tool_dialog(&ctx);

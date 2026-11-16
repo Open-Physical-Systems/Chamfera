@@ -1734,6 +1734,12 @@ impl Session {
             FeatureKind::MoveFace(m) => Some(crate::face_edit::build_move_face(
                 &self.doc, m, feature.id, made,
             )),
+            FeatureKind::Draft(d) => Some(crate::face_edit::build_draft(
+                &self.doc, d, feature.id, made,
+            )),
+            FeatureKind::Rib(r) => {
+                Some(crate::face_edit::build_rib(&self.doc, r, feature.id, made))
+            }
             _ => None,
         };
         if let Some(result) = face_edit {
@@ -1810,7 +1816,11 @@ impl Session {
             | FeatureKind::SheetBase(_)
             | FeatureKind::SheetFlange(_)
             | FeatureKind::SheetUnfold(_) => return,
-            FeatureKind::OffsetFace(_) | FeatureKind::DeleteFace(_) | FeatureKind::MoveFace(_) => {
+            FeatureKind::OffsetFace(_)
+            | FeatureKind::DeleteFace(_)
+            | FeatureKind::MoveFace(_)
+            | FeatureKind::Draft(_)
+            | FeatureKind::Rib(_) => {
                 return;
             }
         };

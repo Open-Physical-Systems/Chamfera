@@ -68,6 +68,7 @@ pub enum Icon {
     Construction,
     Delete,
     DeleteFace,
+    Draft,
     Dimension,
     Drawing,
     Edit,
@@ -133,6 +134,7 @@ pub enum Icon {
     SurfaceTrim,
     Sweep,
     Text,
+    Rib,
     Thicken,
     Trim,
     Undo,
@@ -154,7 +156,7 @@ pub enum Icon {
 
 impl Icon {
     #[cfg(test)]
-    pub const ALL: [Icon; 131] = [
+    pub const ALL: [Icon; 133] = [
         Icon::RenderCamera,
         Icon::RenderEnvironment,
         Icon::RenderImage,
@@ -213,6 +215,7 @@ impl Icon {
         Icon::Construction,
         Icon::Delete,
         Icon::DeleteFace,
+        Icon::Draft,
         Icon::Dimension,
         Icon::Drawing,
         Icon::Edit,
@@ -278,6 +281,7 @@ impl Icon {
         Icon::SurfaceTrim,
         Icon::Sweep,
         Icon::Text,
+        Icon::Rib,
         Icon::Thicken,
         Icon::Trim,
         Icon::Undo,
@@ -353,6 +357,8 @@ impl Icon {
             Icon::Sweep => master!("sweep"),
             Icon::Text => master!("text"),
             Icon::Thicken => master!("thicken"),
+            Icon::Draft => master!("draft"),
+            Icon::Rib => master!("rib"),
             Icon::Patch => master!("patch"),
             Icon::Stitch => master!("stitch"),
             Icon::SurfaceExtrude => master!("surface_extrude"),

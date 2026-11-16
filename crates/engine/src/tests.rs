@@ -412,6 +412,18 @@ fn hostile_params_never_panic() {
         json!({"constraints": [{"kind": "horizontal", "line": 3}], "replace": -1, "kind": "fix"}),
         json!({"text": long, "x": 1e300, "y": f64::NAN, "height": -1, "font": long, "align": 5}),
         json!({"text": "\u{0}\u{FFFF}", "x": 0, "y": 0, "height": 1e300, "align": "middle", "font": "/dev/zero"}),
+        // Drafts: neutral planes and angles.
+        json!({"faces": ["1:side 0"], "neutral": long, "angle": 1e300, "flip": "yes"}),
+        json!({"faces": ["2:side 0", "2:side 1"], "neutral": "xy", "angle": "80 deg", "flip": true, "preview": true}),
+        json!({"pick": {"x": 400, "y": 300, "width": 800, "height": 600}, "neutral": 5, "angle": f64::NAN}),
+        json!({"faces": ["2:side 0"], "neutral": "2:top", "angle": "-1e-300 deg", "clear": "yes"}),
+        json!({"faces": vec!["2:side 0"; 20_000], "neutral": "", "angle": [5], "preview": 1}),
+        // Ribs: chains, thicknesses, bodies.
+        json!({"sketch": 1, "curves": [1, 1e300], "thickness": f64::NAN, "web": "yes"}),
+        json!({"sketch": 1, "curves": [1, 2], "thickness": "1e7 mm", "web": true, "flip": true, "body": long, "preview": true}),
+        json!({"sketch": 4294967296u64, "curves": vec![1; 2000], "thickness": -1, "body": ""}),
+        json!({"sketch": 1, "curves": [-1], "thickness": "3 deg", "body": 5, "flip": 1, "feature": 2}),
+        json!({"sketch": 1, "curves": [1], "thickness": 1e-300, "web": false, "body": "Sample bracket", "clear": false}),
     ];
     for c in registry() {
         for p in &hostile {

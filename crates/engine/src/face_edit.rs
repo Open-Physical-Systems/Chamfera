@@ -1,5 +1,5 @@
-//! Direct face edits on the timeline (offset, delete and move faces) and Press Pull, the
-//! one tool that picks the right operation for what is selected.
+//! Direct face edits on the timeline (offset, delete, move and draft faces), ribs and webs,
+//! and Press Pull, the one tool that picks the right operation for what is selected.
 //!
 //! An edit finds its faces by name in the bodies built so far, edits every body that has
 //! any of them (kernel `face_edit`), and keeps the names of everything it does not delete,
@@ -7,7 +7,9 @@
 
 use crate::solids::{name_edges, name_faces, split_face_key};
 use chamfera_doc::expr::Dim;
-use chamfera_doc::{BlendKind, DeleteFace, Document, FeatureKind, MoveFace, OffsetFace};
+use chamfera_doc::{
+    BlendKind, DeleteFace, Document, Draft, FeatureKind, MoveFace, OffsetFace, Rib,
+};
 use chamfera_geom::{Transform, Vec3};
 use chamfera_kernel::{Body, FaceId};
 
@@ -128,6 +130,118 @@ pub(crate) fn build_move_face(
     edit_named(doc, made, &m.faces, feature, "move face", |b, f| {
         chamfera_kernel::move_faces(b, f, &t)
     })
+}
+
+/// A draft's neutral plane as a frame whose z is the pull direction: an origin plane's
+/// own normal, or for a planar face the direction into the solid (against its outward
+/// normal); `flip` reverses it.
+pub(crate) fn draft_neutral(
+    doc: &Document,
+    d: &Draft,
+    feature: u32,
+    made: &[(u32, String, Body)],
+) -> Result<chamfera_geom::Frame, String> {
+    let frame = match d.neutral.trim() {
+        "xy" => chamfera_geom::Frame::XY,
+        "yz" => chamfera_geom::Frame::YZ,
+        "xz" => chamfera_geom::Frame::XZ,
+        name => {
+            let bodies = crate::naming::bodies(made);
+            let found = crate::naming::resolve(
+                doc,
+                feature,
+                &bodies,
+                crate::naming::Kind::Face,
+                name,
+                crate::naming::Want::All,
+            )
+            .map_err(|x| format!("draft: the neutral plane: {x}"))?;
+            let plane = found.first().and_then(|f| {
+                let body = &made.get(f.body)?.2;
+                crate::solids::face_plane(body, f.face()?)
+            });
+            plane
+                .ok_or_else(|| {
+                    format!("draft: the neutral plane {name} is not a planar face of a solid")
+                })?
+                .flipped()
+        }
+    };
+    Ok(if d.flip { frame.flipped() } else { frame })
+}
+
+pub(crate) fn build_draft(
+    doc: &Document,
+    d: &Draft,
+    feature: u32,
+    made: &[(u32, String, Body)],
+) -> Result<Made, String> {
+    let a = doc.draft_angle(d).map_err(|x| x.to_string())?;
+    let neutral = draft_neutral(doc, d, feature, made)?;
+    edit_named(doc, made, &d.faces, feature, "draft", |b, f| {
+        chamfera_kernel::draft_faces(b, f, &neutral, a)
+    })
+}
+
+/// Grows a rib (or web) from its sketch chain into the named body, or the solid nearest
+/// the chain, and joins it there. The rib's faces are named after the feature like an
+/// extrude's (`7:side 0`).
+pub(crate) fn build_rib(
+    doc: &Document,
+    r: &Rib,
+    feature: u32,
+    made: &[(u32, String, Body)],
+) -> Result<Made, String> {
+    let word = if r.web { "web" } else { "rib" };
+    let f = doc.sketch(r.sketch).map_err(|x| x.to_string())?;
+    let chain = crate::solids::chain_edges(f, &r.curves).map_err(|x| format!("{word}: {x}"))?;
+    let t = doc.rib_thickness(r).map_err(|x| x.to_string())?;
+    let target = match &r.body {
+        Some(name) => made
+            .iter()
+            .position(|m| m.1 == *name)
+            .ok_or_else(|| format!("{word}: there is no body named {name}"))?,
+        None => {
+            let mid = chain
+                .first()
+                .map(|e| f.plane.from_plane(e.start().lerp(e.end(), 0.5)))
+                .ok_or_else(|| format!("{word}: pick at least one line or arc"))?;
+            made.iter()
+                .enumerate()
+                .filter(|(_, m)| !m.2.is_open())
+                .filter_map(|(i, m)| Some((i, box_distance(&m.2.bounding_box()?, mid))))
+                .min_by(|a, b| a.1.total_cmp(&b.1))
+                .map(|(i, _)| i)
+                .ok_or_else(|| format!("{word}: there is no solid to join it to"))?
+        }
+    };
+    let extent = if r.web {
+        chamfera_kernel::RibExtent::Through
+    } else {
+        chamfera_kernel::RibExtent::ToBody
+    };
+    let mut next = made.to_vec();
+    let Some(slot) = next.get_mut(target) else {
+        return Err(format!("{word}: the body is gone"));
+    };
+    let mut out = chamfera_kernel::rib(&slot.2, &f.plane, &chain, t, extent, r.flip)
+        .map_err(|x| format!("{word}: {x}"))?;
+    name_faces(&mut out, feature);
+    name_edges(&mut out, feature);
+    slot.2 = out;
+    let changed = vec![slot.1.clone()];
+    Ok((next, changed))
+}
+
+/// How far `p` is from the box `b` (0 inside).
+fn box_distance(b: &chamfera_geom::Aabb, p: chamfera_geom::Point3) -> f64 {
+    let gap = |v: f64, lo: f64, hi: f64| (lo - v).max(v - hi).max(0.0);
+    let (dx, dy, dz) = (
+        gap(p.x, b.min.x, b.max.x),
+        gap(p.y, b.min.y, b.max.y),
+        gap(p.z, b.min.z, b.max.z),
+    );
+    (dx * dx + dy * dy + dz * dz).sqrt()
 }
 
 /// What Press Pull does with a selection.

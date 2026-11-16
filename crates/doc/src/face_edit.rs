@@ -1,5 +1,5 @@
-//! Direct face edits on the timeline: offset, delete and move faces of the solids built so
-//! far. Faces are named like everywhere else (`2:top` is face `top` of feature 2's shape),
+//! Direct face edits on the timeline: offset, delete, move and draft faces of the solids
+//! built so far. Faces are named like everywhere else (`2:top` is face `top` of feature 2's shape),
 //! so an edit finds its faces again after every rebuild, and its distances are
 //! expressions a parameter can drive.
 
@@ -47,6 +47,29 @@ pub struct MoveFace {
     pub turn: Option<FaceTurn>,
 }
 
+/// Planar faces tilted by `angle` from the pull direction about the line where each
+/// meets the neutral plane, their neighbours re-trimmed (format 40).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Draft {
+    pub faces: Vec<String>,
+    /// The neutral plane: a planar face (`2:bottom`; the pull goes into the solid,
+    /// against its outward normal) or an origin plane `xy`, `yz` or `xz` (the pull along
+    /// its normal, as sketches on it see it).
+    pub neutral: String,
+    /// An expression such as `5 deg`; positive narrows the solid along the pull.
+    pub angle: String,
+    /// Pull the other way.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub flip: bool,
+}
+
+/// The steepest draft, in degrees (the kernel's `MAX_DRAFT_ANGLE`).
+pub const MAX_DRAFT_DEGREES: f64 = 80.0;
+
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
 fn bad(reason: impl Into<String>) -> DocError {
     DocError::BadFeature {
         reason: reason.into(),
@@ -78,6 +101,28 @@ impl Document {
 
     pub(crate) fn check_delete_face(&self, d: &DeleteFace) -> Result<(), DocError> {
         check_faces(&d.faces)
+    }
+
+    pub(crate) fn check_draft(&self, d: &Draft) -> Result<(), DocError> {
+        check_faces(&d.faces)?;
+        if d.neutral.trim().is_empty() || d.neutral.chars().count() > 512 {
+            return Err(bad("pick a neutral plane: a planar face or xy, yz or xz"));
+        }
+        self.draft_angle(d).map(|_| ())
+    }
+
+    /// A draft's angle in radians, checked: 0 < |angle| <= 80 degrees.
+    pub fn draft_angle(&self, d: &Draft) -> Result<f64, DocError> {
+        let a = self.evaluate_feature_value(&d.angle, expr::Dim::ANGLE)?;
+        if !a.is_finite()
+            || a.abs() <= chamfera_geom::ANGULAR_TOLERANCE
+            || a.abs() > MAX_DRAFT_DEGREES.to_radians() + chamfera_geom::ANGULAR_TOLERANCE
+        {
+            return Err(bad(format!(
+                "the draft angle must be above 0 and at most {MAX_DRAFT_DEGREES} degrees either way"
+            )));
+        }
+        Ok(a)
     }
 
     pub(crate) fn check_move_face(&self, m: &MoveFace) -> Result<(), DocError> {
@@ -158,6 +203,24 @@ mod tests {
             turn: None,
         });
         assert!(doc.add_feature(still).is_err());
+        let draft = |angle: &str, neutral: &str| {
+            FeatureKind::Draft(Draft {
+                faces: vec!["900:side 0".into()],
+                neutral: neutral.into(),
+                angle: angle.into(),
+                flip: false,
+            })
+        };
+        let id = doc.add_feature(draft("5 deg", "900:bottom")).unwrap();
+        assert_eq!(doc.feature(id).unwrap().name, "Draft1");
+        for (a, n) in [
+            ("0", "900:bottom"),
+            ("81 deg", "900:bottom"),
+            ("5 mm", "900:bottom"),
+            ("5 deg", ""),
+        ] {
+            assert!(doc.add_feature(draft(a, n)).is_err(), "{a} {n}");
+        }
         let back = Document::from_json(&doc.to_json().unwrap()).unwrap();
         assert_eq!(back, doc);
     }

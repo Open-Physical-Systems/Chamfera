@@ -103,6 +103,14 @@ pub fn kind_dependencies(kind: &FeatureKind) -> Vec<u32> {
         FeatureKind::OffsetFace(o) => deps.extend(o.faces.iter().flat_map(|f| edge_features(f))),
         FeatureKind::DeleteFace(d) => deps.extend(d.faces.iter().flat_map(|f| edge_features(f))),
         FeatureKind::MoveFace(m) => deps.extend(m.faces.iter().flat_map(|f| edge_features(f))),
+        FeatureKind::Draft(d) => deps.extend(
+            d.faces
+                .iter()
+                .chain(std::iter::once(&d.neutral))
+                .flat_map(|f| edge_features(f)),
+        ),
+        // Its sketch is listed above; the body is named (found when built).
+        FeatureKind::Rib(_) => {}
         FeatureKind::Extrude(e) => {
             if let Some(crate::ExtrudeTo::Face(r)) = &e.to {
                 deps.push(r.feature);

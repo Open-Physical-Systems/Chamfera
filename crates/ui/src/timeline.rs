@@ -217,6 +217,25 @@ impl ChamferaApp {
                 FeatureKind::OffsetFace(_)
                 | FeatureKind::DeleteFace(_)
                 | FeatureKind::MoveFace(_) => crate::press_pull_ui::timeline_entry(&f.kind),
+                FeatureKind::Draft(d) => (
+                    Icon::Draft,
+                    format!(
+                        "Draft {} · {} face{}",
+                        d.angle,
+                        d.faces.len(),
+                        if d.faces.len() == 1 { "" } else { "s" }
+                    ),
+                ),
+                FeatureKind::Rib(r) => (
+                    Icon::Rib,
+                    format!(
+                        "{} {} · {} curve{}",
+                        if r.web { "Web" } else { "Rib" },
+                        r.thickness,
+                        r.curves.len(),
+                        if r.curves.len() == 1 { "" } else { "s" }
+                    ),
+                ),
                 FeatureKind::Shell(sh) => (
                     Icon::Shell,
                     format!(
@@ -1079,6 +1098,8 @@ impl ChamferaApp {
             FeatureKind::Mirror(m) => (crate::transform_ui::mirror_details(m), None),
             FeatureKind::Move(m) => (crate::transform_ui::move_details(m), None),
             FeatureKind::Shell(sh) => (sh.thickness.clone(), None),
+            FeatureKind::Draft(d) => (d.angle.clone(), None),
+            FeatureKind::Rib(r) => (r.thickness.clone(), None),
             FeatureKind::SheetBase(_)
             | FeatureKind::SheetFlange(_)
             | FeatureKind::SheetUnfold(_) => return,
@@ -1112,7 +1133,10 @@ impl ChamferaApp {
         };
         let name = feature.name.clone();
         let key = match &feature.kind {
-            FeatureKind::Shell(_) | FeatureKind::Thicken(_) => Some("thickness"),
+            FeatureKind::Shell(_) | FeatureKind::Thicken(_) | FeatureKind::Rib(_) => {
+                Some("thickness")
+            }
+            FeatureKind::Draft(_) => Some("angle"),
             FeatureKind::OffsetFace(_)
             | FeatureKind::MoveFace(_)
             | FeatureKind::Surface(chamfera_doc::SurfaceFeature::Extrude(_)) => Some("distance"),
@@ -1152,7 +1176,7 @@ impl ChamferaApp {
         let extrude = matches!(feature.kind, FeatureKind::Extrude(_));
         let shell = matches!(
             feature.kind,
-            FeatureKind::Shell(_) | FeatureKind::Thicken(_)
+            FeatureKind::Shell(_) | FeatureKind::Thicken(_) | FeatureKind::Rib(_)
         );
         // Offset and move face edit their distance in the same field.
         let face_edit = matches!(
@@ -1165,6 +1189,7 @@ impl ChamferaApp {
         let angle = matches!(
             feature.kind,
             FeatureKind::Revolve(_)
+                | FeatureKind::Draft(_)
                 | FeatureKind::Surface(chamfera_doc::SurfaceFeature::Revolve(_))
         );
         let blend = shell || face_edit || angle || matches!(feature.kind, FeatureKind::Blend(_));
@@ -1173,7 +1198,8 @@ impl ChamferaApp {
             FeatureKind::Revolve(_) => "Angle",
             FeatureKind::Pattern(_) => "Count",
             FeatureKind::Mirror(_) | FeatureKind::Move(_) => "Definition",
-            FeatureKind::Shell(_) | FeatureKind::Thicken(_) => "Thickness",
+            FeatureKind::Shell(_) | FeatureKind::Thicken(_) | FeatureKind::Rib(_) => "Thickness",
+            FeatureKind::Draft(_) => "Angle",
             FeatureKind::OffsetFace(_) | FeatureKind::MoveFace(_) => "Distance",
             FeatureKind::Surface(chamfera_doc::SurfaceFeature::Extrude(_)) => "Distance",
             FeatureKind::Surface(chamfera_doc::SurfaceFeature::Revolve(_)) => "Angle",

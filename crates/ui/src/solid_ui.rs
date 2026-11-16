@@ -471,6 +471,10 @@ pub struct SolidUi {
     pub transform: Option<crate::transform_ui::TransformTool>,
     /// The Shell tool.
     pub shell: Option<crate::shell_ui::ShellTool>,
+    /// The Draft tool (`draft_rib_ui.rs`).
+    pub draft: Option<crate::draft_rib_ui::DraftTool>,
+    /// The Rib tool (`draft_rib_ui.rs`).
+    pub rib: Option<crate::draft_rib_ui::RibTool>,
     /// The Press Pull, Offset Face or Delete Face tool (`press_pull_ui.rs`).
     pub press_pull: Option<crate::press_pull_ui::PressPullTool>,
     /// Combine, Split Body, Split Face or Thicken (`body_tools_ui.rs`).

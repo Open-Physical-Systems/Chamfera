@@ -624,6 +624,10 @@ pub enum FeatureKind {
     Surface(crate::surface::SurfaceFeature),
     /// A cosmetic thread on a cylindrical face (format 38).
     Thread(crate::thread::Thread),
+    /// Planar faces tilted about a neutral plane (format 40).
+    Draft(crate::face_edit::Draft),
+    /// A rib or web grown from an open sketch chain to a solid (format 40).
+    Rib(crate::rib::Rib),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -649,6 +653,7 @@ impl FeatureKind {
             FeatureKind::Loft(l) => l.sections.first().map(|s| s.sketch),
             FeatureKind::Hole(h) => h.sketch,
             FeatureKind::SheetBase(b) => Some(b.sketch),
+            FeatureKind::Rib(r) => Some(r.sketch),
             FeatureKind::SheetFlange(_) | FeatureKind::SheetUnfold(_) => None,
             FeatureKind::SplitFace(s) => match s.tool {
                 crate::body_tools::SplitFaceTool::SketchLine { sketch, .. } => Some(sketch),
@@ -667,6 +672,7 @@ impl FeatureKind {
             | FeatureKind::OffsetFace(_)
             | FeatureKind::DeleteFace(_)
             | FeatureKind::MoveFace(_)
+            | FeatureKind::Draft(_)
             | FeatureKind::Thread(_) => None,
         }
     }
@@ -711,6 +717,8 @@ impl FeatureKind {
             | FeatureKind::OffsetFace(_)
             | FeatureKind::DeleteFace(_)
             | FeatureKind::MoveFace(_)
+            | FeatureKind::Draft(_)
+            | FeatureKind::Rib(_)
             | FeatureKind::Thread(_) => Operation::NewBody,
         }
     }
@@ -741,6 +749,8 @@ impl FeatureKind {
             | FeatureKind::OffsetFace(_)
             | FeatureKind::DeleteFace(_)
             | FeatureKind::MoveFace(_)
+            | FeatureKind::Draft(_)
+            | FeatureKind::Rib(_)
             | FeatureKind::Thread(_) => &[],
         }
     }
@@ -780,6 +790,14 @@ impl FeatureKind {
             FeatureKind::Thicken(_) => "Thicken",
             FeatureKind::Remove(_) => "Remove",
             FeatureKind::Thread(_) => "Thread",
+            FeatureKind::Draft(_) => "Draft",
+            FeatureKind::Rib(r) => {
+                if r.web {
+                    "Web"
+                } else {
+                    "Rib"
+                }
+            }
         }
     }
 }
@@ -817,6 +835,8 @@ impl Document {
             FeatureKind::OffsetFace(o) => return self.check_offset_face(o),
             FeatureKind::DeleteFace(d) => return self.check_delete_face(d),
             FeatureKind::MoveFace(m) => return self.check_move_face(m),
+            FeatureKind::Draft(d) => return self.check_draft(d),
+            FeatureKind::Rib(r) => return self.check_rib(r),
             _ => {}
         }
         if kind.is_body_tool() {
@@ -912,6 +932,8 @@ impl Document {
             | FeatureKind::OffsetFace(_)
             | FeatureKind::DeleteFace(_)
             | FeatureKind::MoveFace(_)
+            | FeatureKind::Draft(_)
+            | FeatureKind::Rib(_)
             | FeatureKind::Thread(_) => {}
             FeatureKind::Sweep(s) => self.check_sweep_path(s)?,
             FeatureKind::Revolve(r) => {

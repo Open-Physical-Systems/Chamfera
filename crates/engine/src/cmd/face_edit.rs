@@ -61,7 +61,7 @@ fn bad(msg: impl Into<String>) -> CommandError {
 }
 
 /// A length or angle given as a number (in `unit`) or an expression.
-fn expression(p: &Value, key: &str, unit: &str) -> Result<Option<String>, CommandError> {
+pub(super) fn expression(p: &Value, key: &str, unit: &str) -> Result<Option<String>, CommandError> {
     match p.get(key) {
         None | Some(Value::Null) => Ok(None),
         Some(Value::String(s)) => Ok(Some(s.clone())),
@@ -82,7 +82,7 @@ fn point(p: &Value, key: &str) -> Result<Option<chamfera_geom::Vec3>, CommandErr
 }
 
 /// The faces a command edits: a non-empty list, or the one under `pick`.
-fn faces(s: &Session, p: &Value) -> Result<Vec<String>, CommandError> {
+pub(super) fn faces(s: &Session, p: &Value) -> Result<Vec<String>, CommandError> {
     let list = match (p.get("faces"), p.get("pick")) {
         (Some(Value::Array(list)), None | Some(Value::Null)) => list
             .iter()

@@ -1,0 +1,18 @@
+[
+  { "command": "sketch.create", "params": { "plane": "xy" }, "as": "base" },
+  { "command": "sketch.line", "params": { "x1": 0, "y1": 0, "x2": 40, "y2": 0 }, "as": "a" },
+  { "command": "sketch.line", "params": { "x1": 40, "y1": 0, "x2": 40, "y2": 5, "start": "$a.end" }, "as": "b" },
+  { "command": "sketch.line", "params": { "x1": 40, "y1": 5, "x2": 5, "y2": 5, "start": "$b.end" }, "as": "c" },
+  { "command": "sketch.line", "params": { "x1": 5, "y1": 5, "x2": 5, "y2": 40, "start": "$c.end" }, "as": "d" },
+  { "command": "sketch.line", "params": { "x1": 5, "y1": 40, "x2": 0, "y2": 40, "start": "$d.end" }, "as": "e" },
+  { "command": "sketch.line", "params": { "x1": 0, "y1": 40, "x2": 0, "y2": 0, "start": "$e.end", "end": "$a.start" } },
+  { "command": "sketch.finish" },
+  { "command": "solid.extrude", "params": { "sketch": "$base.sketch", "profiles": [{ "x": 2, "y": 2 }], "distance": 20 } },
+  { "command": "construct.plane_offset", "params": { "base": "xy", "distance": 10 }, "as": "mid" },
+  { "command": "sketch.create", "params": { "plane": "$mid.feature" }, "as": "ribline" },
+  { "command": "sketch.line", "params": { "x1": 5, "y1": 25, "x2": 25, "y2": 5 }, "as": "line" },
+  { "command": "sketch.finish" },
+  { "command": "solid.rib", "params": { "sketch": "$ribline.sketch", "curves": ["$line.curve"], "thickness": 4 } },
+  { "command": "view.home", "params": { "width": 1100, "height": 760 } },
+  { "command": "view.orbit", "params": { "yaw": 1.5708, "pitch": 0 } }
+]
