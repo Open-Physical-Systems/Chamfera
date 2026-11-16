@@ -145,7 +145,8 @@ impl ChamferaApp {
         // Markers already placed: the anchor pixel and how many sit there.
         let mut stacks: Vec<(egui::Pos2, usize)> = Vec::new();
         let mut clicked = None;
-        for g in glyphs.into_iter().take(MAX_GLYPHS) {
+        // A constraint on two curves has two markers: the index keeps their ids apart.
+        for (i, g) in glyphs.into_iter().take(MAX_GLYPHS).enumerate() {
             let Some(p) = self.project(rect, g.anchor) else {
                 continue;
             };
@@ -165,7 +166,7 @@ impl ChamferaApp {
             if !rect.contains_rect(r) {
                 continue;
             }
-            let id = ui.scope_id().with(("constraint glyph", g.constraint, k));
+            let id = ui.scope_id().with(("constraint glyph", g.constraint, i));
             let title = constraint_title(&g.kind);
             let resp = ui
                 .interact(r, id, egui::Sense::click())

@@ -163,7 +163,12 @@ use thiserror::Error;
 ///   line type, line weight, on/off, frozen and locked; the current layer; a line type
 ///   scale; and lines, circles, arcs and polylines drawn on those layers. Older files open
 ///   unchanged: their sheets have layer 0 only.
-pub const FORMAT_VERSION: u32 = 42;
+/// - 45: sketch gaps: intersection curves (`intersections` on a sketch: the body cut by
+///   the sketch plane, by name and the feature that made it, the sketch curves the cut
+///   gave, and whether they follow the body), and tangent handles on fit splines
+///   (`start_handle`, `end_handle`). Older files open unchanged: they hold none. (43 and
+///   44 are other branches'.)
+pub const FORMAT_VERSION: u32 = 45;
 /// The tag every design file starts with, so other JSON is not mistaken for a design.
 pub const FORMAT_TAG: &str = "chamfera";
 /// Longest parameter name.
@@ -291,6 +296,25 @@ fn linked_default() -> bool {
     true
 }
 
+/// Most intersection curves one sketch may hold.
+pub const MAX_INTERSECTIONS: usize = 1_000;
+/// Most sketch curves one intersection may make.
+pub const MAX_INTERSECTION_CURVES: usize = 10_000;
+
+/// Where the sketch plane cuts a body (an intersection curve): the sketch curves the cut
+/// made, fixed in place, and the body they follow when the design rebuilds.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Intersection {
+    /// The body's name (`Extrude1`).
+    pub body: String,
+    /// The feature that made the body, so the sketch is built after it.
+    pub feature: u32,
+    pub curves: Vec<u32>,
+    /// Whether the curves follow the body on rebuild; an unlinked copy stays where it is.
+    #[serde(default = "linked_default")]
+    pub linked: bool,
+}
+
 /// A sketch and the plane it is drawn on.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SketchFeature {
@@ -314,6 +338,9 @@ pub struct SketchFeature {
     /// Model edges projected into the sketch (see [`Projection`]).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub projections: Vec<Projection>,
+    /// Curves where the sketch plane cuts bodies (see [`Intersection`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub intersections: Vec<Intersection>,
 }
 
 impl SketchFeature {
@@ -614,6 +641,7 @@ impl Document {
             expressions: BTreeMap::new(),
             attached: None,
             projections: Vec::new(),
+            intersections: Vec::new(),
             on_plane: None,
         });
         self.timeline_insert(id);
@@ -729,6 +757,22 @@ impl Document {
             }
             if s.projections.len() > MAX_PROJECTIONS {
                 return Err(bad("too many projected edges".into()));
+            }
+            if s.intersections.len() > MAX_INTERSECTIONS {
+                return Err(bad("too many intersection curves".into()));
+            }
+            for i in &s.intersections {
+                if i.curves.len() > MAX_INTERSECTION_CURVES
+                    || i.body.chars().count() > MAX_EDGE_REF_LEN
+                    || i.curves
+                        .iter()
+                        .any(|c| s.sketch.curve(chamfera_sketch::CurveId(*c)).is_none())
+                {
+                    return Err(bad(format!(
+                        "intersection with {:?} names a missing curve",
+                        i.body
+                    )));
+                }
             }
             for p in &s.projections {
                 if s.sketch.curve(chamfera_sketch::CurveId(p.curve)).is_none()

@@ -308,6 +308,13 @@ impl Document {
                     .filter(|p| p.linked)
                     .flat_map(|p| edge_features(&p.edge)),
             );
+            // Linked intersection curves follow the body as its feature builds it.
+            deps.extend(
+                s.intersections
+                    .iter()
+                    .filter(|i| i.linked)
+                    .map(|i| i.feature),
+            );
             deps.sort_unstable();
             deps.dedup();
         }

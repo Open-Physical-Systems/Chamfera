@@ -110,6 +110,14 @@ pub enum Curve {
         closed: bool,
         #[serde(default)]
         construction: bool,
+        /// A tangent handle at the first point of an open fit spline: the spline leaves
+        /// that point toward it (its direction counts, not its length).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        start_handle: Option<PointId>,
+        /// A tangent handle at the last point: the spline arrives there heading away
+        /// from it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        end_handle: Option<PointId>,
     },
 }
 
@@ -145,7 +153,16 @@ impl Curve {
             Curve::Arc {
                 centre, start, end, ..
             } => vec![*centre, *start, *end],
-            Curve::Spline { points, .. } => points.clone(),
+            Curve::Spline {
+                points,
+                start_handle,
+                end_handle,
+                ..
+            } => {
+                let mut all = points.clone();
+                all.extend(start_handle.iter().chain(end_handle.iter()));
+                all
+            }
             Curve::Ellipse {
                 centre,
                 major,
@@ -161,6 +178,62 @@ impl Curve {
                 ..
             } => vec![*centre, *major, *minor, *start, *end],
         }
+    }
+
+    /// The same curve on other points: `f` maps each point id.
+    pub fn map_points(&self, f: impl Fn(PointId) -> PointId) -> Curve {
+        let mut c = self.clone();
+        match &mut c {
+            Curve::Line { start, end, .. } => {
+                *start = f(*start);
+                *end = f(*end);
+            }
+            Curve::Circle { centre, .. } => *centre = f(*centre),
+            Curve::Arc {
+                centre, start, end, ..
+            } => {
+                *centre = f(*centre);
+                *start = f(*start);
+                *end = f(*end);
+            }
+            Curve::Ellipse {
+                centre,
+                major,
+                minor,
+                ..
+            } => {
+                *centre = f(*centre);
+                *major = f(*major);
+                *minor = f(*minor);
+            }
+            Curve::EllipticalArc {
+                centre,
+                major,
+                minor,
+                start,
+                end,
+                ..
+            } => {
+                *centre = f(*centre);
+                *major = f(*major);
+                *minor = f(*minor);
+                *start = f(*start);
+                *end = f(*end);
+            }
+            Curve::Spline {
+                points,
+                start_handle,
+                end_handle,
+                ..
+            } => {
+                for p in points.iter_mut() {
+                    *p = f(*p);
+                }
+                *start_handle = start_handle.map(&f);
+                *end_handle = end_handle.map(&f);
+            }
+        }
+        c
     }
 
     /// The two ends of a line, arc or elliptical arc (closed curves have none).

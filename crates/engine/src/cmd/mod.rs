@@ -25,8 +25,10 @@ mod render;
 mod select;
 mod sheet;
 mod sketch;
+mod sketch_more;
 mod spline;
 mod surface;
+mod svg;
 mod text;
 mod thread;
 mod timeline;
@@ -80,8 +82,10 @@ pub fn registry() -> Vec<&'static CommandSpec> {
         select::COMMANDS,
         sheet::COMMANDS,
         sketch::COMMANDS,
+        sketch_more::COMMANDS,
         spline::COMMANDS,
         surface::COMMANDS,
+        svg::COMMANDS,
         text::COMMANDS,
         thread::COMMANDS,
         timeline::COMMANDS,

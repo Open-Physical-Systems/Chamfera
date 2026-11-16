@@ -43,6 +43,7 @@ pub const PATH_COMMANDS: &[(&str, Access)] = &[
     ("drawing.export", Access::Write),
     ("sketch.export_dxf", Access::Write),
     ("sketch.import_dxf", Access::Read),
+    ("sketch.import_svg", Access::Read),
 ];
 
 /// True when a command's parameter docs name a path parameter.

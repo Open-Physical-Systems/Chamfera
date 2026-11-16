@@ -648,19 +648,21 @@ impl ChamferaApp {
                 self.open_conflict_for(&c)?;
             }
             "draft" | "rib" => self.open_draft_rib_with(name == "rib", arg)?,
-            "dxf-insert" if !arg.is_empty() => {
+            "dxf-insert" | "svg-insert" if !arg.is_empty() => {
                 let file = std::path::Path::new(arg)
                     .file_name()
                     .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
-                self.file.dxf = Some(file_ui::DxfInsert::new(
-                    file_ui::DxfSource::Path(arg.to_owned()),
-                    file,
-                ));
+                let source = file_ui::DxfSource::Path(arg.to_owned());
+                self.file.dxf = Some(if name == "svg-insert" {
+                    file_ui::DxfInsert::svg(source, file)
+                } else {
+                    file_ui::DxfInsert::new(source, file)
+                });
             }
             _ => {
                 return Err(format!(
                     "--dialog takes joint-edit:ID, component-move:ID, component-rename:ID, \
-                     edit-feature:ID, dxf-insert:PATH, constraint-conflict:JSON, move:BODY, \
+                     edit-feature:ID, dxf-insert:PATH, svg-insert:PATH, constraint-conflict:JSON, move:BODY, \
                      fillet:EDGE, draft:JSON or rib:JSON, not {spec:?}"
                 ));
             }

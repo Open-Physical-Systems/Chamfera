@@ -52,6 +52,14 @@ pub(crate) const DXF_UNITS: [(Option<&str>, &str); 3] = [
     (Some("inch"), "Inches"),
 ];
 
+/// The units Insert SVG offers: what one SVG user unit is.
+pub(crate) const SVG_UNITS: [(Option<&str>, &str); 4] = [
+    (None, "From the file (else px)"),
+    (Some("mm"), "1 unit = 1 mm"),
+    (Some("px"), "1 unit = 1 px (1/96 in)"),
+    (Some("inch"), "1 unit = 1 inch"),
+];
+
 /// Where the DXF file to insert comes from.
 #[derive(Debug, Clone, PartialEq)]
 pub enum DxfSource {
@@ -74,6 +82,8 @@ pub struct DxfInsert {
     pub scale: String,
     /// Why the last Insert did nothing, shown under the fields.
     pub error: Option<String>,
+    /// An SVG file (Insert SVG) rather than a DXF one.
+    pub svg: bool,
 }
 
 impl DxfInsert {
@@ -84,7 +94,30 @@ impl DxfInsert {
             units: 0,
             scale: "1".into(),
             error: None,
+            svg: false,
         }
+    }
+
+    /// Insert SVG after the file is chosen.
+    pub fn svg(source: DxfSource, name: String) -> DxfInsert {
+        DxfInsert {
+            svg: true,
+            ..DxfInsert::new(source, name)
+        }
+    }
+
+    /// The units this insert offers.
+    pub(crate) fn unit_list(&self) -> &'static [(Option<&'static str>, &'static str)] {
+        if self.svg { &SVG_UNITS } else { &DXF_UNITS }
+    }
+
+    /// The command's label, for the dialog title.
+    pub(crate) fn title(&self) -> &'static str {
+        label(if self.svg {
+            "sketch.import_svg"
+        } else {
+            "sketch.import_dxf"
+        })
     }
 
     /// The command and its parameters, or why the scale cannot be used.
@@ -101,12 +134,14 @@ impl DxfInsert {
             DxfSource::Bytes(data) => json!({ "data": data }),
         };
         p["scale"] = json!(k);
-        if let Some(Some(u)) = DXF_UNITS.get(self.units).map(|u| u.0) {
+        if let Some(Some(u)) = self.unit_list().get(self.units).map(|u| u.0) {
             p["units"] = json!(u);
         }
-        let id = match self.source {
-            DxfSource::Path(_) => "sketch.import_dxf",
-            DxfSource::Bytes(_) => "sketch.import_dxf_bytes",
+        let id = match (&self.source, self.svg) {
+            (DxfSource::Path(_), false) => "sketch.import_dxf",
+            (DxfSource::Bytes(_), false) => "sketch.import_dxf_bytes",
+            (DxfSource::Path(_), true) => "sketch.import_svg",
+            (DxfSource::Bytes(_), true) => "sketch.import_svg_bytes",
         };
         Ok((id, p))
     }
@@ -436,6 +471,31 @@ impl ChamferaApp {
         ));
     }
 
+    /// The browser's file picker for an SVG drawing.
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn svg_dialog(&mut self) {
+        self.web.pick(crate::web::Kind::Svg, ".svg,.SVG", false);
+    }
+
+    /// Asks for an SVG file, then its units and scale (the same dialog as Insert DXF).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn svg_dialog(&mut self) {
+        let Some(path) = rfd::FileDialog::new()
+            .set_title(label("sketch.import_svg"))
+            .add_filter("SVG drawing", &["svg", "SVG"])
+            .pick_file()
+        else {
+            return;
+        };
+        let name = path
+            .file_name()
+            .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+        self.file.dxf = Some(DxfInsert::svg(
+            DxfSource::Path(path.to_string_lossy().into_owned()),
+            name,
+        ));
+    }
+
     /// Insert in the Insert DXF dialog: draws the file with the chosen units and scale.
     pub(crate) fn dxf_ok(&mut self) -> Option<serde_json::Value> {
         let d = self.file.dxf.as_ref()?;
@@ -477,7 +537,15 @@ impl ChamferaApp {
         let Some(d) = self.file.dxf.as_mut() else {
             return;
         };
-        let title = label("sketch.import_dxf");
+        let title = d.title();
+        let units = d.unit_list();
+        let note = if d.svg {
+            "Drawn into the sketch being edited, the page's bottom-left corner at the origin. \
+             Béziers become splines on the same control points, so curves stay exact."
+        } else {
+            "Drawn into the sketch being edited. A file that does not say its units is taken \
+             as mm."
+        };
         let mut ok = false;
         let mut cancel = false;
         egui::Window::new(title)
@@ -504,10 +572,10 @@ impl ChamferaApp {
                             ui.end_row();
                             widgets::field_label(ui, look, "Units");
                             egui::ComboBox::from_id_salt("dxf units")
-                                .selected_text(DXF_UNITS.get(d.units).map_or("", |u| u.1))
+                                .selected_text(units.get(d.units).map_or("", |u| u.1))
                                 .width(widgets::FIELD_WIDTH)
                                 .show_ui(ui, |ui| {
-                                    for (i, (_, n)) in DXF_UNITS.iter().enumerate() {
+                                    for (i, (_, n)) in units.iter().enumerate() {
                                         ui.selectable_value(&mut d.units, i, *n);
                                     }
                                 });
@@ -526,12 +594,9 @@ impl ChamferaApp {
                         });
                     ui.add(
                         egui::Label::new(
-                            egui::RichText::new(
-                                "Drawn into the sketch being edited. A file that does not say \
-                                 its units is taken as mm.",
-                            )
-                            .size(widgets::T_SMALL)
-                            .color(look.c(|t| t.text_muted)),
+                            egui::RichText::new(note)
+                                .size(widgets::T_SMALL)
+                                .color(look.c(|t| t.text_muted)),
                         )
                         .wrap(),
                     );
@@ -623,7 +688,11 @@ impl ChamferaApp {
         let mut text = format!(
             "Inserted {} curves ({}), {} profiles",
             v["curves"],
-            v["units"].as_str().unwrap_or("mm"),
+            match v["units"].as_str() {
+                Some("file") => "units from the file",
+                Some(u) => u,
+                None => "mm",
+            },
             v["profiles"].as_array().map_or(0, Vec::len)
         );
         if skipped > 0 {
@@ -683,6 +752,9 @@ impl ChamferaApp {
                 }
                 crate::web::Kind::Dxf => {
                     self.file.dxf = Some(DxfInsert::new(DxfSource::Bytes(data), picked.name));
+                }
+                crate::web::Kind::Svg => {
+                    self.file.dxf = Some(DxfInsert::svg(DxfSource::Bytes(data), picked.name));
                 }
                 crate::web::Kind::Mesh => {
                     let name = picked.name.as_str();

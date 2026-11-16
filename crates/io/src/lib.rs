@@ -16,6 +16,7 @@ pub mod obj;
 pub mod recovery;
 pub mod step;
 pub mod stl;
+pub mod svg;
 pub mod threemf;
 mod xml;
 pub mod zip;

@@ -162,6 +162,18 @@ impl Session {
                     OverlayStyle::Sketch
                 };
                 push(style, lines, Vec::new());
+                // While editing, a control spline shows its control polygon and a fit
+                // spline its tangent handles, thin like construction lines.
+                if active {
+                    let guide = spline_guides(&f.sketch, curve);
+                    if !guide.is_empty() {
+                        let lines = guide
+                            .iter()
+                            .map(|[a, b]| [f.plane.from_plane(*a), f.plane.from_plane(*b)])
+                            .collect();
+                        push(OverlayStyle::Construction, lines, Vec::new());
+                    }
+                }
             }
             if active {
                 for (id, p) in f.sketch.points() {
@@ -439,4 +451,43 @@ fn segment_distance(p: (f64, f64), a: (f64, f64), b: (f64, f64)) -> f64 {
         0.0
     };
     (p.0 - (a.0 + t * dx)).hypot(p.1 - (a.1 + t * dy))
+}
+
+/// The guide lines of a spline: its control polygon (control form, closed back to the
+/// first point when closed) or the lines from its ends to their tangent handles (fit
+/// form). Empty for other curves.
+pub fn spline_guides(
+    sk: &chamfera_sketch::Sketch,
+    curve: &chamfera_sketch::Curve,
+) -> Vec<[Point2; 2]> {
+    let chamfera_sketch::Curve::Spline {
+        points,
+        form,
+        closed,
+        start_handle,
+        end_handle,
+        ..
+    } = curve
+    else {
+        return Vec::new();
+    };
+    let at = |p: &chamfera_sketch::PointId| sk.point(*p);
+    let mut out = Vec::new();
+    match form {
+        chamfera_sketch::SplineForm::Control => {
+            let pts: Vec<Point2> = points.iter().filter_map(at).collect();
+            out.extend(pts.windows(2).map(|w| [w[0], w[1]]));
+            if *closed && let (Some(f), Some(l)) = (pts.first(), pts.last()) {
+                out.push([*l, *f]);
+            }
+        }
+        chamfera_sketch::SplineForm::Fit => {
+            for (end, handle) in [(points.first(), start_handle), (points.last(), end_handle)] {
+                if let (Some(e), Some(h)) = (end.and_then(at), handle.as_ref().and_then(at)) {
+                    out.push([e, h]);
+                }
+            }
+        }
+    }
+    out
 }

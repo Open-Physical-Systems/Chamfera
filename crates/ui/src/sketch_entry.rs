@@ -188,7 +188,7 @@ impl ChamferaApp {
             track: None,
             free: true,
         };
-        if tool == Tool::Spline {
+        if matches!(tool, Tool::Spline | Tool::ControlSpline) {
             if self
                 .sketch
                 .clicks

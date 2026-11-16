@@ -833,6 +833,14 @@ pub const TOOLS: &[RibbonTool] = &[
     ),
     sketch("CREATE", S::TangentCircle, Icon::CircleTangent, "Tangent Circle"),
     sketch("CREATE", S::Slot, Icon::Slot, "Slot"),
+    sketch("CREATE", S::ArcSlot, Icon::Slot, "Arc Slot"),
+    sketch("CREATE", S::EdgePolygon, Icon::Polygon, "Edge Polygon"),
+    sketch(
+        "CREATE",
+        S::ControlSpline,
+        Icon::Spline,
+        "Control Point Spline",
+    ),
     sketch("CREATE", S::Ellipse, Icon::Ellipse, "Ellipse"),
     sketch("CREATE", S::Project, Icon::Project, "Project").sep(),
     sketch("CREATE", S::Offset, Icon::Offset, "Offset"),
@@ -979,6 +987,23 @@ pub const TOOLS: &[RibbonTool] = &[
     )
     .primary()
     .short("Insert DXF"),
+    tool(
+        K,
+        "INSERT",
+        Action::Tool("sketch.import_svg"),
+        Icon::ImportMesh,
+        "Insert SVG…",
+        "Draw the paths, lines, circles and ellipses of an SVG file into this sketch, curves kept exact",
+    )
+    .short("Insert SVG"),
+    tool(
+        K,
+        "INSERT",
+        Action::Tool("sketch.intersect"),
+        Icon::Project,
+        "Intersect",
+        "Add the curves where the sketch plane cuts the selected bodies (else every body it cuts), linked so they follow the model",
+    ),
     tool(
         K,
         "INSERT",
@@ -2134,6 +2159,8 @@ impl ChamferaApp {
             "inspect.interference" => self.toggle_interference(),
             "view.explode" => self.toggle_explode(),
             "sketch.import_dxf" => self.dxf_dialog(),
+            "sketch.import_svg" => self.svg_dialog(),
+            "sketch.intersect" => self.intersect_tool(),
             "body.import_step" => self.step_dialog(),
             "sketch.export_dxf" => self.export("DXF drawing", &["dxf"], "sketch.export_dxf"),
             "sketch.split_all" => {

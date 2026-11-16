@@ -1,0 +1,13 @@
+[
+  { "command": "sketch.create", "params": { "plane": "xy" } },
+  { "command": "sketch.spline", "params": { "kind": "control", "points": [
+      { "x": 0, "y": 0 }, { "x": 10, "y": 30 }, { "x": 35, "y": 35 }, { "x": 50, "y": 5 }, { "x": 75, "y": 0 }, { "x": 90, "y": 25 } ] }, "as": "s" },
+  { "command": "sketch.line", "params": { "x1": -30, "y1": -20, "x2": -5, "y2": -20 }, "as": "l" },
+  { "command": "sketch.spline", "params": { "kind": "fit", "points": [
+      { "point": "$l.end" }, { "x": 20, "y": -5 }, { "x": 45, "y": -30 }, { "x": 70, "y": -20 } ] }, "as": "f" },
+  { "command": "sketch.constrain", "params": { "constraint": { "kind": "tangent", "a": "$l.curve", "b": "$f.curve" } } },
+  { "command": "sketch.spline.handles", "params": { "curve": "$f.curve", "start": false, "end": true } },
+  { "command": "view.standard", "params": { "view": "top" } },
+  { "command": "view.fit", "params": { "width": 1120, "height": 680 } },
+  { "command": "sketch.get" }
+]
