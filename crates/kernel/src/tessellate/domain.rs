@@ -16,6 +16,9 @@
 //! | Sphere, radius `r` | `r` | `r` (isometric at the equator) | u: `2π r` | the two poles |
 //! | Torus, `R`, `a` | the tube's mean distance from the axis, `(ρ_max + max(ρ_min, 0)) / 2` | `a` (isometric) | u: `2π s_u`, v: `2π a` | a spindle torus's tips |
 //!
+//! Extrusions and free-form surfaces (K10) use their own parameters scaled by mean
+//! speeds ([`ExtrusionDomain`], [`NurbsDomain`]).
+//!
 //! Scaling by positive constants keeps `∂S/∂u × ∂S/∂v` along the kernel's normal
 //! ([`Surface::normal_at`]), so the orientation contract holds. The u scale is exact on a
 //! cylinder and at the widest parallel elsewhere; nearer the axis Delaunay triangles in
@@ -32,7 +35,7 @@
 //!   shorter sides anyway; near a pole they do not, and a triangle spanning half a turn
 //!   there would fold over.
 
-use crate::{KernelError, KernelResult, Surface};
+use crate::{KernelError, KernelResult, NurbsSurface, Surface};
 use chamfera_geom::{Frame, LINEAR_TOLERANCE, Point2, Point3, Vec3};
 use std::f64::consts::FRAC_PI_2;
 
@@ -167,6 +170,69 @@ impl SurfaceDomain for ExtrusionDomain {
     }
 }
 
+/// A free-form surface (K10) in `(u, v) = (s_u t, s_v w)`: the knot parameters scaled by
+/// the surface's mean speeds `|S_u|` and `|S_v|` over a grid of samples, so (u, v) is
+/// about isometric where the speed is even; the refinement in space corrects the rest.
+/// Periodic where the surface closes; its poles (collapsed `v` boundaries) are singular.
+/// On a surface with a pole an interior side may span at most a quarter of the domain in
+/// each direction, which keeps fans into the pole from folding as on a sphere; without
+/// one nothing limits the spans (a limit could not be met along a long straight boundary
+/// edge, which has no points between its ends to split at).
+pub(super) struct NurbsDomain {
+    surface: NurbsSurface,
+    su: f64,
+    sv: f64,
+}
+
+impl SurfaceDomain for NurbsDomain {
+    fn surface_point(&self, uv: Point2) -> Point3 {
+        self.surface.point_at(uv.x / self.su, uv.y / self.sv)
+    }
+    fn surface_uv(&self, p: Point3) -> Point2 {
+        let q = self.surface.parameters(p);
+        Point2::new(q.u * self.su, q.v * self.sv)
+    }
+    fn surface_normal(&self, uv: Point2) -> Vec3 {
+        self.surface.normal_at(uv.x / self.su, uv.y / self.sv)
+    }
+    fn u_period(&self) -> Option<f64> {
+        self.surface.period_u().map(|p| p * self.su)
+    }
+    fn v_period(&self) -> Option<f64> {
+        self.surface.period_v().map(|p| p * self.sv)
+    }
+    fn is_singular(&self, p: Point3) -> bool {
+        self.surface.is_pole(p)
+    }
+    fn max_span(&self) -> (f64, f64) {
+        let (ul, uh) = self.surface.domain_u();
+        let (vl, vh) = self.surface.domain_v();
+        if let (None, None) = self.surface.poles() {
+            return (f64::INFINITY, f64::INFINITY);
+        }
+        (0.25 * (uh - ul) * self.su, 0.25 * (vh - vl) * self.sv)
+    }
+}
+
+/// The mean speeds `(|S_u|, |S_v|)` of a free-form surface over a grid of samples.
+fn mean_speeds(n: &NurbsSurface) -> (f64, f64) {
+    const GRID: usize = 8;
+    let (ul, uh) = n.domain_u();
+    let (vl, vh) = n.domain_v();
+    let (mut a, mut b) = (0.0, 0.0);
+    for i in 0..=GRID {
+        for j in 0..=GRID {
+            let u = ul + (uh - ul) * i as f64 / GRID as f64;
+            let v = vl + (vh - vl) * j as f64 / GRID as f64;
+            let (su, sv) = n.derivatives(u, v);
+            a += su.length();
+            b += sv.length();
+        }
+    }
+    let count = ((GRID + 1) * (GRID + 1)) as f64;
+    (a / count, b / count)
+}
+
 /// The domain of a face on `surface`; `boundary` holds the face's boundary points (a
 /// cone's u scale is taken from them).
 pub(super) fn domain_for(
@@ -188,6 +254,19 @@ pub(super) fn domain_for(
         Ok(domain)
     };
     match surface {
+        Surface::Nurbs(n) => {
+            let (su, sv) = mean_speeds(n);
+            if !(su.is_finite() && sv.is_finite() && su > 0.0 && sv > 0.0) {
+                return Err(KernelError::InvalidInput(
+                    "a free-form face is too small to tessellate".into(),
+                ));
+            }
+            Ok(Box::new(NurbsDomain {
+                surface: n.clone(),
+                su,
+                sv,
+            }))
+        }
         Surface::Extrusion(e) => {
             // u scaled by the curve's mean speed, so (u, v) is about isometric.
             let (lo, hi) = e.curve().domain();

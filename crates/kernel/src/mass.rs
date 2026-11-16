@@ -32,7 +32,9 @@
 //! of Mathematical Functions*, 25.4.29): on a plane, cylinder and cone `f` is a polynomial
 //! of degree at most 4 in `v`, so one 5-point panel is exact; on a sphere and a torus `f`
 //! is a trigonometric polynomial and panels of at most π/16 leave an error below 1e-15 of
-//! the integral. The boundary integrals use adaptive 5-point Gauss-Legendre quadrature to
+//! the integral. On a free-form (NURBS) surface `f` is rational on each knot span, and
+//! each span is cut into a fixed number of panels (`nurbs.rs`); `u'` along an edge is the
+//! least-squares solution of `S_u u' + S_v v' = C'`. The boundary integrals use adaptive 5-point Gauss-Legendre quadrature to
 //! [`MASS_QUADRATURE_TOLERANCE`].
 //!
 //! Voids (shells with inward faces) subtract themselves, as they do from the volume.
@@ -141,6 +143,24 @@ impl FaceIntegrand {
             ));
         }
         if span == 0.0 {
+            return Ok(out);
+        }
+        if let Surface::Nurbs(n) = &self.surface {
+            // Panels per knot span: `f` is rational (analytic) on each.
+            let cuts = n
+                .v_panels(self.v_ref, v, MAX_V_PANELS * 64)
+                .ok_or_else(|| {
+                    KernelError::InvalidInput(
+                        "a free-form face winds around its surface too many times".into(),
+                    )
+                })?;
+            for w in cuts.windows(2) {
+                let (m, h) = (0.5 * (w[0] + w[1]), 0.5 * (w[1] - w[0]));
+                for (x, wt) in GAUSS5 {
+                    let f = density(&self.surface, self.c, u, m + h * x);
+                    add(&mut out, &f, h * wt);
+                }
+            }
             return Ok(out);
         }
         let panels = if self.angular_v {
@@ -264,6 +284,15 @@ fn du_dt(surface: &Surface, p: Point3, d: Vec3) -> Option<f64> {
     if let Surface::Plane(_) = surface {
         return Some(d.x);
     }
+    if let Surface::Nurbs(n) = surface {
+        // The world frame: `d` is unchanged. At a pole u is undefined and the step
+        // along the pole is integrated on its own (`pole_steps`).
+        let q = n.parameters(p);
+        if q.singular {
+            return Some(0.0);
+        }
+        return n.parameter_rates(q.u, q.v, d).map(|r| r.0);
+    }
     let l = frame.to_local(p);
     let r2 = l.x * l.x + l.y * l.y;
     if r2 <= LINEAR_TOLERANCE * LINEAR_TOLERANCE {
@@ -336,8 +365,9 @@ fn face_moments(body: &Body, face: FaceId, c: Point3) -> KernelResult<Moments> {
     let (surface, orient) = body.face_orientation(face)?;
     let angular_v = matches!(surface, Surface::Sphere(_) | Surface::Torus(_));
     let (lo, hi) = surface.v_range();
-    let v_ref = match surface {
+    let v_ref = match &surface {
         Surface::Sphere(_) | Surface::Torus(_) => 0.0,
+        Surface::Nurbs(n) => n.domain_v().0,
         _ => surface.parameters(c).v.clamp(lo, hi),
     };
     let integrand = FaceIntegrand {

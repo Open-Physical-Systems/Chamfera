@@ -35,9 +35,11 @@
 
 use crate::check;
 use crate::extrusion::Extrusion;
+use crate::nurbs::NurbsSurface;
 use crate::{KernelError, KernelResult};
 use chamfera_geom::{
-    ANGULAR_TOLERANCE, BSplineCurve2, Frame, LINEAR_TOLERANCE, MAX_COORDINATE, Point3, Vec3,
+    ANGULAR_TOLERANCE, BSplineCurve2, BSplineSurface3, Frame, LINEAR_TOLERANCE, MAX_COORDINATE,
+    Point3, Vec3,
 };
 use serde::{Deserialize, Serialize};
 use std::f64::consts::{FRAC_PI_2, TAU};
@@ -194,6 +196,8 @@ pub enum Surface {
     /// A planar B-spline swept along its plane's normal (rung K10, `extrusion.rs`): the
     /// side face of an extruded spline.
     Extrusion(Extrusion),
+    /// A rational B-spline surface (rung K10, `nurbs.rs`): a free-form face.
+    Nurbs(NurbsSurface),
 }
 
 /// The serialized form of a [`Surface`]: the constructor arguments.
@@ -223,6 +227,15 @@ enum SurfaceData {
         frame: Frame,
         curve: BSplineCurve2,
     },
+    /// The control net as rows along `u` and the weights in the same shape.
+    Nurbs {
+        degree_u: usize,
+        degree_v: usize,
+        knots_u: Vec<f64>,
+        knots_v: Vec<f64>,
+        points: Vec<Vec<Point3>>,
+        weights: Vec<Vec<f64>>,
+    },
 }
 
 impl From<Surface> for SurfaceData {
@@ -251,6 +264,19 @@ impl From<Surface> for SurfaceData {
                 frame: e.frame,
                 curve: e.curve,
             },
+            Surface::Nurbs(n) => {
+                let s = n.surface();
+                let (degree_u, degree_v) = s.degrees();
+                let (points, weights) = s.net();
+                SurfaceData::Nurbs {
+                    degree_u,
+                    degree_v,
+                    knots_u: s.knots_u().to_vec(),
+                    knots_v: s.knots_v().to_vec(),
+                    points,
+                    weights,
+                }
+            }
         }
     }
 }
@@ -277,6 +303,21 @@ impl TryFrom<SurfaceData> for Surface {
             SurfaceData::Extrusion { frame, curve } => {
                 Surface::Extrusion(Extrusion::new(frame, curve)?)
             }
+            SurfaceData::Nurbs {
+                degree_u,
+                degree_v,
+                knots_u,
+                knots_v,
+                points,
+                weights,
+            } => Surface::Nurbs(NurbsSurface::new(BSplineSurface3::new(
+                degree_u,
+                degree_v,
+                knots_u,
+                knots_v,
+                points,
+                Some(weights),
+            )?)?),
         })
     }
 }
@@ -407,6 +448,11 @@ impl Surface {
         )?))
     }
 
+    /// A free-form surface (see [`NurbsSurface::new`]).
+    pub fn nurbs(surface: BSplineSurface3) -> KernelResult<Surface> {
+        Ok(Surface::Nurbs(NurbsSurface::new(surface)?))
+    }
+
     pub fn frame(&self) -> &Frame {
         match self {
             Surface::Plane(f) => f,
@@ -415,13 +461,14 @@ impl Surface {
             Surface::Sphere(s) => &s.frame,
             Surface::Torus(t) => &t.frame,
             Surface::Extrusion(e) => &e.frame,
+            Surface::Nurbs(n) => n.frame(),
         }
     }
 
     /// The meridian of a surface of revolution (`None` for a plane or an extrusion).
     pub(crate) fn meridian(&self) -> Option<Meridian> {
         match *self {
-            Surface::Plane(_) | Surface::Extrusion(_) => None,
+            Surface::Plane(_) | Surface::Extrusion(_) | Surface::Nurbs(_) => None,
             Surface::Cylinder(c) => Some(Meridian::Line {
                 r: c.radius,
                 s: 0.0,
@@ -444,23 +491,28 @@ impl Surface {
     }
 
     /// The period of `u` (2π on every surface of revolution; none on a plane or an
-    /// extrusion).
+    /// extrusion; the domain's width on a free-form surface that closes in `u`).
     pub fn period_u(&self) -> Option<f64> {
         match self {
             Surface::Plane(_) | Surface::Extrusion(_) => None,
+            Surface::Nurbs(n) => n.period_u(),
             _ => Some(TAU),
         }
     }
-    /// The period of `v` (2π on a torus; none otherwise).
+    /// The period of `v` (2π on a torus; the domain's width on a free-form surface that
+    /// closes in `v`; none otherwise).
     pub fn period_v(&self) -> Option<f64> {
         match self {
             Surface::Torus(_) => Some(TAU),
+            Surface::Nurbs(n) => n.period_v(),
             _ => None,
         }
     }
-    /// The range of `v` (one period `[0, 2π)` on a torus).
+    /// The range of `v` (one period `[0, 2π)` on a torus; the knot domain on a free-form
+    /// surface).
     pub fn v_range(&self) -> (f64, f64) {
         match self {
+            Surface::Nurbs(n) => n.domain_v(),
             Surface::Plane(_) | Surface::Cylinder(_) | Surface::Extrusion(_) => {
                 (f64::NEG_INFINITY, f64::INFINITY)
             }
@@ -481,6 +533,7 @@ impl Surface {
         match (self, self.meridian()) {
             (Surface::Plane(f), _) => f.origin() + f.x() * u + f.y() * v,
             (Surface::Extrusion(e), _) => e.point_at(u, v),
+            (Surface::Nurbs(n), _) => n.point_at(u, v),
             (_, Some(m)) => {
                 let f = self.frame();
                 let (s, c) = u.sin_cos();
@@ -494,6 +547,9 @@ impl Surface {
     pub fn derivatives(&self, u: f64, v: f64) -> (Vec3, Vec3) {
         if let Surface::Extrusion(e) = self {
             return e.derivatives(u, v);
+        }
+        if let Surface::Nurbs(n) = self {
+            return n.derivatives(u, v);
         }
         let f = self.frame();
         match self.meridian() {
@@ -514,6 +570,9 @@ impl Surface {
     pub fn normal_at(&self, u: f64, v: f64) -> Vec3 {
         if let Surface::Extrusion(e) = self {
             return e.normal_at(u, v);
+        }
+        if let Surface::Nurbs(n) = self {
+            return n.normal_at(u, v);
         }
         let f = self.frame();
         match self.meridian() {
@@ -539,6 +598,9 @@ impl Surface {
         if let Surface::Extrusion(e) = self {
             return e.parameters(p);
         }
+        if let Surface::Nurbs(n) = self {
+            return n.parameters(p);
+        }
         let l = self.frame().to_local(p);
         let rho_p = l.x.hypot(l.y);
         let singular = rho_p <= LINEAR_TOLERANCE;
@@ -554,6 +616,10 @@ impl Surface {
             Surface::Cylinder(_) => (u, l.z),
             Surface::Extrusion(e) => {
                 let q = e.parameters(p);
+                (q.u, q.v)
+            }
+            Surface::Nurbs(n) => {
+                let q = n.parameters(p);
                 (q.u, q.v)
             }
             Surface::Cone(c) => {
@@ -592,11 +658,14 @@ impl Surface {
         if let Surface::Extrusion(e) = self {
             return e.closest_point(p);
         }
+        if let Surface::Nurbs(n) = self {
+            return n.closest_point(p);
+        }
         check::point3("point", p)?;
         let q = self.parameters(p);
         let point = self.point_at(q.u, q.v);
         let unique = match self {
-            Surface::Plane(_) | Surface::Extrusion(_) => true,
+            Surface::Plane(_) | Surface::Extrusion(_) | Surface::Nurbs(_) => true,
             Surface::Sphere(s) => s.frame.origin().distance(p) > LINEAR_TOLERANCE,
             Surface::Torus(t) => {
                 // On the axis every tube circle is equally near.

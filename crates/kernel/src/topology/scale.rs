@@ -220,6 +220,10 @@ fn surface(s: &Surface, m: &Map, t: &Transform) -> KernelResult<Surface> {
             let curve = e.curve().to_3d(old)?.transformed(t)?.to_plane(&f)?;
             Surface::Extrusion(crate::Extrusion::new(f, curve)?)
         }
+        // Affine invariance (The NURBS Book §4.4): the control points are mapped, any
+        // positive scale keeps a free-form surface free-form. With `det S > 0`,
+        // `(S S_u) × (S S_v) = det S · S^-T (S_u × S_v)` stays on the same side.
+        Surface::Nurbs(n) => Surface::Nurbs(n.transformed(t, false)?),
     })
 }
 

@@ -408,7 +408,7 @@ fn loop_uv(
     // A copy at least every angle tolerance around the axis (and half the fold span).
     let spacing = match pu {
         Some(p) => (p * angle_tolerance / std::f64::consts::TAU).min(0.5 * domain.max_span().0),
-        None => f64::INFINITY,
+        None => 0.5 * domain.max_span().0,
     };
     let mut out_g: Vec<u32> = Vec::with_capacity(n);
     let mut out_uv: Vec<Point2> = Vec::with_capacity(n);
@@ -439,16 +439,30 @@ fn loop_uv(
         } else {
             0.0
         };
-        let (Some(p), Some((_, next_q, _)), false, true) = (pu, next, next_is_singular, dir != 0.0)
-        else {
+        let (Some((_, next_q, _)), false, true) = (next, next_is_singular, dir != 0.0) else {
             // Within a run of singular points (only on faces near the tolerance), or with
             // nothing to walk: keep u.
             out_g.push(g);
             out_uv.push(Point2::new(last.x, v));
             continue;
         };
-        let step = domain::directed_step(next_q.x - last.x, dir, p, p * 1e-12);
-        let copies = (step.abs() / spacing).ceil();
+        // Around a periodic u the walk goes the way the face's side demands; in an open
+        // u (a free-form patch with a pole at a corner) straight to where the loop leaves.
+        let step = match pu {
+            Some(p) => domain::directed_step(next_q.x - last.x, dir, p, p * 1e-12),
+            None => next_q.x - last.x,
+        };
+        if step == 0.0 {
+            // The loop leaves the pole along the meridian it came in on.
+            out_g.push(g);
+            out_uv.push(Point2::new(last.x, v));
+            continue;
+        }
+        let copies = if spacing.is_finite() && spacing > 0.0 {
+            (step.abs() / spacing).ceil()
+        } else {
+            1.0
+        };
         if !(copies.is_finite() && copies <= max_points as f64) {
             return Err(KernelError::InvalidInput(
                 "a pole would need more points than `max_triangles` at this angle tolerance".into(),

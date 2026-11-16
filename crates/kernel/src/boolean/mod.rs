@@ -178,6 +178,11 @@ pub fn boolean(a: &Body, b: &Body, op: BooleanOp) -> KernelResult<Body> {
                 "the {which} solid is empty"
             )));
         }
+        if body.has_freeform_faces() {
+            return Err(KernelError::Unsupported(format!(
+                "a boolean with the {which} solid, which has free-form (NURBS) faces: their intersections with other faces need surface-surface marching (kernel rung K10, next step)"
+            )));
+        }
         if body.faces().len() > MAX_BOOLEAN_FACES {
             return Err(KernelError::InvalidInput(format!(
                 "the {which} solid has more than {MAX_BOOLEAN_FACES} faces"

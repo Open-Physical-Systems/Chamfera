@@ -108,6 +108,9 @@ pub fn intersect_curve_surface_on(
     t1: f64,
     surface: &Surface,
 ) -> KernelResult<CurveSurfaceIntersection> {
+    if let Surface::Nurbs(n) = surface {
+        return super::nurbs::curve_nurbs(curve, t0, t1, n);
+    }
     if let Surface::Extrusion(e) = surface {
         return super::extrusion::curve_extrusion(curve, t0, t1, e);
     }
@@ -174,7 +177,7 @@ fn implicit(surface: &Surface, x: &Poly, y: &Poly, z: &Poly, d: &Poly) -> Poly {
     let rho2 = sq(x).add(&sq(y));
     match surface {
         // Refused before (`intersect_curve_surface_on`); no implicit form here.
-        Surface::Plane(_) | Surface::Extrusion(_) => z.clone(),
+        Surface::Plane(_) | Surface::Extrusion(_) | Surface::Nurbs(_) => z.clone(),
         Surface::Cylinder(c) => rho2.sub(&sq(d).scale(c.radius() * c.radius())),
         Surface::Sphere(s) => rho2.add(&sq(z)).sub(&sq(d).scale(s.radius() * s.radius())),
         Surface::Cone(c) => {

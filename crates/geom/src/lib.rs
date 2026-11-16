@@ -18,7 +18,7 @@ pub use mesh::{Aabb, MAX_TRIANGLES, MeshError, Ray, TriMesh, same_length};
 pub use nurbs::{
     BSplineCurve2, BSplineCurve3, BSplineSurface3, CurveProjection, DEFAULT_SPLINE_DEGREE,
     KNOT_TOLERANCE, LENGTH_RELATIVE_TOLERANCE, MAX_CONTROL_POINTS, MAX_DEGREE, MAX_FIT_POINTS,
-    MAX_KNOT, MAX_SURFACE_CONTROL_POINTS, MAX_WEIGHT, MIN_WEIGHT, NurbsError,
+    MAX_KNOT, MAX_SURFACE_CONTROL_POINTS, MAX_WEIGHT, MIN_WEIGHT, NurbsError, SurfaceDerivatives,
 };
 pub use predicates::{
     PREDICATE_MAX_MAGNITUDE, PREDICATE_MIN_MAGNITUDE, Sign, incircle, orient2d, orient3d,

@@ -418,6 +418,7 @@ fn shape_of(body: &Body, entity: Entity) -> (String, Option<Vec3>) {
             Some((Surface::Sphere(_), _)) => ("sphere".into(), None),
             Some((Surface::Torus(t), _)) => ("torus".into(), Some(t.frame().z())),
             Some((Surface::Extrusion(_), _)) => ("extrusion".into(), None),
+            Some((Surface::Nurbs(_), _)) => ("nurbs".into(), None),
             None => (String::new(), None),
         },
         Entity::Edge(e) => match body.edge_curve(e).ok().flatten() {

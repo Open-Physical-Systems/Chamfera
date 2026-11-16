@@ -171,7 +171,9 @@ use thiserror::Error;
 ///   `cylinder`, `sphere`, `torus` or `cone`), scale features (`kind: scale`) and physical
 ///   materials per feature's bodies (`materials`: name and density in g/cm³, used by mass
 ///   properties). Older files open unchanged: they hold none.
-pub const FORMAT_VERSION: u32 = 43;
+/// - 44: free-form faces: imported solids may hold rational B-spline surfaces (`nurbs`:
+///   degrees, knots, the control net and its weights). Older files open unchanged.
+pub const FORMAT_VERSION: u32 = 44;
 /// The tag every design file starts with, so other JSON is not mistaken for a design.
 pub const FORMAT_TAG: &str = "chamfera";
 /// Longest parameter name.

@@ -1011,7 +1011,7 @@ fn implicit_value(s: &Surface, p: Point3) -> Option<f64> {
             let q = all + big * big - a * a;
             Some(q * q - 4.0 * big * big * rho2)
         }
-        Surface::Cone(_) | Surface::Extrusion(_) => None,
+        Surface::Cone(_) | Surface::Extrusion(_) | Surface::Nurbs(_) => None,
     }
 }
 

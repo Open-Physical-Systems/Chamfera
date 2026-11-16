@@ -68,11 +68,12 @@ fn oblique_term(e: &Extrusion, edge: &EdgeImage, centre: Option<Point3>) -> Kern
 }
 
 impl Body {
-    /// True when any face lies on a spline surface or any edge on a spline curve.
+    /// True when any face lies on a spline surface (an extrusion or a free-form surface)
+    /// or any edge on a spline curve.
     pub fn has_spline_geometry(&self) -> bool {
         self.surfaces
             .live()
-            .any(|(_, s)| matches!(s, Surface::Extrusion(_)))
+            .any(|(_, s)| matches!(s, Surface::Extrusion(_) | Surface::Nurbs(_)))
             || self
                 .curves
                 .live()
