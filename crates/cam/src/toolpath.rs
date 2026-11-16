@@ -35,6 +35,17 @@ pub enum Move {
         peck: Option<f64>,
         feed: f64,
     },
+    /// A tapping cycle at `at` (G84, or a post's rigid tapping): rapid to the retract
+    /// plane `r`, feed to `bottom` at `pitch` mm per turn (`feed` = pitch x spindle
+    /// speed), the spindle reverses and the tap feeds back out to `r`, then back to the
+    /// height it started at.
+    Tap {
+        at: Point2,
+        r: f64,
+        bottom: f64,
+        pitch: f64,
+        feed: f64,
+    },
 }
 
 /// What one operation makes: its tool and its moves.
@@ -74,74 +85,101 @@ pub fn arc_length(from: Point3, to: Point3, c: Point2, clockwise: bool) -> f64 {
     (r * sweep).hypot(to.z - from.z)
 }
 
+/// Appends `m`, starting from `at`, to `out` with a drill or tapping cycle written out as
+/// its rapids and feeds (G98: back to the height it started at); returns where the tool
+/// ends.
+pub fn expand_move(m: &Move, at: Point3, out: &mut Vec<Move>) -> Point3 {
+    match *m {
+        Move::Drill {
+            at: xy,
+            r,
+            bottom,
+            peck,
+            feed,
+        } => {
+            let start_z = at.z;
+            let p = |z: f64| Point3::new(xy.x, xy.y, z);
+            out.push(Move::Rapid { to: p(start_z) });
+            out.push(Move::Rapid { to: p(r) });
+            match peck {
+                Some(q) if q > 0.0 => {
+                    let mut depth = r;
+                    // Bounded: at most this many pecks (the peck is at least
+                    // 1/10000 of the stroke).
+                    for _ in 0..10_000 {
+                        let next = (depth - q).max(bottom);
+                        if depth < r {
+                            out.push(Move::Rapid {
+                                to: p((depth + PECK_CLEARANCE).min(r)),
+                            });
+                        }
+                        out.push(Move::Plunge { to: p(next), feed });
+                        out.push(Move::Rapid { to: p(r) });
+                        depth = next;
+                        if depth <= bottom {
+                            break;
+                        }
+                    }
+                }
+                _ => {
+                    out.push(Move::Plunge {
+                        to: p(bottom),
+                        feed,
+                    });
+                }
+            }
+            out.push(Move::Rapid { to: p(start_z) });
+            p(start_z)
+        }
+        Move::Tap {
+            at: xy,
+            r,
+            bottom,
+            feed,
+            ..
+        } => {
+            let start_z = at.z;
+            let p = |z: f64| Point3::new(xy.x, xy.y, z);
+            out.push(Move::Rapid { to: p(start_z) });
+            out.push(Move::Rapid { to: p(r) });
+            out.push(Move::Plunge {
+                to: p(bottom),
+                feed,
+            });
+            // Out again at the same feed, the spindle turning the other way.
+            out.push(Move::Line { to: p(r), feed });
+            out.push(Move::Rapid { to: p(start_z) });
+            p(start_z)
+        }
+        Move::Rapid { to } | Move::Line { to, .. } | Move::Plunge { to, .. } => {
+            out.push(*m);
+            to
+        }
+        Move::Arc { to, .. } => {
+            out.push(*m);
+            to
+        }
+    }
+}
+
 impl Toolpath {
     /// The first position the toolpath goes to (its first move's end).
     pub fn start(&self) -> Option<Point3> {
         self.moves.first().map(|m| match *m {
             Move::Rapid { to } | Move::Line { to, .. } | Move::Plunge { to, .. } => to,
             Move::Arc { to, .. } => to,
-            Move::Drill { at, r, .. } => Point3::new(at.x, at.y, r),
+            Move::Drill { at, r, .. } | Move::Tap { at, r, .. } => Point3::new(at.x, at.y, r),
         })
     }
 
-    /// The same path with drill cycles written out as the rapids and feeds they make,
-    /// as RS274/NGC defines G81 and G83 (NIST spec v3, §3.5.16) with G98 (return to the
-    /// height before the cycle).
+    /// The same path with drill and tapping cycles written out as the rapids and feeds
+    /// they make, as RS274/NGC defines G81 and G83 (NIST spec v3, §3.5.16) with G98
+    /// (return to the height before the cycle).
     pub fn expanded(&self) -> Vec<Move> {
         let mut out = Vec::with_capacity(self.moves.len());
         let mut at = self.start().unwrap_or_default();
         for m in &self.moves {
-            match *m {
-                Move::Drill {
-                    at: xy,
-                    r,
-                    bottom,
-                    peck,
-                    feed,
-                } => {
-                    let start_z = at.z;
-                    let p = |z: f64| Point3::new(xy.x, xy.y, z);
-                    out.push(Move::Rapid { to: p(start_z) });
-                    out.push(Move::Rapid { to: p(r) });
-                    match peck {
-                        Some(q) if q > 0.0 => {
-                            let mut depth = r;
-                            // Bounded: at most this many pecks (the peck is at least
-                            // 1/10000 of the stroke).
-                            for _ in 0..10_000 {
-                                let next = (depth - q).max(bottom);
-                                if depth < r {
-                                    out.push(Move::Rapid {
-                                        to: p((depth + PECK_CLEARANCE).min(r)),
-                                    });
-                                }
-                                out.push(Move::Plunge { to: p(next), feed });
-                                out.push(Move::Rapid { to: p(r) });
-                                depth = next;
-                                if depth <= bottom {
-                                    break;
-                                }
-                            }
-                        }
-                        _ => {
-                            out.push(Move::Plunge {
-                                to: p(bottom),
-                                feed,
-                            });
-                        }
-                    }
-                    out.push(Move::Rapid { to: p(start_z) });
-                    at = p(start_z);
-                }
-                Move::Rapid { to } | Move::Line { to, .. } | Move::Plunge { to, .. } => {
-                    out.push(*m);
-                    at = to;
-                }
-                Move::Arc { to, .. } => {
-                    out.push(*m);
-                    at = to;
-                }
-            }
+            at = expand_move(m, at, &mut out);
         }
         out
     }
@@ -169,7 +207,7 @@ impl Toolpath {
                     clockwise,
                     feed,
                 } => (to, arc_length(at, to, centre, clockwise), feed),
-                Move::Drill { .. } => continue,
+                Move::Drill { .. } | Move::Tap { .. } => continue,
             };
             s.feed_length += len;
             if feed > 0.0 {
@@ -237,7 +275,7 @@ impl Toolpath {
                     }
                     at = to;
                 }
-                Move::Drill { .. } => {}
+                Move::Drill { .. } | Move::Tap { .. } => {}
             }
         }
         (rapids, feeds)

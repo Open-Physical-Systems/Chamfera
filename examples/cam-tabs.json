@@ -1,0 +1,17 @@
+[
+  { "command": "sketch.create", "params": { "plane": "xy" }, "as": "base" },
+  { "command": "sketch.rectangle", "params": { "x1": 0, "y1": 0, "x2": 100, "y2": 60 } },
+  { "command": "sketch.circle", "params": { "cx": 8, "cy": 8, "radius": 3 } },
+  { "command": "sketch.circle", "params": { "cx": 92, "cy": 8, "radius": 3 } },
+  { "command": "sketch.circle", "params": { "cx": 92, "cy": 52, "radius": 3 } },
+  { "command": "sketch.circle", "params": { "cx": 8, "cy": 52, "radius": 3 } },
+  { "command": "sketch.finish" },
+  { "command": "solid.extrude", "params": { "sketch": "$base.sketch", "profiles": [{ "x": 50, "y": 4 }], "distance": 12 }, "as": "plate" },
+  { "command": "cam.setup", "params": { "stock": { "kind": "from_model", "side": 3, "top": 1, "bottom": 0 }, "origin": "stock_top_corner" } },
+  { "command": "cam.tool_add", "params": { "kind": "flat_end_mill", "diameter": 6, "feed": 600 }, "as": "mill" },
+  { "command": "cam.tool_add", "params": { "kind": "tap", "diameter": 8, "spindle_rpm": 300, "feed": 375, "name": "M8 x 1.25 tap" }, "as": "tap" },
+  { "command": "cam.op_add", "params": { "kind": "contour", "tool": "$mill.tool", "face": "2:bottom", "side": "outside", "stepdown": 2, "bottom_offset": 0.5, "tabs": { "count": 6, "width": 10, "height": 4, "shape": "rectangular", "ramp_angle": 45 } } },
+  { "command": "cam.op_add", "params": { "kind": "drill", "tool": "$tap.tool", "tap": "1.25 mm" } },
+  { "command": "cam.generate" },
+  { "command": "view.home", "params": { "width": 1100, "height": 760 } }
+]

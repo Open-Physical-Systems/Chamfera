@@ -7,9 +7,10 @@
 
 use super::CommandSpec;
 use crate::{CmdResult, CommandError, Session, params};
+use chamfera_cam::post::{Coolant, OutUnits, PostDef, PostOptions};
 use chamfera_doc::cam::{
     CamOperation, Entry, Holder, HolderCheck, HolderSegment, LibraryTool, OpKind, Setup, Side,
-    Stock, Tool, ToolKind, ToolLibrary, WcsOrigin,
+    Stock, TabShape, Tabs, Tool, ToolKind, ToolLibrary, WcsOrigin,
 };
 use chamfera_doc::expr::Dim;
 use serde_json::{Map, Value, json};
@@ -46,11 +47,16 @@ pub static COMMANDS: &[CommandSpec] = &[
                  lead_radius: length (contour) - tangent lead arcs; default the tool radius outside, 0 inside\n\
                  bottom_offset: length (contour) - cut this far below the boundary (default 0)\n\
                  climb: boolean (contour) - climb milling (default true)\n\
+                 tabs: object or null (contour) - holding tabs {count (default 4) or spacing (length), \
+                 width (default 6), height (default 2), shape: rectangular (default) or triangular, \
+                 ramp_angle (degrees, rectangular: default 45, 90 straight up)}; null removes them\n\
                  entry: string (pocket) - helix (default), ramp or plunge\n\
                  ramp_angle: angle (pocket) - degrees, default 3\n\
                  helix_radius: length (pocket) - default a quarter of the tool diameter\n\
                  faces: list of strings (drill) - hole faces; default every vertical hole\n\
                  peck: length (drill) - peck depth (G83); default none (G81)\n\
+                 tap: length (drill) - thread pitch: a tapping cycle (G84, rigid where the post has it) \
+                 instead of drilling; null drills again\n\
                  retract: length (drill) - retract plane above the stock (default 2)\n\
                  breakthrough: length (drill) - past the hole bottom (default 0)\n\
                  scallop: length (parallel) - cusp height for a ball end mill, instead of stepover\n\
@@ -87,10 +93,26 @@ pub static COMMANDS: &[CommandSpec] = &[
         label: "Post G-code",
         params: "path: string (optional) - where to write the .nc file; without it the \
                  G-code comes back as `gcode`\n\
-                 dialect: string (optional) - linuxcnc (default) or grbl (no M6, no canned cycles)\n\
-                 setup: integer (optional) - default the first setup",
+                 post: string or object (optional) - a post's name from cam.posts (linuxcnc default, \
+                 grbl, pc-mill, iso-mill, vmc-mill) or a whole post definition as JSON\n\
+                 post_file: string (optional) - a post definition file (JSON, as cam.posts shows one)\n\
+                 dialect: string (optional) - the same as post (kept for older scripts)\n\
+                 coolant: string (optional) - none (default), flood or mist\n\
+                 units: string (optional) - mm or inch; default the post's\n\
+                 program_number: integer (optional) - the O number where the post writes one (default 1000)\n\
+                 setup: integer (optional) - default the first setup\n\
+                 Replies with the post's name, the line count and any warnings",
         mutates: false,
         run: post,
+    },
+    CommandSpec {
+        id: "cam.posts",
+        label: "List Posts",
+        params: "name: string (optional) - just this post, with its whole definition\n\
+                 Lists the post processors (name, title, description, aliases); a post is data, \
+                 so a definition can be copied, changed and given to cam.post as post or post_file",
+        mutates: false,
+        run: posts,
     },
     CommandSpec {
         id: "cam.simulate",
@@ -134,7 +156,7 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         id: "cam.tool_add",
         label: "Add Tool",
-        params: "kind: string (required) - flat_end_mill, ball_end_mill, bull_nose, drill, chamfer_mill\n\
+        params: "kind: string (required) - flat_end_mill, ball_end_mill, bull_nose, drill, chamfer_mill, tap\n\
                  diameter: length (required)\n\
                  name: string (optional)\n\
                  number: integer (optional) - T number; default the next free one\n\
@@ -457,7 +479,7 @@ fn holder_param(s: &Session, p: &Value) -> Result<Option<Option<Holder>>, Comman
 fn apply_tool(s: &Session, p: &Value, t: &mut Tool, new: bool) -> Result<(), CommandError> {
     if let Some(kind_s) = params::opt_str(p, "kind")? {
         t.kind = ToolKind::parse(kind_s).ok_or_else(|| {
-            bad("`kind` is flat_end_mill, ball_end_mill, bull_nose, drill or chamfer_mill")
+            bad("`kind` is flat_end_mill, ball_end_mill, bull_nose, drill, chamfer_mill or tap")
         })?;
     }
     if let Some(d) = length(s, p, "diameter")? {
@@ -679,7 +701,13 @@ fn apply(s: &Session, p: &Value, op: &mut OpKind, tool_d: f64) -> Result<(), Com
             lead_radius,
             bottom_offset,
             climb,
+            tabs,
         } => {
+            match obj(p)?.get("tabs") {
+                None => {}
+                Some(Value::Null) => *tabs = None,
+                Some(v) => *tabs = Some(tabs_param(s, v, tabs.as_ref())?),
+            }
             if let Some(f) = params::opt_str(p, "face")? {
                 *face = Some(f.to_owned());
                 edges.clear();
@@ -728,6 +756,7 @@ fn apply(s: &Session, p: &Value, op: &mut OpKind, tool_d: f64) -> Result<(), Com
             peck,
             retract,
             breakthrough,
+            tap,
         } => {
             if let Some(f) = str_list(p, "faces")? {
                 *faces = f;
@@ -735,7 +764,18 @@ fn apply(s: &Session, p: &Value, op: &mut OpKind, tool_d: f64) -> Result<(), Com
             match obj(p)?.get("peck") {
                 None => {}
                 Some(Value::Null) => *peck = None,
-                Some(_) => *peck = length(s, p, "peck")?,
+                Some(_) => {
+                    *peck = length(s, p, "peck")?;
+                    *tap = None;
+                }
+            }
+            match obj(p)?.get("tap") {
+                None => {}
+                Some(Value::Null) => *tap = None,
+                Some(_) => {
+                    *tap = length(s, p, "tap")?;
+                    *peck = None;
+                }
             }
             *retract = length(s, p, "retract")?.unwrap_or(*retract);
             *breakthrough = length(s, p, "breakthrough")?.unwrap_or(*breakthrough);
@@ -806,6 +846,42 @@ fn apply(s: &Session, p: &Value, op: &mut OpKind, tool_d: f64) -> Result<(), Com
     Ok(())
 }
 
+/// Holding tabs from a `tabs` object, onto `old` (an edit changes only what it gives).
+fn tabs_param(s: &Session, v: &Value, old: Option<&Tabs>) -> Result<Tabs, CommandError> {
+    if !v.is_object() {
+        return Err(bad(
+            "`tabs` must be an object such as {\"count\": 4, \"width\": 6, \"height\": 2}",
+        ));
+    }
+    let mut t = old.copied().unwrap_or(Tabs {
+        count: Some(4),
+        spacing: None,
+        width: 6.0,
+        height: 2.0,
+        shape: TabShape::Rectangular,
+        ramp_angle: 45f64.to_radians(),
+    });
+    match obj(v)?.get("count") {
+        None => {}
+        Some(Value::Null) => t.count = None,
+        Some(_) => {
+            t.count = Some(params::req_id(v, "count")?);
+            t.spacing = None;
+        }
+    }
+    if let Some(sp) = length(s, v, "spacing")? {
+        t.spacing = Some(sp);
+        t.count = None;
+    }
+    t.width = length(s, v, "width")?.unwrap_or(t.width);
+    t.height = length(s, v, "height")?.unwrap_or(t.height);
+    if let Some(k) = params::opt_str(v, "shape")? {
+        t.shape = TabShape::parse(k).ok_or_else(|| bad("`shape` is rectangular or triangular"))?;
+    }
+    t.ramp_angle = angle(s, v, "ramp_angle")?.unwrap_or(t.ramp_angle);
+    Ok(t)
+}
+
 fn holder_check_param(p: &Value) -> Result<Option<HolderCheck>, CommandError> {
     match params::opt_str(p, "holder_check")? {
         None => Ok(None),
@@ -829,6 +905,7 @@ fn default_op(kind: &str, tool_d: f64) -> Result<OpKind, CommandError> {
             lead_radius: tool_d / 2.0,
             bottom_offset: 0.0,
             climb: true,
+            tabs: None,
         },
         "pocket" => OpKind::Pocket {
             face: String::new(),
@@ -843,6 +920,7 @@ fn default_op(kind: &str, tool_d: f64) -> Result<OpKind, CommandError> {
             peck: None,
             retract: 2.0,
             breakthrough: 0.0,
+            tap: None,
         },
         "parallel" => OpKind::Parallel {
             stepover: 0.1,
@@ -900,17 +978,31 @@ fn op_reply(s: &Session, id: u32) -> Value {
         if matches!(o.op, OpKind::Scallop { .. }) {
             v["experimental"] = json!(true);
         }
-        if let OpKind::Drill { faces, .. } = &o.op {
+        if let OpKind::Contour { tabs: Some(t), .. } = &o.op {
+            v["tabs"] = json!({"count": t.count, "spacing": t.spacing, "width": t.width,
+                               "height": t.height, "shape": t.shape.key(),
+                               "ramp_angle": t.ramp_angle.to_degrees()});
+        }
+        if let OpKind::Drill { faces, tap, .. } = &o.op {
+            v["cycle"] = json!(if tap.is_some() { "tap" } else { "drill" });
             let bodies: Vec<chamfera_kernel::Body> =
                 s.solids().iter().map(|x| x.body.clone()).collect();
             if let Ok(h) = chamfera_cam::drill_holes(&bodies, faces) {
                 if let Some(t) = s.doc.cam.tool(o.tool) {
-                    let w = chamfera_cam::ops::drill_warnings(
-                        t.diameter,
-                        t.kind == chamfera_doc::cam::ToolKind::Drill,
-                        t.kind.words(),
-                        &h,
-                    );
+                    let w = match tap {
+                        Some(_) => chamfera_cam::ops::tap_warnings(
+                            t.diameter,
+                            t.kind == ToolKind::Tap,
+                            t.kind.words(),
+                            &h,
+                        ),
+                        None => chamfera_cam::ops::drill_warnings(
+                            t.diameter,
+                            t.kind == ToolKind::Drill,
+                            t.kind.words(),
+                            &h,
+                        ),
+                    };
                     if !w.is_empty() {
                         v["warnings"] = json!(w);
                     }
@@ -1182,12 +1274,91 @@ fn show(s: &mut Session, p: &Value) -> CmdResult {
     Ok(json!({"visible": v}))
 }
 
-fn post(s: &mut Session, p: &Value) -> CmdResult {
-    let dialect = match params::opt_str(p, "dialect")? {
-        None => chamfera_cam::Dialect::LinuxCnc,
-        Some(d) => {
-            chamfera_cam::Dialect::parse(d).ok_or_else(|| bad("`dialect` is linuxcnc or grbl"))?
+/// The post `cam.post` uses: `post` (a name or a definition), `post_file`, or `dialect`.
+fn post_param(p: &Value) -> Result<PostDef, CommandError> {
+    let named = |n: &str| {
+        chamfera_cam::post::find_post(n).ok_or_else(|| {
+            let names: Vec<String> = chamfera_cam::post::builtin_posts()
+                .into_iter()
+                .map(|d| d.name)
+                .collect();
+            bad(format!(
+                "there is no post {n:?}: the posts are {}",
+                names.join(", ")
+            ))
+        })
+    };
+    let o = obj(p)?;
+    let given = ["post", "post_file", "dialect"]
+        .iter()
+        .filter(|k| o.get(**k).is_some_and(|v| !v.is_null()))
+        .count();
+    if given > 1 {
+        return Err(bad("give one of `post`, `post_file` or `dialect`"));
+    }
+    if let Some(path) = params::opt_str(p, "post_file")? {
+        let bytes = chamfera_io::read_limited(
+            std::path::Path::new(path),
+            chamfera_cam::post::MAX_POST_BYTES as u64,
+        )?;
+        let text = String::from_utf8(bytes).map_err(|_| bad("the post file is not UTF-8 text"))?;
+        return PostDef::from_json(&text).map_err(|e| bad(e.to_string()));
+    }
+    match o.get("post") {
+        None | Some(Value::Null) => {}
+        Some(Value::String(n)) => return named(n),
+        Some(v @ Value::Object(_)) => {
+            return PostDef::from_value(v).map_err(|e| bad(e.to_string()));
         }
+        Some(_) => {
+            return Err(bad("`post` is a post's name or a post definition object"));
+        }
+    }
+    named(params::opt_str(p, "dialect")?.unwrap_or("linuxcnc"))
+}
+
+fn posts(_s: &mut Session, p: &Value) -> CmdResult {
+    obj(p)?;
+    if let Some(n) = params::opt_str(p, "name")? {
+        let d = post_param(&json!({ "post": n }))?;
+        let def = serde_json::to_value(&d).map_err(|e| bad(e.to_string()))?;
+        return Ok(
+            json!({"name": d.name, "title": d.title, "description": d.description,
+                         "aliases": d.aliases, "definition": def}),
+        );
+    }
+    let list: Vec<Value> = chamfera_cam::post::builtin_posts()
+        .into_iter()
+        .map(|d| {
+            json!({"name": d.name, "title": d.title, "description": d.description,
+                   "aliases": d.aliases,
+                   "tapping": d.cycles.tapping.is_some(),
+                   "canned_cycles": d.cycles.drill || d.cycles.peck})
+        })
+        .collect();
+    Ok(json!({ "posts": list }))
+}
+
+fn post(s: &mut Session, p: &Value) -> CmdResult {
+    let def = post_param(p)?;
+    let coolant = match params::opt_str(p, "coolant")? {
+        None => Coolant::Off,
+        Some(c) => Coolant::parse(c).ok_or_else(|| bad("`coolant` is none, flood or mist"))?,
+    };
+    let units = match params::opt_str(p, "units")? {
+        None => None,
+        Some(u) => Some(OutUnits::parse(u).ok_or_else(|| bad("`units` is mm or inch"))?),
+    };
+    let program_number = match opt_id(p, "program_number")? {
+        Some(n) if n == 0 || n > 99_999 => {
+            return Err(bad("`program_number` must be from 1 to 99999"));
+        }
+        n => n,
+    };
+    let opts = PostOptions {
+        coolant,
+        units,
+        program_number,
     };
     let path = params::opt_str(p, "path")?.map(str::to_owned);
     let setup_id = match opt_id(p, "setup")? {
@@ -1238,13 +1409,24 @@ fn post(s: &mut Session, p: &Value) -> CmdResult {
         || "Chamfera".to_owned(),
         |n| n.to_string_lossy().into_owned(),
     );
-    let text = chamfera_cam::post::post(&format!("{program} {}", st.name), &ops, &geo.wcs, dialect);
+    let posted = chamfera_cam::post::post_with(
+        &format!("{program} {}", st.name),
+        &ops,
+        &geo.wcs,
+        &def,
+        &opts,
+    )
+    .map_err(|e| CommandError::Unavailable(e.to_string()))?;
+    let text = posted.text;
     let lines = text.lines().count();
+    let mut reply = json!({"post": def.name, "lines": lines, "operations": ops.len(),
+                           "warnings": posted.warnings});
     match path {
         Some(path) => {
             std::fs::write(&path, text.as_bytes()).map_err(chamfera_io::IoError::from)?;
-            Ok(json!({"path": path, "lines": lines, "operations": ops.len()}))
+            reply["path"] = json!(path);
         }
-        None => Ok(json!({"gcode": text, "lines": lines, "operations": ops.len()})),
+        None => reply["gcode"] = json!(text),
     }
+    Ok(reply)
 }
