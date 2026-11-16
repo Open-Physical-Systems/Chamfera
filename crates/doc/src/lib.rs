@@ -6,6 +6,7 @@ pub mod cam;
 pub mod component;
 pub mod config;
 pub mod construct;
+pub mod drafting;
 pub mod drawing;
 pub mod expr;
 pub mod face_edit;
@@ -158,7 +159,11 @@ use thiserror::Error;
 ///   given as a whole frame (`at: frame`), and rigid groups (`assembly.groups`: name and
 ///   members, each with its placement relative to the first). Older files open
 ///   unchanged: every new field is optional.
-pub const FORMAT_VERSION: u32 = 41;
+/// - 42: 2D drafting on drawing sheets (`drafting` on a sheet): user layers with colour,
+///   line type, line weight, on/off, frozen and locked; the current layer; a line type
+///   scale; and lines, circles, arcs and polylines drawn on those layers. Older files open
+///   unchanged: their sheets have layer 0 only.
+pub const FORMAT_VERSION: u32 = 42;
 /// The tag every design file starts with, so other JSON is not mistaken for a design.
 pub const FORMAT_TAG: &str = "chamfera";
 /// Longest parameter name.

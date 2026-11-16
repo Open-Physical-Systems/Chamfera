@@ -37,7 +37,6 @@ fn escape(s: &str) -> String {
 /// The sheet as an SVG document.
 pub fn write(sheet: &SheetGeometry) -> String {
     let (w, h) = (sheet.width, sheet.height);
-    let y = |v: f64| num(h - v);
     let mut out = String::new();
     let _ = writeln!(out, r#"<?xml version="1.0" encoding="UTF-8"?>"#);
     let _ = writeln!(
@@ -71,95 +70,136 @@ pub fn write(sheet: &SheetGeometry) -> String {
             num(layer.width())
         );
         for item in sheet.items.iter().filter(|i| i.layer == layer) {
-            match &item.shape {
-                Shape::Line { a, b } => {
-                    let _ = writeln!(
-                        out,
-                        r#"<line x1="{}" y1="{}" x2="{}" y2="{}"/>"#,
-                        num(a.x),
-                        y(a.y),
-                        num(b.x),
-                        y(b.y)
-                    );
-                }
-                Shape::Circle { centre, radius } => {
-                    let _ = writeln!(
-                        out,
-                        r#"<circle cx="{}" cy="{}" r="{}"/>"#,
-                        num(centre.x),
-                        y(centre.y),
-                        num(*radius)
-                    );
-                }
-                Shape::Arc {
-                    centre,
-                    radius,
-                    start,
-                    end,
-                } => {
-                    // Counter-clockwise on paper is the negative-angle direction on
-                    // SVG's y-down canvas: sweep-flag 0. Split in halves so no single
-                    // arc command is near a full turn.
-                    let mid = 0.5 * (start + end);
-                    let p = |a: f64| {
-                        (
-                            num(centre.x + radius * a.cos()),
-                            y(centre.y + radius * a.sin()),
-                        )
-                    };
-                    let (x0, y0) = p(*start);
-                    let (x1, y1) = p(mid);
-                    let (x2, y2) = p(*end);
-                    let r = num(*radius);
-                    let large = if (end - start) * 0.5 > PI { 1 } else { 0 };
-                    let _ = writeln!(
-                        out,
-                        r#"<path d="M {x0} {y0} A {r} {r} 0 {large} 0 {x1} {y1} A {r} {r} 0 {large} 0 {x2} {y2}"/>"#
-                    );
-                }
-                Shape::Text {
-                    at,
-                    height,
-                    angle,
-                    align,
-                    text,
-                } => {
-                    let anchor = match align {
-                        Align::Left => "start",
-                        Align::Centre => "middle",
-                        Align::Right => "end",
-                    };
-                    let (x, yy) = (num(at.x), y(at.y));
-                    let rot = if angle.abs() > 1e-12 {
-                        format!(
-                            r#" transform="rotate({} {x} {yy})""#,
-                            num(-angle.to_degrees())
-                        )
-                    } else {
-                        String::new()
-                    };
-                    let _ = writeln!(
-                        out,
-                        r#"<text x="{x}" y="{yy}" font-family="Helvetica, Arial, sans-serif" font-size="{}" text-anchor="{anchor}" fill="black" stroke="none"{rot}>{}</text>"#,
-                        num(*height),
-                        escape(text)
-                    );
-                }
-                Shape::Fill { points } => {
-                    let pts = points
-                        .iter()
-                        .map(|p| format!("{},{}", num(p.x), y(p.y)))
-                        .collect::<Vec<_>>()
-                        .join(" ");
-                    let _ = writeln!(
-                        out,
-                        r#"<polygon points="{pts}" fill="black" stroke="none"/>"#
-                    );
-                }
-            }
+            shape(&mut out, &item.shape, h);
+        }
+        let _ = writeln!(out, "</g>");
+    }
+    // User layers, over the sheet's own lines: one group each, in the layer's colour,
+    // weight and dash pattern. Layers that are off or frozen have no shapes here.
+    for (i, style) in sheet.draft_layers.iter().enumerate() {
+        if !style.visible() {
+            continue;
+        }
+        let dash = if style.pattern.is_empty() {
+            String::new()
+        } else {
+            let d = style
+                .pattern
+                .iter()
+                .map(|d| num(*d))
+                .collect::<Vec<_>>()
+                .join(" ");
+            format!(r#" stroke-dasharray="{d}""#)
+        };
+        let _ = writeln!(
+            out,
+            r#"<g id="layer-{}" fill="none" stroke="{}" stroke-width="{}" stroke-linecap="round"{dash}>"#,
+            escape(&style.name),
+            hex(style.colour),
+            num(style.weight)
+        );
+        for s in sheet.drafted.iter().filter(|s| s.layer == i) {
+            shape(&mut out, &s.shape, h);
         }
         let _ = writeln!(out, "</g>");
     }
     let _ = writeln!(out, "</svg>");
     out
+}
+
+/// `#rrggbb`, black for the ink colour.
+pub(crate) fn hex(c: Option<[u8; 3]>) -> String {
+    let [r, g, b] = c.unwrap_or([0, 0, 0]);
+    format!("#{r:02x}{g:02x}{b:02x}")
+}
+
+/// One shape as an SVG element, y flipped on a sheet `h` mm high.
+fn shape(out: &mut String, shape: &Shape, h: f64) {
+    let y = |v: f64| num(h - v);
+    match shape {
+        Shape::Line { a, b } => {
+            let _ = writeln!(
+                out,
+                r#"<line x1="{}" y1="{}" x2="{}" y2="{}"/>"#,
+                num(a.x),
+                y(a.y),
+                num(b.x),
+                y(b.y)
+            );
+        }
+        Shape::Circle { centre, radius } => {
+            let _ = writeln!(
+                out,
+                r#"<circle cx="{}" cy="{}" r="{}"/>"#,
+                num(centre.x),
+                y(centre.y),
+                num(*radius)
+            );
+        }
+        Shape::Arc {
+            centre,
+            radius,
+            start,
+            end,
+        } => {
+            // Counter-clockwise on paper is the negative-angle direction on
+            // SVG's y-down canvas: sweep-flag 0. Split in halves so no single
+            // arc command is near a full turn.
+            let mid = 0.5 * (start + end);
+            let p = |a: f64| {
+                (
+                    num(centre.x + radius * a.cos()),
+                    y(centre.y + radius * a.sin()),
+                )
+            };
+            let (x0, y0) = p(*start);
+            let (x1, y1) = p(mid);
+            let (x2, y2) = p(*end);
+            let r = num(*radius);
+            let large = if (end - start) * 0.5 > PI { 1 } else { 0 };
+            let _ = writeln!(
+                out,
+                r#"<path d="M {x0} {y0} A {r} {r} 0 {large} 0 {x1} {y1} A {r} {r} 0 {large} 0 {x2} {y2}"/>"#
+            );
+        }
+        Shape::Text {
+            at,
+            height,
+            angle,
+            align,
+            text,
+        } => {
+            let anchor = match align {
+                Align::Left => "start",
+                Align::Centre => "middle",
+                Align::Right => "end",
+            };
+            let (x, yy) = (num(at.x), y(at.y));
+            let rot = if angle.abs() > 1e-12 {
+                format!(
+                    r#" transform="rotate({} {x} {yy})""#,
+                    num(-angle.to_degrees())
+                )
+            } else {
+                String::new()
+            };
+            let _ = writeln!(
+                out,
+                r#"<text x="{x}" y="{yy}" font-family="Helvetica, Arial, sans-serif" font-size="{}" text-anchor="{anchor}" fill="black" stroke="none"{rot}>{}</text>"#,
+                num(*height),
+                escape(text)
+            );
+        }
+        Shape::Fill { points } => {
+            let pts = points
+                .iter()
+                .map(|p| format!("{},{}", num(p.x), y(p.y)))
+                .collect::<Vec<_>>()
+                .join(" ");
+            let _ = writeln!(
+                out,
+                r#"<polygon points="{pts}" fill="black" stroke="none"/>"#
+            );
+        }
+    }
 }

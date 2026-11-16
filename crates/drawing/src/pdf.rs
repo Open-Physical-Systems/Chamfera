@@ -79,83 +79,116 @@ fn content(sheet: &SheetGeometry) -> String {
             .join(" ");
         let _ = writeln!(out, "{} w [{dashes}] 0 d", num(layer.width()));
         for item in sheet.items.iter().filter(|i| i.layer == layer) {
-            match &item.shape {
-                Shape::Line { a, b } => {
-                    let _ = writeln!(
-                        out,
-                        "{} {} m {} {} l S",
-                        num(a.x),
-                        num(a.y),
-                        num(b.x),
-                        num(b.y)
-                    );
-                }
-                Shape::Circle { centre, radius } => {
-                    arc_path(
-                        &mut out,
-                        centre.x,
-                        centre.y,
-                        *radius,
-                        0.0,
-                        std::f64::consts::TAU,
-                        true,
-                    );
-                    let _ = writeln!(out, "h S");
-                }
-                Shape::Arc {
-                    centre,
-                    radius,
-                    start,
-                    end,
-                } => {
-                    arc_path(&mut out, centre.x, centre.y, *radius, *start, *end, true);
-                    let _ = writeln!(out, "S");
-                }
-                Shape::Fill { points } => {
-                    let [a, b, c] = *points;
-                    let _ = writeln!(
-                        out,
-                        "{} {} m {} {} l {} {} l h f",
-                        num(a.x),
-                        num(a.y),
-                        num(b.x),
-                        num(b.y),
-                        num(c.x),
-                        num(c.y)
-                    );
-                }
-                Shape::Text {
-                    at,
-                    height,
-                    angle,
-                    align,
-                    text,
-                } => {
-                    let w = width(text, *height);
-                    let shift = match align {
-                        Align::Left => 0.0,
-                        Align::Centre => w * 0.5,
-                        Align::Right => w,
-                    };
-                    let (c, s) = (angle.cos(), angle.sin());
-                    let (x, y) = (at.x - c * shift, at.y - s * shift);
-                    let _ = writeln!(
-                        out,
-                        "BT /F1 {} Tf {} {} {} {} {} {} Tm {} Tj ET",
-                        num(*height),
-                        num(c),
-                        num(s),
-                        num(-s),
-                        num(c),
-                        num(x),
-                        num(y),
-                        pdf_string(text)
-                    );
-                }
-            }
+            shape(&mut out, &item.shape);
+        }
+    }
+    // User layers over the sheet's own lines, each in its colour, weight and dashes.
+    for (i, style) in sheet.draft_layers.iter().enumerate() {
+        if !style.visible() {
+            continue;
+        }
+        let dashes = style
+            .pattern
+            .iter()
+            .map(|d| num(*d))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let [r, g, b] = style.colour.unwrap_or([0, 0, 0]);
+        let c = |v: u8| num(f64::from(v) / 255.0);
+        let _ = writeln!(
+            out,
+            "{} w [{dashes}] 0 d {} {} {} RG {} {} {} rg",
+            num(style.weight),
+            c(r),
+            c(g),
+            c(b),
+            c(r),
+            c(g),
+            c(b)
+        );
+        for s in sheet.drafted.iter().filter(|s| s.layer == i) {
+            shape(&mut out, &s.shape);
         }
     }
     out
+}
+
+/// One shape as PDF path or text operators.
+fn shape(out: &mut String, shape: &Shape) {
+    match shape {
+        Shape::Line { a, b } => {
+            let _ = writeln!(
+                out,
+                "{} {} m {} {} l S",
+                num(a.x),
+                num(a.y),
+                num(b.x),
+                num(b.y)
+            );
+        }
+        Shape::Circle { centre, radius } => {
+            arc_path(
+                out,
+                centre.x,
+                centre.y,
+                *radius,
+                0.0,
+                std::f64::consts::TAU,
+                true,
+            );
+            let _ = writeln!(out, "h S");
+        }
+        Shape::Arc {
+            centre,
+            radius,
+            start,
+            end,
+        } => {
+            arc_path(out, centre.x, centre.y, *radius, *start, *end, true);
+            let _ = writeln!(out, "S");
+        }
+        Shape::Fill { points } => {
+            let [a, b, c] = *points;
+            let _ = writeln!(
+                out,
+                "{} {} m {} {} l {} {} l h f",
+                num(a.x),
+                num(a.y),
+                num(b.x),
+                num(b.y),
+                num(c.x),
+                num(c.y)
+            );
+        }
+        Shape::Text {
+            at,
+            height,
+            angle,
+            align,
+            text,
+        } => {
+            let w = width(text, *height);
+            let shift = match align {
+                Align::Left => 0.0,
+                Align::Centre => w * 0.5,
+                Align::Right => w,
+            };
+            let (c, s) = (angle.cos(), angle.sin());
+            let (x, y) = (at.x - c * shift, at.y - s * shift);
+            let _ = writeln!(
+                out,
+                "BT /F1 {} Tf {} {} {} {} {} {} Tm {} Tj ET",
+                num(*height),
+                num(c),
+                num(s),
+                num(-s),
+                num(c),
+                num(x),
+                num(y),
+                pdf_string(text)
+            );
+        }
+    }
 }
 
 /// The sheet as a one-page PDF 1.4 file.

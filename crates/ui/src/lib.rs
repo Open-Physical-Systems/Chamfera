@@ -25,12 +25,14 @@ mod cam_ui;
 #[cfg(not(target_arch = "wasm32"))]
 mod cam_worker;
 mod chrome;
+mod command_line;
 mod config_ui;
 mod constraint_ui;
 mod construct_ui;
 mod context_menu;
 mod display_ui;
 mod draft_rib_ui;
+mod drafting_ui;
 mod drawing_sheet_ui;
 mod drawing_tools_ui;
 mod drawing_ui;
@@ -38,6 +40,7 @@ mod file_ui;
 mod history_ui;
 mod hole_ui;
 mod inspect_ui;
+mod layer_ui;
 mod manipulator_ui;
 
 /// `--screenshot` gives up after this long without a drawn frame.
@@ -127,6 +130,9 @@ pub struct Options {
     /// In the DRAWING workspace, select what is at sheet point (x1, y1) and show it
     /// being dragged to (x2, y2), for screenshots of moving drawing items.
     pub drawing_drag: Option<[f32; 4]>,
+    /// In the DRAWING workspace, lines typed into the command line at start, separated
+    /// by `;` (such as `LA; SEL ALL`), for screenshots of the Layers panel and grips.
+    pub command_line: Option<String>,
     /// Open the search palette at start with this query typed.
     pub search: Option<String>,
     /// Open the viewport's right-click menu at this viewport point once it has drawn.
@@ -538,6 +544,12 @@ impl ChamferaApp {
                 chamfera_geom::Point2::new(f64::from(x1), f64::from(y1)),
                 chamfera_geom::Point2::new(f64::from(x2), f64::from(y2)),
             );
+        }
+        if let Some(text) = &options.command_line {
+            app.drawing.active = true;
+            for line in text.split(';').take(64) {
+                app.drafting_submit(line.trim());
+            }
         }
         if let Some(q) = &options.search {
             app.run_action(shortcuts::Action::Search);
