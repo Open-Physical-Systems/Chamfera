@@ -113,7 +113,7 @@ impl SketchTransform {
 
     /// `c` as it carries over to the moved geometry, ids mapped by `mp` and `mc`; `None`
     /// when it no longer holds (a horizontal line turned by 30 degrees).
-    fn constraint(
+    pub(crate) fn constraint(
         &self,
         c: &Constraint,
         mp: &dyn Fn(PointId) -> PointId,

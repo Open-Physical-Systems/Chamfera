@@ -1571,7 +1571,8 @@ impl Session {
         if let Ok(s) = self.doc.sketch(id) {
             let follows = s.attached.is_some()
                 || s.on_plane.is_some()
-                || s.projections.iter().any(|p| p.linked);
+                || s.projections.iter().any(|p| p.linked)
+                || s.intersections.iter().any(|i| i.linked);
             if let Err(e) = self.follow_attached_sketch(id, made, &built.constructs) {
                 built.sketch_errors.insert(id, e);
             }
@@ -1916,7 +1917,8 @@ impl Session {
         {
             f.plane = plane;
         }
-        self.follow_projections(sketch, made.iter().map(|m| &m.2))
+        self.follow_projections(sketch, made.iter().map(|m| &m.2))?;
+        self.follow_intersections(sketch, made)
     }
 
     /// The solid face under pixel `(x, y)`: (solid index, face, the point hit on the

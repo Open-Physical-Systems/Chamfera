@@ -18,6 +18,21 @@
 //! width dimension (from a point of the far side to the near side). Its degrees of freedom
 //! are the two centres. A construction line joins the centres, for dimensioning.
 //!
+//! # Polygon by edge
+//! The polygon with one side from `a` to `b`, to the side's left: its centre is on the
+//! side's perpendicular bisector at the apothem `s / (2 tan(π/n))` (s the side length),
+//! so the polygon about that centre with a vertex at `a` has its next vertex at `b`.
+//!
+//! # Arc slot
+//! A slot bent along an arc of radius `R` about a centre, `w` wide: an outer arc of
+//! radius `R + w/2` and an inner one of `R - w/2` about one centre point, and two
+//! half-circle caps of radius `w/2` about the centre line's ends, each sharing its ends
+//! with both arcs and tangent to them (tangency at a shared end puts the centres and
+//! the end in line), the caps equal and dimensioned by their diameter, the width. That
+//! leaves 5 degrees of freedom: the centre, the radius and the two end angles. (The arcs'
+//! own equal-radius equations then follow from the caps; no centre-line arc is added,
+//! because its equation would repeat them.)
+//!
 //! # Ellipse
 //! An ellipse or elliptical arc with its centre, major and minor points (`entity.rs`).
 //!
@@ -266,6 +281,96 @@ impl Sketch {
             let first = lines.first().copied().ok_or(SketchError::IdsExhausted)?;
             self.add_constraint(Constraint::Tangent { a: first, b: inner })?;
         }
+        Ok(())
+    }
+
+    pub(crate) fn polygon_edge(
+        &mut self,
+        a: Point2,
+        b: Point2,
+        sides: u32,
+    ) -> Result<(), ToolError> {
+        check_point("the first corner", a)?;
+        check_point("the second corner", b)?;
+        if !(MIN_POLYGON_SIDES..=MAX_POLYGON_SIDES).contains(&sides) {
+            return refuse(format!(
+                "a polygon has {MIN_POLYGON_SIDES} to {MAX_POLYGON_SIDES} sides, got {sides}"
+            ));
+        }
+        let side = a.distance(b);
+        check_length("the side", side)?;
+        let Some(u) = (b - a).normalized() else {
+            return refuse("a polygon side needs two different points");
+        };
+        let apothem = side / (2.0 * (PI / f64::from(sides)).tan());
+        let centre = a.lerp(b, 0.5) + u.perp() * apothem;
+        self.polygon(centre, a, sides, true)
+    }
+
+    pub(crate) fn arc_slot(
+        &mut self,
+        centre: Point2,
+        start: Point2,
+        end: Point2,
+        width: f64,
+    ) -> Result<(), ToolError> {
+        check_point("the centre", centre)?;
+        check_point("the start", start)?;
+        check_point("the end", end)?;
+        check_length("the width", width)?;
+        let r = width / 2.0;
+        let big = centre.distance(start);
+        check_length("the radius", big)?;
+        if big - r <= LINEAR_TOLERANCE {
+            return refuse("the slot's radius must be more than half its width");
+        }
+        let Some(u1) = (start - centre).normalized() else {
+            return refuse("the start must be away from the centre");
+        };
+        let Some(u2) = (end - centre).normalized() else {
+            return refuse("the end must be away from the centre");
+        };
+        let sweep = (u2.angle() - u1.angle()).rem_euclid(TAU);
+        let (e1, e2) = (centre + u1 * big, centre + u2 * big);
+        // The caps would overlap where the ends of the centre line are closer than the
+        // width.
+        if sweep <= 0.0 || e1.distance(e2) <= width + LINEAR_TOLERANCE || sweep >= TAU {
+            return refuse("the slot's ends are closer than its width: sweep it further");
+        }
+        let at = [
+            centre,
+            e1,
+            e2,
+            centre + u1 * (big + r),
+            centre + u2 * (big + r),
+            centre + u1 * (big - r),
+            centre + u2 * (big - r),
+        ];
+        for p in at {
+            check_point("a slot point", p)?;
+        }
+        let mut ids = Vec::new();
+        for p in at {
+            ids.push(self.add_point(p)?);
+        }
+        let [c, e1, e2, o1, o2, i1, i2] = ids.as_slice() else {
+            return refuse("the slot lost a point");
+        };
+        let (c, e1, e2, o1, o2, i1, i2) = (*c, *e1, *e2, *o1, *o2, *i1, *i2);
+        let outer = self.add_arc(c, o1, o2)?;
+        let inner = self.add_arc(c, i1, i2)?;
+        // The end cap at the end bulges forward (counter-clockwise from outer to inner),
+        // the one at the start backward.
+        let cap2 = self.add_arc(e2, o2, i2)?;
+        let cap1 = self.add_arc(e1, i1, o1)?;
+        for (x, y) in [(outer, cap2), (cap2, inner), (inner, cap1), (cap1, outer)] {
+            self.add_constraint(Constraint::Tangent { a: x, b: y })?;
+        }
+        self.add_constraint(Constraint::Equal { a: cap1, b: cap2 })?;
+        self.add_constraint(Constraint::Diameter {
+            curve: cap1,
+            value: width,
+        })?;
         Ok(())
     }
 

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- A test drawing for Insert SVG, made for Chamfera (no outside artwork):
+     a rounded plate, a hole, an ellipse turned by a transform, a wave of cubic and
+     quadratic Béziers closed by lines, an arc-ended tab and a star. 120 x 80 mm. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="120mm" height="80mm" viewBox="0 0 240 160">
+  <rect x="10" y="10" width="220" height="140" rx="16" fill="none" stroke="black"/>
+  <circle cx="45" cy="45" r="16" fill="none" stroke="black"/>
+  <ellipse cx="190" cy="45" rx="24" ry="12" transform="rotate(-30 190 45)" fill="none" stroke="black"/>
+  <path d="M30 120 C 50 80 70 80 90 110 S 130 140 150 110 Q 165 90 180 110 T 210 110 L 210 135 L 30 135 Z" fill="none" stroke="black"/>
+  <path d="M100 30 h40 a12 12 0 0 1 0 24 h-40 a12 12 0 0 1 0 -24 z" fill="none" stroke="black"/>
+  <g transform="translate(120 85) scale(0.9)">
+    <polygon points="0,-18 5,-6 18,-6 8,2 12,15 0,7 -12,15 -8,2 -18,-6 -5,-6" fill="none" stroke="black"/>
+  </g>
+</svg>

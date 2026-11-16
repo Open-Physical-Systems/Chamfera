@@ -21,6 +21,7 @@ mod drawing_tests;
 pub mod face_edit;
 pub mod hole;
 mod imported;
+pub mod intersection;
 pub mod joint_solve;
 pub mod loop_solver;
 pub mod motion;
@@ -93,6 +94,9 @@ pub struct Session {
     pub active_sketch: Option<u32>,
     /// Selected points and curves of the active sketch.
     pub sketch_selection: Vec<sketching::SketchItem>,
+    /// Sketch geometry kept by `sketch.copy` for `sketch.paste`. Not part of the design or
+    /// of undo.
+    pub sketch_clipboard: Option<chamfera_sketch::Sketch>,
     /// Selected edges of solids, by name (`select.pick` with a `filter` that has edges).
     pub selected_edges: Vec<String>,
     /// Solids built from the timeline (worked out again after every change).
@@ -288,6 +292,8 @@ mod body_tools_tests;
 mod draft_rib_tests;
 #[cfg(test)]
 mod qa_tests;
+#[cfg(test)]
+mod sketch_gaps_tests;
 #[cfg(test)]
 mod surface_tests;
 #[cfg(test)]

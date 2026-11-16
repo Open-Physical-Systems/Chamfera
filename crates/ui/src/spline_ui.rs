@@ -17,6 +17,25 @@ use serde_json::{Value, json};
 pub(crate) const TOOLTIP: &str = "Spline\nA smooth curve through the points you click. \
      Double-click or press Enter to finish; click the first point to close it";
 
+/// The Control Point Spline tool's name.
+pub(crate) const CONTROL_NAME: &str = "Control Point Spline";
+
+/// Its tooltip.
+pub(crate) const CONTROL_TOOLTIP: &str = "Control Point Spline\nA smooth curve guided by the \
+     corners of the polygon you click: it starts at the first and ends at the last. \
+     Double-click or press Enter to finish; click the first point to close it";
+
+/// Its status hint after `clicks` points.
+pub(crate) fn control_hint(clicks: usize) -> &'static str {
+    match clicks {
+        0 => "Click the first control point (the spline starts here)",
+        1 => "Click the next control point · Esc cancels",
+        _ => {
+            "Click more control points · double-click or Enter finishes · click the first point to close"
+        }
+    }
+}
+
 /// Preview points per knot span of the curve being drawn.
 const PREVIEW_SAMPLES_PER_SPAN: usize = 16;
 
@@ -82,9 +101,14 @@ impl ChamferaApp {
                 None => json!({ "x": c.at.x, "y": c.at.y }),
             })
             .collect();
+        let kind = if self.sketch.tool() == crate::sketch_ui::Tool::ControlSpline {
+            "control"
+        } else {
+            "fit"
+        };
         self.run_sketch(
             "sketch.spline",
-            json!({ "points": points, "kind": "fit", "closed": closed }),
+            json!({ "points": points, "kind": kind, "closed": closed }),
         );
     }
 
@@ -99,6 +123,13 @@ impl ChamferaApp {
         }
         if pts.len() < 2 {
             return Vec::new();
+        }
+        if self.sketch.tool() == crate::sketch_ui::Tool::ControlSpline {
+            // The curve and its control polygon.
+            return match BSplineCurve2::from_control_points(&pts, false) {
+                Ok(c) => vec![c.polyline(PREVIEW_SAMPLES_PER_SPAN), pts],
+                Err(_) => vec![pts],
+            };
         }
         match BSplineCurve2::interpolate(&pts, None, None) {
             Ok(c) => vec![c.polyline(PREVIEW_SAMPLES_PER_SPAN)],
@@ -177,6 +208,36 @@ mod tests {
         // A smooth closed curve through the corners of a 40 mm square bulges outside it.
         let area = g["profiles"][0]["area"].as_f64().unwrap();
         assert!(area > 1600.0 && area < 3200.0, "{area}");
+    }
+
+    #[test]
+    fn the_control_point_tool_makes_a_spline_on_its_clicks() {
+        // Four clicks are the control polygon of one cubic Bézier span: the curve starts
+        // at the first and ends at the last, and its middle, at t = 1/2, is
+        // (P0 + 3 P1 + 3 P2 + P3) / 8 = (0 + 0 + 120 + 40, 0 + 60 + 60 + 0) / 8
+        // = (20, 15).
+        let (mut app, px) = app_on_top_plane();
+        app.sketch.tool = Some(Tool::ControlSpline);
+        for (x, y) in [
+            (0.0, 0.0),
+            (0.0, 20.0),
+            (40.0, 20.0),
+            (40.0, 0.0),
+            (40.0, 0.0),
+        ] {
+            click(&mut app, px(x, y));
+        }
+        let g = app.session.execute("sketch.get", &json!({})).unwrap();
+        assert_eq!(g["curves"][0]["geometry"]["form"], "control", "{g}");
+        let sk = &app.session.active_sketch().unwrap().sketch;
+        let (id, _) = sk.curves().next().unwrap();
+        let c = sk.spline_curve(id).unwrap();
+        let per_mm = px(1.0, 0.0).0 - px(0.0, 0.0).0;
+        let m = c.point_at(0.5);
+        assert!(
+            (m.x - 20.0).abs() < 2.0 / per_mm && (m.y - 15.0).abs() < 2.0 / per_mm,
+            "{m:?}"
+        );
     }
 
     #[test]

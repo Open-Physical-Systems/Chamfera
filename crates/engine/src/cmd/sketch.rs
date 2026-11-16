@@ -444,21 +444,21 @@ pub static COMMANDS: &[CommandSpec] = &[
     },
 ];
 
-fn bad(msg: impl Into<String>) -> CommandError {
+pub(super) fn bad(msg: impl Into<String>) -> CommandError {
     CommandError::BadParams(msg.into())
 }
 
-fn sketch_err(e: impl std::fmt::Display) -> CommandError {
+pub(super) fn sketch_err(e: impl std::fmt::Display) -> CommandError {
     CommandError::Unavailable(e.to_string())
 }
 
-fn active_id(s: &Session) -> Result<u32, CommandError> {
+pub(super) fn active_id(s: &Session) -> Result<u32, CommandError> {
     s.active_sketch().map(|f| f.id).ok_or_else(|| {
         CommandError::Unavailable("no sketch is being edited: Create Sketch or Edit Sketch".into())
     })
 }
 
-fn active(s: &mut Session) -> Result<&mut Sketch, CommandError> {
+pub(super) fn active(s: &mut Session) -> Result<&mut Sketch, CommandError> {
     let id = active_id(s)?;
     Ok(&mut s.doc.sketch_mut(id)?.sketch)
 }
@@ -471,7 +471,7 @@ fn coord(p: &Value, key: &str) -> Result<f64, CommandError> {
     Ok(v)
 }
 
-fn pt(p: &Value, x: &str, y: &str) -> Result<Point2, CommandError> {
+pub(super) fn pt(p: &Value, x: &str, y: &str) -> Result<Point2, CommandError> {
     Ok(Point2::new(coord(p, x)?, coord(p, y)?))
 }
 
@@ -1413,11 +1413,15 @@ fn prune_expressions(s: &mut Session) -> Result<(), CommandError> {
     });
     f.projections
         .retain(|p| sketch.curve(CurveId(p.curve)).is_some());
+    for i in &mut f.intersections {
+        i.curves.retain(|c| sketch.curve(CurveId(*c)).is_some());
+    }
+    f.intersections.retain(|i| !i.curves.is_empty());
     Ok(())
 }
 
 /// Runs a tool on the active sketch and reports what it made, changed and removed.
-fn run_tool(s: &mut Session, op: ToolOp) -> CmdResult {
+pub(super) fn run_tool(s: &mut Session, op: ToolOp) -> CmdResult {
     let sk = active(s)?;
     let r = sk.apply_tool(&op).map_err(sketch_err)?;
     prune_expressions(s)?;
@@ -1469,7 +1473,10 @@ fn opt_ids(p: &Value, key: &str) -> Result<Option<Vec<u32>>, CommandError> {
 }
 
 /// The curves and points to act on: the lists given, or else the selection.
-fn targets(s: &Session, p: &Value) -> Result<(Vec<CurveId>, Vec<PointId>), CommandError> {
+pub(super) fn targets(
+    s: &Session,
+    p: &Value,
+) -> Result<(Vec<CurveId>, Vec<PointId>), CommandError> {
     let curves = opt_ids(p, "curves")?;
     let points = opt_ids(p, "points")?;
     if curves.is_none() && points.is_none() {
@@ -1491,7 +1498,7 @@ fn targets(s: &Session, p: &Value) -> Result<(Vec<CurveId>, Vec<PointId>), Comma
 }
 
 /// A whole number from 0 to `max`.
-fn count(p: &Value, key: &str, max: u32) -> Result<u32, CommandError> {
+pub(super) fn count(p: &Value, key: &str, max: u32) -> Result<u32, CommandError> {
     let v = params::req_f64(p, key)?;
     if v.fract() != 0.0 || !(0.0..=f64::from(max)).contains(&v) {
         return Err(bad(format!(

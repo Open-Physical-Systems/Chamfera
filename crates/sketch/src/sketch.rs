@@ -361,6 +361,24 @@ impl Sketch {
     /// Adds a constraint without solving. Use [`Sketch::try_add_constraint`] to add and solve
     /// in one step, keeping the sketch unchanged if the solve fails.
     pub fn add_constraint(&mut self, c: Constraint) -> Result<ConstraintId, SketchError> {
+        if let Constraint::Tangent { a, b } = c {
+            // A fit spline is held tangent through a handle at the end that meets the
+            // other curve: give it one where it has none.
+            for (sp, other) in [(a, b), (b, a)] {
+                if let Some(join) = self.spline_join(sp, other)
+                    && join.tangent.is_none()
+                    && matches!(
+                        self.curve(sp),
+                        Some(Curve::Spline {
+                            form: crate::SplineForm::Fit,
+                            ..
+                        })
+                    )
+                {
+                    self.add_spline_handles(sp, join.first, !join.first)?;
+                }
+            }
+        }
         self.check_constraint(&c)?;
         if self.constraints.len() >= MAX_CONSTRAINTS {
             return Err(SketchError::TooMany {
@@ -648,8 +666,34 @@ impl Sketch {
                 };
                 check_radius("arc radius", r)?;
             }
-            Curve::Spline { points, closed, .. } => {
+            Curve::Spline {
+                points,
+                closed,
+                form,
+                start_handle,
+                end_handle,
+                ..
+            } => {
                 crate::spline::check_points(points, *closed)?;
+                let handles: Vec<PointId> = start_handle
+                    .iter()
+                    .chain(end_handle.iter())
+                    .copied()
+                    .collect();
+                if !handles.is_empty() {
+                    if *closed || *form != crate::SplineForm::Fit {
+                        return Err(SketchError::BadSpline(
+                            "only an open fit spline has tangent handles".into(),
+                        ));
+                    }
+                    if handles.iter().any(|h| points.contains(h))
+                        || (handles.len() == 2 && handles.first() == handles.get(1))
+                    {
+                        return Err(SketchError::SameEntityTwice {
+                            what: "a spline's points and handles",
+                        });
+                    }
+                }
             }
             Curve::Ellipse {
                 centre,
@@ -737,7 +781,39 @@ impl Sketch {
                 if a == b {
                     return Err(SketchError::SameEntityTwice { what: "tangent" });
                 }
-                if self.curve_kind(*a)?.is_line() {
+                let (ka, kb) = (self.curve_kind(*a)?, self.curve_kind(*b)?);
+                if ka.is_spline() || kb.is_spline() {
+                    for (sp, other) in [(*a, *b), (*b, *a)] {
+                        if !self.curve_kind(sp)?.is_spline() {
+                            let k = self.curve_kind(sp)?;
+                            if !(k.is_line() || matches!(k, Curve::Arc { .. })) {
+                                return Err(SketchError::BadSpline(format!(
+                                    "a spline is tangent to a line, an arc or a spline, \
+                                     not a{} {}",
+                                    if k.kind_name().starts_with(['a', 'e']) {
+                                        "n"
+                                    } else {
+                                        ""
+                                    },
+                                    k.kind_name()
+                                )));
+                            }
+                            continue;
+                        }
+                        let join = self.spline_join(sp, other).ok_or_else(|| {
+                            SketchError::BadSpline(
+                                "a spline is tangent where one of its ends meets an end of \
+                                 the other curve"
+                                    .into(),
+                            )
+                        })?;
+                        if join.tangent.is_none() {
+                            return Err(SketchError::BadSpline(
+                                "the spline needs a tangent handle at that end".into(),
+                            ));
+                        }
+                    }
+                } else if ka.is_line() {
                     self.check_circular(*b)?;
                 } else if self.curve_kind(*b)?.is_line() {
                     self.check_circular(*a)?;

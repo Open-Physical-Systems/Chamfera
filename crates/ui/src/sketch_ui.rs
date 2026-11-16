@@ -39,6 +39,8 @@ pub enum Tool {
     ThreePointArc,
     TangentArc,
     Spline,
+    /// A spline on the control polygon clicked (`spline_ui.rs`).
+    ControlSpline,
     Offset,
     Mirror,
     RectangularPattern,
@@ -58,6 +60,8 @@ pub enum Tool {
     ThreePointCircle,
     TangentCircle,
     Transform,
+    EdgePolygon,
+    ArcSlot,
 }
 
 /// The tools `sketch_shapes.rs` handles, for the `match`es below.
@@ -72,10 +76,12 @@ macro_rules! shape_tools {
             | Tool::ThreePointCircle
             | Tool::TangentCircle
             | Tool::Transform
+            | Tool::EdgePolygon
+            | Tool::ArcSlot
     };
 }
 
-pub(crate) const CREATE_ALL: [Tool; 21] = [
+pub(crate) const CREATE_ALL: [Tool; 24] = [
     Tool::Line,
     Tool::Rectangle,
     Tool::CentreRectangle,
@@ -88,10 +94,13 @@ pub(crate) const CREATE_ALL: [Tool; 21] = [
     Tool::ThreePointArc,
     Tool::TangentArc,
     Tool::Polygon,
+    Tool::EdgePolygon,
     Tool::Slot,
+    Tool::ArcSlot,
     Tool::Ellipse,
     Tool::Project,
     Tool::Spline,
+    Tool::ControlSpline,
     Tool::Point,
     Tool::Offset,
     Tool::Mirror,
@@ -121,6 +130,7 @@ impl Tool {
             Tool::ThreePointArc => label("sketch.arc.three_point"),
             Tool::TangentArc => label("sketch.arc.tangent"),
             Tool::Spline => label("sketch.spline"),
+            Tool::ControlSpline => crate::spline_ui::CONTROL_NAME,
             Tool::Offset => label("sketch.offset"),
             Tool::Mirror => label("sketch.mirror"),
             Tool::RectangularPattern => label("sketch.pattern.rectangular"),
@@ -147,7 +157,7 @@ impl Tool {
             Tool::Arc => Icon::Arc,
             Tool::ThreePointArc => Icon::ArcThreePoint,
             Tool::TangentArc => Icon::ArcTangent,
-            Tool::Spline => Icon::Spline,
+            Tool::Spline | Tool::ControlSpline => Icon::Spline,
             Tool::Offset => Icon::Offset,
             Tool::Mirror => Icon::Mirror,
             Tool::RectangularPattern => Icon::PatternRectangular,
@@ -164,6 +174,7 @@ impl Tool {
     pub(crate) fn tooltip(self) -> &'static str {
         match self {
             Tool::Spline => crate::spline_ui::TOOLTIP,
+            Tool::ControlSpline => crate::spline_ui::CONTROL_TOOLTIP,
             t @ shape_tools!() => crate::sketch_shapes::tooltip(t),
             Tool::Select => {
                 "Select
@@ -243,6 +254,7 @@ Click a curve to split it where other curves cross it; Split All splits every cr
     fn hint(self, clicks: usize) -> &'static str {
         match (self, clicks) {
             (Tool::Spline, n) => crate::spline_ui::hint(n),
+            (Tool::ControlSpline, n) => crate::spline_ui::control_hint(n),
             (t @ shape_tools!(), n) => crate::sketch_shapes::hint(t, n),
             (Tool::Select, _) => {
                 "Click to select (Shift adds) · drag a point to move it · drag on empty space to box select · Del deletes"
@@ -408,6 +420,10 @@ pub fn parse_demo(text: &str) -> Result<Vec<DemoStep>, String> {
                 "three_point_circle" => Tool::ThreePointCircle,
                 "circle" => Tool::Circle,
                 "arc" => Tool::Arc,
+                "spline" => Tool::Spline,
+                "control_spline" => Tool::ControlSpline,
+                "edge_polygon" => Tool::EdgePolygon,
+                "arc_slot" => Tool::ArcSlot,
                 other => return Err(format!("--sketch-input: no drawing tool `{other}`")),
             }),
             "click" | "hover" => {
@@ -477,7 +493,7 @@ pub struct SketchUi {
     pub(crate) clicks: Vec<Click>,
     /// The first point of the current line chain, to close the loop on it.
     chain_start: Option<u32>,
-    hover: Option<Point2>,
+    pub(crate) hover: Option<Point2>,
     /// The hovered pixel and viewport size, for previews that pick geometry.
     pub(crate) hover_px: Option<(f64, f64, f64, f64)>,
     /// The curve the Offset tool picked with its first click.
@@ -971,7 +987,23 @@ impl ChamferaApp {
         } else {
             self.heads_up_keys(ui)
         };
-        if self.sketch.tool() == Tool::Spline
+        if !typing {
+            // Ctrl+C and Ctrl+V arrive as copy and paste events.
+            let (copy, paste) = ui.input(|i| {
+                (
+                    i.events.iter().any(|e| matches!(e, egui::Event::Copy)),
+                    i.events.iter().any(|e| matches!(e, egui::Event::Paste(_))),
+                )
+            });
+            if copy {
+                self.sketch_copy();
+            }
+            if paste {
+                let at = self.sketch.hover;
+                self.sketch_paste(at);
+            }
+        }
+        if matches!(self.sketch.tool(), Tool::Spline | Tool::ControlSpline)
             && !typing
             && ui.input(|i| i.key_pressed(egui::Key::Enter))
         {
@@ -1347,7 +1379,7 @@ impl ChamferaApp {
             self.edit_click(tool, (x, y, w, h), click);
             return;
         }
-        if tool == Tool::Spline {
+        if matches!(tool, Tool::Spline | Tool::ControlSpline) {
             self.spline_click(click, (x, y, w, h));
             return;
         }
@@ -1708,7 +1740,9 @@ impl ChamferaApp {
                     polylines.extend(self.op_polylines(&op));
                 }
             }
-            (Tool::Spline, _) => polylines.extend(self.spline_preview(hover)),
+            (Tool::Spline | Tool::ControlSpline, _) => {
+                polylines.extend(self.spline_preview(hover));
+            }
             (tool, _) if tool.edits() => polylines.extend(self.edit_preview(tool, hover)),
             (tool, _) if crate::sketch_shapes::is_shape(tool) => {
                 let pts: Vec<Point2> = c.iter().map(|k| k.at).collect();

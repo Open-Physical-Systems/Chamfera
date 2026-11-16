@@ -31,6 +31,8 @@ pub enum Kind {
     Mesh,
     /// A DXF drawing for the active sketch.
     Dxf,
+    /// An SVG drawing for the active sketch.
+    Svg,
 }
 
 /// A file the user picked: its name, and its contents as base64 (or why it was refused).

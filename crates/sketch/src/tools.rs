@@ -170,6 +170,18 @@ pub enum ToolOp {
         width: f64,
         overall: bool,
     },
+    /// A regular polygon of `sides` with one side from `a` to `b`, lying to the left of
+    /// it (counter-clockwise).
+    PolygonEdge { a: Point2, b: Point2, sides: u32 },
+    /// A slot `width` wide whose centre line is the arc about `centre` from the direction
+    /// of `start` (which also sets the radius) counter-clockwise to the direction of
+    /// `end`.
+    ArcSlot {
+        centre: Point2,
+        start: Point2,
+        end: Point2,
+        width: f64,
+    },
     /// An ellipse about `centre` with a semi-axis to `major` and the other semi-axis
     /// `minor` mm long.
     Ellipse {
@@ -423,7 +435,7 @@ fn with_end(curve: &Curve, at_start: bool, p: PointId) -> Curve {
 }
 
 /// What changed between two versions of a sketch.
-fn report(before: &Sketch, after: &Sketch) -> ToolReport {
+pub(crate) fn report(before: &Sketch, after: &Sketch) -> ToolReport {
     ToolReport {
         created_points: after
             .points()
@@ -633,6 +645,13 @@ impl Sketch {
                 width,
                 overall,
             } => self.slot(*start, *end, *width, *overall),
+            ToolOp::PolygonEdge { a, b, sides } => self.polygon_edge(*a, *b, *sides),
+            ToolOp::ArcSlot {
+                centre,
+                start,
+                end,
+                width,
+            } => self.arc_slot(*centre, *start, *end, *width),
             ToolOp::Ellipse {
                 centre,
                 major,
@@ -1899,18 +1918,9 @@ impl Sketch {
                     construction,
                 },
                 // Interpolation and control polygons commute with rigid motions and
-                // reflections, so the copy is the spline on the copied points.
-                Curve::Spline {
-                    ref points,
-                    form,
-                    closed,
-                    construction,
-                } => Curve::Spline {
-                    points: points.iter().map(m).collect(),
-                    form,
-                    closed,
-                    construction,
-                },
+                // reflections, so the copy is the spline on the copied points (its
+                // handles copied with them).
+                Curve::Spline { .. } => curve.map_points(|p| m(&p)),
                 Curve::Ellipse {
                     centre,
                     major,

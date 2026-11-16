@@ -44,6 +44,77 @@ fn shared_end(sketch: &Sketch, a: CurveId, b: CurveId) -> Option<PointId> {
     ea.into_iter().find(|p| eb.contains(p))
 }
 
+/// Tangency where a spline's end meets a line, an arc or another spline's end, or
+/// `None` when neither curve is a spline. The direction from the spline's end `e` to the
+/// point `h` that sets its tangent there (a handle, or the next control point) is held
+/// along the line, square to the arc's radius at `e`, or along the other spline's own
+/// tangent direction.
+fn spline_tangent(
+    sketch: &Sketch,
+    layout: &Layout,
+    a: CurveId,
+    b: CurveId,
+    scale: f64,
+) -> Result<Option<Residual>, SketchError> {
+    let is_spline = |c: CurveId| sketch.curve(c).is_some_and(Curve::is_spline);
+    let (sp, other) = if is_spline(a) {
+        (a, b)
+    } else if is_spline(b) {
+        (b, a)
+    } else {
+        return Ok(None);
+    };
+    let ends = |s: CurveId, o: CurveId| -> Result<(usize, usize), SketchError> {
+        let j = sketch.spline_join(s, o).ok_or_else(|| {
+            SketchError::BadSpline("the spline's end no longer meets the other curve".into())
+        })?;
+        let t = j.tangent.ok_or_else(|| {
+            SketchError::BadSpline("the spline has no tangent handle at that end".into())
+        })?;
+        Ok((layout.p(j.end)?, layout.p(t)?))
+    };
+    let (e, h) = ends(sp, other)?;
+    Ok(Some(match sketch.curve(other) {
+        Some(Curve::Line { .. }) => {
+            let (la, lb) = layout.line(sketch, other)?;
+            Residual::Parallel {
+                a1: e,
+                b1: h,
+                a2: la,
+                b2: lb,
+                scale,
+            }
+        }
+        Some(Curve::Arc { .. }) => {
+            let (c, _) = layout.circular(sketch, other)?;
+            Residual::SymmetricPerp {
+                p: e,
+                q: h,
+                a: c,
+                b: e,
+            }
+        }
+        Some(Curve::Spline { .. }) => {
+            let (e2, h2) = ends(other, sp)?;
+            Residual::Parallel {
+                a1: e,
+                b1: h,
+                a2: e2,
+                b2: h2,
+                scale,
+            }
+        }
+        Some(k) => {
+            return Err(SketchError::WrongCurveKind {
+                curve: other,
+                found: k.kind_name(),
+                expected: "line, arc or spline",
+            });
+        }
+        None => return Err(SketchError::UnknownCurve(other)),
+    }))
+}
+
 /// A radius: a circle's unknown, or an arc's centre-to-start distance.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum Radius {
@@ -854,6 +925,10 @@ pub(crate) fn compile(sketch: &Sketch, layout: &Layout) -> Result<Vec<Equation>,
                 });
             }
             Constraint::Tangent { a, b } => {
+                if let Some(r) = spline_tangent(sketch, layout, *a, *b, scale)? {
+                    add(r);
+                    continue;
+                }
                 let a_is_line = sketch.curve(*a).is_some_and(Curve::is_line);
                 let b_is_line = sketch.curve(*b).is_some_and(Curve::is_line);
                 if let Some(shared) = shared_end(sketch, *a, *b) {

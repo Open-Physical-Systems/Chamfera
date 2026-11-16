@@ -92,6 +92,8 @@ impl Sketch {
             form,
             closed,
             construction: false,
+            start_handle: None,
+            end_handle: None,
         })
     }
 
@@ -107,14 +109,206 @@ impl Sketch {
             points,
             form,
             closed,
+            start_handle,
+            end_handle,
             ..
         } = curve
         else {
             return None;
         };
         let at: Option<Vec<Point2>> = points.iter().map(|p| self.point(*p)).collect();
-        spline_geometry(&at?, *form, *closed)
+        let at = at?;
+        if *form == SplineForm::Fit && !*closed && (start_handle.is_some() || end_handle.is_some())
+        {
+            // A handle sets the end tangent: from the first point toward its handle, and
+            // at the last point away from its handle. A handle on its end sets none.
+            let toward = |end: Option<&PointId>, handle: &Option<PointId>, out: bool| {
+                let e = self.point(*end?)?;
+                let h = self.point((*handle)?)?;
+                let v = if out { h - e } else { e - h };
+                (v.length() > chamfera_geom::LINEAR_TOLERANCE).then_some(v)
+            };
+            let t0 = toward(points.first(), start_handle, true);
+            let t1 = toward(points.last(), end_handle, false);
+            return BSplineCurve2::interpolate(&at, t0, t1).ok();
+        }
+        spline_geometry(&at, *form, *closed)
     }
+
+    /// Gives an open fit spline tangent handles at its ends (`start`, `end`), each a new
+    /// point a third of the way along the first (last) chord from its end, in the
+    /// direction the spline now leaves (arrives); returns the handle points. An end that
+    /// already has a handle keeps it.
+    pub fn add_spline_handles(
+        &mut self,
+        id: CurveId,
+        start: bool,
+        end: bool,
+    ) -> Result<(Option<PointId>, Option<PointId>), SketchError> {
+        let curve = self
+            .curve(id)
+            .cloned()
+            .ok_or(SketchError::UnknownCurve(id))?;
+        let Curve::Spline {
+            points,
+            form: SplineForm::Fit,
+            closed: false,
+            start_handle,
+            end_handle,
+            ..
+        } = curve.clone()
+        else {
+            return Err(SketchError::BadSpline(
+                "only an open fit spline has tangent handles (a control spline's tangents \
+                 follow its control polygon)"
+                    .into(),
+            ));
+        };
+        let geometry = self
+            .spline_of(&curve)
+            .ok_or_else(|| SketchError::BadSpline("the spline has no shape now".into()))?;
+        let (lo, hi) = geometry.domain();
+        let chord = |i: usize, j: usize| match (
+            points.get(i).and_then(|p| self.point(*p)),
+            points.get(j).and_then(|p| self.point(*p)),
+        ) {
+            (Some(a), Some(b)) => a.distance(b),
+            _ => 0.0,
+        };
+        let n = points.len();
+        let place = |at_end: bool| -> Result<Point2, SketchError> {
+            let (u, p, len) = if at_end {
+                (hi, points.last(), chord(n.saturating_sub(2), n - 1))
+            } else {
+                (lo, points.first(), chord(0, 1))
+            };
+            let e = p
+                .and_then(|p| self.point(*p))
+                .ok_or_else(|| SketchError::BadSpline("the spline has no end".into()))?;
+            let d = geometry
+                .derivatives(u, 1)
+                .get(1)
+                .copied()
+                .and_then(|v| v.normalized())
+                .ok_or_else(|| SketchError::BadSpline("the spline has no tangent there".into()))?;
+            let reach = (len / 3.0).max(chamfera_geom::LINEAR_TOLERANCE * 10.0);
+            Ok(if at_end { e - d * reach } else { e + d * reach })
+        };
+        let want_start = match (start, start_handle) {
+            (true, None) => Some(place(false)?),
+            _ => None,
+        };
+        let want_end = match (end, end_handle) {
+            (true, None) => Some(place(true)?),
+            _ => None,
+        };
+        let s = match want_start {
+            Some(at) => Some(self.add_point(at)?),
+            None => start_handle,
+        };
+        let e = match want_end {
+            Some(at) => Some(self.add_point(at)?),
+            None => end_handle,
+        };
+        let mut next = curve;
+        if let Curve::Spline {
+            start_handle,
+            end_handle,
+            ..
+        } = &mut next
+        {
+            *start_handle = s;
+            *end_handle = e;
+        }
+        self.replace_curve(id, next)?;
+        Ok((s, e))
+    }
+
+    /// Takes a spline's tangent handles away (the points stay, free).
+    pub fn remove_spline_handles(&mut self, id: CurveId) -> Result<(), SketchError> {
+        let mut curve = self
+            .curve(id)
+            .cloned()
+            .ok_or(SketchError::UnknownCurve(id))?;
+        let Curve::Spline {
+            start_handle,
+            end_handle,
+            ..
+        } = &mut curve
+        else {
+            return Err(SketchError::BadSpline("not a spline".into()));
+        };
+        *start_handle = None;
+        *end_handle = None;
+        self.replace_curve(id, curve)
+    }
+
+    /// Where spline `spline` meets curve `other` end to end, for a tangent constraint:
+    /// the spline's end point there, the point that sets the spline's tangent there (its
+    /// handle, or for a control spline the next control point in), whether it is the
+    /// spline's first point, and the other curve's end that meets it. Ends meet when
+    /// they are one point or tied by a coincident constraint.
+    pub(crate) fn spline_join(&self, spline: CurveId, other: CurveId) -> Option<SplineJoin> {
+        let Some(Curve::Spline {
+            points,
+            form,
+            closed: false,
+            start_handle,
+            end_handle,
+            ..
+        }) = self.curve(spline)
+        else {
+            return None;
+        };
+        let (oa, ob) = self.curve(other)?.ends()?;
+        let joined = |p: PointId, q: PointId| {
+            p == q
+                || self.constraints().any(|(_, c)| {
+                    matches!(c, crate::Constraint::Coincident { a, b }
+                        if (*a == p && *b == q) || (*a == q && *b == p))
+                })
+        };
+        let n = points.len();
+        let ends = [(true, points.first()), (false, points.last())];
+        for (first, end) in ends {
+            let Some(&e) = end else { continue };
+            let Some(meet) = [oa, ob].into_iter().find(|q| joined(e, *q)) else {
+                continue;
+            };
+            let tangent = match form {
+                SplineForm::Control => {
+                    if first {
+                        points.get(1).copied()
+                    } else {
+                        points.get(n.saturating_sub(2)).copied()
+                    }
+                }
+                SplineForm::Fit => {
+                    if first {
+                        *start_handle
+                    } else {
+                        *end_handle
+                    }
+                }
+            };
+            return Some(SplineJoin {
+                end: e,
+                tangent,
+                first,
+                other_end: meet,
+            });
+        }
+        None
+    }
+}
+
+/// See [`Sketch::spline_join`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct SplineJoin {
+    pub end: PointId,
+    pub tangent: Option<PointId>,
+    pub first: bool,
+    pub other_end: PointId,
 }
 
 /// Points per knot span of a spline's display and containment polyline.

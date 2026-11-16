@@ -853,3 +853,132 @@ fn trimming_the_inner_arcs_of_two_circles_leaves_their_union() {
     // The second trim reused the first one's cut points: nothing is redundant.
     assert_eq!(dof(&s), 6);
 }
+
+// ----- polygon by an edge, arc slot, spline end tangents -----
+
+fn sorted_areas(s: &Sketch) -> Vec<f64> {
+    let mut a: Vec<f64> = s.profiles().iter().map(|r| r.area).collect();
+    a.sort_by(f64::total_cmp);
+    a
+}
+
+#[test]
+fn a_hexagon_on_an_edge_has_the_hexagon_area_and_lies_left_of_it() {
+    // Side (0, 0) to (10, 0): area (3√3 / 2) s² = 150 √3; centre (5, 5√3), to the left
+    // of the side; four degrees of freedom like any polygon.
+    let mut s = Sketch::new();
+    s.apply_tool(&ToolOp::PolygonEdge {
+        a: p(0.0, 0.0),
+        b: p(10.0, 0.0),
+        sides: 6,
+    })
+    .unwrap();
+    let a = sorted_areas(&s);
+    assert_eq!(a.len(), 1);
+    assert!((a[0] - 150.0 * 3f64.sqrt()).abs() < TOL, "{a:?}");
+    let has = |x: f64, y: f64| s.points().any(|(_, q)| q.distance(p(x, y)) < TOL);
+    assert!(has(0.0, 0.0) && has(10.0, 0.0) && has(5.0, 5.0 * 3f64.sqrt()));
+    assert_eq!(s.analyze().unwrap().dof, 4);
+    assert!(
+        s.apply_tool(&ToolOp::PolygonEdge {
+            a: p(0.0, 0.0),
+            b: p(0.0, 0.0),
+            sides: 6
+        })
+        .is_err()
+    );
+}
+
+#[test]
+fn an_arc_slot_has_the_annular_sector_plus_one_disc_of_area() {
+    // R = 30 about the origin from 0° to 90°, 10 wide: the sector of the ring between
+    // 25 and 35 is (π/2)/2 · (35² - 25²) = 150 π; the two half-disc caps of radius 5
+    // make one disc, 25 π. 175 π in all, with 5 degrees of freedom (centre, radius, two
+    // end angles).
+    let mut s = Sketch::new();
+    s.apply_tool(&ToolOp::ArcSlot {
+        centre: p(0.0, 0.0),
+        start: p(30.0, 0.0),
+        end: p(0.0, 50.0),
+        width: 10.0,
+    })
+    .unwrap();
+    let a = sorted_areas(&s);
+    assert_eq!(a.len(), 1, "{a:?}");
+    assert!((a[0] - 175.0 * PI).abs() < 1e-6, "{a:?}");
+    assert_eq!(s.analyze().unwrap().dof, 5);
+    for bad in [
+        (p(3.0, 0.0), p(0.0, 3.0), 10.0),
+        (p(30.0, 0.0), p(30.0, 1.0), 10.0),
+        (p(30.0, 0.0), p(0.0, 30.0), -1.0),
+    ] {
+        assert!(
+            s.apply_tool(&ToolOp::ArcSlot {
+                centre: p(0.0, 0.0),
+                start: bad.0,
+                end: bad.1,
+                width: bad.2,
+            })
+            .is_err()
+        );
+    }
+    let _ = (FRAC_PI_2, TAU);
+}
+
+#[test]
+fn a_fit_spline_made_tangent_to_a_line_leaves_along_it() {
+    // A line from (-20, 0) to (0, 0) and a fit spline from (0, 0) through (10, 10) to
+    // (20, 0), sharing the point at the origin. Tangent: the spline gets a handle there
+    // and leaves along +x, so its first derivative has no y part.
+    let mut s = Sketch::new();
+    let a = s.add_point(p(-20.0, 0.0)).unwrap();
+    let o = s.add_point(p(0.0, 0.0)).unwrap();
+    let m = s.add_point(p(10.0, 10.0)).unwrap();
+    let e = s.add_point(p(20.0, 0.0)).unwrap();
+    let line = s.add_line(a, o).unwrap();
+    let sp = s.add_spline(vec![o, m, e], SplineForm::Fit, false).unwrap();
+    for q in [a, o, m, e] {
+        s.fix_point(q).unwrap();
+    }
+    s.try_add_constraint(Constraint::Tangent { a: line, b: sp })
+        .unwrap();
+    let curve = s.spline_curve(sp).unwrap();
+    let (lo, _) = curve.domain();
+    let d = curve.derivatives(lo, 1)[1];
+    assert!(d.x > 0.0 && (d.y / d.x).abs() < 1e-9, "{d:?}");
+    // It still passes through its points.
+    assert!(curve.closest_point(p(10.0, 10.0)).distance < 1e-9);
+    // The handle is a free point along the line: one freedom (its distance) is left.
+    assert_eq!(s.analyze().unwrap().dof, 1);
+}
+
+#[test]
+fn a_control_spline_made_tangent_to_an_arc_leaves_square_to_the_radius() {
+    // The arc about the origin from (10, 0) to (0, 10); a control spline from the arc's
+    // end (0, 10) over (5, 15), (10, 20) to (20, 20). Tangent at (0, 10): the first leg
+    // of the control polygon turns horizontal (square to the radius along y).
+    let mut s = Sketch::new();
+    let c = s.add_point(p(0.0, 0.0)).unwrap();
+    let a0 = s.add_point(p(10.0, 0.0)).unwrap();
+    let a1 = s.add_point(p(0.0, 10.0)).unwrap();
+    let arc = s.add_arc(c, a0, a1).unwrap();
+    let q1 = s.add_point(p(5.0, 15.0)).unwrap();
+    let q2 = s.add_point(p(10.0, 20.0)).unwrap();
+    let q3 = s.add_point(p(20.0, 20.0)).unwrap();
+    let sp = s
+        .add_spline(vec![a1, q1, q2, q3], SplineForm::Control, false)
+        .unwrap();
+    for q in [c, a0, a1] {
+        s.fix_point(q).unwrap();
+    }
+    s.try_add_constraint(Constraint::Tangent { a: arc, b: sp })
+        .unwrap();
+    let (e, h) = (s.point(a1).unwrap(), s.point(q1).unwrap());
+    assert!((h.y - e.y).abs() < 1e-9, "{h:?}");
+    // A spline not meeting the curve, or a closed one, is refused.
+    let lone = line(&mut s, (50.0, 50.0), (60.0, 50.0));
+    assert!(
+        s.add_constraint(Constraint::Tangent { a: lone, b: sp })
+            .is_err()
+    );
+}

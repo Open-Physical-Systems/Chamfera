@@ -151,17 +151,17 @@ fn import(s: &mut Session, bytes: &[u8], p: &Value) -> CmdResult {
     }))
 }
 
-/// Draws DXF entities into a sketch.
-struct Builder<'a> {
-    sk: &'a mut Sketch,
+/// Draws DXF entities (and SVG's, `svg.rs`) into a sketch.
+pub(super) struct Builder<'a> {
+    pub(super) sk: &'a mut Sketch,
     /// Millimetres per drawing unit.
-    k: f64,
+    pub(super) k: f64,
     /// Endpoints so far, by grid cell of [`JOIN_TOLERANCE`].
     grid: HashMap<(i64, i64), Vec<(Point2, PointId)>>,
-    curves: usize,
-    points: usize,
-    joined: usize,
-    skipped: BTreeMap<String, usize>,
+    pub(super) curves: usize,
+    pub(super) points: usize,
+    pub(super) joined: usize,
+    pub(super) skipped: BTreeMap<String, usize>,
 }
 
 fn cell(p: Point2) -> (i64, i64) {
@@ -171,7 +171,45 @@ fn cell(p: Point2) -> (i64, i64) {
     )
 }
 
-impl Builder<'_> {
+impl<'a> Builder<'a> {
+    pub(super) fn new(sk: &'a mut Sketch, k: f64, skipped: BTreeMap<String, usize>) -> Self {
+        Builder {
+            sk,
+            k,
+            grid: HashMap::new(),
+            curves: 0,
+            points: 0,
+            joined: 0,
+            skipped,
+        }
+    }
+
+    /// A cubic Bézier on its four control points (drawing units): a control-point spline
+    /// with clamped knots `0 0 0 0 1 1 1 1`, which is the Bézier itself. The inner
+    /// control points are kept even where they sit on an end (a common way to write a
+    /// curve that leaves along the next control point), so the curve stays exact.
+    pub(super) fn cubic(&mut self, p: &[Point2; 4]) -> Result<(), CommandError> {
+        let mut q = [Point2::new(0.0, 0.0); 4];
+        for (i, x) in p.iter().enumerate() {
+            if let Some(slot) = q.get_mut(i) {
+                *slot = self.map(*x)?;
+            }
+        }
+        let [a, b, c, d] = q;
+        if [b, c, d].iter().all(|x| x.distance(a) <= JOIN_TOLERANCE) {
+            self.skip("cubic (zero length)");
+            return Ok(());
+        }
+        let pa = self.endpoint(a)?;
+        let (pb, pc) = (self.point(b)?, self.point(c)?);
+        let pd = self.endpoint(d)?;
+        self.sk
+            .add_spline(vec![pa, pb, pc, pd], SplineForm::Control, false)
+            .map_err(sketch_err)?;
+        self.curves += 1;
+        Ok(())
+    }
+
     fn skip(&mut self, why: &str) {
         *self.skipped.entry(why.to_owned()).or_insert(0) += 1;
     }
@@ -233,7 +271,7 @@ impl Builder<'_> {
         Ok(id)
     }
 
-    fn add(&mut self, e: &Entity) -> Result<(), CommandError> {
+    pub(super) fn add(&mut self, e: &Entity) -> Result<(), CommandError> {
         match e {
             Entity::Line { a, b } => {
                 let (a, b) = (self.map(*a)?, self.map(*b)?);

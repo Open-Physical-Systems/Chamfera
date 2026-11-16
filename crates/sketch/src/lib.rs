@@ -65,6 +65,7 @@
 //! Cholesky; Tarjan on bridges). Read `skills/chamfera-kernel/SKILL.md` before changing
 //! them.
 
+mod clipboard;
 mod constraint;
 mod crossing;
 mod ellipse;

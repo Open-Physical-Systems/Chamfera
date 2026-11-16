@@ -84,6 +84,8 @@ pub(crate) fn is_shape(tool: Tool) -> bool {
             | Tool::ThreePointCircle
             | Tool::TangentCircle
             | Tool::Transform
+            | Tool::EdgePolygon
+            | Tool::ArcSlot
     )
 }
 
@@ -103,6 +105,8 @@ pub(crate) fn name(tool: Tool) -> &'static str {
         Tool::ThreePointCircle => label("sketch.circle.three_point"),
         Tool::TangentCircle => label("sketch.circle.tangent"),
         Tool::Transform => "Move/Copy",
+        Tool::EdgePolygon => label("sketch.polygon.edge"),
+        Tool::ArcSlot => label("sketch.slot.arc"),
         _ => label("sketch.project"),
     }
 }
@@ -117,6 +121,8 @@ pub(crate) fn icon(tool: Tool) -> Icon {
         Tool::ThreePointCircle => Icon::CircleThreePoint,
         Tool::TangentCircle => Icon::CircleTangent,
         Tool::Transform => Icon::SketchTransform,
+        Tool::EdgePolygon => Icon::Polygon,
+        Tool::ArcSlot => Icon::Slot,
         _ => Icon::Project,
     }
 }
@@ -140,6 +146,12 @@ pub(crate) fn tooltip(tool: Tool) -> &'static str {
         }
         Tool::Transform => {
             "Move/Copy\nMove, turn or scale the selected geometry by typed values, or a moved copy of it"
+        }
+        Tool::EdgePolygon => {
+            "Edge Polygon\nA regular polygon by the two ends of one side; it lies to the left of the side"
+        }
+        Tool::ArcSlot => {
+            "Arc Slot\nA slot bent along an arc: the centre, the start, the end, then the width"
         }
         _ => "Project\nCopy model edges into the sketch, linked so they follow the model",
     }
@@ -170,6 +182,12 @@ pub(crate) fn hint(tool: Tool, clicks: usize) -> &'static str {
             "Select geometry, set the values and Apply · or click the base point (the centre to turn or scale about)"
         }
         (Tool::Transform, _) => "Click where the base point goes · Esc cancels",
+        (Tool::EdgePolygon, 0) => "Click one end of a side",
+        (Tool::EdgePolygon, _) => "Click the other end of the side (the polygon lies to its left)",
+        (Tool::ArcSlot, 0) => "Click the centre of the arc",
+        (Tool::ArcSlot, 1) => "Click the start of the slot's centre line",
+        (Tool::ArcSlot, 2) => "Click the end of the centre line (counter-clockwise)",
+        (Tool::ArcSlot, _) => "Click to set the width",
         _ => "Click a model edge, or a face to project all its edges · Esc cancels",
     }
 }
@@ -177,7 +195,8 @@ pub(crate) fn hint(tool: Tool, clicks: usize) -> &'static str {
 /// How many clicks a shape takes.
 fn clicks_needed(tool: Tool, o: &ShapeOptions) -> usize {
     match tool {
-        Tool::Polygon | Tool::TwoPointCircle => 2,
+        Tool::Polygon | Tool::TwoPointCircle | Tool::EdgePolygon => 2,
+        Tool::ArcSlot => 4,
         Tool::Slot | Tool::Ellipse | Tool::ThreePointRectangle | Tool::ThreePointCircle => 3,
         Tool::TangentCircle if o.tangent_three => 3,
         Tool::TangentCircle => 2,
@@ -214,6 +233,34 @@ impl ChamferaApp {
                         corner: *k,
                         sides,
                         inscribed: !o.circumscribed,
+                    },
+                ))
+            }
+            (Tool::EdgePolygon, [a, b]) => {
+                let sides: u32 = o.sides.trim().parse().ok()?;
+                Some((
+                    "sketch.polygon.edge",
+                    json!({ "x1": a.x, "y1": a.y, "x2": b.x, "y2": b.y, "sides": sides }),
+                    ToolOp::PolygonEdge {
+                        a: *a,
+                        b: *b,
+                        sides,
+                    },
+                ))
+            }
+            (Tool::ArcSlot, [c, a, b, w]) => {
+                let width = 2.0 * (w.distance(*c) - a.distance(*c)).abs();
+                Some((
+                    "sketch.slot.arc",
+                    json!({
+                        "cx": c.x, "cy": c.y, "x1": a.x, "y1": a.y, "x2": b.x, "y2": b.y,
+                        "width": width,
+                    }),
+                    ToolOp::ArcSlot {
+                        centre: *c,
+                        start: *a,
+                        end: *b,
+                        width,
                     },
                 ))
             }
@@ -367,8 +414,23 @@ impl ChamferaApp {
     ) -> Vec<Vec<Point2>> {
         let mut all = pts.to_vec();
         all.push(hover);
-        if all.len() == 2 && clicks_needed(tool, &self.sketch.shapes) == 3 {
+        if all.len() == 2 && clicks_needed(tool, &self.sketch.shapes) >= 3 {
             return vec![all];
+        }
+        if let (Tool::ArcSlot, [c, a, b]) = (tool, all.as_slice()) {
+            // The centre line so far: counter-clockwise from the start toward the cursor.
+            let r = a.distance(*c);
+            let t0 = (*a - *c).angle();
+            let sweep = ((*b - *c).angle() - t0).rem_euclid(std::f64::consts::TAU);
+            let n = 48;
+            return vec![
+                (0..=n)
+                    .map(|k| {
+                        let t = t0 + sweep * f64::from(k) / f64::from(n);
+                        Point2::new(c.x + r * t.cos(), c.y + r * t.sin())
+                    })
+                    .collect(),
+            ];
         }
         let Some((_, _, op)) = self.shape_op(tool, &all) else {
             return Vec::new();
@@ -462,12 +524,67 @@ impl ChamferaApp {
         }
     }
 
+    /// Intersect: the curves where the sketch plane cuts the selected bodies, else every
+    /// body it cuts.
+    pub(crate) fn intersect_tool(&mut self) {
+        if let Some(r) = self.run_sketch("sketch.intersect", json!({})) {
+            let list = r["intersections"].as_array().cloned().unwrap_or_default();
+            let curves: usize = list
+                .iter()
+                .map(|i| i["curves"].as_array().map_or(0, Vec::len))
+                .sum();
+            self.message = Some((
+                format!(
+                    "Intersect: {curves} curve{} from {} bod{}",
+                    if curves == 1 { "" } else { "s" },
+                    list.len(),
+                    if list.len() == 1 { "y" } else { "ies" }
+                ),
+                false,
+            ));
+        }
+    }
+
+    /// Ctrl+C in a sketch: keeps the selected geometry for pasting.
+    pub(crate) fn sketch_copy(&mut self) {
+        if self.session.sketch_selection.is_empty() {
+            return;
+        }
+        if let Some(r) = self.run_sketch("sketch.copy", json!({})) {
+            self.message = Some((
+                format!(
+                    "Copied {} curves and {} constraints: Ctrl+V pastes them at the cursor",
+                    r["curves"], r["constraints"]
+                ),
+                false,
+            ));
+        }
+    }
+
+    /// Ctrl+V in a sketch: pastes the copied geometry with its middle at `at` (the
+    /// cursor), or where it was.
+    pub(crate) fn sketch_paste(&mut self, at: Option<Point2>) {
+        if self.session.sketch_clipboard.is_none() {
+            return;
+        }
+        let params = match at {
+            Some(p) => json!({ "x": p.x, "y": p.y }),
+            None => json!({}),
+        };
+        self.run_sketch("sketch.paste", params);
+    }
+
     /// The option box of the shape tools that take values, at the viewport's top left.
     pub(crate) fn shape_tool_box(&mut self, ui: &mut egui::Ui, rect: Rect) {
         let tool = self.sketch.tool();
         if !matches!(
             tool,
-            Tool::Polygon | Tool::Slot | Tool::Project | Tool::TangentCircle | Tool::Transform
+            Tool::Polygon
+                | Tool::EdgePolygon
+                | Tool::Slot
+                | Tool::Project
+                | Tool::TangentCircle
+                | Tool::Transform
         ) {
             return;
         }
@@ -517,6 +634,15 @@ impl ChamferaApp {
                                     &mut o.circumscribed,
                                     "Circumscribed (around the circle)",
                                 );
+                            }
+                            Tool::EdgePolygon => {
+                                ui.horizontal(|ui| {
+                                    widgets::field_label(ui, look, "Sides");
+                                    ui.add(
+                                        egui::TextEdit::singleline(&mut o.sides)
+                                            .desired_width(64.0),
+                                    );
+                                });
                             }
                             Tool::Slot => {
                                 ui.checkbox(&mut o.overall, "Points are the tips (overall length)");
