@@ -590,6 +590,33 @@ pub const TOOLS: &[RibbonTool] = &[
         "Show the components moved apart along the assembly's axes, with trails; the \
          model does not change",
     ),
+    tool(
+        P,
+        "ASSEMBLE",
+        Action::Tool("joint.as_built"),
+        Icon::JointAsBuilt,
+        "As-built Joint",
+        "Joint two components where they already sit: pick the axis on the part that \
+         moves, then the other part; nothing moves until you drive it",
+    ),
+    tool(
+        P,
+        "ASSEMBLE",
+        Action::Tool("component.rigid_group"),
+        Icon::RigidGroup,
+        "Rigid Group",
+        "Lock the selected bodies' components together so they move as one; on a \
+         grouped part, ungroup it",
+    ),
+    tool(
+        P,
+        "ASSEMBLE",
+        Action::Tool("bom.list"),
+        Icon::Bom,
+        "Bill of Materials",
+        "List the parts with their quantities, material and volume; export it as CSV",
+    )
+    .short("BOM"),
     // SOLID > CONSTRUCT
     construct(
         "construct.plane_offset",
@@ -1824,6 +1851,9 @@ impl ChamferaApp {
                 "motion.set_time" => self.motion.study.is_some(),
                 "inspect.interference" => self.motion.interference.is_some(),
                 "view.explode" => self.motion.explode.is_some(),
+                "joint.as_built" => self.assembly.joint.as_ref().is_some_and(|t| t.as_built),
+                "component.rigid_group" => self.selected_group().is_some(),
+                "bom.list" => self.bom.open,
                 "cam.tool_add" => self.cam.tool_dialog.is_some(),
                 "cam.tool_library" => self.cam.library_open,
                 "cam.simulate" => self.cam.sim_panel.is_some(),
@@ -1890,7 +1920,7 @@ impl ChamferaApp {
                     format!("{name}: select a body of a component, or activate one, first")
                 }
                 "component.ground" => return None,
-                "joint.create" if !has_solids => {
+                "joint.create" | "joint.as_built" if !has_solids => {
                     format!("{name}: build bodies in two components first")
                 }
                 "joint.drag" | "motion.set_time" if self.session.doc.assembly.joints.is_empty() => {
@@ -1905,6 +1935,12 @@ impl ChamferaApp {
                     format!("{name}: group bodies into components first")
                 }
                 "view.explode" => return None,
+                "component.rigid_group" if self.selected_group().is_some() => return None,
+                "component.rigid_group" if self.selected_components().len() < 2 => {
+                    format!("{name}: select bodies of two or more components first")
+                }
+                "component.rigid_group" => return None,
+                "bom.list" => return None,
                 "config.list" => return None,
                 "solid.remove" if has_solids && self.session.scene.selected_bodies().is_empty() => {
                     format!("{name}: select the bodies to remove first")
@@ -2063,6 +2099,9 @@ impl ChamferaApp {
             "inspect.mass" => self.open_inspect(InspectMode::Mass),
             "component.new" => self.new_component(),
             "joint.create" => self.toggle_joint(),
+            "joint.as_built" => self.toggle_as_built(),
+            "component.rigid_group" => self.rigid_group_selection(),
+            "bom.list" => self.bom.open = !self.bom.open,
             "component.ground" => self.toggle_ground(),
             "joint.drag" => self.toggle_drive(),
             "motion.set_time" => self.toggle_study(),
@@ -2138,6 +2177,8 @@ impl ChamferaApp {
                     || matches!(
                         id,
                         "joint.create"
+                            | "joint.as_built"
+                            | "bom.list"
                             | "component.ground"
                             | "joint.drag"
                             | "motion.set_time"
@@ -2617,6 +2658,8 @@ mod tests {
             "drawing.move", // a drag on the sheet canvas
             "drawing.pick", // a click on the sheet canvas
             "inspect.measure_at",
+            "bom.export_csv",       // the Bill of Materials panel's Export CSV
+            "component.ungroup",    // Rigid Group on a grouped part
             "joint.delete", // the Browser's joint rows
             "joint.edit",
             "joint.origin_at",

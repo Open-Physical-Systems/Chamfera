@@ -147,6 +147,9 @@ pub enum Icon {
     MotionStudy,
     Interference,
     Explode,
+    JointAsBuilt,
+    RigidGroup,
+    Bom,
     RenderCamera,
     RenderEnvironment,
     RenderImage,
@@ -156,7 +159,7 @@ pub enum Icon {
 
 impl Icon {
     #[cfg(test)]
-    pub const ALL: [Icon; 133] = [
+    pub const ALL: [Icon; 136] = [
         Icon::RenderCamera,
         Icon::RenderEnvironment,
         Icon::RenderImage,
@@ -167,6 +170,9 @@ impl Icon {
         Icon::MotionStudy,
         Icon::Interference,
         Icon::Explode,
+        Icon::JointAsBuilt,
+        Icon::RigidGroup,
+        Icon::Bom,
         Icon::Arc,
         Icon::ArcTangent,
         Icon::ArcThreePoint,
@@ -432,6 +438,9 @@ impl Icon {
             Icon::MotionStudy => master!("motion_study"),
             Icon::Interference => master!("interference"),
             Icon::Explode => master!("explode"),
+            Icon::JointAsBuilt => master!("joint_as_built"),
+            Icon::RigidGroup => master!("rigid_group"),
+            Icon::Bom => master!("bom"),
         }
     }
 }

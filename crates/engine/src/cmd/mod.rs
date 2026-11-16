@@ -2,6 +2,7 @@
 
 mod app;
 mod body;
+mod bom;
 mod body_tools;
 mod cam;
 mod component;
@@ -55,6 +56,7 @@ pub fn registry() -> Vec<&'static CommandSpec> {
     for area in [
         app::COMMANDS,
         body::COMMANDS,
+        bom::COMMANDS,
         cam::COMMANDS,
         body_tools::COMMANDS,
         component::COMMANDS,

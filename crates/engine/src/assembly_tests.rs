@@ -190,7 +190,7 @@ fn a_chain_of_joints_composes_through_the_session() {
 }
 
 #[test]
-fn a_joint_loop_is_refused_and_changes_nothing() {
+fn a_loop_that_fits_is_solved_and_one_that_cannot_close_is_refused() {
     let mut s = Session::new();
     let (a, b) = two_plates(&mut s);
     s.execute(
@@ -199,22 +199,34 @@ fn a_joint_loop_is_refused_and_changes_nothing() {
                 "b": at_origin(b, [0.0, 0.0, 1.0])}),
     )
     .unwrap();
-    let before = s.doc.clone();
-    let e = s
+    // A revolute joint back from B to A about the same axis closes a loop that already
+    // fits: its angle solves to 0 (from the 30 degrees typed) and nothing moves.
+    let r = s
         .execute(
             "joint.create",
             &json!({"type": "revolute", "a": at_origin(b, [0.0, 0.0, 1.0]),
-                    "b": at_origin(a, [0.0, 0.0, 1.0])}),
+                    "b": at_origin(a, [0.0, 0.0, 1.0]), "value": 30}),
+        )
+        .unwrap();
+    let v = s.doc.assembly.joint(r["joint"].as_u64().unwrap() as u32).unwrap().value;
+    assert!(v.abs() < 1e-9, "{v}");
+    assert!(close(bounds(&mut s, b), [0.0, 0.0, 0.0, 40.0, 10.0, 4.0]));
+    // A rigid joint that holds B's origin 5 mm from where the first one holds it cannot
+    // fit: nothing in that loop can move. Refused, and the design is unchanged.
+    let before = s.doc.clone();
+    let off = json!({"component": a, "point": {"x": 5, "y": 0, "z": 0},
+                     "axis": {"x": 0, "y": 0, "z": 1}});
+    let e = s
+        .execute(
+            "joint.create",
+            &json!({"type": "rigid", "a": off, "b": at_origin(b, [0.0, 0.0, 1.0])}),
         )
         .unwrap_err();
-    assert!(e.to_string().contains("loop"), "{e}");
+    assert!(e.to_string().contains("over-constrained"), "{e}");
     assert_eq!(s.doc, before);
-    // Grounding B too would hold it twice: refused.
-    assert!(
-        s.execute("component.ground", &json!({"component": b}))
-            .is_err()
-    );
-    assert_eq!(s.doc, before);
+    // Grounding B too fits (B sits where A's joint holds it), so it is allowed.
+    s.execute("component.ground", &json!({"component": b}))
+        .unwrap();
 }
 
 #[test]
@@ -886,4 +898,310 @@ fn a_linked_copys_bodies_have_names_of_their_own() {
         .unwrap();
     assert!((m["volume"].as_f64().unwrap() - 1000.0).abs() < 1e-6);
     assert_eq!(m["solid"], "Extrude1 (Peg:2)");
+}
+
+/// A component's world transform from `component.list`: its matrix rows and translation.
+fn world_of(s: &mut Session, id: u64) -> ([[f64; 3]; 3], [f64; 3]) {
+    let w = component(s, id)["world"].clone();
+    let m = |i: usize, j: usize| w["matrix"][i][j].as_f64().unwrap();
+    let t = |k: &str| w["translation"][k].as_f64().unwrap();
+    (
+        [
+            [m(0, 0), m(0, 1), m(0, 2)],
+            [m(1, 0), m(1, 1), m(1, 2)],
+            [m(2, 0), m(2, 1), m(2, 2)],
+        ],
+        [t("x"), t("y"), t("z")],
+    )
+}
+
+/// A component's own point `p` in the world.
+fn world_point(s: &mut Session, id: u64, p: [f64; 3]) -> [f64; 3] {
+    let (m, t) = world_of(s, id);
+    let row = |i: usize| m[i][0] * p[0] + m[i][1] * p[1] + m[i][2] * p[2] + t[i];
+    [row(0), row(1), row(2)]
+}
+
+fn point_on(component: u64, x: f64) -> Value {
+    json!({"component": component, "point": {"x": x, "y": 0, "z": 0},
+           "axis": {"x": 0, "y": 0, "z": 1}})
+}
+
+/// The rocker angle of a four-bar linkage from the Freudenstein equation (Freudenstein,
+/// "Approximate synthesis of four-bar linkages", Trans. ASME 77, 1955):
+/// `K1 cos θ4 − K2 cos θ2 + K3 = cos(θ2 − θ4)` with `K1 = d/a`, `K2 = d/c`,
+/// `K3 = (a² − b² + c² + d²) / 2ac`. With `t = tan(θ4 / 2)` it is the quadratic
+/// `A t² + B t + C = 0`, `A = cos θ2 − K1 − K2 cos θ2 + K3`, `B = −2 sin θ2`,
+/// `C = K1 − (K2 + 1) cos θ2 + K3`; the open branch (coupler above the ground link)
+/// is the root with the minus sign.
+fn freudenstein(a: f64, b: f64, c: f64, d: f64, theta2: f64) -> f64 {
+    let (k1, k2, k3) = (d / a, d / c, (a * a - b * b + c * c + d * d) / (2.0 * a * c));
+    let (s2, c2) = theta2.sin_cos();
+    let qa = c2 - k1 - k2 * c2 + k3;
+    let qb = -2.0 * s2;
+    let qc = k1 - (k2 + 1.0) * c2 + k3;
+    let t = (-qb - (qb * qb - 4.0 * qa * qc).sqrt()) / (2.0 * qa);
+    2.0 * t.atan()
+}
+
+/// The rocker's angle in the world, degrees: the direction of its own x axis (from its
+/// pivot to its tip).
+fn rocker_angle(s: &mut Session, rocker: u64) -> f64 {
+    let (m, _) = world_of(s, rocker);
+    m[1][0].atan2(m[0][0]).to_degrees()
+}
+
+/// Builds a four-bar linkage of empty components: Ground (grounded), Crank (a = 40),
+/// Coupler (b = 120) and Rocker (c = 80), ground pivots 100 apart (d), joined by four
+/// revolute joints about z. Each link lies along its own x axis from its first pivot.
+/// The joints start near the open branch at a crank angle of 90 degrees; the solve
+/// closes the loop exactly. Returns (crank joint, rocker joint, coupler id, rocker id).
+fn four_bar(s: &mut Session) -> (u64, u64, u64, u64) {
+    let mut part = |name: &str| -> u64 {
+        s.execute("component.new", &json!({"name": name, "parent": 0}))
+            .unwrap()["component"]
+            .as_u64()
+            .unwrap()
+    };
+    let (g, crank, coupler, rocker) = (part("Ground"), part("Crank"), part("Coupler"), part("Rocker"));
+    s.execute("component.ground", &json!({"component": g}))
+        .unwrap();
+    let mut joint = |a: Value, b: Value, value: f64| -> u64 {
+        s.execute(
+            "joint.create",
+            &json!({"type": "revolute", "a": a, "b": b, "value": value}),
+        )
+        .unwrap()["joint"]
+            .as_u64()
+            .unwrap()
+    };
+    // At θ2 = 90°: Freudenstein gives θ4 = 80.26°, so the coupler's far end is at
+    // (100 + 80 cos θ4, 80 sin θ4) = (113.53, 78.85) and the coupler, from the crank's
+    // tip (0, 40), points at θ3 = atan2(38.85, 113.53) = 18.89°. Joint values are
+    // relative turns: crank 90, coupler θ3 − θ2 = −71.11, rocker on the coupler
+    // θ4 − θ3 = 61.37, rocker on the ground θ4 = 80.26; whole degrees are given and the
+    // solve does the rest.
+    let input = joint(point_on(g, 0.0), point_on(crank, 0.0), 90.0);
+    joint(point_on(crank, 40.0), point_on(coupler, 0.0), -71.0);
+    joint(point_on(coupler, 120.0), point_on(rocker, 80.0), 61.0);
+    let output = joint(point_on(g, 100.0), point_on(rocker, 0.0), 80.0);
+    (input, output, coupler, rocker)
+}
+
+#[test]
+fn a_four_bar_linkage_follows_the_freudenstein_equation() {
+    let mut s = Session::new();
+    let (input, output, coupler, rocker) = four_bar(&mut s);
+    let (a, b, c, d) = (40.0, 120.0, 80.0, 100.0);
+    for theta2 in [90.0_f64, 60.0, 30.0, 0.0, -45.0] {
+        s.execute("joint.set_value", &json!({"joint": input, "value": theta2}))
+            .unwrap();
+        let expected = freudenstein(a, b, c, d, theta2.to_radians()).to_degrees();
+        let measured = rocker_angle(&mut s, rocker);
+        assert!(
+            (measured - expected).abs() < 1e-6,
+            "θ2 = {theta2}: rocker at {measured}°, Freudenstein says {expected}°"
+        );
+        // The loop is closed: the coupler's end (120, 0, 0) is the rocker's tip.
+        let p = world_point(&mut s, coupler, [120.0, 0.0, 0.0]);
+        let q = world_point(&mut s, rocker, [80.0, 0.0, 0.0]);
+        let gap = ((p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2) + (p[2] - q[2]).powi(2)).sqrt();
+        assert!(gap < 1e-7, "θ2 = {theta2}: the loop is open by {gap} mm");
+    }
+    // Hand values from the quadratic (see `freudenstein`): at 90° θ4 = 80.26°, at 60°
+    // A = −2.0625, B = −√3, C = 1.9375, t = (√3 − √(3 + 15.984)) / −4.125 = 0.6364,
+    // θ4 = 2 atan(0.6364) = 64.94°.
+    assert!((freudenstein(a, b, c, d, 90f64.to_radians()).to_degrees() - 80.26).abs() < 0.01);
+    assert!((freudenstein(a, b, c, d, 60f64.to_radians()).to_degrees() - 64.94).abs() < 0.01);
+    // The crank is the loop's input; the rocker joint is solved, not driven.
+    let list = s.execute("component.list", &json!({})).unwrap();
+    let joints = list["joints"].as_array().unwrap();
+    let driven = |id: u64| joints.iter().find(|j| j["joint"] == json!(id)).unwrap()["driven"].clone();
+    assert_eq!(driven(input), json!(true));
+    assert_eq!(driven(output), json!(false));
+    let loops = list["loops"].as_array().unwrap();
+    assert_eq!(loops.len(), 1);
+    // One degree of freedom (the crank), held: none left.
+    assert_eq!(loops[0]["freedom"], json!(0));
+    assert_eq!(loops[0]["unknowns"], json!(3));
+}
+
+#[test]
+fn an_over_constrained_loop_is_refused_with_its_joints_named() {
+    let mut s = Session::new();
+    let (_, _, coupler, _) = four_bar(&mut s);
+    let ground = 1;
+    let before = s.doc.clone();
+    // Pinning the coupler's start to the ground at (50, 50) leaves the linkage no motion
+    // with the crank driven, and the crank's tip (0, 40) is not there.
+    let e = s
+        .execute(
+            "joint.create",
+            &json!({"type": "revolute", "name": "Pin", "a": {"component": ground,
+                    "point": {"x": 50, "y": 50, "z": 0}, "axis": {"x": 0, "y": 0, "z": 1}},
+                    "b": point_on(coupler, 0.0)}),
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("over-constrained"), "{e}");
+    assert!(e.contains("\"Pin\"") && e.contains("\"Joint1\""), "{e}");
+    assert_eq!(s.doc, before);
+}
+
+#[test]
+fn an_as_built_joint_keeps_placements_bit_for_bit_and_turns_about_its_origin() {
+    let mut s = Session::new();
+    let (a, b) = two_plates(&mut s);
+    // B turned 30° about z and moved 50 along x: a placement with rounding in it.
+    s.execute(
+        "component.move",
+        &json!({"component": b, "transform": {"rotate": {"axis": {"x": 0, "y": 0, "z": 1},
+                "angle": 30}, "translate": {"x": 50, "y": 0, "z": 0}}}),
+    )
+    .unwrap();
+    let before = component(&mut s, b);
+    let bounds_before = bounds(&mut s, b);
+    let r = s
+        .execute(
+            "joint.as_built",
+            &json!({"type": "revolute", "a": a, "b": b,
+                    "origin": {"point": {"x": 50, "y": 0, "z": 0}, "axis": {"x": 0, "y": 0, "z": 1}}}),
+        )
+        .unwrap();
+    assert_eq!(r["as_built"], json!(true));
+    let after = component(&mut s, b);
+    // Bit for bit: the stored placement, the solved world transform and the bounds.
+    assert_eq!(after["placement"], before["placement"]);
+    assert_eq!(after["world"], before["world"]);
+    assert_eq!(bounds(&mut s, b), bounds_before);
+    // Driven to −30° about z through (50, 0, 0), B's turn is undone: its plate lies at
+    // x 50..90, y 0..10 (the move alone).
+    let j = r["joint"].clone();
+    s.execute("joint.set_value", &json!({"joint": j, "value": -30}))
+        .unwrap();
+    assert!(close(bounds(&mut s, b), [50.0, 0.0, 0.0, 90.0, 10.0, 4.0]));
+    // And back at 0 it is where it was built, bit for bit.
+    s.execute("joint.set_value", &json!({"joint": j, "value": 0}))
+        .unwrap();
+    assert_eq!(component(&mut s, b)["world"], before["world"]);
+    // It survives save and open, still keeping B where it was built.
+    let saved = s.execute("design.save_bytes", &json!({})).unwrap();
+    let mut t = Session::new();
+    t.execute("design.open_bytes", &json!({"data": saved["data"]}))
+        .unwrap();
+    assert_eq!(t.doc.assembly.joints.len(), 1);
+    assert!(t.doc.assembly.joints[0].as_built);
+    assert_eq!(component(&mut t, b)["world"], before["world"]);
+}
+
+#[test]
+fn a_rigid_group_moves_as_one_and_ungrouping_leaves_it_in_place() {
+    let mut s = Session::new();
+    let (a, b) = two_plates(&mut s);
+    // C: a 2 mm cube at x 60..62, y 0..2.
+    let fc = plate(&mut s, 60.0, 0.0, 62.0, 2.0, 2.0);
+    let c = new_component(&mut s, "C", fc);
+    let g = s
+        .execute("component.rigid_group", &json!({"components": [b, c]}))
+        .unwrap();
+    assert_eq!(g["name"], "Group1");
+    // Nothing moved when grouped.
+    assert!(close(bounds(&mut s, c), [60.0, 0.0, 0.0, 62.0, 2.0, 2.0]));
+    // Turning B a quarter about z through the origin takes C with it:
+    // (x, y) -> (−y, x), so C is at x −2..0, y 60..62.
+    s.execute(
+        "joint.create",
+        &json!({"type": "revolute", "a": at_origin(a, [0.0, 0.0, 1.0]),
+                "b": at_origin(b, [0.0, 0.0, 1.0]), "value": 90}),
+    )
+    .unwrap();
+    assert!(close(bounds(&mut s, c), [-2.0, 60.0, 0.0, 0.0, 62.0, 2.0]));
+    assert!(close(bounds(&mut s, b), [-10.0, 0.0, 0.0, 0.0, 40.0, 4.0]));
+    // C is held by the group: moving it alone is refused, naming the group.
+    let e = s
+        .execute(
+            "component.move",
+            &json!({"component": c, "transform": {"translate": {"x": 1, "y": 0, "z": 0}}}),
+        )
+        .unwrap_err();
+    assert!(e.to_string().contains("Group1"), "{e}");
+    // Ungrouped, C stays where the group held it.
+    s.execute("component.ungroup", &json!({"group": g["group"]}))
+        .unwrap();
+    assert!(close(bounds(&mut s, c), [-2.0, 60.0, 0.0, 0.0, 62.0, 2.0]));
+    assert!(s.doc.assembly.groups.is_empty());
+    // A component in two groups, or a group of one, is refused.
+    s.execute("component.rigid_group", &json!({"components": [b, c]}))
+        .unwrap();
+    assert!(
+        s.execute("component.rigid_group", &json!({"components": [c, a]}))
+            .is_err()
+    );
+    assert!(
+        s.execute("component.rigid_group", &json!({"components": [a]}))
+            .is_err()
+    );
+}
+
+#[test]
+fn the_bill_of_materials_counts_nested_linked_copies() {
+    let mut s = Session::new();
+    // Axle (top level) owns a 100 x 10 x 10 shaft; Wheel, inside Axle, a 20 x 20 x 5
+    // plate; Bolt, top level, a 2 x 2 x 10 pin.
+    let shaft = plate(&mut s, 0.0, 0.0, 100.0, 10.0, 10.0);
+    let wheel = plate(&mut s, 0.0, 20.0, 20.0, 40.0, 5.0);
+    let bolt = plate(&mut s, 50.0, 50.0, 52.0, 52.0, 10.0);
+    let axle = new_component(&mut s, "Axle", shaft);
+    let w = s
+        .execute(
+            "component.new",
+            &json!({"name": "Wheel", "from_bodies": [wheel], "parent": axle}),
+        )
+        .unwrap()["component"]
+        .as_u64()
+        .unwrap();
+    new_component(&mut s, "Bolt", bolt);
+    // Wheel: two copies of it, and a copy of a copy (which copies the original), all
+    // inside Axle: four wheels. Axle: one copy, which shows the shaft only (a linked
+    // copy shows its original's own bodies): two shafts.
+    let w2 = s.execute("component.copy", &json!({"component": w})).unwrap();
+    s.execute("component.copy", &json!({"component": w})).unwrap();
+    s.execute("component.copy", &json!({"component": w2["component"]}))
+        .unwrap();
+    s.execute("component.copy", &json!({"component": axle}))
+        .unwrap();
+    let r = s.execute("bom.list", &json!({})).unwrap();
+    let rows = r["rows"].as_array().unwrap();
+    let got: Vec<(String, u64, f64)> = rows
+        .iter()
+        .map(|x| {
+            (
+                x["part"].as_str().unwrap().to_owned(),
+                x["quantity"].as_u64().unwrap(),
+                x["volume"].as_f64().unwrap(),
+            )
+        })
+        .collect();
+    let want = [
+        ("Axle", 2, 10_000.0),
+        ("Wheel", 4, 2_000.0),
+        ("Bolt", 1, 40.0),
+    ];
+    assert_eq!(got.len(), want.len(), "{got:?}");
+    for ((part, q, v), (wp, wq, wv)) in got.iter().zip(want) {
+        assert_eq!((part.as_str(), *q), (wp, wq));
+        assert!((v - wv).abs() < 1e-6, "{part}: {v}");
+    }
+    assert_eq!(r["parts"], json!(7));
+    // The quantities match what is shown: each instance shows its part's bodies.
+    let shown: u64 = rows
+        .iter()
+        .map(|x| x["quantity"].as_u64().unwrap() * x["bodies"].as_u64().unwrap())
+        .sum();
+    assert_eq!(shown, s.solids().len() as u64);
+    // CSV: a header and a line per row.
+    let csv = s.execute("bom.export_csv", &json!({})).unwrap();
+    let text = csv["csv"].as_str().unwrap();
+    assert!(text.starts_with("item,part,quantity,material,volume_mm3"), "{text}");
+    assert!(text.contains("\r\n2,Wheel,4,,2000.000,,\r\n"), "{text}");
 }

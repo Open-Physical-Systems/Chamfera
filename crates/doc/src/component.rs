@@ -52,6 +52,28 @@ pub struct Component {
     pub tint: bool,
 }
 
+/// Most rigid groups one design may hold.
+pub const MAX_GROUPS: usize = 1_000;
+
+/// One member of a rigid group.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GroupMember {
+    pub component: u32,
+    /// From this member's coordinates into the group's first member's, as they sat when
+    /// the group was made (the identity for the first member).
+    pub relative: Transform,
+}
+
+/// Components locked together (format 41): they move as one, wherever joints or
+/// placements put any of them. Solved as rigid links from the first member to each other
+/// one, at the relative positions they had when grouped.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RigidGroup {
+    pub id: u32,
+    pub name: String,
+    pub members: Vec<GroupMember>,
+}
+
 /// The components and joints of a design.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct Assembly {
@@ -59,6 +81,9 @@ pub struct Assembly {
     pub components: Vec<Component>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub joints: Vec<Joint>,
+    /// Rigid groups (format 41).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub groups: Vec<RigidGroup>,
     /// The component new features go into ([`ROOT`] when none is active).
     #[serde(default)]
     pub active: u32,
@@ -104,6 +129,7 @@ impl Assembly {
     pub fn is_empty(&self) -> bool {
         self.components.is_empty()
             && self.joints.is_empty()
+            && self.groups.is_empty()
             && self.active == ROOT
             && self.last_id == 0
     }
@@ -304,6 +330,7 @@ impl Assembly {
         self.components.retain(|x| !gone.contains(&x.id));
         self.joints
             .retain(|j| !gone.contains(&j.a.component) && !gone.contains(&j.b.component));
+        self.drop_from_groups(&gone);
         if gone.contains(&self.active) {
             self.active = ROOT;
         }
@@ -397,9 +424,241 @@ impl Assembly {
             }
             j.check(self)?;
         }
-        crate::joint::check_tree(self)?;
+        if self.groups.len() > MAX_GROUPS {
+            return Err(bad(format!(
+                "a design holds at most {MAX_GROUPS} rigid groups"
+            )));
+        }
+        let mut grouped = BTreeSet::new();
+        for g in &self.groups {
+            if g.id == ROOT
+                || g.id > self.last_id
+                || ids.contains(&g.id)
+                || !joint_ids.insert(g.id)
+            {
+                return Err(bad(format!(
+                    "rigid group {} has a duplicate or out-of-range id",
+                    g.id
+                )));
+            }
+            check_name(&g.name)?;
+            check_members(self, g.members.iter().map(|m| m.component), &mut grouped)?;
+            for (i, m) in g.members.iter().enumerate() {
+                let first_is_identity = i > 0 || m.relative == Transform::IDENTITY;
+                if !is_valid_placement(&m.relative) || !first_is_identity {
+                    return Err(bad(format!(
+                        "rigid group {:?} holds a member at a placement that is not a move \
+                         and rotation within range",
+                        g.name
+                    )));
+                }
+            }
+        }
         Ok(())
     }
+
+    /// The joints the engine solves: the design's joints, then one rigid link from each
+    /// rigid group's first member to each other member. A link's id is above every id
+    /// handed out (`last_id`), so it never clashes; see [`Assembly::link_group`].
+    pub fn solving_joints(&self) -> Vec<Joint> {
+        let mut out = self.joints.clone();
+        let mut next = u64::from(self.last_id) + 1;
+        for g in &self.groups {
+            let Some(first) = g.members.first() else {
+                continue;
+            };
+            for m in g.members.iter().skip(1) {
+                let Ok(id) = u32::try_from(next) else {
+                    return out;
+                };
+                next += 1;
+                let frame = |t: &Transform| {
+                    chamfera_geom::Frame::from_normal_and_x(
+                        t.apply_point(chamfera_geom::Point3::ORIGIN),
+                        t.apply_vector(chamfera_geom::Vec3::Z),
+                        t.apply_vector(chamfera_geom::Vec3::X),
+                    )
+                };
+                let (Some(on_first), Some(on_member)) =
+                    (frame(&m.relative), frame(&Transform::IDENTITY))
+                else {
+                    continue;
+                };
+                out.push(Joint {
+                    id,
+                    name: g.name.clone(),
+                    kind: crate::JointKind::Rigid,
+                    a: crate::JointOrigin {
+                        component: first.component,
+                        at: crate::OriginAt::Frame { frame: on_first },
+                    },
+                    b: crate::JointOrigin {
+                        component: m.component,
+                        at: crate::OriginAt::Frame { frame: on_member },
+                    },
+                    value: 0.0,
+                    distance: 0.0,
+                    offset: [0.0, 0.0],
+                    limits: None,
+                    flip: false,
+                    driven: false,
+                    as_built: true,
+                });
+            }
+        }
+        out
+    }
+
+    /// The rigid group a solving link (from [`Assembly::solving_joints`]) belongs to, or
+    /// `None` for a design joint.
+    pub fn link_group(&self, joint: u32) -> Option<u32> {
+        if joint <= self.last_id {
+            return None;
+        }
+        let mut next = u64::from(self.last_id) + 1;
+        for g in &self.groups {
+            let links = g.members.len().saturating_sub(1) as u64;
+            if u64::from(joint) < next + links {
+                return Some(g.id);
+            }
+            next += links;
+        }
+        None
+    }
+
+    /// The rigid group a component is in, if any.
+    pub fn group_of(&self, component: u32) -> Option<&RigidGroup> {
+        self.groups
+            .iter()
+            .find(|g| g.members.iter().any(|m| m.component == component))
+    }
+
+    pub fn group(&self, id: u32) -> Result<&RigidGroup, DocError> {
+        self.groups
+            .iter()
+            .find(|g| g.id == id)
+            .ok_or_else(|| bad(format!("no rigid group {id}")))
+    }
+
+    /// Adds a rigid group of `members`, each given with its world placement now (from its
+    /// coordinates to the world): they keep these relative positions. Returns its id.
+    pub fn add_group(
+        &mut self,
+        name: &str,
+        members: &[(u32, Transform)],
+    ) -> Result<u32, DocError> {
+        if self.groups.len() >= MAX_GROUPS {
+            return Err(bad(format!(
+                "a design holds at most {MAX_GROUPS} rigid groups"
+            )));
+        }
+        check_name(name)?;
+        let mut grouped = BTreeSet::new();
+        for g in &self.groups {
+            grouped.extend(g.members.iter().map(|m| m.component));
+        }
+        check_members(self, members.iter().map(|m| m.0), &mut grouped)?;
+        let Some((first_id, first_world)) = members.first() else {
+            return Err(bad("a rigid group needs at least two components"));
+        };
+        let to_first = first_world
+            .inverse_rigid()
+            .ok_or_else(|| bad("the first component's placement is not a move and rotation"))?;
+        let mut list = Vec::with_capacity(members.len());
+        for (i, (c, world)) in members.iter().enumerate() {
+            let relative = if i == 0 {
+                Transform::IDENTITY
+            } else {
+                world.then(&to_first)
+            };
+            if !is_valid_placement(&relative) {
+                return Err(bad(format!(
+                    "{} is too far from {} to group",
+                    self.name_of(*c),
+                    self.name_of(*first_id)
+                )));
+            }
+            list.push(GroupMember {
+                component: *c,
+                relative,
+            });
+        }
+        let id = self.next_id()?;
+        self.groups.push(RigidGroup {
+            id,
+            name: name.to_owned(),
+            members: list,
+        });
+        Ok(id)
+    }
+
+    pub fn remove_group(&mut self, id: u32) -> Result<RigidGroup, DocError> {
+        let i = self
+            .groups
+            .iter()
+            .position(|g| g.id == id)
+            .ok_or_else(|| bad(format!("no rigid group {id}")))?;
+        Ok(self.groups.remove(i))
+    }
+
+    /// Takes removed components out of their groups; a group left with fewer than two
+    /// members goes. When the first member goes, the next becomes the first and the
+    /// others' relative positions are re-based on it.
+    fn drop_from_groups(&mut self, gone: &[u32]) {
+        for g in &mut self.groups {
+            let first_gone = g.members.first().is_some_and(|m| gone.contains(&m.component));
+            g.members.retain(|m| !gone.contains(&m.component));
+            if first_gone
+                && let Some(base) = g.members.first().and_then(|m| m.relative.inverse_rigid())
+            {
+                for m in &mut g.members {
+                    m.relative = m.relative.then(&base);
+                }
+                if let Some(m) = g.members.first_mut() {
+                    m.relative = Transform::IDENTITY;
+                }
+            }
+        }
+        self.groups.retain(|g| g.members.len() >= 2);
+    }
+}
+
+/// Checks a rigid group's members: two or more distinct components (not the root), each
+/// in no other group (`grouped` collects the ones already taken).
+fn check_members(
+    asm: &Assembly,
+    members: impl Iterator<Item = u32>,
+    grouped: &mut BTreeSet<u32>,
+) -> Result<(), DocError> {
+    let mut n = 0usize;
+    let mut own = BTreeSet::new();
+    for c in members {
+        n += 1;
+        if n > MAX_COMPONENTS {
+            return Err(bad("a rigid group lists too many components"));
+        }
+        if c == ROOT || !asm.exists(c) {
+            return Err(bad(format!(
+                "a rigid group holds components (not the root); {c} is not one"
+            )));
+        }
+        if !own.insert(c) {
+            return Err(bad(format!(
+                "{} is listed twice in a rigid group",
+                asm.name_of(c)
+            )));
+        }
+        if !grouped.insert(c) {
+            return Err(bad(format!(
+                "{} is already in a rigid group: ungroup it first",
+                asm.name_of(c)
+            )));
+        }
+    }
+    if n < 2 {
+        return Err(bad("a rigid group needs at least two components"));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -433,6 +692,37 @@ mod tests {
         assert_eq!(a.active, ROOT);
         assert!(a.remove_component(ROOT).is_err());
         a.check(10).unwrap();
+    }
+
+    #[test]
+    fn a_rigid_group_keeps_relative_places_and_rebases_when_its_first_member_goes() {
+        use chamfera_geom::Vec3;
+        let mut a = Assembly::default();
+        let c1 = a.add_component("A", ROOT, &[]).unwrap();
+        let c2 = a.add_component("B", ROOT, &[]).unwrap();
+        let c3 = a.add_component("C", ROOT, &[]).unwrap();
+        let at = |x: f64| Transform::translation(Vec3::new(x, 0.0, 0.0)).unwrap();
+        // A at x = 10, B at x = 30, C at x = 70: B is 20 from A, C 60 from A.
+        let g = a
+            .add_group("G", &[(c1, at(10.0)), (c2, at(30.0)), (c3, at(70.0))])
+            .unwrap();
+        let rel = |a: &Assembly, i: usize| {
+            a.group(g).unwrap().members[i].relative.translation_part().x
+        };
+        assert_eq!((rel(&a, 0), rel(&a, 1), rel(&a, 2)), (0.0, 20.0, 60.0));
+        assert_eq!(a.solving_joints().len(), 2, "two links from the first member");
+        assert_eq!(a.link_group(a.last_id + 1), Some(g));
+        a.check(10).unwrap();
+        // A component is in one group at most.
+        assert!(a.add_group("H", &[(c2, at(0.0)), (c3, at(0.0))]).is_err());
+        // Removing A makes B the first: C is now 40 from it.
+        a.remove_component(c1).unwrap();
+        assert_eq!(a.group(g).unwrap().members.len(), 2);
+        assert_eq!((rel(&a, 0), rel(&a, 1)), (0.0, 40.0));
+        a.check(10).unwrap();
+        // Removing B leaves a group of one, which goes.
+        a.remove_component(c2).unwrap();
+        assert!(a.groups.is_empty());
     }
 
     #[test]
