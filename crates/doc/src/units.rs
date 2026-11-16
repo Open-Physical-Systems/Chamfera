@@ -229,6 +229,9 @@ impl FeatureKind {
             // A move's turn is an angle; its distance is a length.
             FeatureKind::MoveFace(m) => vec![&mut m.distance],
             FeatureKind::Thicken(t) => vec![&mut t.thickness],
+            FeatureKind::Primitive(p) => p.shape.sizes_mut().into_iter().map(|x| x.1).collect(),
+            // Factors are plain numbers.
+            FeatureKind::Scale(_) => Vec::new(),
             FeatureKind::Surface(sf) => sf.length_expressions_mut(),
             FeatureKind::Combine(_)
             | FeatureKind::SplitBody(_)

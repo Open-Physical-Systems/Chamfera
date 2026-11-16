@@ -624,6 +624,10 @@ pub enum FeatureKind {
     Surface(crate::surface::SurfaceFeature),
     /// A cosmetic thread on a cylindrical face (format 38).
     Thread(crate::thread::Thread),
+    /// A box, cylinder, sphere, torus or cone (format 40).
+    Primitive(crate::primitive::Primitive),
+    /// Bodies scaled about a point (format 40).
+    Scale(crate::primitive::Scale),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -667,7 +671,9 @@ impl FeatureKind {
             | FeatureKind::OffsetFace(_)
             | FeatureKind::DeleteFace(_)
             | FeatureKind::MoveFace(_)
-            | FeatureKind::Thread(_) => None,
+            | FeatureKind::Thread(_)
+            | FeatureKind::Primitive(_)
+            | FeatureKind::Scale(_) => None,
         }
     }
 
@@ -711,7 +717,9 @@ impl FeatureKind {
             | FeatureKind::OffsetFace(_)
             | FeatureKind::DeleteFace(_)
             | FeatureKind::MoveFace(_)
-            | FeatureKind::Thread(_) => Operation::NewBody,
+            | FeatureKind::Thread(_)
+            | FeatureKind::Scale(_) => Operation::NewBody,
+            FeatureKind::Primitive(p) => p.operation,
         }
     }
 
@@ -741,7 +749,9 @@ impl FeatureKind {
             | FeatureKind::OffsetFace(_)
             | FeatureKind::DeleteFace(_)
             | FeatureKind::MoveFace(_)
-            | FeatureKind::Thread(_) => &[],
+            | FeatureKind::Thread(_)
+            | FeatureKind::Primitive(_)
+            | FeatureKind::Scale(_) => &[],
         }
     }
 
@@ -780,6 +790,8 @@ impl FeatureKind {
             FeatureKind::Thicken(_) => "Thicken",
             FeatureKind::Remove(_) => "Remove",
             FeatureKind::Thread(_) => "Thread",
+            FeatureKind::Primitive(p) => p.shape.label(),
+            FeatureKind::Scale(_) => "Scale",
         }
     }
 }
@@ -803,6 +815,11 @@ impl Document {
         }
         if let FeatureKind::Move(m) = kind {
             return self.check_move(m);
+        }
+        match kind {
+            FeatureKind::Primitive(p) => return self.check_primitive(p),
+            FeatureKind::Scale(sc) => return self.check_scale(sc),
+            _ => {}
         }
         if let FeatureKind::Construct(c) = kind {
             return self.check_construction(c);
@@ -912,7 +929,9 @@ impl Document {
             | FeatureKind::OffsetFace(_)
             | FeatureKind::DeleteFace(_)
             | FeatureKind::MoveFace(_)
-            | FeatureKind::Thread(_) => {}
+            | FeatureKind::Thread(_)
+            | FeatureKind::Primitive(_)
+            | FeatureKind::Scale(_) => {}
             FeatureKind::Sweep(s) => self.check_sweep_path(s)?,
             FeatureKind::Revolve(r) => {
                 let a = self.evaluate_feature_value(&r.angle, expr::Dim::ANGLE)?;

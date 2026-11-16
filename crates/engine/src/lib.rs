@@ -31,6 +31,9 @@ pub mod perf;
 #[cfg(test)]
 mod perf_tests;
 pub mod pick_filter;
+pub mod primitive;
+#[cfg(test)]
+mod primitive_tests;
 pub mod projection;
 pub mod render;
 #[cfg(test)]

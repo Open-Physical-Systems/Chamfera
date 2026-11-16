@@ -1689,6 +1689,18 @@ impl Session {
             }
             return;
         }
+        if let FeatureKind::Scale(sc) = &feature.kind {
+            match crate::primitive::scale_bodies(&self.doc, sc, made) {
+                Ok((next, changed)) => {
+                    *made = next;
+                    built.edited.insert(feature.id, changed);
+                }
+                Err(e) => {
+                    built.errors.insert(feature.id, e);
+                }
+            }
+            return;
+        }
         if let FeatureKind::Blend(b) = &feature.kind {
             match build_blend(&self.doc, b, feature.id, made) {
                 Ok(next) => *made = next,
@@ -1793,6 +1805,7 @@ impl Session {
             FeatureKind::Sweep(s) => build_sweep(&self.doc, s),
             FeatureKind::Loft(l) => build_loft(&self.doc, l),
             FeatureKind::Revolve(r) => build_revolve(&self.doc, r, &built.constructs),
+            FeatureKind::Primitive(p) => crate::primitive::build(&self.doc, p),
             FeatureKind::Pattern(_)
             | FeatureKind::Construct(_)
             | FeatureKind::Blend(_)
@@ -1806,6 +1819,7 @@ impl Session {
             | FeatureKind::Remove(_)
             | FeatureKind::Surface(_)
             | FeatureKind::Thread(_)
+            | FeatureKind::Scale(_)
             | FeatureKind::Hole(_)
             | FeatureKind::SheetBase(_)
             | FeatureKind::SheetFlange(_)

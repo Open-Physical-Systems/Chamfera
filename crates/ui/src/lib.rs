@@ -49,6 +49,7 @@ mod params_ui;
 mod prefs;
 mod prefs_ui;
 mod press_pull_ui;
+mod quick_ui;
 mod recovery_ui;
 mod render_ui;
 mod ribbon;
@@ -594,6 +595,11 @@ impl ChamferaApp {
                 }
             }
             "edit-feature" => self.edit_feature(id()?),
+            // Any ribbon tool, opened as its button does (`tool:solid.box`).
+            "tool" => match ribbon::by_id(arg) {
+                Some(t) => self.run_action(t.action),
+                None => return Err(format!("--dialog tool:ID: {arg:?} is not a ribbon tool")),
+            },
             "constraint-conflict" => {
                 let c: Value = serde_json::from_str(arg).map_err(|e| {
                     format!("--dialog constraint-conflict takes a constraint as JSON: {e}")
@@ -612,7 +618,7 @@ impl ChamferaApp {
             _ => {
                 return Err(format!(
                     "--dialog takes joint-edit:ID, component-move:ID, component-rename:ID, \
-                     edit-feature:ID, dxf-insert:PATH or constraint-conflict:JSON, not {spec:?}"
+                     edit-feature:ID, dxf-insert:PATH, constraint-conflict:JSON or tool:ID, not {spec:?}"
                 ));
             }
         }
@@ -847,6 +853,14 @@ impl ChamferaApp {
         {
             let (x, y) = local(pos);
             self.body_tool_click(x, y, w, h);
+            return;
+        }
+        if self.solid.quick.is_some()
+            && response.clicked()
+            && let Some(pos) = response.interact_pointer_pos()
+        {
+            let (x, y) = local(pos);
+            self.quick_click(x, y, w, h);
             return;
         }
         if self.solid.extrude.is_some()
@@ -1271,6 +1285,7 @@ impl eframe::App for ChamferaApp {
             self.sheet_dialogs(&ctx);
             self.press_pull_dialog(&ctx);
             self.body_tool_dialog(&ctx);
+            self.quick_dialog(&ctx);
             self.surface_dialog(&ctx);
             self.sweep_dialog(&ctx);
             self.feature_dialog(&ctx);

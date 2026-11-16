@@ -15,6 +15,8 @@ pub mod joint;
 pub mod model_params;
 pub mod motion;
 pub mod naming;
+pub mod physical;
+pub mod primitive;
 pub mod sheet;
 pub mod surface;
 pub mod thread;
@@ -42,6 +44,8 @@ pub use imported::{ImportedBody, ImportedMesh, SharedMesh};
 pub use joint::{EdgeEnd, Joint, JointKind, JointOrigin, OriginAt};
 pub use model_params::{ModelMeta, ModelParameter};
 pub use motion::{Motion, MotionKey};
+pub use physical::PhysicalMaterial;
+pub use primitive::{Primitive, PrimitiveAxis, PrimitiveShape, PrimitiveValues, Scale};
 pub use sheet::{
     FlangePosition, FlangeSide, FlangeValues, ReliefShape, SheetBase, SheetFlange, SheetRule,
     SheetUnfold,
@@ -148,7 +152,11 @@ use thiserror::Error;
 ///   callouts (`hole_callout` annotations, their text worked out from the hole feature),
 ///   and more title block fields (`drawing_number`, `revision`, `material`,
 ///   `checked_by`). Older files open unchanged. (38 is another branch's.)
-pub const FORMAT_VERSION: u32 = 39;
+/// - 40: modelling quick wins: primitives (`kind: primitive` with `shape`: `box`,
+///   `cylinder`, `sphere`, `torus` or `cone`), scale features (`kind: scale`) and physical
+///   materials per feature's bodies (`materials`: name and density in g/cm³, used by mass
+///   properties). Older files open unchanged: they hold none.
+pub const FORMAT_VERSION: u32 = 40;
 /// The tag every design file starts with, so other JSON is not mistaken for a design.
 pub const FORMAT_TAG: &str = "chamfera";
 /// Longest parameter name.
@@ -339,6 +347,9 @@ pub struct Document {
     /// How the bodies a feature (or an import) made look, by its id. Display data only.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub appearances: BTreeMap<u32, Appearance>,
+    /// What the bodies a feature made are made of, by its id (format 40).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub materials: BTreeMap<u32, PhysicalMaterial>,
     /// Manufacturing: setups, tools and operations (format 20). Older files have none.
     #[serde(default, skip_serializing_if = "cam::Cam::is_empty")]
     pub cam: cam::Cam,
@@ -381,6 +392,7 @@ impl Default for Document {
             assembly: Assembly::default(),
             drawing: Drawing::default(),
             appearances: BTreeMap::new(),
+            materials: BTreeMap::new(),
             cam: cam::Cam::default(),
             units: DisplayUnits::default(),
             motion: Motion::default(),
@@ -773,6 +785,8 @@ impl Document {
         checked.drawing = doc.drawing;
         appearance::check(&doc.appearances, checked.last_feature_id)?;
         checked.appearances = doc.appearances;
+        physical::check(&doc.materials, checked.last_feature_id)?;
+        checked.materials = doc.materials;
         doc.cam.validate()?;
         checked.cam = doc.cam;
         naming::check(&doc.references, &seen)?;

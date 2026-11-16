@@ -245,6 +245,9 @@ impl ChamferaApp {
                 | FeatureKind::SplitFace(_)
                 | FeatureKind::Thicken(_)
                 | FeatureKind::Remove(_)) => crate::body_tools_ui::details(k),
+                k @ (FeatureKind::Primitive(_) | FeatureKind::Scale(_)) => {
+                    crate::quick_ui::details(k)
+                }
             };
             items.push(Item {
                 id: f.id,
@@ -1073,6 +1076,9 @@ impl ChamferaApp {
             FeatureKind::Revolve(r) => (r.angle.clone(), None),
             FeatureKind::Pattern(p) => (p.count.clone(), None),
             FeatureKind::Construct(_) => return self.edit_construct(id),
+            FeatureKind::Primitive(_) | FeatureKind::Scale(_) => {
+                return self.edit_quick_feature(id);
+            }
             FeatureKind::Blend(b) => (b.size.clone(), None),
             FeatureKind::Hole(h) => (h.diameter.clone(), None),
             FeatureKind::Thread(t) => (t.pitch.clone(), None),
