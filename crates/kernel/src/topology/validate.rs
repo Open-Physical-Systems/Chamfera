@@ -18,8 +18,8 @@
 //! rest of its shell.
 
 use super::{
-    Body, EdgeId, FaceId, HalfEdgeId, LoopId, MAX_NAME_LENGTH, MAX_TOPOLOGY_ENTITIES, ShellId,
-    Surface, TopologySummary, VertexId,
+    Body, EdgeId, FaceId, HalfEdgeId, LoopId, MAX_BODY_TOLERANCE, MAX_NAME_LENGTH,
+    MAX_TOPOLOGY_ENTITIES, ShellId, Surface, TopologySummary, VertexId,
 };
 use chamfera_geom::LINEAR_TOLERANCE;
 use std::collections::HashSet;
@@ -68,13 +68,13 @@ pub enum TopologyError {
     MissingCurve(EdgeId),
     #[error("{0} has an invalid curve range: {1}")]
     BadCurveRange(EdgeId, String),
-    #[error("the curve of {0} does not start and end at its vertices within {LINEAR_TOLERANCE} mm")]
+    #[error("the curve of {0} does not start and end at its vertices within the body's tolerance")]
     VertexOffCurve(EdgeId),
     #[error("{0} joins two different vertices at the same point")]
     DegenerateEdge(EdgeId),
     #[error("{0} has no surface")]
     MissingSurface(FaceId),
-    #[error("a vertex or edge of {0} is farther than {LINEAR_TOLERANCE} mm from its surface")]
+    #[error("a vertex or edge of {0} is farther than the body's tolerance from its surface")]
     OffSurface(FaceId),
     #[error("{0} is used twice by one loop of a planar face (a dangling wire edge)")]
     WireEdge(EdgeId),
@@ -90,6 +90,10 @@ pub enum TopologyError {
         "{0} encloses no volume (its faces do not close, or they point inward with no lump around it)"
     )]
     NotOutward(ShellId),
+    #[error(
+        "the body's tolerance {0} mm is not a number between {LINEAR_TOLERANCE} and {MAX_BODY_TOLERANCE} mm"
+    )]
+    BadTolerance(f64),
     #[error("{0} is a void (its faces point inward) that does not lie inside a lump of the body")]
     VoidOutside(ShellId),
     #[error(
@@ -475,6 +479,23 @@ impl Body {
         }
     }
 
+    /// How far (mm) the body's geometry may stray from its topology, checked by
+    /// [`Body::validate`]: [`LINEAR_TOLERANCE`] for bodies the kernel builds, looser for
+    /// imported bodies whose writer was less precise (the precision a STEP file declares).
+    pub fn tolerance(&self) -> f64 {
+        self.tolerance.unwrap_or(LINEAR_TOLERANCE)
+    }
+
+    /// Sets [`Body::tolerance`]; values at or below [`LINEAR_TOLERANCE`] clear it. Fails
+    /// for a value that is not finite or above [`MAX_BODY_TOLERANCE`].
+    pub fn set_tolerance(&mut self, tolerance: f64) -> Result<(), TopologyError> {
+        if !tolerance.is_finite() || tolerance > MAX_BODY_TOLERANCE {
+            return Err(TopologyError::BadTolerance(tolerance));
+        }
+        self.tolerance = (tolerance > LINEAR_TOLERANCE).then_some(tolerance);
+        Ok(())
+    }
+
     /// What loading a body checks: the topology, plus that every point is valid and every
     /// edge range fits its curve (curves and frames are re-validated as they are read).
     pub(super) fn validate_loaded(&self) -> Result<TopologyReport, TopologyError> {
@@ -506,7 +527,9 @@ impl Body {
     /// `S_u × S_v`, the other way when it is the opposite (loops around a periodic
     /// direction without a seam are not checked for orientation); every shell encloses
     /// non-zero volume, positive for a lump and negative for a void inside a lump (which also
-    /// catches a face whose orientation flag is wrong; see `check_shell_volumes`).
+    /// catches a face whose orientation flag is wrong; see `check_shell_volumes`). A shell
+    /// with free-form (NURBS) faces is not integrated for this: it counts as a lump once it
+    /// is closed and its faces agree in orientation.
     pub fn validate(&self) -> Result<TopologyReport, TopologyError> {
         self.validate_as(Validation::Solid)
     }
@@ -516,8 +539,12 @@ impl Body {
     /// orientation of neighbouring faces is still consistent: every edge's two uses run in
     /// opposite directions, an opening's included). [`Validation::Solid`] fails with
     /// [`TopologyError::OpenShell`] on an open shell.
+    ///
+    /// The distance checks (vertices on curves, edges on surfaces) use
+    /// [`Body::tolerance`]; areas and volumes are compared with [`LINEAR_TOLERANCE`].
     pub fn validate_as(&self, mode: Validation) -> Result<TopologyReport, TopologyError> {
         let report = self.validate_loaded()?;
+        let tol = self.tolerance();
         if mode == Validation::Solid {
             for (si, _) in self.shells.live() {
                 let s = ShellId::from_index(si);
@@ -537,7 +564,7 @@ impl Body {
             let (Ok(p0), Ok(p1)) = (self.vertex_point(v0), self.vertex_point(v1)) else {
                 return Err(TopologyError::InvalidPoint(v0));
             };
-            if !(c.point_at(t0).coincident(p0) && c.point_at(t1).coincident(p1)) {
+            if !(c.point_at(t0).distance(p0) <= tol && c.point_at(t1).distance(p1) <= tol) {
                 return Err(TopologyError::VertexOffCurve(e));
             }
             if v0 != v1 && p0.coincident(p1) {
@@ -558,12 +585,12 @@ impl Body {
                 return Err(TopologyError::MissingSurface(f));
             };
             match surface {
-                Surface::Plane(_) => self.check_planar_face(f, &surface, same_sense)?,
-                _ => self.check_curved_face(f, &surface, same_sense)?,
+                Surface::Plane(_) => self.check_planar_face(f, &surface, same_sense, tol)?,
+                _ => self.check_curved_face(f, &surface, same_sense, tol)?,
             }
         }
         if mode == Validation::Solid {
-            self.check_shell_volumes()?;
+            super::measure::coarse_quadrature(|| self.check_shell_volumes())?;
         }
         Ok(report)
     }
@@ -578,10 +605,19 @@ impl Body {
         let mut voids = Vec::new();
         for (si, _) in self.shells.live() {
             let s = ShellId::from_index(si);
+            let b = self.shell_box(s).ok_or(TopologyError::NotOutward(s))?;
+            // A shell with free-form faces is taken as a lump of unknown volume: it is
+            // closed and its faces' orientations agree (checked above), and integrating a
+            // dense spline face costs seconds to minutes (each sample integrates across
+            // every knot span), or never converges across a seam. Its volume is still
+            // exact when asked for (`Body::volume`).
+            if self.shell_has_freeform(s) {
+                lumps.push((f64::INFINITY, b));
+                continue;
+            }
             let v = self
                 .shell_volume(s)
                 .map_err(|_| TopologyError::NotOutward(s))?;
-            let b = self.shell_box(s).ok_or(TopologyError::NotOutward(s))?;
             let tiny = LINEAR_TOLERANCE * LINEAR_TOLERANCE * LINEAR_TOLERANCE;
             if !v.is_finite() || v.abs() <= tiny {
                 return Err(TopologyError::NotOutward(s));
@@ -610,6 +646,15 @@ impl Body {
         Ok(())
     }
 
+    /// Whether a face of shell `s` lies on a free-form (NURBS) surface.
+    fn shell_has_freeform(&self, s: ShellId) -> bool {
+        self.shell_faces(s).is_ok_and(|faces| {
+            faces
+                .iter()
+                .any(|f| matches!(self.face_surface(*f), Ok(Some((Surface::Nurbs(_), _)))))
+        })
+    }
+
     /// The box around the edges of a shell's faces.
     fn shell_box(&self, s: ShellId) -> Option<chamfera_geom::Aabb> {
         let mut out: Option<chamfera_geom::Aabb> = None;
@@ -631,6 +676,7 @@ impl Body {
         f: FaceId,
         surface: &Surface,
         same_sense: bool,
+        tol: f64,
     ) -> Result<(), TopologyError> {
         let normal = surface
             .plane_normal()
@@ -658,7 +704,7 @@ impl Body {
                     let off = surface
                         .plane_distance(c.point_at(t))
                         .unwrap_or(f64::INFINITY);
-                    if off.is_nan() || off.abs() > LINEAR_TOLERANCE {
+                    if off.is_nan() || off.abs() > tol {
                         return Err(TopologyError::OffSurface(f));
                     }
                 }
@@ -684,6 +730,7 @@ impl Body {
         f: FaceId,
         surface: &Surface,
         same_sense: bool,
+        tol: f64,
     ) -> Result<(), TopologyError> {
         let orient = if same_sense { 1.0 } else { -1.0 };
         let loops = self.face_loops(f).map_err(|_| dangling(f, "its loops"))?;
@@ -705,7 +752,7 @@ impl Body {
                 for i in 0..=8 {
                     let t = t0 + (t1 - t0) * f64::from(i) / 8.0;
                     let off = surface.distance(c.point_at(t));
-                    if off.is_nan() || off > LINEAR_TOLERANCE {
+                    if off.is_nan() || off > tol {
                         return Err(TopologyError::OffSurface(f));
                     }
                 }

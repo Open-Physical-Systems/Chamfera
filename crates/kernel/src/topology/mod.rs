@@ -89,6 +89,9 @@ use std::collections::HashSet;
 pub const MAX_TOPOLOGY_ENTITIES: usize = 10_000_000;
 /// Longest name a face, edge or vertex may carry, in bytes.
 pub const MAX_NAME_LENGTH: usize = 256;
+/// Loosest tolerance (mm) a body may carry: 0.01 mm, ten times the coarsest precision
+/// common exchange files declare. Gaps wider than this are errors, not imprecision.
+pub const MAX_BODY_TOLERANCE: f64 = 1e-2;
 
 macro_rules! id_type {
     ($(#[$meta:meta])* $name:ident) => {
@@ -302,6 +305,12 @@ pub struct Body {
     points: Arena<Point3>,
     curves: Arena<Curve>,
     surfaces: Arena<Surface>,
+    /// How far (mm) the geometry of an imported body may stray from its topology: a
+    /// vertex from the ends of its edges' curves, an edge from its faces' surfaces.
+    /// `None` for bodies the kernel built ([`LINEAR_TOLERANCE`]). See
+    /// [`Body::tolerance`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    tolerance: Option<f64>,
 }
 
 /// The serialized form of a [`Body`], checked by [`Body::validate_loaded`] on load.
@@ -317,6 +326,8 @@ struct BodyData {
     points: Arena<Point3>,
     curves: Arena<Curve>,
     surfaces: Arena<Surface>,
+    #[serde(default)]
+    tolerance: Option<f64>,
 }
 
 impl TryFrom<BodyData> for Body {
@@ -332,7 +343,13 @@ impl TryFrom<BodyData> for Body {
             points: d.points,
             curves: d.curves,
             surfaces: d.surfaces,
+            tolerance: d.tolerance,
         };
+        if let Some(t) = d.tolerance
+            && !(LINEAR_TOLERANCE..=MAX_BODY_TOLERANCE).contains(&t)
+        {
+            return Err(TopologyError::BadTolerance(t));
+        }
         body.validate_loaded()?;
         Ok(body)
     }

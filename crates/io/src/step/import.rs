@@ -46,6 +46,13 @@
 //! millimetres and angles (a cone's semi-angle) to radians. Without a unit the file is
 //! read as millimetres and radians.
 //!
+//! # Precision
+//! A context's `GLOBAL_UNCERTAINTY_ASSIGNED_CONTEXT` gives the writer's distance accuracy
+//! (`UNCERTAINTY_MEASURE_WITH_UNIT`, in its own unit): the gap it treats as coincident.
+//! The solid is built and validated within the largest one, clamped to
+//! `[LINEAR_TOLERANCE, MAX_BODY_TOLERANCE]`, and the body keeps it
+//! ([`Body::tolerance`]). A context without one is read at [`LINEAR_TOLERANCE`].
+//!
 //! # What is refused
 //! A solid is imported only when it is complete and passes [`Body::validate`]; otherwise
 //! it is reported as a [`SolidFailure`] naming the entities at fault, and the other
@@ -71,10 +78,10 @@ pub use assembly::{MAX_ASSEMBLY_DEPTH, MAX_STEP_COMPONENTS, StepComponent};
 use super::MAX_STEP_BYTES;
 use super::read::{self, Exchange, Param};
 use crate::IoError;
-use chamfera_geom::{Frame, Point3, TriMesh, Vec3};
+use chamfera_geom::{Frame, LINEAR_TOLERANCE, Point3, TriMesh, Vec3};
 use chamfera_kernel::{
-    Arc3, Body, Circle3, Curve, Ellipse3, EllipticalArc3, MAX_NAME_LENGTH, Segment3, Surface,
-    TopologyError,
+    Arc3, Body, Circle3, Curve, Ellipse3, EllipticalArc3, MAX_BODY_TOLERANCE, MAX_NAME_LENGTH,
+    Segment3, Surface, TopologyError,
 };
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -588,16 +595,22 @@ fn kernel_name(s: &str) -> Option<String> {
 
 // --- Units --------------------------------------------------------------------------------
 
-/// Millimetres per length unit and radians per plane-angle unit of a context.
+/// Millimetres per length unit and radians per plane-angle unit of a context, and the
+/// precision (mm) its writer declares.
 #[derive(Debug, Clone, Copy)]
 struct Units {
     length: f64,
     angle: f64,
+    /// The context's length uncertainty (`GLOBAL_UNCERTAINTY_ASSIGNED_CONTEXT`) in mm,
+    /// within `[LINEAR_TOLERANCE, MAX_BODY_TOLERANCE]`: how far the solid's vertices may
+    /// lie from its curves and surfaces.
+    tolerance: f64,
 }
 
 const MM_RAD: Units = Units {
     length: 1.0,
     angle: 1.0,
+    tolerance: LINEAR_TOLERANCE,
 };
 
 /// Each representation item's context: `(…REPRESENTATION(name, items, context))`.
@@ -652,7 +665,54 @@ fn units_for(ex: &Exchange, ctx: Option<u64>) -> Result<Units, String> {
             out.angle = unit_scale(ex, *u, UnitKind::Angle, 0)?;
         }
     }
+    out.tolerance = uncertainty(ex, ctx, out.length);
     Ok(out)
+}
+
+/// The largest length uncertainty context `#ctx` declares, in mm (`length` mm per the
+/// context's unit when the measure names no unit of its own), clamped to
+/// `[LINEAR_TOLERANCE, MAX_BODY_TOLERANCE]`; [`LINEAR_TOLERANCE`] when it declares none.
+/// A writer's distance accuracy is the gap it treats as coincident (CAx-IF recommended
+/// practices), so the solid's vertices and edges may stray from its geometry that far.
+fn uncertainty(ex: &Exchange, ctx: u64, length: f64) -> f64 {
+    let list = ex
+        .data
+        .get(&ctx)
+        .and_then(|i| i.record("GLOBAL_UNCERTAINTY_ASSIGNED_CONTEXT"))
+        .and_then(|r| match r.params.first() {
+            Some(Param::List(l)) => Some(l.as_slice()),
+            _ => None,
+        })
+        .unwrap_or(&[]);
+    let mut out = LINEAR_TOLERANCE;
+    for u in list.iter().take(MAX_NESTING) {
+        let Param::Ref(u) = u else { continue };
+        let Some(m) = ex
+            .data
+            .get(u)
+            .and_then(|i| i.record("UNCERTAINTY_MEASURE_WITH_UNIT"))
+        else {
+            continue;
+        };
+        let Some(Param::Typed(kind, _)) = m.params.first() else {
+            continue;
+        };
+        if kind != "LENGTH_MEASURE" {
+            continue;
+        }
+        let Some(v) = m.params.first().and_then(|p| real_of(p, *u, "value").ok()) else {
+            continue;
+        };
+        let scale = match m.params.get(1) {
+            Some(Param::Ref(unit)) => unit_scale(ex, *unit, UnitKind::Length, 0).unwrap_or(length),
+            _ => length,
+        };
+        let mm = v * scale;
+        if mm.is_finite() && mm > out {
+            out = mm;
+        }
+    }
+    out.min(MAX_BODY_TOLERANCE)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1072,8 +1132,13 @@ impl<'a> Build<'a> {
         if !self.unsupported.is_empty() {
             return Err(Fail::Unsupported(std::mem::take(&mut self.unsupported)));
         }
-        let mut body = Body::from_boundary(&self.points, &self.edges, &self.faces)
-            .map_err(|e| invalid(self.locate(&e)))?;
+        let mut body = Body::from_boundary_within(
+            &self.points,
+            &self.edges,
+            &self.faces,
+            self.ctx.units.tolerance,
+        )
+        .map_err(|e| invalid(self.locate(&e)))?;
         for (f, name) in body.faces().into_iter().zip(&self.face_names) {
             if let Some(n) = name {
                 let _ = body.set_face_name(f, n);

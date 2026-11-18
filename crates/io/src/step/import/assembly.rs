@@ -44,7 +44,7 @@ use std::collections::{BTreeMap, HashMap};
 /// Deepest assembly nesting read.
 pub const MAX_ASSEMBLY_DEPTH: usize = 32;
 /// Most components one import makes.
-pub const MAX_STEP_COMPONENTS: usize = 2_000;
+pub const MAX_STEP_COMPONENTS: usize = 10_000;
 
 /// One component of an imported assembly.
 #[derive(Debug, Clone, PartialEq)]

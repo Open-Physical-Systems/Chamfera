@@ -55,7 +55,20 @@ impl Body {
         edges: &[InEdge],
         faces: &[InFace],
     ) -> Result<Body, TopologyError> {
-        let body = link(points, edges, faces)?;
+        Self::from_boundary_within(points, edges, faces, LINEAR_TOLERANCE)
+    }
+
+    /// [`Body::from_boundary`] for a description whose writer was less precise than the
+    /// kernel: the body carries `tolerance` (mm, see [`Body::set_tolerance`]) and is
+    /// validated within it.
+    pub fn from_boundary_within(
+        points: &[Point3],
+        edges: &[InEdge],
+        faces: &[InFace],
+        tolerance: f64,
+    ) -> Result<Body, TopologyError> {
+        let mut body = link(points, edges, faces)?;
+        body.set_tolerance(tolerance)?;
         body.validate()?;
         Ok(body)
     }
