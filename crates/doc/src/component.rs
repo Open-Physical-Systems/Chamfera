@@ -21,7 +21,7 @@ use std::collections::BTreeSet;
 /// The root component's id: the design itself.
 pub const ROOT: u32 = 0;
 /// Most components one design may hold.
-pub const MAX_COMPONENTS: usize = 2_000;
+pub const MAX_COMPONENTS: usize = 10_000;
 /// Longest component or joint name, in characters.
 pub const MAX_COMPONENT_NAME: usize = 256;
 /// Most features one component may list.

@@ -177,7 +177,11 @@ use thiserror::Error;
 ///   the sketch plane, by name and the feature that made it, the sketch curves the cut
 ///   gave, and whether they follow the body), and tangent handles on fit splines
 ///   (`start_handle`, `end_handle`). Older files open unchanged: they hold none.
-pub const FORMAT_VERSION: u32 = 45;
+/// - 46: tolerant imported bodies: a body may carry its own `tolerance` (mm, at most
+///   0.01), the precision its STEP file declared, within which its vertices lie on its
+///   curves and its edges on its surfaces; and up to 10 000 components (was 2 000).
+///   Older files open unchanged: their bodies hold none.
+pub const FORMAT_VERSION: u32 = 46;
 /// The tag every design file starts with, so other JSON is not mistaken for a design.
 pub const FORMAT_TAG: &str = "chamfera";
 /// Longest parameter name.

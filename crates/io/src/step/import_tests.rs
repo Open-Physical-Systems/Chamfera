@@ -1297,3 +1297,75 @@ fn hostile_assemblies_never_panic_and_say_what_was_left_out() {
         let _ = import(&good[..cut]);
     }
 }
+
+/// Millimetres with a declared distance accuracy of `u` in the unit `unit` (#501 mm,
+/// #505 metre), as CAx-IF writers put it in the representation context.
+fn mm_with_uncertainty(u: &str, unit: u32) -> String {
+    format!(
+        "#501=(LENGTH_UNIT()NAMED_UNIT(*)SI_UNIT(.MILLI.,.METRE.));
+#502=(NAMED_UNIT(*)PLANE_ANGLE_UNIT()SI_UNIT($,.RADIAN.));
+#505=(LENGTH_UNIT()NAMED_UNIT(*)SI_UNIT($,.METRE.));
+#506=UNCERTAINTY_MEASURE_WITH_UNIT(LENGTH_MEASURE({u}),#{unit},'distance_accuracy_value','');
+#510=(GEOMETRIC_REPRESENTATION_CONTEXT(3)GLOBAL_UNCERTAINTY_ASSIGNED_CONTEXT((#506))GLOBAL_UNIT_ASSIGNED_CONTEXT((#501,#502))REPRESENTATION_CONTEXT('3D',''));"
+    )
+}
+
+/// The 10 mm cube with its corner (10, 10, 10) raised 0.00003 mm: off the planes of its
+/// three faces by 3e-5 mm, far beyond the kernel's 1e-7 mm.
+fn loose_cube(units: &str) -> String {
+    let lines: Vec<String> = cube_lines("10.", units, Style::default())
+        .into_iter()
+        .map(|l| {
+            l.replace(
+                "#8=CARTESIAN_POINT('',(10.,10.,10.));",
+                "#8=CARTESIAN_POINT('',(10.,10.,10.00003));",
+            )
+        })
+        .collect();
+    assert!(lines.iter().any(|l| l.contains("10.00003")));
+    file(&lines)
+}
+
+#[test]
+fn a_solid_imports_within_the_precision_its_file_declares() {
+    // No declared precision: the 3e-5 mm gap is an error.
+    let strict = import(&loose_cube(MM)).unwrap();
+    assert_eq!((strict.solids.len(), strict.failed.len()), (0, 1));
+    // 1e-5 mm declared: still too tight for 3e-5 mm.
+    let tight = import(&loose_cube(&mm_with_uncertainty("1.E-5", 501))).unwrap();
+    assert_eq!((tight.solids.len(), tight.failed.len()), (0, 1));
+    // 1e-4 mm declared: within it, and the body keeps it. Volume: the cube 1000 mm^3
+    // plus a sliver of at most 10 * 10 * 3e-5 = 0.003 mm^3.
+    let loose = import(&loose_cube(&mm_with_uncertainty("1.E-4", 501))).unwrap();
+    assert_eq!((loose.solids.len(), loose.failed.len()), (1, 0));
+    let body = &loose.solids[0].1;
+    assert!((body.tolerance() - 1e-4).abs() < 1e-18);
+    body.validate().unwrap();
+    assert!((body.volume().unwrap() - 1000.0).abs() <= 0.003);
+    // 1e-7 m is 1e-4 mm: the measure's own unit counts, not the context's.
+    let metres = import(&loose_cube(&mm_with_uncertainty("1.E-7", 505))).unwrap();
+    assert_eq!(metres.solids.len(), 1);
+    assert!((metres.solids[0].1.tolerance() - 1e-4).abs() < 1e-15);
+    // A tight file keeps the kernel's tolerance.
+    let exact = only(&cube(
+        "10.",
+        &mm_with_uncertainty("1.E-8", 501),
+        Style::default(),
+    ));
+    assert_eq!(exact.tolerance(), chamfera_geom::LINEAR_TOLERANCE);
+}
+
+#[test]
+fn a_huge_or_bogus_declared_precision_is_clamped_and_never_panics() {
+    // 5 mm declared: clamped to MAX_BODY_TOLERANCE (0.01 mm), so the 3e-5 mm gap passes
+    // and a 1 mm gap would not.
+    let r = import(&loose_cube(&mm_with_uncertainty("5.", 501))).unwrap();
+    assert_eq!(
+        r.solids[0].1.tolerance(),
+        chamfera_kernel::MAX_BODY_TOLERANCE
+    );
+    for u in ["-1.", "0.", "1.E308", "'x'", "$"] {
+        let r = import(&loose_cube(&mm_with_uncertainty(u, 501)));
+        assert!(r.is_ok(), "{u}");
+    }
+}

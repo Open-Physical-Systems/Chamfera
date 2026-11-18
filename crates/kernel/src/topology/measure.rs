@@ -57,6 +57,36 @@ use chamfera_geom::{Frame, LINEAR_TOLERANCE, Point3, Vec3};
 pub const SURFACE_QUADRATURE_TOLERANCE: f64 = 1e-12;
 /// Most quadrature panels one edge integral may use (hostile-input limit).
 const MAX_PANELS: usize = 20_000;
+/// Relative accuracy while [`Body::validate`] checks that shells enclose volume: it needs
+/// the volume's sign and that it is not zero, not twelve digits, and free-form faces of
+/// imported solids (wires swept along long splines) cost minutes at full accuracy.
+const CHECK_QUADRATURE_TOLERANCE: f64 = 1e-6;
+/// Most panels one edge integral may use during that check: an integral that has not
+/// converged by then is reported (`NoConvergence`) at once, not after minutes.
+const CHECK_MAX_PANELS: usize = 128;
+
+thread_local! {
+    /// Whether this thread is inside [`coarse_quadrature`].
+    static COARSE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Runs `f` with the boundary integrals at [`CHECK_QUADRATURE_TOLERANCE`] (restored
+/// afterwards, also when `f` fails).
+pub(super) fn coarse_quadrature<T>(f: impl FnOnce() -> T) -> T {
+    let was = COARSE.with(|c| c.replace(true));
+    let out = f();
+    COARSE.with(|c| c.set(was));
+    out
+}
+
+/// The accuracy and panel budget the integrals use now.
+fn quadrature_limits() -> (f64, usize) {
+    if COARSE.with(std::cell::Cell::get) {
+        (CHECK_QUADRATURE_TOLERANCE, CHECK_MAX_PANELS)
+    } else {
+        (SURFACE_QUADRATURE_TOLERANCE, MAX_PANELS)
+    }
+}
 /// Two image coordinates within this are the same (radians, or mm along a cylinder):
 /// projections of an exactly horizontal or vertical edge differ only by rounding.
 const STRAIGHT_IMAGE_TOLERANCE: f64 = 1e-9;
@@ -102,13 +132,14 @@ pub(super) fn integrate(f: &dyn Fn(f64) -> KernelResult<f64>, a: f64, b: f64) ->
         );
         scale += gauss5(&|t| Ok(f(t)?.abs()), x0, x1)?.abs();
     }
-    let tol = SURFACE_QUADRATURE_TOLERANCE * scale.max(f64::MIN_POSITIVE);
+    let (relative, max_panels) = quadrature_limits();
+    let tol = relative * scale.max(f64::MIN_POSITIVE);
     let mut stack = vec![(a, b, gauss5(f, a, b)?)];
     let mut total = 0.0;
     let mut panels = 0usize;
     while let Some((x0, x1, whole)) = stack.pop() {
         panels += 1;
-        if panels > MAX_PANELS {
+        if panels > max_panels {
             return Err(KernelError::NoConvergence(
                 "an edge's boundary integral needs more quadrature panels than allowed".into(),
             ));

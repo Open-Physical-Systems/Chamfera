@@ -1144,3 +1144,47 @@ fn random_euler_operator_sequences_keep_the_topology_valid() {
     eprintln!("successes per kind: {kinds:?}");
     assert!(kinds.iter().all(|k| *k > 0), "{kinds:?}");
 }
+
+#[test]
+fn a_body_with_a_tolerance_accepts_gaps_within_it_and_keeps_it_through_save() {
+    // Raise one corner of the box by 3e-5 mm: its edges' lines no longer end there.
+    let loose = || {
+        let mut b = good_box();
+        b.points.get_mut(1).unwrap().z += 3e-5;
+        b
+    };
+    let mut b = loose();
+    assert_eq!(b.tolerance(), LINEAR_TOLERANCE);
+    assert!(matches!(
+        b.validate(),
+        Err(TopologyError::VertexOffCurve(_))
+    ));
+    b.set_tolerance(1e-5).unwrap();
+    assert!(b.validate().is_err());
+    b.set_tolerance(1e-4).unwrap();
+    assert_eq!(b.tolerance(), 1e-4);
+    b.validate().unwrap();
+    // Saved and loaded, the body keeps its tolerance and stays valid.
+    let json = serde_json::to_string(&b).unwrap();
+    let back: Body = serde_json::from_str(&json).unwrap();
+    assert_eq!(back.tolerance(), 1e-4);
+    back.validate().unwrap();
+    // A body without one writes no field, so older readers still read it.
+    assert!(
+        !serde_json::to_string(&good_box())
+            .unwrap()
+            .contains("tolerance")
+    );
+    // Out-of-range tolerances are refused, set or loaded.
+    let mut b = loose();
+    for bad in [f64::NAN, f64::INFINITY, 0.02] {
+        assert!(b.set_tolerance(bad).is_err(), "{bad}");
+    }
+    b.set_tolerance(0.0).unwrap();
+    assert_eq!(b.tolerance(), LINEAR_TOLERANCE);
+    for bad in ["0.5", "1e-9", "-1"] {
+        let text = json.replace("\"tolerance\":0.0001", &format!("\"tolerance\":{bad}"));
+        assert!(text.contains(bad));
+        assert!(serde_json::from_str::<Body>(&text).is_err(), "{bad}");
+    }
+}

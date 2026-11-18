@@ -648,6 +648,7 @@ mod tests {
             units: Units {
                 length: 25.4,
                 angle: 1.0,
+                tolerance: chamfera_geom::LINEAR_TOLERANCE,
             },
         };
         for id in [20, 21] {
